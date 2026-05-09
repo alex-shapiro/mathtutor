@@ -1,0 +1,380 @@
+//! Regression tests for `mt next`'s per-atom completion walker.
+//!
+//! Each test builds an in-memory `Graph`, `PathFile`, and event log,
+//! then asserts on the `Action` returned by `scheduler::next_action`.
+//! No filesystem, no curriculum AYML — just the scheduler's contract.
+
+use std::collections::HashMap;
+
+use chrono::{DateTime, Duration, Utc};
+
+use mathtutor::event_log::{Event, EventKind, EventPayload};
+use mathtutor::graph::{FlatConcept, Graph, Quiz};
+use mathtutor::path::PathFile;
+use mathtutor::scheduler::{self, Action};
+use mathtutor::types::{Difficulty, Rating};
+
+// ── Fixture builders ────────────────────────────────────────────────
+
+const PATH_ID: &str = "p_test";
+
+fn quiz(id: &str, difficulty: Difficulty) -> Quiz {
+    Quiz {
+        id: id.to_string(),
+        difficulty,
+        kind: None,
+        question: format!("q? {id}"),
+        answer: "a".into(),
+        rubric: None,
+    }
+}
+
+fn atom(id: &str, prereqs: &[&str], lesson: Option<&str>, quizzes: Vec<Quiz>) -> FlatConcept {
+    FlatConcept {
+        id: id.into(),
+        name: id.into(),
+        description: None,
+        prerequisites: prereqs.iter().map(|s| (*s).to_string()).collect(),
+        children_ids: Vec::new(),
+        lesson: lesson.map(String::from),
+        quizzes,
+    }
+}
+
+fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
+    let mut by_id = HashMap::new();
+    for c in concepts {
+        by_id.insert(c.id.clone(), c);
+    }
+    Graph { by_id }
+}
+
+fn path_with(targets: &[&str]) -> PathFile {
+    PathFile {
+        schema_version: 1,
+        id: PATH_ID.into(),
+        goal: "test".into(),
+        created_at: Utc::now(),
+        target_atoms: targets.iter().map(|s| (*s).to_string()).collect(),
+        cards: HashMap::new(),
+    }
+}
+
+fn answered(quiz_id: &str, rating: Rating, ts: DateTime<Utc>) -> Event {
+    Event {
+        ts,
+        kind: EventKind::QuizAnswered,
+        path: PATH_ID.into(),
+        atom: None,
+        quiz: Some(quiz_id.into()),
+        payload: EventPayload {
+            rating: Some(rating),
+            ..Default::default()
+        },
+    }
+}
+
+fn assert_create_lesson(action: &Action, expected_atom: &str) {
+    match action {
+        Action::CreateLesson { atom_id } => assert_eq!(atom_id, expected_atom),
+        other => panic!("expected CreateLesson({expected_atom}), got {other:?}"),
+    }
+}
+
+fn assert_create_quiz(action: &Action, expected_atom: &str, expected_diff: Difficulty) {
+    match action {
+        Action::CreateQuiz {
+            atom_id,
+            difficulty,
+        } => {
+            assert_eq!(atom_id, expected_atom);
+            assert_eq!(*difficulty, expected_diff);
+        }
+        other => panic!("expected CreateQuiz({expected_atom}, {expected_diff:?}), got {other:?}"),
+    }
+}
+
+fn assert_present_quiz(action: &Action, expected_atom: &str, expected_quiz: &str) {
+    match action {
+        Action::PresentQuiz { atom_id, quiz_id } => {
+            assert_eq!(atom_id, expected_atom);
+            assert_eq!(quiz_id, expected_quiz);
+        }
+        other => panic!("expected PresentQuiz({expected_atom}, {expected_quiz}), got {other:?}"),
+    }
+}
+
+// ── Walker contract ────────────────────────────────────────────────
+
+#[test]
+fn create_lesson_when_atom_has_none() {
+    let g = graph_of(vec![atom("a", &[], None, vec![])]);
+    let p = path_with(&["a"]);
+    assert_create_lesson(&scheduler::next_action(&g, &p, &[]), "a");
+}
+
+#[test]
+fn create_easy_quiz_when_lesson_stored_and_no_quizzes() {
+    let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
+    let p = path_with(&["a"]);
+    assert_create_quiz(&scheduler::next_action(&g, &p, &[]), "a", Difficulty::Easy);
+}
+
+#[test]
+fn present_easy_quiz_when_authored_but_unanswered() {
+    let g = graph_of(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![quiz("a.q1", Difficulty::Easy)],
+    )]);
+    let p = path_with(&["a"]);
+    assert_present_quiz(&scheduler::next_action(&g, &p, &[]), "a", "a.q1");
+}
+
+#[test]
+fn keep_presenting_easy_after_again_rating() {
+    let g = graph_of(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![quiz("a.q1", Difficulty::Easy)],
+    )]);
+    let p = path_with(&["a"]);
+    let events = vec![answered("a.q1", Rating::Again, Utc::now())];
+    assert_present_quiz(&scheduler::next_action(&g, &p, &events), "a", "a.q1");
+}
+
+#[test]
+fn keep_presenting_easy_after_hard_rating() {
+    // `hard` (the rating) is not "complete" — only good/easy advance.
+    let g = graph_of(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![quiz("a.q1", Difficulty::Easy)],
+    )]);
+    let p = path_with(&["a"]);
+    let events = vec![answered("a.q1", Rating::Hard, Utc::now())];
+    assert_present_quiz(&scheduler::next_action(&g, &p, &events), "a", "a.q1");
+}
+
+#[test]
+fn advance_to_medium_after_easy_correct() {
+    let g = graph_of(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![quiz("a.q1", Difficulty::Easy)],
+    )]);
+    let p = path_with(&["a"]);
+    let events = vec![answered("a.q1", Rating::Good, Utc::now())];
+    assert_create_quiz(
+        &scheduler::next_action(&g, &p, &events),
+        "a",
+        Difficulty::Medium,
+    );
+}
+
+#[test]
+fn advance_to_hard_after_easy_and_medium_correct() {
+    let g = graph_of(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![
+            quiz("a.q1", Difficulty::Easy),
+            quiz("a.q2", Difficulty::Medium),
+        ],
+    )]);
+    let p = path_with(&["a"]);
+    let events = vec![
+        answered("a.q1", Rating::Easy, Utc::now()),
+        answered("a.q2", Rating::Good, Utc::now()),
+    ];
+    assert_create_quiz(
+        &scheduler::next_action(&g, &p, &events),
+        "a",
+        Difficulty::Hard,
+    );
+}
+
+#[test]
+fn done_after_all_three_correct_on_only_target() {
+    let g = graph_of(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![
+            quiz("a.q1", Difficulty::Easy),
+            quiz("a.q2", Difficulty::Medium),
+            quiz("a.q3", Difficulty::Hard),
+        ],
+    )]);
+    let p = path_with(&["a"]);
+    let events = vec![
+        answered("a.q1", Rating::Good, Utc::now()),
+        answered("a.q2", Rating::Good, Utc::now()),
+        answered("a.q3", Rating::Easy, Utc::now()),
+    ];
+    assert!(matches!(
+        scheduler::next_action(&g, &p, &events),
+        Action::Done
+    ));
+}
+
+#[test]
+fn advance_to_next_target_lesson_after_first_complete() {
+    let g = graph_of(vec![
+        atom(
+            "a",
+            &[],
+            Some("body"),
+            vec![
+                quiz("a.q1", Difficulty::Easy),
+                quiz("a.q2", Difficulty::Medium),
+                quiz("a.q3", Difficulty::Hard),
+            ],
+        ),
+        atom("b", &[], None, vec![]),
+    ]);
+    let p = path_with(&["a", "b"]);
+    let events = vec![
+        answered("a.q1", Rating::Good, Utc::now()),
+        answered("a.q2", Rating::Good, Utc::now()),
+        answered("a.q3", Rating::Good, Utc::now()),
+    ];
+    assert_create_lesson(&scheduler::next_action(&g, &p, &events), "b");
+}
+
+#[test]
+fn does_not_advance_after_only_lesson_stored() {
+    // The exact regression: after `create_lesson` on `a`, `mt next`
+    // must NOT jump to `b`'s lesson.
+    let g = graph_of(vec![
+        atom("a", &[], Some("body"), vec![]),
+        atom("b", &[], None, vec![]),
+    ]);
+    let p = path_with(&["a", "b"]);
+    assert_create_quiz(&scheduler::next_action(&g, &p, &[]), "a", Difficulty::Easy);
+}
+
+#[test]
+fn descends_into_prereq_before_target() {
+    let g = graph_of(vec![
+        atom("pre", &[], None, vec![]),
+        atom("target", &["pre"], Some("body"), vec![]),
+    ]);
+    let p = path_with(&["target"]);
+    assert_create_lesson(&scheduler::next_action(&g, &p, &[]), "pre");
+}
+
+#[test]
+fn finishes_prereq_quizzes_before_target_lesson() {
+    let g = graph_of(vec![
+        atom(
+            "pre",
+            &[],
+            Some("body"),
+            vec![quiz("pre.q1", Difficulty::Easy)],
+        ),
+        atom("target", &["pre"], None, vec![]),
+    ]);
+    let p = path_with(&["target"]);
+    assert_present_quiz(&scheduler::next_action(&g, &p, &[]), "pre", "pre.q1");
+}
+
+// ── is_atom_complete / atom_completed_at ───────────────────────────
+
+#[test]
+fn is_atom_complete_false_without_lesson() {
+    let g = graph_of(vec![atom("a", &[], None, vec![])]);
+    assert!(!scheduler::is_atom_complete(&g, &[], "a"));
+}
+
+#[test]
+fn is_atom_complete_false_with_only_two_correct() {
+    let g = graph_of(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![
+            quiz("a.q1", Difficulty::Easy),
+            quiz("a.q2", Difficulty::Medium),
+            quiz("a.q3", Difficulty::Hard),
+        ],
+    )]);
+    let events = vec![
+        answered("a.q1", Rating::Good, Utc::now()),
+        answered("a.q2", Rating::Good, Utc::now()),
+    ];
+    assert!(!scheduler::is_atom_complete(&g, &events, "a"));
+}
+
+#[test]
+fn is_atom_complete_true_with_all_three_correct() {
+    let g = graph_of(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![
+            quiz("a.q1", Difficulty::Easy),
+            quiz("a.q2", Difficulty::Medium),
+            quiz("a.q3", Difficulty::Hard),
+        ],
+    )]);
+    let events = vec![
+        answered("a.q1", Rating::Good, Utc::now()),
+        answered("a.q2", Rating::Easy, Utc::now()),
+        answered("a.q3", Rating::Good, Utc::now()),
+    ];
+    assert!(scheduler::is_atom_complete(&g, &events, "a"));
+}
+
+#[test]
+fn atom_completed_at_returns_latest_first_correct() {
+    let g = graph_of(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![
+            quiz("a.q1", Difficulty::Easy),
+            quiz("a.q2", Difficulty::Medium),
+            quiz("a.q3", Difficulty::Hard),
+        ],
+    )]);
+    let t0 = Utc::now();
+    let t1 = t0 + Duration::minutes(1);
+    let t2 = t0 + Duration::minutes(2);
+    let events = vec![
+        answered("a.q1", Rating::Good, t0),
+        answered("a.q2", Rating::Good, t2), // latest
+        answered("a.q3", Rating::Good, t1),
+    ];
+    assert_eq!(
+        scheduler::atom_completed_at(&g, &events, "a"),
+        Some(t2),
+        "should pick the max ts among the three first-correct answers",
+    );
+}
+
+#[test]
+fn atom_completed_at_ignores_again_ratings() {
+    let g = graph_of(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![
+            quiz("a.q1", Difficulty::Easy),
+            quiz("a.q2", Difficulty::Medium),
+            quiz("a.q3", Difficulty::Hard),
+        ],
+    )]);
+    let t0 = Utc::now();
+    let events = vec![
+        answered("a.q1", Rating::Good, t0),
+        answered("a.q2", Rating::Again, t0),
+        answered("a.q3", Rating::Good, t0),
+    ];
+    assert_eq!(scheduler::atom_completed_at(&g, &events, "a"), None);
+}

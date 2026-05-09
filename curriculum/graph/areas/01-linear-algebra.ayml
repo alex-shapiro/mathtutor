@@ -138,21 +138,45 @@ children:
             description: Σᵢ cᵢ vᵢ with scalars cᵢ and vectors vᵢ; finite sums by convention.
             prerequisites:
               - la.1.1.4
+            lesson: """
+              A **linear combination** is the fundamental way we build new vectors from existing ones. Given a set of vectors $\\{\\mathbf{v}_1, \\mathbf{v}_2, \\dots, \\mathbf{v}_n\\}$ in a vector space $V$ and a set of scalars $\\{c_1, c_2, \\dots, c_n\\}$ from the underlying field $F$, a linear combination is the sum:
+              $$\\sum_{i=1}^{n} c_i \\mathbf{v}_i = c_1 \\mathbf{v}_1 + c_2 \\mathbf{v}_2 + \\dots + c_n \\mathbf{v}_n$$
+
+              By convention, linear combinations in vector spaces always involve a **finite** number of vectors. This ensures that the sum is always well-defined within the algebraic structure of the vector space, without requiring any notions of convergence or limits. Any vector that can be written in this form is said to be "represented as a linear combination" of the original vectors.
+              """
           - id: la.1.3.2
             name: Span
             description: span(S) = set of all finite linear combinations of vectors in S.
             prerequisites:
               - la.1.3.1
+            lesson: """
+              The **span** of a set of vectors $S = \\{\\mathbf{v}_1, \\dots, \\mathbf{v}_n\\}$ is the set of all possible linear combinations that can be formed using those vectors. We denote it as $\\text{span}(S)$. Formally:
+              $$\\text{span}(S) = \\{ c_1 \\mathbf{v}_1 + \\dots + c_n \\mathbf{v}_n \\mid c_i \\in F \\}$$
+
+              The span of any set of vectors in $V$ is always a subspace of $V$. Geometrically, the span of a single non-zero vector is a line passing through the origin; the span of two non-parallel vectors is a plane. If $\\text{span}(S) = V$, we say that the set $S$ **spans** the vector space $V$, meaning every vector in $V$ can be reached by combining vectors from $S$.
+              """
           - id: la.1.3.3
             name: Spanning set
             description: S spans V iff span(S) = V.
             prerequisites:
               - la.1.3.2
+            lesson: """
+              A **spanning set** is a collection of vectors $S$ in a vector space $V$ such that every vector in $V$ can be represented as a linear combination of vectors from $S$. If this condition holds, we say that $S$ **generates** $V$. In essence, if you have a spanning set, you have enough "building blocks" to construct any element within the entire space.
+
+              While a spanning set ensures that every vector is reachable, it does not necessarily do so efficiently. A spanning set might contain redundant vectors that could be removed without shrinking the span. When we find a spanning set that is also linearly independent, we have found a *basis*, which is the most efficient way to generate the space.
+              """
           - id: la.1.3.4
             name: Linear independence
             description: Σ cᵢ vᵢ = 0 forces all cᵢ = 0.
             prerequisites:
               - la.1.3.1
+            lesson: """
+              A set of vectors $\\{\\mathbf{v}_1, \\dots, \\mathbf{v}_n\\}$ is **linearly independent** if the only way to form the zero vector using a linear combination of these vectors is to set all the scalars to zero. In other words, the equation
+              $$c_1 \\mathbf{v}_1 + c_2 \\mathbf{v}_2 + \\dots + c_n \\mathbf{v}_n = \\mathbf{0}$$
+              implies that $c_1 = c_2 = \\dots = c_n = 0$.
+
+              If there exists a set of scalars, not all zero, such that the sum is the zero vector, we call the set **linearly dependent**. Intuitively, linear independence means that no vector in the set can be expressed as a linear combination of the others; each vector provides a "new direction" that cannot be reached by the rest. This concept is vital for defining the dimension of a space.
+              """
           - id: la.1.3.5
             name: Linear dependence
             description: Negation of independence; some non-trivial combination equals 0.
@@ -299,6 +323,13 @@ children:
             description: "T: V → W with T(au + bv) = aT(u) + bT(v) for all u, v, a, b."
             prerequisites:
               - la.1.1.4
+            lesson: """
+              A **linear map** (or linear transformation) is a function $T: V \\to W$ between two vector spaces $V$ and $W$ over the same field $F$ that preserves the structure of the spaces. This means that $T$ respects both vector addition and scalar multiplication, allowing us to study the relationship between different vector spaces through functions that maintain their linear properties.
+
+              A function $T$ is a linear map if, for all vectors $\\mathbf{u}, \\mathbf{v} \\in V$ and all scalars $a, b \\in F$, the following condition holds:
+              $$T(a\\mathbf{u} + b\\mathbf{v}) = aT(\\mathbf{u}) + bT(\\mathbf{v})$$
+              This property, called **linearity**, implies that the image of a linear combination is the same as the linear combination of the images. A key consequence is that every linear map must send the zero vector of $V$ to the zero vector of $W$: $T(\\mathbf{0}_V) = \\mathbf{0}_W$.
+              """
           - id: la.2.1.2
             name: Examples of linear maps
             description: "Zero map, identity, scaling, projection, rotation, differentiation, integration."

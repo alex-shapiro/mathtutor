@@ -7,10 +7,12 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::answer::atom_from_quiz_id;
-use crate::event_log::{self, EventKind};
-use crate::graph::{self, FlatConcept, Graph, Quiz};
+use crate::event_log::{self, Event, EventKind};
+use crate::graph::{self, FlatConcept, Graph};
 use crate::path::{self, CardState, PathError, PathFile};
 use crate::types::{Difficulty, QuizType, Rating};
+
+const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
 #[derive(Debug, thiserror::Error)]
 pub enum SchedulerError {
@@ -26,8 +28,9 @@ pub fn cmd_next(path_id: Option<&str>, graph_dir: &Path) -> Result<(), Scheduler
     let g = Graph::load(graph_dir)?;
     let id = path::resolve_id(path_id)?;
     let p = path::load_path(&id)?;
+    let events = event_log::load(&id)?;
 
-    let action = run_next(&g, &p);
+    let action = next_action(&g, &p, &events);
     // Build the envelope first — it reads the log to compute `history`,
     // and we want `history.repetitions` to count past presentations only,
     // not the one we are about to log below.
@@ -63,32 +66,97 @@ pub enum Action {
     Done,
 }
 
+impl Action {
+    pub fn atom_id(&self) -> Option<&str> {
+        match self {
+            Action::CreateLesson { atom_id }
+            | Action::CreateQuiz { atom_id, .. }
+            | Action::PresentQuiz { atom_id, .. } => Some(atom_id),
+            Action::Done => None,
+        }
+    }
+}
+
 /// Action priority (see `DESIGN.md`):
-///   1. earliest-due quiz card                  → `present_quiz`
-///   2. untaught atom in path coverage          → `create_lesson`
-///   3. taught atom with unfilled difficulty    → `create_quiz`
-///   4. nothing pending                         → `done`
-fn run_next(g: &Graph, p: &PathFile) -> Action {
+///   1. earliest-due quiz card → `present_quiz`
+///   2. for each path target (and its prereqs), in topo order:
+///      a. no lesson yet → `create_lesson`
+///      b. missing difficulty slot → `create_quiz`
+///      c. quiz never answered correctly → `present_quiz`
+///   3. otherwise → `done`
+///
+/// (2) walks per-atom: an atom isn't considered complete — and the
+/// walker doesn't advance to the next atom — until its lesson is
+/// stored, all three difficulty slots are filled, and each quiz has
+/// at least one `quiz_answered` event with rating `good` or `easy`.
+pub fn next_action(g: &Graph, p: &PathFile, events: &[Event]) -> Action {
     let now = Utc::now();
     if let Some((quiz_id, atom_id)) = first_due_card(g, p, now) {
         return Action::PresentQuiz { quiz_id, atom_id };
     }
 
-    if let Some(id) = g.first_untaught_in(p.target_atoms.iter().map(String::as_str)) {
-        return Action::CreateLesson { atom_id: id };
-    }
-
     let mut visited = HashSet::new();
     for target in &p.target_atoms {
-        if let Some((atom, diff)) = first_quiz_slot(g, target, &mut visited) {
-            return Action::CreateQuiz {
-                atom_id: atom,
-                difficulty: diff,
-            };
+        if let Some(action) = next_atom_action(g, events, target, &mut visited) {
+            return action;
+        }
+    }
+    Action::Done
+}
+
+/// Walk an atom (and its prereqs / children) and return the first
+/// pending action, or `None` if everything reachable is complete.
+fn next_atom_action(
+    g: &Graph,
+    events: &[Event],
+    id: &str,
+    visited: &mut HashSet<String>,
+) -> Option<Action> {
+    if !visited.insert(id.to_string()) {
+        return None;
+    }
+    let c = g.by_id.get(id)?;
+
+    for prereq in &c.prerequisites {
+        if let Some(action) = next_atom_action(g, events, prereq, visited) {
+            return Some(action);
         }
     }
 
-    Action::Done
+    if !c.children_ids.is_empty() {
+        for child_id in &c.children_ids {
+            if let Some(action) = next_atom_action(g, events, child_id, visited) {
+                return Some(action);
+            }
+        }
+        return None;
+    }
+
+    // Atom: lesson, then easy → medium → hard (each authored and answered correctly).
+    if c.lesson.is_none() {
+        return Some(Action::CreateLesson {
+            atom_id: id.to_string(),
+        });
+    }
+    for diff in DIFFICULTIES {
+        match c.quizzes.iter().find(|q| q.difficulty == diff) {
+            None => {
+                return Some(Action::CreateQuiz {
+                    atom_id: id.to_string(),
+                    difficulty: diff,
+                });
+            }
+            Some(quiz) => {
+                if !quiz_answered_correctly(events, &quiz.id) {
+                    return Some(Action::PresentQuiz {
+                        quiz_id: quiz.id.clone(),
+                        atom_id: id.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    None
 }
 
 fn first_due_card(g: &Graph, p: &PathFile, now: DateTime<Utc>) -> Option<(String, String)> {
@@ -106,47 +174,48 @@ fn first_due_card(g: &Graph, p: &PathFile, now: DateTime<Utc>) -> Option<(String
     None
 }
 
-fn first_quiz_slot(
-    g: &Graph,
-    id: &str,
-    visited: &mut HashSet<String>,
-) -> Option<(String, Difficulty)> {
-    if !visited.insert(id.to_string()) {
-        return None;
-    }
-    let c = g.by_id.get(id)?;
-    for prereq in &c.prerequisites {
-        if let Some(found) = first_quiz_slot(g, prereq, visited) {
-            return Some(found);
-        }
-    }
-    if c.children_ids.is_empty() {
-        if c.lesson.is_some()
-            && let Some(diff) = next_missing_difficulty(&c.quizzes)
-        {
-            return Some((id.to_string(), diff));
-        }
-    } else {
-        for child_id in &c.children_ids {
-            if let Some(found) = first_quiz_slot(g, child_id, visited) {
-                return Some(found);
-            }
-        }
-    }
-    None
+/// Has this quiz ever been answered with `good` or `easy`?
+pub fn quiz_answered_correctly(events: &[Event], quiz_id: &str) -> bool {
+    events.iter().any(|e| {
+        matches!(e.kind, EventKind::QuizAnswered)
+            && e.quiz.as_deref() == Some(quiz_id)
+            && matches!(e.payload.rating, Some(Rating::Good | Rating::Easy))
+    })
 }
 
-fn next_missing_difficulty(quizzes: &[Quiz]) -> Option<Difficulty> {
-    let has = |d: Difficulty| quizzes.iter().any(|q| q.difficulty == d);
-    if !has(Difficulty::Easy) {
-        Some(Difficulty::Easy)
-    } else if !has(Difficulty::Medium) {
-        Some(Difficulty::Medium)
-    } else if !has(Difficulty::Hard) {
-        Some(Difficulty::Hard)
-    } else {
-        None
+/// "Complete" = lesson stored AND all three difficulty quizzes exist
+/// AND each has at least one correct answer in the log.
+pub fn is_atom_complete(g: &Graph, events: &[Event], atom_id: &str) -> bool {
+    let Some(c) = g.by_id.get(atom_id) else {
+        return false;
+    };
+    if c.lesson.is_none() {
+        return false;
     }
+    DIFFICULTIES.iter().all(|diff| {
+        c.quizzes
+            .iter()
+            .find(|q| q.difficulty == *diff)
+            .is_some_and(|q| quiz_answered_correctly(events, &q.id))
+    })
+}
+
+/// Wall-clock time at which this atom became complete (max ts among
+/// the three first-correct answers). `None` if not yet complete.
+pub fn atom_completed_at(g: &Graph, events: &[Event], atom_id: &str) -> Option<DateTime<Utc>> {
+    let c = g.by_id.get(atom_id)?;
+    c.lesson.as_ref()?;
+    let mut latest: Option<DateTime<Utc>> = None;
+    for diff in DIFFICULTIES {
+        let quiz = c.quizzes.iter().find(|q| q.difficulty == diff)?;
+        let first_correct = events.iter().find(|e| {
+            matches!(e.kind, EventKind::QuizAnswered)
+                && e.quiz.as_deref() == Some(&quiz.id)
+                && matches!(e.payload.rating, Some(Rating::Good | Rating::Easy))
+        })?;
+        latest = Some(latest.map_or(first_correct.ts, |l| l.max(first_correct.ts)));
+    }
+    latest
 }
 
 // ── Quiz history (derived from the event log on every present_quiz) ──

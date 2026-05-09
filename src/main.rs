@@ -1,17 +1,7 @@
 use std::process::ExitCode;
 
-mod answer;
-mod cli;
-mod discover;
-mod event_log;
-mod graph;
-mod path;
-mod scheduler;
-mod state;
-mod store;
-mod types;
-
-use cli::{Cmd, GraphOp, Mt, StoreOp};
+use mathtutor::cli::{Cmd, GraphOp, Mt, StoreOp};
+use mathtutor::{answer, discover, graph, path, scheduler, state, store};
 
 fn run_simple<E: std::fmt::Display>(
     result: Result<(), E>,

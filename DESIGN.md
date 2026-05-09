@@ -335,12 +335,20 @@ recomputed from the log.
   slot — per individual question. Memorizing an easy question shouldn't
   pull a hard one out of rotation.
 - Card state stored in `path.ayml`, keyed by quiz ID.
-- `mt next` algorithm (sketch — exact priority is tunable):
+- `mt next` algorithm:
   1. Earliest-due quiz card whose atom has a stored lesson → `present_quiz`.
-  2. Else, the next path-target atom that lacks a lesson → `create_lesson`.
-  3. Else, an already-taught atom with an unfilled difficulty slot →
-     `create_quiz`.
-  4. Else, advance the path or return `done`.
+  2. Else, walk targets (and their prereqs) in topo order. For each
+     uncomplete atom, return the first applicable:
+     a. no lesson → `create_lesson`
+     b. missing easy/medium/hard slot → `create_quiz`
+     c. quiz never answered with `good`/`easy` → `present_quiz`
+  3. Else → `done`.
+
+  An atom is "complete" only once its lesson is stored and all three
+  difficulty quizzes have at least one correct answer in the event log.
+  The walker doesn't move past an incomplete atom, so a freshly-taught
+  atom always gets all three quizzes authored and answered before the
+  next target's lesson is requested.
 
 The `fsrs` crate is the current default; not 100% confirmed — needs to be
 proved out during the PoC. If FSRS doesn't fit cleanly we'll either swap
