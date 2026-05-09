@@ -1,6 +1,6 @@
 //! Curriculum graph: AYML-backed types, loader, and `mt graph check`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -284,6 +284,47 @@ pub struct FlatConcept {
 }
 
 impl Graph {
+    /// First atom (`children_ids` empty, `lesson == None`) reachable
+    /// from `id` via prerequisite-first DFS. `None` if everything
+    /// reachable is already taught.
+    pub fn first_untaught(&self, id: &str, visited: &mut HashSet<String>) -> Option<String> {
+        if !visited.insert(id.to_string()) {
+            return None;
+        }
+        let c = self.by_id.get(id)?;
+        for prereq in &c.prerequisites {
+            if let Some(found) = self.first_untaught(prereq, visited) {
+                return Some(found);
+            }
+        }
+        if c.children_ids.is_empty() {
+            if c.lesson.is_none() {
+                return Some(id.to_string());
+            }
+        } else {
+            for child_id in &c.children_ids {
+                if let Some(found) = self.first_untaught(child_id, visited) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    /// First untaught atom across a sequence of starting points.
+    pub fn first_untaught_in<'a>(
+        &self,
+        roots: impl IntoIterator<Item = &'a str>,
+    ) -> Option<String> {
+        let mut visited = HashSet::new();
+        for r in roots {
+            if let Some(id) = self.first_untaught(r, &mut visited) {
+                return Some(id);
+            }
+        }
+        None
+    }
+
     pub fn load(graph_dir: &Path) -> Result<Self, LoadError> {
         let manifest = load_manifest(&graph_dir.join("manifest.ayml"))?;
         let mut by_id = HashMap::new();

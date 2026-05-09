@@ -32,9 +32,9 @@ lessons — never on lookahead material.
 
 ```bash
 # Path lifecycle
-mt new   <GOAL>      # start a new learning path
-mt state [--path P]  # current status of a path
-mt next  [--path P]  # next action (AYML on stdout)
+mt new <GOAL> --atom <ID>...   # start a new learning path
+mt state [--path P]            # current status of a path
+mt next  [--path P]            # next action (AYML on stdout)
 
 # LLM stores authored content
 mt store lesson <ATOM>      --body TEXT
@@ -55,6 +55,20 @@ mt amend quiz   <QUIZ_ID> [--question TEXT] [--answer TEXT] [--rubric TEXT]
 # Maintenance
 mt graph check                                   # validate curriculum graph
 ```
+
+### `--atom` ID resolution on `mt new`
+
+Each `--atom` argument may be:
+
+- an **atom ID** (leaf concept, e.g. `tx.1.1`) — included as-is
+- a **cluster ID** (any non-leaf node, e.g. `tx.1` or `tx.5`) — expanded
+  to all atomic descendants
+- a bare **area prefix** (e.g. `tx`) — expanded to every atom in that
+  area
+
+Mixing forms is allowed; results are deduplicated and topologically
+sorted by prerequisite order before being stored as the path's
+`target_atoms`.
 
 All commands write a structured AYML record to the per-path event log;
 agents read the log if they need history.

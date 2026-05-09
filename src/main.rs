@@ -6,6 +6,7 @@ mod event_log;
 mod graph;
 mod path;
 mod scheduler;
+mod state;
 mod store;
 mod types;
 
@@ -47,7 +48,7 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        Cmd::State(c) => match path::cmd_state(c.path.as_deref()) {
+        Cmd::State(c) => match state::cmd_state(c.path.as_deref(), &c.graph) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");

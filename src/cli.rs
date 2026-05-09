@@ -92,6 +92,10 @@ pub struct StateCmd {
     /// path id (defaults to most recent)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
+
+    /// path to the curriculum graph directory (default: `$MT_GRAPH` or `curriculum/graph`)
+    #[argh(option, default = "default_graph_dir()")]
+    pub graph: PathBuf,
 }
 
 /// Store agent-authored content into the canonical curriculum graph.

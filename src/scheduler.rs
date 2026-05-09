@@ -74,11 +74,8 @@ fn run_next(g: &Graph, p: &PathFile) -> Action {
         return Action::PresentQuiz { quiz_id, atom_id };
     }
 
-    let mut visited = HashSet::new();
-    for target in &p.target_atoms {
-        if let Some(id) = first_untaught(g, target, &mut visited) {
-            return Action::CreateLesson { atom_id: id };
-        }
+    if let Some(id) = g.first_untaught_in(p.target_atoms.iter().map(String::as_str)) {
+        return Action::CreateLesson { atom_id: id };
     }
 
     let mut visited = HashSet::new();
@@ -105,30 +102,6 @@ fn first_due_card(g: &Graph, p: &PathFile, now: DateTime<Utc>) -> Option<(String
             return Some((quiz_id.clone(), atom_id));
         }
         // Quiz no longer in graph (rare); skip.
-    }
-    None
-}
-
-fn first_untaught(g: &Graph, id: &str, visited: &mut HashSet<String>) -> Option<String> {
-    if !visited.insert(id.to_string()) {
-        return None;
-    }
-    let c = g.by_id.get(id)?;
-    for prereq in &c.prerequisites {
-        if let Some(found) = first_untaught(g, prereq, visited) {
-            return Some(found);
-        }
-    }
-    if c.children_ids.is_empty() {
-        if c.lesson.is_none() {
-            return Some(id.to_string());
-        }
-    } else {
-        for child_id in &c.children_ids {
-            if let Some(found) = first_untaught(g, child_id, visited) {
-                return Some(found);
-            }
-        }
     }
     None
 }
