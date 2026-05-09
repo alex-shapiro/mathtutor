@@ -3,7 +3,7 @@
 //! Each provides serde for AYML round-trip, `argh::FromArgValue` for CLI
 //! parsing, and `Display` where format-string output is needed. Wire
 //! formats (`rename_all`) match the AYML and CLI conventions: lowercase
-//! for word-shaped variants, snake_case for compound ones.
+//! for word-shaped variants, `snake_case` for compound ones.
 
 use serde::{Deserialize, Serialize};
 

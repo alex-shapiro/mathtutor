@@ -337,6 +337,7 @@ pub struct CheckReport {
     pub issues: Vec<CheckIssue>,
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn run_check(graph_dir: &Path) -> Result<CheckReport, LoadError> {
     let manifest_path = graph_dir.join("manifest.ayml");
     let manifest = load_manifest(&manifest_path)?;
@@ -457,8 +458,8 @@ pub fn run_check(graph_dir: &Path) -> Result<CheckReport, LoadError> {
         report.atoms += area_atoms;
 
         eprintln!(
-            "  loaded {:30} [{:<4}] schema_v{}  clusters={:>3} atoms={:>4}",
-            area_slug, prefix, sv, area_clusters, area_atoms
+            "  loaded {area_slug:30} [{prefix:<4}] schema_v{sv}  \
+             clusters={area_clusters:>3} atoms={area_atoms:>4}"
         );
 
         area_trees.push((entry.clone(), sv, concepts));
@@ -481,6 +482,7 @@ pub fn run_check(graph_dir: &Path) -> Result<CheckReport, LoadError> {
     Ok(report)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_validate(
     n: &Concept,
     parent_id: Option<&str>,
@@ -525,14 +527,7 @@ fn walk_validate(
 
     if let Some(p) = parent_id {
         let expected_prefix = format!("{p}.");
-        if !n.id.starts_with(&expected_prefix) {
-            report.issues.push(CheckIssue {
-                area: Some(area_slug.to_string()),
-                node: Some(n.id.clone()),
-                message: format!("id does not extend parent '{p}'"),
-            });
-        } else {
-            let suffix = &n.id[expected_prefix.len()..];
+        if let Some(suffix) = n.id.strip_prefix(&expected_prefix) {
             if suffix.contains('.') {
                 report.issues.push(CheckIssue {
                     area: Some(area_slug.to_string()),
@@ -540,6 +535,12 @@ fn walk_validate(
                     message: format!("id should extend parent '{p}' by exactly one segment"),
                 });
             }
+        } else {
+            report.issues.push(CheckIssue {
+                area: Some(area_slug.to_string()),
+                node: Some(n.id.clone()),
+                message: format!("id does not extend parent '{p}'"),
+            });
         }
     }
 

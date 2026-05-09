@@ -61,6 +61,7 @@ pub fn cmd_store_lesson(
 /// Persist a quiz on an atom (free-text by default), generating a stable
 /// `<atom>.q<n>` ID. Logs `quiz_authored` against the active path.
 /// Returns the generated quiz ID.
+#[allow(clippy::too_many_arguments)]
 pub fn cmd_store_quiz(
     atom_id: &str,
     difficulty: Difficulty,
@@ -273,8 +274,8 @@ fn node_at_path<'a>(nodes: &'a mut [NodeRaw], path: &[usize]) -> Option<&'a mut 
 }
 
 fn find_leaf_mut<'a>(topics: &'a mut [TopicRaw], id: &str) -> Option<&'a mut LeafRaw> {
-    for t in topics.iter_mut() {
-        for l in t.leaves.iter_mut() {
+    for t in topics {
+        for l in &mut t.leaves {
             if l.id == id {
                 return Some(l);
             }

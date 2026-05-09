@@ -15,3 +15,6 @@ fsrs = "5.2.0"
 serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
 tracing = "0.1.44"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }

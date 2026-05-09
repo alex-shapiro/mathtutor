@@ -97,14 +97,14 @@ pub fn most_recent_id() -> Result<Option<String>, PathError> {
         return Ok(None);
     }
     let mut entries: Vec<_> = fs::read_dir(&root)?
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .filter(|e| e.path().is_dir())
         .collect();
     entries.sort_by_key(|e| std::cmp::Reverse(e.metadata().and_then(|m| m.modified()).ok()));
     Ok(entries
         .into_iter()
         .next()
-        .and_then(|e| e.file_name().to_str().map(|s| s.to_string())))
+        .and_then(|e| e.file_name().to_str().map(String::from)))
 }
 
 pub fn resolve_id(explicit: Option<&str>) -> Result<String, PathError> {
@@ -171,7 +171,7 @@ pub fn cmd_state(explicit_id: Option<&str>) -> Result<(), PathError> {
 // ── Topological sort over the user-supplied target atoms ───────────
 
 fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>, PathError> {
-    let atom_set: HashSet<&str> = atoms.iter().map(|s| s.as_str()).collect();
+    let atom_set: HashSet<&str> = atoms.iter().map(String::as_str).collect();
     let mut indegree: HashMap<&str, usize> = atoms.iter().map(|a| (a.as_str(), 0)).collect();
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
 
@@ -191,7 +191,7 @@ fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>, PathError> {
         .iter()
         .filter_map(|(k, &v)| if v == 0 { Some(*k) } else { None })
         .collect();
-    frontier.sort();
+    frontier.sort_unstable();
 
     let mut result = Vec::new();
     while !frontier.is_empty() {
@@ -199,13 +199,13 @@ fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>, PathError> {
         result.push(node.to_string());
         if let Some(neighbors) = adj.get(node) {
             let mut neighbors = neighbors.clone();
-            neighbors.sort();
+            neighbors.sort_unstable();
             for n in neighbors {
                 let entry = indegree.get_mut(n).unwrap();
                 *entry -= 1;
                 if *entry == 0 {
                     frontier.push(n);
-                    frontier.sort();
+                    frontier.sort_unstable();
                 }
             }
         }

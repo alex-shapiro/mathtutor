@@ -64,10 +64,10 @@ pub enum Action {
 }
 
 /// Action priority (see `DESIGN.md`):
-///   1. earliest-due quiz card                  → present_quiz
-///   2. untaught atom in path coverage          → create_lesson
-///   3. taught atom with unfilled difficulty    → create_quiz
-///   4. nothing pending                         → done
+///   1. earliest-due quiz card                  → `present_quiz`
+///   2. untaught atom in path coverage          → `create_lesson`
+///   3. taught atom with unfilled difficulty    → `create_quiz`
+///   4. nothing pending                         → `done`
 fn run_next(g: &Graph, p: &PathFile) -> Action {
     let now = Utc::now();
     if let Some((quiz_id, atom_id)) = first_due_card(g, p, now) {
@@ -190,10 +190,14 @@ struct QuizHistory {
     recent_ratings: Vec<Rating>,
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 fn compute_quiz_history(p: &PathFile, quiz_id: &str) -> QuizHistory {
-    let events = match event_log::load(&p.id) {
-        Ok(es) => es,
-        Err(_) => return QuizHistory::default(),
+    let Ok(events) = event_log::load(&p.id) else {
+        return QuizHistory::default();
     };
 
     let mut h = QuizHistory::default();
@@ -315,6 +319,7 @@ struct DonePayload {
 }
 
 impl Envelope {
+    #[allow(clippy::too_many_lines)]
     fn build(g: &Graph, p: &PathFile, action: Action) -> Self {
         match action {
             Action::PresentQuiz { quiz_id, atom_id } => {

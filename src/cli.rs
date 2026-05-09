@@ -147,7 +147,7 @@ pub struct StoreQuizCmd {
     #[argh(option)]
     pub rubric: Option<String>,
 
-    /// quiz type: free_text (default) | multiple_choice
+    /// quiz type: `free_text` (default) | `multiple_choice`
     #[argh(option, long = "type", default = "types::QuizType::FreeText")]
     pub quiz_type: types::QuizType,
 

@@ -20,6 +20,11 @@ pub enum AnswerError {
     Fsrs(String),
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
 pub fn cmd_answer(
     quiz_id: &str,
     rating: Rating,
