@@ -10,6 +10,7 @@ dependencies:
 files:
   rules:
   - path: ./**
+  - path: ~/.mathtutor/**
 network:
   rules: []
 exec:
