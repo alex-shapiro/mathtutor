@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://hub.ashell.dev/schemas/policy/v1.json
+
+schema_version: 1
+dependencies:
+  ash/base-macos: ^0
+  ash/claude-code: ^0.0.8
+  ash/git: ^0
+  ash/rust-dev: ^0
+files:
+  rules:
+  - path: ./**
+network:
+  rules: []
+exec:
+  rules: []
+io_devices:
+  rules: []
