@@ -33,6 +33,7 @@ topics:
         description: Independent attention heads concatenated.
         prerequisites:
           - tx.1.1
+        lesson: ...
       - id: tx.1.3
         name: Self vs cross attention
         description: Same vs different sequences for QKV.
