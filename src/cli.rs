@@ -7,6 +7,13 @@ use argh::FromArgs;
 
 use crate::types;
 
+/// Curriculum-graph location for `--graph` / `-p` defaults. `MT_GRAPH`
+/// lets the agent run `mt` from any cwd; falling back to the
+/// project-relative path matches in-tree development.
+fn default_graph_dir() -> PathBuf {
+    std::env::var_os("MT_GRAPH").map_or_else(|| PathBuf::from("curriculum/graph"), PathBuf::from)
+}
+
 #[derive(FromArgs, Debug)]
 /// Math Tutor — small lessons + spaced repetition over a curriculum graph.
 pub struct Mt {
@@ -17,12 +24,12 @@ pub struct Mt {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand)]
 pub enum Cmd {
-    Graph(GraphCmd),
     New(NewCmd),
-    Next(NextCmd),
     State(StateCmd),
+    Next(NextCmd),
     Store(StoreCmd),
     Answer(AnswerCmd),
+    Graph(GraphCmd),
 }
 
 /// Operate on the curriculum graph.
@@ -43,8 +50,8 @@ pub enum GraphOp {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "check")]
 pub struct GraphCheck {
-    /// path to the graph directory (default: curriculum/graph)
-    #[argh(option, short = 'p', default = "PathBuf::from(\"curriculum/graph\")")]
+    /// path to the graph directory (default: `$MT_GRAPH` or `curriculum/graph`)
+    #[argh(option, short = 'p', default = "default_graph_dir()")]
     pub path: PathBuf,
 }
 
@@ -61,7 +68,7 @@ pub struct NewCmd {
     pub atom: Vec<String>,
 
     /// path to the curriculum graph directory (default: curriculum/graph)
-    #[argh(option, default = "PathBuf::from(\"curriculum/graph\")")]
+    #[argh(option, default = "default_graph_dir()")]
     pub graph: PathBuf,
 }
 
@@ -74,7 +81,7 @@ pub struct NextCmd {
     pub path: Option<String>,
 
     /// path to the curriculum graph directory (default: curriculum/graph)
-    #[argh(option, default = "PathBuf::from(\"curriculum/graph\")")]
+    #[argh(option, default = "default_graph_dir()")]
     pub graph: PathBuf,
 }
 
@@ -119,7 +126,7 @@ pub struct StoreLessonCmd {
     pub path: Option<String>,
 
     /// path to the curriculum graph directory (default: curriculum/graph)
-    #[argh(option, default = "PathBuf::from(\"curriculum/graph\")")]
+    #[argh(option, default = "default_graph_dir()")]
     pub graph: PathBuf,
 }
 
@@ -156,7 +163,7 @@ pub struct StoreQuizCmd {
     pub path: Option<String>,
 
     /// path to the curriculum graph directory (default: curriculum/graph)
-    #[argh(option, default = "PathBuf::from(\"curriculum/graph\")")]
+    #[argh(option, default = "default_graph_dir()")]
     pub graph: PathBuf,
 }
 
@@ -177,6 +184,6 @@ pub struct AnswerCmd {
     pub path: Option<String>,
 
     /// path to the curriculum graph directory (default: curriculum/graph)
-    #[argh(option, default = "PathBuf::from(\"curriculum/graph\")")]
+    #[argh(option, default = "default_graph_dir()")]
     pub graph: PathBuf,
 }
