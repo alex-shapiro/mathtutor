@@ -1,7 +1,8 @@
 //! Learning-path data, per-path storage, and `mt new` / `mt state`.
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::event_log;
 use crate::graph::{self, Graph};
+use crate::types::Rating;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathError {
@@ -41,41 +43,6 @@ pub struct PathFile {
     pub target_atoms: Vec<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cards: HashMap<String, CardState>,
-}
-
-/// FSRS grade for a quiz answer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Rating {
-    Again,
-    Hard,
-    Good,
-    Easy,
-}
-
-impl std::fmt::Display for Rating {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Rating::Again => "again",
-            Rating::Hard => "hard",
-            Rating::Good => "good",
-            Rating::Easy => "easy",
-        })
-    }
-}
-
-impl argh::FromArgValue for Rating {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value {
-            "again" => Ok(Rating::Again),
-            "hard" => Ok(Rating::Hard),
-            "good" => Ok(Rating::Good),
-            "easy" => Ok(Rating::Easy),
-            other => Err(format!(
-                "invalid rating '{other}' (expected again | hard | good | easy)"
-            )),
-        }
-    }
 }
 
 /// FSRS-backed card state per quiz, stored in `path.ayml` keyed by quiz
@@ -120,9 +87,8 @@ pub fn save_path(p: &PathFile) -> Result<(), PathError> {
 }
 
 pub fn load_path(id: &str) -> Result<PathFile, PathError> {
-    let dir = path_dir(id)?;
-    let text = fs::read_to_string(dir.join("path.ayml"))?;
-    ayml::from_str(&text).map_err(|e| PathError::Parse(e.to_string()))
+    let file = File::open(path_dir(id)?.join("path.ayml"))?;
+    ayml::from_reader(BufReader::new(file)).map_err(|e| PathError::Parse(e.to_string()))
 }
 
 pub fn most_recent_id() -> Result<Option<String>, PathError> {
@@ -183,14 +149,7 @@ pub fn cmd_new(goal: &str, atoms: &[String], graph_dir: &Path) -> Result<String,
 
     save_path(&p)?;
 
-    event_log::append(event_log::Event {
-        ts: now,
-        kind: "path_created".to_string(),
-        path: id.clone(),
-        atom: None,
-        quiz: None,
-        payload: event_log::EventPayload::default(),
-    })?;
+    event_log::append(event_log::path_created(id.clone()))?;
 
     Ok(id)
 }

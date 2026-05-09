@@ -1,11 +1,14 @@
 //! Curriculum graph: AYML-backed types, loader, and `mt graph check`.
 
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
+use std::fs::File;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use crate::types::{Difficulty, QuizType};
 
 // ── Errors ──────────────────────────────────────────────────────────
 
@@ -110,59 +113,6 @@ pub struct NodeRaw {
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub difficulty: Option<u32>,
-}
-
-// ── Quiz enums (shared across CLI / graph / scheduler) ─────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Difficulty {
-    Easy,
-    Medium,
-    Hard,
-}
-
-impl std::fmt::Display for Difficulty {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Difficulty::Easy => "easy",
-            Difficulty::Medium => "medium",
-            Difficulty::Hard => "hard",
-        })
-    }
-}
-
-impl argh::FromArgValue for Difficulty {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value {
-            "easy" => Ok(Difficulty::Easy),
-            "medium" => Ok(Difficulty::Medium),
-            "hard" => Ok(Difficulty::Hard),
-            other => Err(format!(
-                "invalid difficulty '{other}' (expected easy | medium | hard)"
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum QuizType {
-    #[default]
-    FreeText,
-    MultipleChoice,
-}
-
-impl argh::FromArgValue for QuizType {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value {
-            "free_text" => Ok(QuizType::FreeText),
-            "multiple_choice" => Ok(QuizType::MultipleChoice),
-            other => Err(format!(
-                "invalid quiz type '{other}' (expected free_text | multiple_choice)"
-            )),
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -290,25 +240,27 @@ fn node_to_concept(n: NodeRaw) -> Concept {
 // ── Loaders ─────────────────────────────────────────────────────────
 
 pub fn load_manifest(path: &Path) -> Result<Manifest, LoadError> {
-    let text = fs::read_to_string(path).map_err(|e| LoadError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    ayml::from_str(&text).map_err(|e| LoadError::Parse {
+    let reader = open_reader(path)?;
+    ayml::from_reader(reader).map_err(|e| LoadError::Parse {
         path: path.to_path_buf(),
         message: e.to_string(),
     })
 }
 
 pub fn load_area(path: &Path) -> Result<AreaFileRaw, LoadError> {
-    let text = fs::read_to_string(path).map_err(|e| LoadError::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
-    ayml::from_str(&text).map_err(|e| LoadError::Parse {
+    let reader = open_reader(path)?;
+    ayml::from_reader(reader).map_err(|e| LoadError::Parse {
         path: path.to_path_buf(),
         message: e.to_string(),
     })
+}
+
+fn open_reader(path: &Path) -> Result<BufReader<File>, LoadError> {
+    let file = File::open(path).map_err(|e| LoadError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    Ok(BufReader::new(file))
 }
 
 // ── Flat graph (for scheduler / `mt new`) ──────────────────────────
@@ -317,7 +269,6 @@ pub fn load_area(path: &Path) -> Result<AreaFileRaw, LoadError> {
 /// Built once via `Graph::load`.
 #[derive(Debug)]
 pub struct Graph {
-    pub manifest: Manifest,
     pub by_id: HashMap<String, FlatConcept>,
 }
 
@@ -330,7 +281,6 @@ pub struct FlatConcept {
     pub children_ids: Vec<String>,
     pub lesson: Option<String>,
     pub quizzes: Vec<Quiz>,
-    pub area: String,
 }
 
 impl Graph {
@@ -338,24 +288,16 @@ impl Graph {
         let manifest = load_manifest(&graph_dir.join("manifest.ayml"))?;
         let mut by_id = HashMap::new();
         for entry in &manifest.areas {
-            let area_path = graph_dir.join(&entry.file);
-            let raw = load_area(&area_path)?;
+            let raw = load_area(&graph_dir.join(&entry.file))?;
             for c in raw.into_concepts() {
-                flatten(c, &entry.slug, &mut by_id);
+                flatten(c, &mut by_id);
             }
         }
-        Ok(Self { manifest, by_id })
-    }
-
-    pub fn is_atom(&self, id: &str) -> bool {
-        self.by_id
-            .get(id)
-            .map(|c| c.children_ids.is_empty())
-            .unwrap_or(false)
+        Ok(Self { by_id })
     }
 }
 
-fn flatten(c: Concept, area: &str, by_id: &mut HashMap<String, FlatConcept>) {
+fn flatten(c: Concept, by_id: &mut HashMap<String, FlatConcept>) {
     let children = c.children;
     let children_ids: Vec<String> = children.iter().map(|x| x.id.clone()).collect();
     let id = c.id;
@@ -369,11 +311,10 @@ fn flatten(c: Concept, area: &str, by_id: &mut HashMap<String, FlatConcept>) {
             children_ids,
             lesson: c.lesson,
             quizzes: c.quizzes,
-            area: area.to_string(),
         },
     );
     for child in children {
-        flatten(child, area, by_id);
+        flatten(child, by_id);
     }
 }
 

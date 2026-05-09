@@ -7,9 +7,10 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::answer::atom_from_quiz_id;
-use crate::event_log::{self, Event, EventPayload};
-use crate::graph::{self, Difficulty, FlatConcept, Graph, Quiz, QuizType};
-use crate::path::{self, CardState, PathError, PathFile, Rating};
+use crate::event_log::{self, EventKind};
+use crate::graph::{self, FlatConcept, Graph, Quiz};
+use crate::path::{self, CardState, PathError, PathFile};
+use crate::types::{Difficulty, QuizType, Rating};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SchedulerError {
@@ -33,14 +34,11 @@ pub fn cmd_next(path_id: Option<&str>, graph_dir: &Path) -> Result<(), Scheduler
     let envelope = Envelope::build(&g, &p, action.clone());
 
     if let Action::PresentQuiz { quiz_id, atom_id } = &action {
-        let _ = event_log::append(Event {
-            ts: Utc::now(),
-            kind: "quiz_presented".to_string(),
-            path: p.id.clone(),
-            atom: Some(atom_id.clone()),
-            quiz: Some(quiz_id.clone()),
-            payload: EventPayload::default(),
-        });
+        let _ = event_log::append(event_log::quiz_presented(
+            p.id.clone(),
+            atom_id.clone(),
+            quiz_id.clone(),
+        ));
     }
 
     let text = ayml::to_string(&envelope).map_err(|e| SchedulerError::Serialize(e.to_string()))?;
@@ -203,12 +201,12 @@ fn compute_quiz_history(p: &PathFile, quiz_id: &str) -> QuizHistory {
         if e.quiz.as_deref() != Some(quiz_id) {
             continue;
         }
-        match e.kind.as_str() {
-            "quiz_presented" => {
+        match e.kind {
+            EventKind::QuizPresented => {
                 h.repetitions += 1;
                 h.last_presented_at = Some(e.ts);
             }
-            "quiz_answered" => {
+            EventKind::QuizAnswered => {
                 if let Some(r) = e.payload.rating {
                     h.recent_ratings.insert(0, r);
                     h.recent_ratings.truncate(10);

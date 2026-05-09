@@ -6,8 +6,9 @@ use std::path::Path;
 use chrono::{Duration, Utc};
 use fsrs::{FSRS, MemoryState};
 
-use crate::event_log::{self, Event, EventPayload};
-use crate::path::{self, CardState, PathError, Rating};
+use crate::event_log;
+use crate::path::{self, CardState, PathError};
+use crate::types::Rating;
 
 const DESIRED_RETENTION: f32 = 0.9;
 
@@ -75,17 +76,12 @@ pub fn cmd_answer(
 
     path::save_path(&p)?;
 
-    event_log::append(Event {
-        ts: now,
-        kind: "quiz_answered".to_string(),
-        path: id,
-        atom: atom_from_quiz_id(quiz_id),
-        quiz: Some(quiz_id.to_string()),
-        payload: EventPayload {
-            rating: Some(rating),
-            ..Default::default()
-        },
-    })?;
+    event_log::append(event_log::quiz_answered(
+        id,
+        atom_from_quiz_id(quiz_id),
+        quiz_id.to_string(),
+        rating,
+    ))?;
 
     Ok(())
 }

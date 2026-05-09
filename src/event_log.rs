@@ -1,11 +1,27 @@
 //! Per-path event log: append-only AYML record.
+//!
+//! Events have a typed `kind` and are constructed via the typed helper
+//! functions in this module — call sites build events by name (e.g.
+//! `event_log::lesson_authored(path, atom)`) rather than by hand.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::BufReader;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::path::{PathError, Rating, path_dir};
+use crate::path::{PathError, path_dir};
+use crate::types::Rating;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    PathCreated,
+    LessonAuthored,
+    QuizAuthored,
+    QuizPresented,
+    QuizAnswered,
+}
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct EventPayload {
@@ -25,7 +41,7 @@ impl EventPayload {
 pub struct Event {
     pub ts: DateTime<Utc>,
     #[serde(rename = "type")]
-    pub kind: String,
+    pub kind: EventKind,
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub atom: Option<String>,
@@ -35,21 +51,74 @@ pub struct Event {
     pub payload: EventPayload,
 }
 
+// ── Typed constructors ────────────────────────────────────────────
+
+pub fn path_created(path: String) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::PathCreated,
+        path,
+        atom: None,
+        quiz: None,
+        payload: EventPayload::default(),
+    }
+}
+
+pub fn lesson_authored(path: String, atom: String) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::LessonAuthored,
+        path,
+        atom: Some(atom),
+        quiz: None,
+        payload: EventPayload::default(),
+    }
+}
+
+pub fn quiz_authored(path: String, atom: String, quiz: String) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::QuizAuthored,
+        path,
+        atom: Some(atom),
+        quiz: Some(quiz),
+        payload: EventPayload::default(),
+    }
+}
+
+pub fn quiz_presented(path: String, atom: String, quiz: String) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::QuizPresented,
+        path,
+        atom: Some(atom),
+        quiz: Some(quiz),
+        payload: EventPayload::default(),
+    }
+}
+
+pub fn quiz_answered(path: String, atom: Option<String>, quiz: String, rating: Rating) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::QuizAnswered,
+        path,
+        atom,
+        quiz: Some(quiz),
+        payload: EventPayload {
+            rating: Some(rating),
+            ..Default::default()
+        },
+    }
+}
+
+// ── Append + load ─────────────────────────────────────────────────
+
 pub fn append(event: Event) -> Result<(), PathError> {
     let dir = path_dir(&event.path)?;
     fs::create_dir_all(&dir)?;
     let log_file = dir.join("log.ayml");
 
-    let mut events: Vec<Event> = if log_file.exists() {
-        let text = fs::read_to_string(&log_file)?;
-        if text.trim().is_empty() {
-            Vec::new()
-        } else {
-            ayml::from_str(&text).map_err(|e| PathError::Parse(e.to_string()))?
-        }
-    } else {
-        Vec::new()
-    };
+    let mut events = read_events(&log_file)?;
     events.push(event);
 
     let text = ayml::to_string(&events).map_err(|e| PathError::Serialize(e.to_string()))?;
@@ -60,13 +129,16 @@ pub fn append(event: Event) -> Result<(), PathError> {
 /// Read all events for a path, in chronological order. Empty if the log
 /// doesn't exist yet.
 pub fn load(path_id: &str) -> Result<Vec<Event>, PathError> {
-    let log_file = path_dir(path_id)?.join("log.ayml");
+    read_events(&path_dir(path_id)?.join("log.ayml"))
+}
+
+fn read_events(log_file: &std::path::Path) -> Result<Vec<Event>, PathError> {
     if !log_file.exists() {
         return Ok(Vec::new());
     }
-    let text = fs::read_to_string(&log_file)?;
-    if text.trim().is_empty() {
+    let file = File::open(log_file)?;
+    if file.metadata()?.len() == 0 {
         return Ok(Vec::new());
     }
-    ayml::from_str(&text).map_err(|e| PathError::Parse(e.to_string()))
+    ayml::from_reader(BufReader::new(file)).map_err(|e| PathError::Parse(e.to_string()))
 }

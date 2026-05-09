@@ -3,13 +3,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
-
 use crate::event_log;
-use crate::graph::{
-    self, AreaFileRaw, Difficulty, LeafRaw, Manifest, NodeRaw, QuizRaw, QuizType, TopicRaw,
-};
+use crate::graph::{self, AreaFileRaw, LeafRaw, Manifest, NodeRaw, QuizRaw, TopicRaw};
 use crate::path::{self, PathError};
+use crate::types::{Difficulty, QuizType};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PersistError {
@@ -56,14 +53,7 @@ pub fn cmd_store_lesson(
     store_lesson_in_graph(graph_dir, atom_id, body)?;
 
     let id = path::resolve_id(path_id)?;
-    event_log::append(event_log::Event {
-        ts: Utc::now(),
-        kind: "lesson_authored".to_string(),
-        path: id,
-        atom: Some(atom_id.to_string()),
-        quiz: None,
-        payload: event_log::EventPayload::default(),
-    })?;
+    event_log::append(event_log::lesson_authored(id, atom_id.to_string()))?;
 
     Ok(())
 }
@@ -86,14 +76,11 @@ pub fn cmd_store_quiz(
     )?;
 
     let id = path::resolve_id(path_id)?;
-    event_log::append(event_log::Event {
-        ts: Utc::now(),
-        kind: "quiz_authored".to_string(),
-        path: id,
-        atom: Some(atom_id.to_string()),
-        quiz: Some(quiz_id.clone()),
-        payload: event_log::EventPayload::default(),
-    })?;
+    event_log::append(event_log::quiz_authored(
+        id,
+        atom_id.to_string(),
+        quiz_id.clone(),
+    ))?;
 
     Ok(quiz_id)
 }
