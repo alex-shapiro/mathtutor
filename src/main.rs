@@ -100,6 +100,7 @@ struct StoreCmd {
 #[argh(subcommand)]
 enum StoreOp {
     Lesson(StoreLessonCmd),
+    Quiz(StoreQuizCmd),
 }
 
 /// Persist a lesson body on an atom.
@@ -113,6 +114,43 @@ struct StoreLessonCmd {
     /// lesson body
     #[argh(option)]
     body: String,
+
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    path: Option<String>,
+
+    /// path to the curriculum graph directory (default: curriculum/graph)
+    #[argh(option, default = "PathBuf::from(\"curriculum/graph\")")]
+    graph: PathBuf,
+}
+
+/// Persist a quiz on an atom (free-text by default).
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "quiz")]
+struct StoreQuizCmd {
+    /// atom id
+    #[argh(positional)]
+    atom: String,
+
+    /// difficulty: easy | medium | hard
+    #[argh(option)]
+    difficulty: String,
+
+    /// question text
+    #[argh(option)]
+    question: String,
+
+    /// reference answer
+    #[argh(option)]
+    answer: String,
+
+    /// optional grading rubric
+    #[argh(option)]
+    rubric: Option<String>,
+
+    /// quiz type: free_text (default) | multiple_choice
+    #[argh(option, long = "type", default = "\"free_text\".to_string()")]
+    quiz_type: String,
 
     /// path id (defaults to most recent)
     #[argh(option, short = 'p')]
@@ -184,6 +222,25 @@ fn main() -> ExitCode {
                     }
                 }
             }
+            StoreOp::Quiz(c) => match persist::cmd_store_quiz(
+                &c.atom,
+                c.difficulty.clone(),
+                c.question.clone(),
+                c.answer.clone(),
+                c.rubric.clone(),
+                c.quiz_type.clone(),
+                c.path.as_deref(),
+                &c.graph,
+            ) {
+                Ok(qid) => {
+                    eprintln!("stored quiz: {qid}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(2)
+                }
+            },
         },
     }
 }

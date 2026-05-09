@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 
 use crate::event_log;
-use crate::graph::{self, AreaFileRaw, LeafRaw, Manifest, NodeRaw, TopicRaw};
+use crate::graph::{self, AreaFileRaw, LeafRaw, Manifest, NodeRaw, QuizRaw, TopicRaw};
 use crate::path::{self, PathError};
 
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +31,12 @@ pub enum PersistError {
     NotAtom(String),
     #[error("atom '{0}' already has a stored lesson; use `mt amend lesson` to replace")]
     LessonAlreadyExists(String),
+    #[error("atom '{0}' has no stored lesson; teach it before authoring quizzes")]
+    NoLesson(String),
+    #[error("invalid difficulty '{0}' (expected easy / medium / hard)")]
+    BadDifficulty(String),
+    #[error("invalid quiz type '{0}' (expected free_text / multiple_choice)")]
+    BadQuizType(String),
     #[error("schema mismatch: file claims schema_version=1 but has no `topics:`")]
     WrongSchemaV1,
     #[error("schema mismatch: file claims schema_version=2 but has no `children:`")]
@@ -39,7 +45,7 @@ pub enum PersistError {
     UnknownSchema(u32),
 }
 
-// ── Public command ─────────────────────────────────────────────────
+// ── Public commands ────────────────────────────────────────────────
 
 /// Persist a lesson body for an atom into the canonical graph and log
 /// `lesson_authored` against the active learning path.
@@ -61,6 +67,35 @@ pub fn cmd_store_lesson(
     })?;
 
     Ok(())
+}
+
+/// Persist a quiz on an atom (free-text by default), generating a stable
+/// `<atom>.q<n>` ID. Logs `quiz_authored` against the active path.
+/// Returns the generated quiz ID.
+pub fn cmd_store_quiz(
+    atom_id: &str,
+    difficulty: String,
+    question: String,
+    answer: String,
+    rubric: Option<String>,
+    quiz_type: String,
+    path_id: Option<&str>,
+    graph_dir: &Path,
+) -> Result<String, PersistError> {
+    let quiz_id = store_quiz_in_graph(
+        graph_dir, atom_id, difficulty, question, answer, rubric, quiz_type,
+    )?;
+
+    let id = path::resolve_id(path_id)?;
+    event_log::append(event_log::Event {
+        ts: Utc::now(),
+        kind: "quiz_authored".to_string(),
+        path: id,
+        atom: Some(atom_id.to_string()),
+        quiz: Some(quiz_id.clone()),
+    })?;
+
+    Ok(quiz_id)
 }
 
 // ── Implementation ─────────────────────────────────────────────────
@@ -100,12 +135,92 @@ fn store_lesson_in_graph(
         v => return Err(PersistError::UnknownSchema(v)),
     }
 
-    let text = ayml::to_string(&raw).map_err(|e| PersistError::Serialize(e.to_string()))?;
-    fs::write(&area_path, text).map_err(|e| PersistError::Io {
-        path: area_path.clone(),
+    write_area(&area_path, &raw)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_quiz_in_graph(
+    graph_dir: &Path,
+    atom_id: &str,
+    difficulty: String,
+    question: String,
+    answer: String,
+    rubric: Option<String>,
+    quiz_type: String,
+) -> Result<String, PersistError> {
+    if !matches!(difficulty.as_str(), "easy" | "medium" | "hard") {
+        return Err(PersistError::BadDifficulty(difficulty));
+    }
+    if !matches!(quiz_type.as_str(), "free_text" | "multiple_choice") {
+        return Err(PersistError::BadQuizType(quiz_type));
+    }
+    // Don't bloat files with the default type.
+    let kind = if quiz_type == "free_text" {
+        None
+    } else {
+        Some(quiz_type)
+    };
+
+    let manifest = graph::load_manifest(&graph_dir.join("manifest.ayml"))?;
+    let area_path = area_file_for_atom(&manifest, graph_dir, atom_id)?;
+    let mut raw = graph::load_area(&area_path)?;
+
+    let new_id = match raw.schema_version {
+        1 => {
+            let topics = raw.topics.as_mut().ok_or(PersistError::WrongSchemaV1)?;
+            let leaf = find_leaf_mut(topics, atom_id)
+                .ok_or_else(|| PersistError::AtomNotFound(atom_id.to_string()))?;
+            if leaf.lesson.is_none() {
+                return Err(PersistError::NoLesson(atom_id.to_string()));
+            }
+            let new_id = next_quiz_id(atom_id, leaf.quizzes.as_deref().unwrap_or(&[]));
+            let q = QuizRaw {
+                id: new_id.clone(),
+                difficulty,
+                kind,
+                question,
+                answer,
+                rubric,
+            };
+            leaf.quizzes.get_or_insert_with(Vec::new).push(q);
+            new_id
+        }
+        2 => {
+            let children = raw.children.as_mut().ok_or(PersistError::WrongSchemaV2)?;
+            let node = find_node_mut(children, atom_id)
+                .ok_or_else(|| PersistError::AtomNotFound(atom_id.to_string()))?;
+            let has_children = node.children.as_ref().is_some_and(|c| !c.is_empty());
+            if has_children {
+                return Err(PersistError::NotAtom(atom_id.to_string()));
+            }
+            if node.lesson.is_none() {
+                return Err(PersistError::NoLesson(atom_id.to_string()));
+            }
+            let new_id = next_quiz_id(atom_id, node.quizzes.as_deref().unwrap_or(&[]));
+            let q = QuizRaw {
+                id: new_id.clone(),
+                difficulty,
+                kind,
+                question,
+                answer,
+                rubric,
+            };
+            node.quizzes.get_or_insert_with(Vec::new).push(q);
+            new_id
+        }
+        v => return Err(PersistError::UnknownSchema(v)),
+    };
+
+    write_area(&area_path, &raw)?;
+    Ok(new_id)
+}
+
+fn write_area(path: &Path, raw: &AreaFileRaw) -> Result<(), PersistError> {
+    let text = ayml::to_string(raw).map_err(|e| PersistError::Serialize(e.to_string()))?;
+    fs::write(path, text).map_err(|e| PersistError::Io {
+        path: path.to_path_buf(),
         source: e,
-    })?;
-    Ok(())
+    })
 }
 
 fn area_file_for_atom(
@@ -122,9 +237,23 @@ fn area_file_for_atom(
     Ok(graph_dir.join(&entry.file))
 }
 
-/// Two-pass mutable lookup: locate by ID via read-only DFS to record the
-/// index path, then walk that path with sequential mutable borrows. This
-/// avoids the borrow-checker conflict from recursive `&mut` returns.
+/// Smallest unused positive integer for the `<atom>.q<n>` ID series.
+/// IDs are stable (deleted IDs aren't reused, matching `SCHEMA.md`).
+/// Persisting always assigns the next-highest number, never reusing
+/// gaps left by earlier deletions if any ever appear.
+fn next_quiz_id(atom_id: &str, existing: &[QuizRaw]) -> String {
+    let prefix = format!("{atom_id}.q");
+    let max = existing
+        .iter()
+        .filter_map(|q| q.id.strip_prefix(&prefix))
+        .filter_map(|s| s.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+    format!("{prefix}{}", max + 1)
+}
+
+// ── Mutable lookup helpers (read-only path probe + sequential descent) ──
+
 fn find_node_mut<'a>(nodes: &'a mut [NodeRaw], id: &str) -> Option<&'a mut NodeRaw> {
     let path = locate_node_path(nodes, id)?;
     node_at_path(nodes, &path)
@@ -176,7 +305,3 @@ fn find_leaf_mut<'a>(topics: &'a mut [TopicRaw], id: &str) -> Option<&'a mut Lea
     }
     None
 }
-
-// `AreaFileRaw` is used through `&mut raw` above; make sure the type stays in scope.
-#[allow(dead_code)]
-fn _ensure_area_file_raw_in_scope(_: &AreaFileRaw) {}
