@@ -2,7 +2,7 @@ schema_version: 1
 area: neural-network-theory
 prefix: nn
 summary: "Neural network architectures, training dynamics, loss landscapes, expressivity, regularization, scaling, efficiency."
-why_for_dl: """
+motivation: """
   This is the architecture-and-dynamics layer specific to neural networks
   but generic across modalities — the place where activations, layers,
   initialization, normalization, gradient flow, and scaling parameterizations

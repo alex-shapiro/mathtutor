@@ -2,7 +2,7 @@ schema_version: 1
 area: geometry-and-topology
 prefix: geom
 summary: "Differential manifolds, Riemannian geometry, Lie groups, group equivariance, algebraic topology, information geometry, optimal-transport geometry."
-why_for_dl: """
+motivation: """
   The manifold hypothesis underlies nearly every representation-learning
   argument. Riemannian geometry powers manifold optimization, hyperbolic
   embeddings, and geodesic interpolation in latent spaces. Lie groups

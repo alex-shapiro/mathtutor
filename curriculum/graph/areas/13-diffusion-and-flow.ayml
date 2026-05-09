@@ -2,7 +2,7 @@ schema_version: 1
 area: diffusion-and-flow
 prefix: dif
 summary: "Score-based generative models, DDPM, continuous-time SDE/ODE perspective, conditioning and guidance, flow matching, distillation, latent / discrete / structured diffusion."
-why_for_dl: """
+motivation: """
   Diffusion and flow-matching are the dominant paradigm for generative
   modeling outside of language. Built on stochastic calculus, score
   matching, and optimal transport, they unify denoising, score-based

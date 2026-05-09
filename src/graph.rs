@@ -52,7 +52,7 @@ pub struct AreaFileRaw {
     pub area: String,
     pub prefix: String,
     pub summary: String,
-    pub why_for_dl: String,
+    pub motivation: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cross_references: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

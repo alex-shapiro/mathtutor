@@ -2,7 +2,7 @@ schema_version: 1
 area: reinforcement-learning
 prefix: rl
 summary: "Markov decision processes, dynamic programming, model-free / policy-gradient methods, KL-regularized RL (RLHF / DPO / KTO), exploration, model-based RL, offline RL."
-why_for_dl: """
+motivation: """
   RL is the language of preference fine-tuning (RLHF, DPO, KTO, IPO),
   reasoning agents, and embodied / robotic systems. The MDP / Bellman
   framework, policy gradient theorem, and KL-regularized formulations

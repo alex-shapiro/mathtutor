@@ -2,7 +2,7 @@ schema_version: 1
 area: information-theory
 prefix: inf
 summary: "Entropy, divergences, source / channel coding, MI estimation, information bottleneck."
-why_for_dl: """
+motivation: """
   Cross-entropy, KL divergence, and mutual information are the loss
   functions and bounds of nearly every probabilistic model. Source-coding
   and rate-distortion intuitions underlie tokenization and compression

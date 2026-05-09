@@ -36,7 +36,7 @@ schema_version: 2
 area: foundations
 prefix: fnd
 summary: "One-line area summary."
-why_for_dl: |
+motivation: |
   Multi-line motivation, Markdown allowed.
 cross_references:
   - linear-algebra
@@ -82,7 +82,7 @@ descendants cover) and `prerequisites` (coarse ordering hints), but no
 | `area` | yes | slug; matches manifest |
 | `prefix` | yes | short ID prefix |
 | `summary` | yes | one-line area description |
-| `why_for_dl` | yes | multi-line motivation |
+| `motivation` | yes | multi-line motivation |
 | `cross_references` | no | list of adjacent area slugs |
 | `children` | yes | top-level concept tree |
 

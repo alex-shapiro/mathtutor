@@ -2,7 +2,7 @@ schema_version: 2
 area: linear-algebra
 prefix: la
 summary: "Vector spaces, linear maps, matrix decompositions, inner-product geometry, tensor algebra, matrix calculus, numerical linear algebra."
-why_for_dl: """
+motivation: """
   Every learned object is a tensor; every layer is a (multi)linear map
   composed with nonlinearity; attention is a sequence of matrix products;
   gradients live in cotangent spaces; LoRA, PCA, weight-spectrum analysis,

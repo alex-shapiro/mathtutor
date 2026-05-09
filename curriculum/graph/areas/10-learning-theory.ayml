@@ -2,7 +2,7 @@ schema_version: 1
 area: learning-theory
 prefix: lt
 summary: "Statistical learning framework, generalization bounds, online learning, implicit bias, modern deep-net theory, robustness, causality."
-why_for_dl: """
+motivation: """
   Learning theory frames what generalization means, when it can be
   guaranteed, and what scaling gives you. NTK, mean-field, double
   descent, scaling laws, and benign-overfitting form the modern
