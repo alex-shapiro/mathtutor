@@ -43,15 +43,54 @@ pub struct PathFile {
     pub cards: HashMap<String, CardState>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+/// FSRS grade for a quiz answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Rating {
+    Again,
+    Hard,
+    Good,
+    Easy,
+}
+
+impl std::fmt::Display for Rating {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Rating::Again => "again",
+            Rating::Hard => "hard",
+            Rating::Good => "good",
+            Rating::Easy => "easy",
+        })
+    }
+}
+
+impl argh::FromArgValue for Rating {
+    fn from_arg_value(value: &str) -> Result<Self, String> {
+        match value {
+            "again" => Ok(Rating::Again),
+            "hard" => Ok(Rating::Hard),
+            "good" => Ok(Rating::Good),
+            "easy" => Ok(Rating::Easy),
+            other => Err(format!(
+                "invalid rating '{other}' (expected again | hard | good | easy)"
+            )),
+        }
+    }
+}
+
+/// FSRS-backed card state per quiz, stored in `path.ayml` keyed by quiz
+/// ID. Created on the first answer for that quiz.
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CardState {
-    pub repetitions: u32,
+    pub due: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub due: Option<DateTime<Utc>>,
+    pub last_review: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_rating: Option<String>,
+    pub stability: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_presented_at: Option<DateTime<Utc>>,
+    pub difficulty: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_rating: Option<Rating>,
 }
 
 // ── Storage layout ──────────────────────────────────────────────────
@@ -150,6 +189,7 @@ pub fn cmd_new(goal: &str, atoms: &[String], graph_dir: &Path) -> Result<String,
         path: id.clone(),
         atom: None,
         quiz: None,
+        payload: event_log::EventPayload::default(),
     })?;
 
     Ok(id)

@@ -39,11 +39,9 @@ pub struct ManifestArea {
 
 // ── Raw area-file shape (handles both v1 and v2) ────────────────────
 //
-// These types round-trip: same struct deserializes the file and
-// re-serializes after mutation (e.g. when `mt store lesson` adds a
-// lesson body). Field order matches the on-disk convention; empty /
-// `None` fields are skipped on serialize so files don't bloat with
-// defaults.
+// These types round-trip: deserialize on read, re-serialize on write.
+// Field order matches the on-disk convention; empty / `None` fields
+// are skip-serialized to keep files free of default-valued lines.
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AreaFileRaw {
@@ -114,12 +112,65 @@ pub struct NodeRaw {
     pub difficulty: Option<u32>,
 }
 
+// ── Quiz enums (shared across CLI / graph / scheduler) ─────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Difficulty {
+    Easy,
+    Medium,
+    Hard,
+}
+
+impl std::fmt::Display for Difficulty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Difficulty::Easy => "easy",
+            Difficulty::Medium => "medium",
+            Difficulty::Hard => "hard",
+        })
+    }
+}
+
+impl argh::FromArgValue for Difficulty {
+    fn from_arg_value(value: &str) -> Result<Self, String> {
+        match value {
+            "easy" => Ok(Difficulty::Easy),
+            "medium" => Ok(Difficulty::Medium),
+            "hard" => Ok(Difficulty::Hard),
+            other => Err(format!(
+                "invalid difficulty '{other}' (expected easy | medium | hard)"
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QuizType {
+    #[default]
+    FreeText,
+    MultipleChoice,
+}
+
+impl argh::FromArgValue for QuizType {
+    fn from_arg_value(value: &str) -> Result<Self, String> {
+        match value {
+            "free_text" => Ok(QuizType::FreeText),
+            "multiple_choice" => Ok(QuizType::MultipleChoice),
+            other => Err(format!(
+                "invalid quiz type '{other}' (expected free_text | multiple_choice)"
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct QuizRaw {
     pub id: String,
-    pub difficulty: String,
+    pub difficulty: Difficulty,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
+    pub kind: Option<QuizType>,
     pub question: String,
     pub answer: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -143,8 +194,8 @@ pub struct Concept {
 #[derive(Debug, Clone)]
 pub struct Quiz {
     pub id: String,
-    pub difficulty: String,
-    pub kind: Option<String>,
+    pub difficulty: Difficulty,
+    pub kind: Option<QuizType>,
     pub question: String,
     pub answer: String,
     pub rubric: Option<String>,

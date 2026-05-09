@@ -3,10 +3,13 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::graph::{self, FlatConcept, Graph, Quiz};
-use crate::path::{self, PathError, PathFile};
+use crate::answer::atom_from_quiz_id;
+use crate::event_log::{self, Event, EventPayload};
+use crate::graph::{self, Difficulty, FlatConcept, Graph, Quiz, QuizType};
+use crate::path::{self, CardState, PathError, PathFile, Rating};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SchedulerError {
@@ -24,7 +27,21 @@ pub fn cmd_next(path_id: Option<&str>, graph_dir: &Path) -> Result<(), Scheduler
     let p = path::load_path(&id)?;
 
     let action = run_next(&g, &p);
-    let envelope = Envelope::build(&g, &p, action);
+    // Build the envelope first — it reads the log to compute `history`,
+    // and we want `history.repetitions` to count past presentations only,
+    // not the one we are about to log below.
+    let envelope = Envelope::build(&g, &p, action.clone());
+
+    if let Action::PresentQuiz { quiz_id, atom_id } = &action {
+        let _ = event_log::append(Event {
+            ts: Utc::now(),
+            kind: "quiz_presented".to_string(),
+            path: p.id.clone(),
+            atom: Some(atom_id.clone()),
+            quiz: Some(quiz_id.clone()),
+            payload: EventPayload::default(),
+        });
+    }
 
     let text = ayml::to_string(&envelope).map_err(|e| SchedulerError::Serialize(e.to_string()))?;
     print!("{text}");
@@ -32,20 +49,33 @@ pub fn cmd_next(path_id: Option<&str>, graph_dir: &Path) -> Result<(), Scheduler
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Action {
-    CreateLesson { atom_id: String },
-    CreateQuiz { atom_id: String, difficulty: String },
+    PresentQuiz {
+        quiz_id: String,
+        atom_id: String,
+    },
+    CreateLesson {
+        atom_id: String,
+    },
+    CreateQuiz {
+        atom_id: String,
+        difficulty: Difficulty,
+    },
     Done,
 }
 
-/// Priority (per DESIGN.md):
-///   (1) due quiz card — not yet implemented
-///   (2) untaught atom in path coverage         → create_lesson
-///   (3) taught atom with unfilled difficulty   → create_quiz
-///   (4) otherwise                               → done
+/// Action priority (see `DESIGN.md`):
+///   1. earliest-due quiz card                  → present_quiz
+///   2. untaught atom in path coverage          → create_lesson
+///   3. taught atom with unfilled difficulty    → create_quiz
+///   4. nothing pending                         → done
 fn run_next(g: &Graph, p: &PathFile) -> Action {
-    // Phase 2: any untaught atom (the user's targets, walking back through prereqs)?
+    let now = Utc::now();
+    if let Some((quiz_id, atom_id)) = first_due_card(g, p, now) {
+        return Action::PresentQuiz { quiz_id, atom_id };
+    }
+
     let mut visited = HashSet::new();
     for target in &p.target_atoms {
         if let Some(id) = first_untaught(g, target, &mut visited) {
@@ -53,18 +83,32 @@ fn run_next(g: &Graph, p: &PathFile) -> Action {
         }
     }
 
-    // Phase 3: any taught atom missing a difficulty slot?
     let mut visited = HashSet::new();
     for target in &p.target_atoms {
         if let Some((atom, diff)) = first_quiz_slot(g, target, &mut visited) {
             return Action::CreateQuiz {
                 atom_id: atom,
-                difficulty: diff.to_string(),
+                difficulty: diff,
             };
         }
     }
 
     Action::Done
+}
+
+fn first_due_card(g: &Graph, p: &PathFile, now: DateTime<Utc>) -> Option<(String, String)> {
+    let mut due_cards: Vec<(&String, &CardState)> =
+        p.cards.iter().filter(|(_, c)| c.due <= now).collect();
+    due_cards.sort_by_key(|(_, c)| c.due);
+    for (quiz_id, _) in due_cards {
+        let atom_id = atom_from_quiz_id(quiz_id)?;
+        let atom = g.by_id.get(&atom_id)?;
+        if atom.quizzes.iter().any(|q| q.id == *quiz_id) {
+            return Some((quiz_id.clone(), atom_id));
+        }
+        // Quiz no longer in graph (rare); skip.
+    }
+    None
 }
 
 fn first_untaught(g: &Graph, id: &str, visited: &mut HashSet<String>) -> Option<String> {
@@ -95,7 +139,7 @@ fn first_quiz_slot(
     g: &Graph,
     id: &str,
     visited: &mut HashSet<String>,
-) -> Option<(String, &'static str)> {
+) -> Option<(String, Difficulty)> {
     if !visited.insert(id.to_string()) {
         return None;
     }
@@ -121,17 +165,68 @@ fn first_quiz_slot(
     None
 }
 
-fn next_missing_difficulty(quizzes: &[Quiz]) -> Option<&'static str> {
-    let has = |d: &str| quizzes.iter().any(|q| q.difficulty == d);
-    if !has("easy") {
-        Some("easy")
-    } else if !has("medium") {
-        Some("medium")
-    } else if !has("hard") {
-        Some("hard")
+fn next_missing_difficulty(quizzes: &[Quiz]) -> Option<Difficulty> {
+    let has = |d: Difficulty| quizzes.iter().any(|q| q.difficulty == d);
+    if !has(Difficulty::Easy) {
+        Some(Difficulty::Easy)
+    } else if !has(Difficulty::Medium) {
+        Some(Difficulty::Medium)
+    } else if !has(Difficulty::Hard) {
+        Some(Difficulty::Hard)
     } else {
         None
     }
+}
+
+// ── Quiz history (derived from the event log on every present_quiz) ──
+
+#[derive(Serialize, Default)]
+struct QuizHistory {
+    repetitions: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_presented_at: Option<DateTime<Utc>>,
+    correct_count: u32,
+    total_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    correct_pct: Option<u32>,
+    recent_ratings: Vec<Rating>,
+}
+
+fn compute_quiz_history(p: &PathFile, quiz_id: &str) -> QuizHistory {
+    let events = match event_log::load(&p.id) {
+        Ok(es) => es,
+        Err(_) => return QuizHistory::default(),
+    };
+
+    let mut h = QuizHistory::default();
+    for e in &events {
+        if e.quiz.as_deref() != Some(quiz_id) {
+            continue;
+        }
+        match e.kind.as_str() {
+            "quiz_presented" => {
+                h.repetitions += 1;
+                h.last_presented_at = Some(e.ts);
+            }
+            "quiz_answered" => {
+                if let Some(r) = e.payload.rating {
+                    h.recent_ratings.insert(0, r);
+                    h.recent_ratings.truncate(10);
+                    if matches!(r, Rating::Good | Rating::Easy) {
+                        h.correct_count += 1;
+                    }
+                    h.total_count += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    h.correct_pct = if h.total_count > 0 {
+        Some(((h.correct_count as f32 / h.total_count as f32) * 100.0).round() as u32)
+    } else {
+        None
+    };
+    h
 }
 
 // ── AYML output shape ──────────────────────────────────────────────
@@ -147,6 +242,7 @@ struct Envelope {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Payload {
+    PresentQuiz(PresentQuizPayload),
     CreateLesson(CreateLessonPayload),
     CreateQuiz(CreateQuizPayload),
     Done(DonePayload),
@@ -162,9 +258,17 @@ struct CreateLessonPayload {
 #[derive(Serialize)]
 struct CreateQuizPayload {
     atom: AtomBrief,
-    target_difficulty: String,
+    target_difficulty: Difficulty,
     existing_quizzes: Vec<ExistingQuizBrief>,
     prerequisites: Vec<PrereqBrief>,
+    next_step: String,
+}
+
+#[derive(Serialize)]
+struct PresentQuizPayload {
+    atom: AtomBrief,
+    quiz: QuizFull,
+    history: QuizHistory,
     next_step: String,
 }
 
@@ -191,8 +295,20 @@ struct PrereqBrief {
 #[derive(Serialize)]
 struct ExistingQuizBrief {
     id: String,
-    difficulty: String,
+    difficulty: Difficulty,
     question: String,
+}
+
+#[derive(Serialize)]
+struct QuizFull {
+    id: String,
+    difficulty: Difficulty,
+    #[serde(rename = "type")]
+    kind: QuizType,
+    question: String,
+    answer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rubric: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -203,13 +319,47 @@ struct DonePayload {
 impl Envelope {
     fn build(g: &Graph, p: &PathFile, action: Action) -> Self {
         match action {
+            Action::PresentQuiz { quiz_id, atom_id } => {
+                let c = g.by_id.get(&atom_id).expect("atom exists in graph");
+                let q = c
+                    .quizzes
+                    .iter()
+                    .find(|x| x.id == quiz_id)
+                    .expect("quiz exists in graph");
+                let atom = AtomBrief {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    description: c.description.clone(),
+                    lesson: c.lesson.clone(),
+                };
+                let quiz = QuizFull {
+                    id: q.id.clone(),
+                    difficulty: q.difficulty,
+                    kind: q.kind.unwrap_or_default(),
+                    question: q.question.clone(),
+                    answer: q.answer.clone(),
+                    rubric: q.rubric.clone(),
+                };
+                let history = compute_quiz_history(p, &quiz_id);
+                Envelope {
+                    schema_version: 1,
+                    action: "present_quiz".to_string(),
+                    path: p.id.clone(),
+                    payload: Payload::PresentQuiz(PresentQuizPayload {
+                        atom,
+                        quiz,
+                        history,
+                        next_step: format!("mt answer {quiz_id} --rating {{again|hard|good|easy}}"),
+                    }),
+                }
+            }
             Action::CreateLesson { atom_id } => {
                 let c = g.by_id.get(&atom_id).expect("atom exists in graph");
                 let atom = AtomBrief {
                     id: c.id.clone(),
                     name: c.name.clone(),
                     description: c.description.clone(),
-                    lesson: None, // create_lesson never includes the to-be-authored lesson
+                    lesson: None,
                 };
                 let prerequisites = collect_prereqs(g, c);
                 Envelope {
@@ -239,7 +389,7 @@ impl Envelope {
                     .iter()
                     .map(|q| ExistingQuizBrief {
                         id: q.id.clone(),
-                        difficulty: q.difficulty.clone(),
+                        difficulty: q.difficulty,
                         question: q.question.clone(),
                     })
                     .collect();

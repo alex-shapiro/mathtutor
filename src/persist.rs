@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 
 use crate::event_log;
-use crate::graph::{self, AreaFileRaw, LeafRaw, Manifest, NodeRaw, QuizRaw, TopicRaw};
+use crate::graph::{
+    self, AreaFileRaw, Difficulty, LeafRaw, Manifest, NodeRaw, QuizRaw, QuizType, TopicRaw,
+};
 use crate::path::{self, PathError};
 
 #[derive(Debug, thiserror::Error)]
@@ -33,10 +35,6 @@ pub enum PersistError {
     LessonAlreadyExists(String),
     #[error("atom '{0}' has no stored lesson; teach it before authoring quizzes")]
     NoLesson(String),
-    #[error("invalid difficulty '{0}' (expected easy / medium / hard)")]
-    BadDifficulty(String),
-    #[error("invalid quiz type '{0}' (expected free_text / multiple_choice)")]
-    BadQuizType(String),
     #[error("schema mismatch: file claims schema_version=1 but has no `topics:`")]
     WrongSchemaV1,
     #[error("schema mismatch: file claims schema_version=2 but has no `children:`")]
@@ -64,6 +62,7 @@ pub fn cmd_store_lesson(
         path: id,
         atom: Some(atom_id.to_string()),
         quiz: None,
+        payload: event_log::EventPayload::default(),
     })?;
 
     Ok(())
@@ -74,11 +73,11 @@ pub fn cmd_store_lesson(
 /// Returns the generated quiz ID.
 pub fn cmd_store_quiz(
     atom_id: &str,
-    difficulty: String,
+    difficulty: Difficulty,
     question: String,
     answer: String,
     rubric: Option<String>,
-    quiz_type: String,
+    quiz_type: QuizType,
     path_id: Option<&str>,
     graph_dir: &Path,
 ) -> Result<String, PersistError> {
@@ -93,6 +92,7 @@ pub fn cmd_store_quiz(
         path: id,
         atom: Some(atom_id.to_string()),
         quiz: Some(quiz_id.clone()),
+        payload: event_log::EventPayload::default(),
     })?;
 
     Ok(quiz_id)
@@ -142,24 +142,15 @@ fn store_lesson_in_graph(
 fn store_quiz_in_graph(
     graph_dir: &Path,
     atom_id: &str,
-    difficulty: String,
+    difficulty: Difficulty,
     question: String,
     answer: String,
     rubric: Option<String>,
-    quiz_type: String,
+    quiz_type: QuizType,
 ) -> Result<String, PersistError> {
-    if !matches!(difficulty.as_str(), "easy" | "medium" | "hard") {
-        return Err(PersistError::BadDifficulty(difficulty));
-    }
-    if !matches!(quiz_type.as_str(), "free_text" | "multiple_choice") {
-        return Err(PersistError::BadQuizType(quiz_type));
-    }
-    // Don't bloat files with the default type.
-    let kind = if quiz_type == "free_text" {
-        None
-    } else {
-        Some(quiz_type)
-    };
+    // Skip the default type on disk so unannotated quizzes don't grow a
+    // redundant `type: free_text` line.
+    let kind = (quiz_type != QuizType::FreeText).then_some(quiz_type);
 
     let manifest = graph::load_manifest(&graph_dir.join("manifest.ayml"))?;
     let area_path = area_file_for_atom(&manifest, graph_dir, atom_id)?;
@@ -237,10 +228,9 @@ fn area_file_for_atom(
     Ok(graph_dir.join(&entry.file))
 }
 
-/// Smallest unused positive integer for the `<atom>.q<n>` ID series.
-/// IDs are stable (deleted IDs aren't reused, matching `SCHEMA.md`).
-/// Persisting always assigns the next-highest number, never reusing
-/// gaps left by earlier deletions if any ever appear.
+/// Returns `<atom>.q<n>` where n is one greater than the highest
+/// existing n. Quiz IDs are stable; gaps from deletions are never
+/// reused.
 fn next_quiz_id(atom_id: &str, existing: &[QuizRaw]) -> String {
     let prefix = format!("{atom_id}.q");
     let max = existing

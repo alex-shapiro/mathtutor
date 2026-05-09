@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use argh::FromArgs;
 
+mod answer;
 mod event_log;
 mod graph;
 mod path;
@@ -24,6 +25,7 @@ enum Cmd {
     Next(NextCmd),
     State(StateCmd),
     Store(StoreCmd),
+    Answer(AnswerCmd),
 }
 
 /// Operate on the curriculum graph.
@@ -124,6 +126,27 @@ struct StoreLessonCmd {
     graph: PathBuf,
 }
 
+/// Record a quiz answer as an FSRS rating.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "answer")]
+struct AnswerCmd {
+    /// quiz id (e.g. fnd.1.1.1.q1)
+    #[argh(positional)]
+    quiz: String,
+
+    /// rating: again | hard | good | easy
+    #[argh(option)]
+    rating: path::Rating,
+
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    path: Option<String>,
+
+    /// path to the curriculum graph directory (default: curriculum/graph)
+    #[argh(option, default = "PathBuf::from(\"curriculum/graph\")")]
+    graph: PathBuf,
+}
+
 /// Persist a quiz on an atom (free-text by default).
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "quiz")]
@@ -134,7 +157,7 @@ struct StoreQuizCmd {
 
     /// difficulty: easy | medium | hard
     #[argh(option)]
-    difficulty: String,
+    difficulty: graph::Difficulty,
 
     /// question text
     #[argh(option)]
@@ -149,8 +172,8 @@ struct StoreQuizCmd {
     rubric: Option<String>,
 
     /// quiz type: free_text (default) | multiple_choice
-    #[argh(option, long = "type", default = "\"free_text\".to_string()")]
-    quiz_type: String,
+    #[argh(option, long = "type", default = "graph::QuizType::FreeText")]
+    quiz_type: graph::QuizType,
 
     /// path id (defaults to most recent)
     #[argh(option, short = 'p')]
@@ -224,11 +247,11 @@ fn main() -> ExitCode {
             }
             StoreOp::Quiz(c) => match persist::cmd_store_quiz(
                 &c.atom,
-                c.difficulty.clone(),
+                c.difficulty,
                 c.question.clone(),
                 c.answer.clone(),
                 c.rubric.clone(),
-                c.quiz_type.clone(),
+                c.quiz_type,
                 c.path.as_deref(),
                 &c.graph,
             ) {
@@ -242,5 +265,17 @@ fn main() -> ExitCode {
                 }
             },
         },
+        Cmd::Answer(c) => {
+            match answer::cmd_answer(&c.quiz, c.rating, c.path.as_deref(), &c.graph) {
+                Ok(()) => {
+                    eprintln!("recorded {} for {}", c.rating, c.quiz);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
     }
 }
