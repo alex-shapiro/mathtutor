@@ -6,6 +6,7 @@ use argh::FromArgs;
 mod event_log;
 mod graph;
 mod path;
+mod persist;
 mod scheduler;
 
 #[derive(FromArgs, Debug)]
@@ -22,6 +23,7 @@ enum Cmd {
     New(NewCmd),
     Next(NextCmd),
     State(StateCmd),
+    Store(StoreCmd),
 }
 
 /// Operate on the curriculum graph.
@@ -86,6 +88,41 @@ struct StateCmd {
     path: Option<String>,
 }
 
+/// Store agent-authored content into the canonical curriculum graph.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "store")]
+struct StoreCmd {
+    #[argh(subcommand)]
+    op: StoreOp,
+}
+
+#[derive(FromArgs, Debug)]
+#[argh(subcommand)]
+enum StoreOp {
+    Lesson(StoreLessonCmd),
+}
+
+/// Persist a lesson body on an atom.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "lesson")]
+struct StoreLessonCmd {
+    /// atom id
+    #[argh(positional)]
+    atom: String,
+
+    /// lesson body
+    #[argh(option)]
+    body: String,
+
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    path: Option<String>,
+
+    /// path to the curriculum graph directory (default: curriculum/graph)
+    #[argh(option, default = "PathBuf::from(\"curriculum/graph\")")]
+    graph: PathBuf,
+}
+
 fn main() -> ExitCode {
     let cli: Mt = argh::from_env();
     match cli.cmd {
@@ -127,6 +164,25 @@ fn main() -> ExitCode {
             Err(e) => {
                 eprintln!("error: {e}");
                 ExitCode::from(1)
+            }
+        },
+        Cmd::Store(s) => match s.op {
+            StoreOp::Lesson(c) => {
+                match persist::cmd_store_lesson(
+                    &c.atom,
+                    c.body.clone(),
+                    c.path.as_deref(),
+                    &c.graph,
+                ) {
+                    Ok(()) => {
+                        eprintln!("stored lesson: {}", c.atom);
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        ExitCode::from(2)
+                    }
+                }
             }
         },
     }

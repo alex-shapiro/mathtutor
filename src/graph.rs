@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 // ── Errors ──────────────────────────────────────────────────────────
@@ -23,13 +23,13 @@ pub enum LoadError {
 
 // ── Manifest ────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Manifest {
     pub schema_version: u32,
     pub areas: Vec<ManifestArea>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ManifestArea {
     pub prefix: String,
     pub slug: String,
@@ -38,85 +38,91 @@ pub struct ManifestArea {
 }
 
 // ── Raw area-file shape (handles both v1 and v2) ────────────────────
+//
+// These types round-trip: same struct deserializes the file and
+// re-serializes after mutation (e.g. when `mt store lesson` adds a
+// lesson body). Field order matches the on-disk convention; empty /
+// `None` fields are skipped on serialize so files don't bloat with
+// defaults.
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct AreaFileRaw {
     pub schema_version: u32,
     pub area: String,
     pub prefix: String,
     pub summary: String,
     pub why_for_dl: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cross_references: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topics: Option<Vec<TopicRaw>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<NodeRaw>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TopicRaw {
     pub id: String,
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
     pub leaves: Vec<LeafRaw>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct LeafRaw {
     pub id: String,
     pub name: String,
     pub description: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prerequisites: Vec<String>,
-    #[serde(default)]
-    pub relevant_for: Vec<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub difficulty: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lesson: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quizzes: Option<Vec<QuizRaw>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relevant_for: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<u32>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct NodeRaw {
     pub id: String,
     pub name: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default)]
-    pub children: Option<Vec<NodeRaw>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prerequisites: Vec<String>,
-    #[serde(default)]
-    pub relevant_for: Vec<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub difficulty: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<NodeRaw>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lesson: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quizzes: Option<Vec<QuizRaw>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relevant_for: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub difficulty: Option<u32>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct QuizRaw {
     pub id: String,
     pub difficulty: String,
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
     pub question: String,
     pub answer: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rubric: Option<String>,
 }
 
