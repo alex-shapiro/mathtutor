@@ -29,11 +29,13 @@ pub struct EventPayload {
     pub rating: Option<Rating>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_answer: Option<String>,
 }
 
 impl EventPayload {
     pub fn is_empty(&self) -> bool {
-        self.rating.is_none() && self.reason.is_none()
+        self.rating.is_none() && self.reason.is_none() && self.user_answer.is_none()
     }
 }
 
@@ -97,7 +99,13 @@ pub fn quiz_presented(path: String, atom: String, quiz: String) -> Event {
     }
 }
 
-pub fn quiz_answered(path: String, atom: Option<String>, quiz: String, rating: Rating) -> Event {
+pub fn quiz_answered(
+    path: String,
+    atom: Option<String>,
+    quiz: String,
+    rating: Rating,
+    user_answer: Option<String>,
+) -> Event {
     Event {
         ts: Utc::now(),
         kind: EventKind::QuizAnswered,
@@ -106,6 +114,7 @@ pub fn quiz_answered(path: String, atom: Option<String>, quiz: String, rating: R
         quiz: Some(quiz),
         payload: EventPayload {
             rating: Some(rating),
+            user_answer,
             ..Default::default()
         },
     }

@@ -122,19 +122,21 @@ Payload:
 
 You:
 
-1. Author a free-text question that depends only on this atom's lesson and previously-taught lessons. No lookahead.
-2. Do not duplicate `existing_quizzes`.
-3. Write a concise reference answer; add a rubric if the answer is subjective.
-4. Present the question; capture the user's reply.
-5. Persist:
+1. Author a free-text question, a concise reference answer, and (only if the answer is subjective) a rubric. The question must depend only on this atom's lesson and previously-taught lessons — no lookahead — and must not duplicate `existing_quizzes`.
+2. Persist _before_ presenting, so the canonical reference answer is locked in before the user's reply can contaminate it:
 
    mt store quiz <atom-id> \
     --difficulty <easy|medium|hard> \
     --question "…" \
-    --answer "…" \
+    --answer "…the reference answer you just wrote…" \
     [--rubric "…"]
 
-6. Grade the reply and call `mt answer` (next section).
+3. Present the question to the user. Do **not** show the reference answer.
+4. Capture their reply. Grade per the **Rating rubric** below, then call:
+
+   mt answer <quiz-id> \
+    --rating <again|hard|good|easy> \
+    --user-answer "…the user's reply, verbatim…"
 
 Default quiz type is free-text. Use `--type multiple_choice` only
 when the concept is genuinely best taught as
@@ -153,21 +155,33 @@ Payload:
 
 You:
 
-1. Show the question to the user. Do **not** show the reference
-   answer.
+1. Show the question to the user. Do **not** show the reference answer.
 2. Wait for their reply.
-3. Grade against the reference answer and rubric. Pick a rating:
-   - **`again`** — wrong / no recall
-   - **`hard`** — right, but with effort
-   - **`good`** — right, normal effort
-   - **`easy`** — effortless
-4. Persist:
+3. Grade against the reference answer and rubric per the **Rating rubric** below, then call:
 
-   mt answer <quiz-id> --rating <again|hard|good|easy>
+   mt answer <quiz-id> \
+    --user-answer "…the user's reply, verbatim…"
+   --rating <again|hard|good|easy> \
 
 Use `history` to calibrate tone — a card on its 6th rep with 100%
 correct gets a lighter intro than a card the user has been
 struggling with.
+
+### Rating rubric
+
+Both `create_quiz` and `present_quiz` end with `mt answer`. Pick the
+rating from:
+
+- **`easy`** — answer correct **and** the user explicitly says it felt easy
+- **`good`** — answer correct, no hints needed
+- **`hard`** — answer correct, but the user asked for ≥ 1 hint along the way
+- **`again`** — answer incorrect, or the user asked you to give them the solution
+
+`easy` is opt-in — don't infer it from a fast reply. Default to `good`
+when the user gets it right without comment.
+
+Always pass `--user-answer` with the user's reply verbatim. It's logged
+with the rating so you (or a future review pass) can audit the call.
 
 ### `done`
 

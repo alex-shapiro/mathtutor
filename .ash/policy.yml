@@ -14,7 +14,8 @@ files:
 network:
   rules: []
 exec:
-  rules: []
+  rules:
+  - path: ~/.cargo/bin/mt
 io_devices:
   rules:
   - class: AGXDeviceUserClient

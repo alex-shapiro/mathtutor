@@ -477,6 +477,11 @@ children:
 
               We typically denote sets with capital letters like , B, S$. If an object $ is an element of a set $, we write  \\in A$. If it is not, we write  \\notin A$.
               """
+            quizzes:
+              - id: fnd.2.1.1.q1
+                difficulty: easy
+                question: "Consider the set  = \\{1, 2, 2, 3, 1\\}$. How many distinct elements does this set have, and how would you write the set in its simplest form?"
+                answer: "The set has 3 distinct elements. In its simplest form, it is written as {1, 2, 3}."
           - id: fnd.2.1.2
             name: Set membership (∈)
             description: x ∈ A means x is an element of A; primitive relation.

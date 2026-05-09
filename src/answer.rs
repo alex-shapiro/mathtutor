@@ -28,6 +28,7 @@ pub enum AnswerError {
 pub fn cmd_answer(
     quiz_id: &str,
     rating: Rating,
+    user_answer: Option<String>,
     path_id: Option<&str>,
     _graph_dir: &Path,
 ) -> Result<(), AnswerError> {
@@ -86,6 +87,7 @@ pub fn cmd_answer(
         atom_from_quiz_id(quiz_id),
         quiz_id.to_string(),
         rating,
+        user_answer,
     ))?;
 
     Ok(())

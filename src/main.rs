@@ -94,7 +94,13 @@ fn main() -> ExitCode {
             },
         },
         Cmd::Answer(c) => {
-            match answer::cmd_answer(&c.quiz, c.rating, c.path.as_deref(), &c.graph) {
+            match answer::cmd_answer(
+                &c.quiz,
+                c.rating,
+                c.user_answer,
+                c.path.as_deref(),
+                &c.graph,
+            ) {
                 Ok(()) => {
                     eprintln!("recorded {} for {}", c.rating, c.quiz);
                     ExitCode::SUCCESS

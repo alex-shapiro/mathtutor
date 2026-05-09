@@ -211,6 +211,10 @@ pub struct AnswerCmd {
     #[argh(option)]
     pub rating: types::Rating,
 
+    /// the user's reply, verbatim — logged with the rating for review
+    #[argh(option, long = "user-answer")]
+    pub user_answer: Option<String>,
+
     /// path id (defaults to most recent)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
