@@ -98,13 +98,15 @@ Payload:
 You:
 
 1. Write a lesson body: 1–2 paragraphs, ≤ 2 minutes of reading, ≤ 1 theorem / rule / definition. Build on the prereqs without restating them.
-2. Present it to the user.
-3. Persist:
+2. Persist:
 
    mt store lesson <atom-id> --body "$(cat <<'BODY'
    …your lesson…
    BODY
    )"
+
+3. Present the lesson to the user in conversation.
+4. Stop. Let the user read, ask questions, request examples, or ask for clarification. Do not call `mt next` until the user explicitly signals they are ready to continue.
 
 ### `create_quiz`
 
