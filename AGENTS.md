@@ -69,7 +69,7 @@ Use these to:
 
 - pick `--atom` arguments for `mt new` when the user gives a
   high-level goal ("teach me linear algebra" → `mt list` → `mt list
-  la` → choose `--atom la` or pick specific topics)
+la` → choose `--atom la` or pick specific topics)
 - look up a prerequisite's name while authoring a lesson
 - check whether a concept exists before referencing it
 
@@ -120,11 +120,9 @@ Payload:
 
 You:
 
-1. Author a free-text question that depends only on this atom's
-   lesson and previously-taught lessons. No lookahead.
-2. Don't duplicate any of `existing_quizzes`.
-3. Write a concise reference answer; add a rubric if the answer
-   admits paraphrase.
+1. Author a free-text question that depends only on this atom's lesson and previously-taught lessons. No lookahead.
+2. Do not duplicate `existing_quizzes`.
+3. Write a concise reference answer; add a rubric if the answer is subjective.
 4. Present the question; capture the user's reply.
 5. Persist:
 
