@@ -3,10 +3,14 @@ name = "mathtutor"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "mt"
+path = "src/main.rs"
+
 [dependencies]
 argh = "0.1.19"
 ayml = "0.1.0"
 fsrs = "5.2.0"
-serde = "1.0.228"
+serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2.0.18"
 tracing = "0.1.44"

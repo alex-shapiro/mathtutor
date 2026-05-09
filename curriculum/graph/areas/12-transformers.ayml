@@ -2,7 +2,7 @@ schema_version: 1
 area: transformers
 prefix: tx
 summary: "Attention mechanism, positional encoding, transformer blocks, efficient attention, state-space models, tokenization, decoding, in-context-learning theory, RLHF / alignment math."
-why_for_dl: |
+why_for_dl: """
   Transformers dominate language and increasingly vision and audio.
   Understanding attention as kernel smoothing, positional encodings as
   Fourier-features, MoE routing as gating distributions, and state-space
@@ -10,6 +10,7 @@ why_for_dl: |
   papers. Tokenization, sampling, and decoding shape what models can
   produce. RLHF / DPO / KTO sit on transformer LMs but are mathematically
   separate (cross-link to `rl`).
+  """
 cross_references:
   - linear-algebra
   - probability

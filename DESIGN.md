@@ -42,7 +42,7 @@ AYML also disallows YAML's long tail of fringe features that no one really uses.
 All code is written in Rust. Crates:
 
 - Use `argh` for CLI arg parsing
-- Use `fsrs` for spaced repetition learning
+- Use `fsrs` for spaced repetition learning (not 100% on this, needs to be proved out)
 - Use `tracing` for debug logging wherever needed
 - Use `thiserror` for error types
 - Use `serde` and `ayml` crates for data serialization

@@ -2,11 +2,12 @@ schema_version: 2
 area: linear-algebra
 prefix: la
 summary: "Vector spaces, linear maps, matrix decompositions, inner-product geometry, tensor algebra, matrix calculus, numerical linear algebra."
-why_for_dl: |
+why_for_dl: """
   Every learned object is a tensor; every layer is a (multi)linear map
   composed with nonlinearity; attention is a sequence of matrix products;
   gradients live in cotangent spaces; LoRA, PCA, weight-spectrum analysis,
   and most theory bounds rest on decompositions and norms.
+  """
 cross_references:
   - foundations
   - analysis
@@ -1641,7 +1642,7 @@ children:
           - id: la.8.3.1
             name: "Conjugate gradient (CG)"
             description: "Iterative solver for symmetric PD systems; converges in n steps in exact arithmetic."
-            prerequisites: [la.8.3.5]
+            prerequisites: [la.6.3.1, la.8.6.1]
           - id: la.8.3.2
             name: "GMRES"
             description: "Iterative solver for general non-symmetric systems via Arnoldi."
@@ -1649,7 +1650,7 @@ children:
           - id: la.8.3.3
             name: "Lanczos algorithm"
             description: "Iterative tridiagonalization of a symmetric matrix; basis for symmetric eigensolvers."
-            prerequisites: [la.8.3.5]
+            prerequisites: [la.8.6.1, la.3.5.1]
           - id: la.8.3.4
             name: "Arnoldi algorithm"
             description: "Builds an orthonormal Krylov basis with an upper-Hessenberg projection of A."

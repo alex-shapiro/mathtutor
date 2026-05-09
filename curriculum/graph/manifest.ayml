@@ -3,80 +3,80 @@ schema_version: 1
 areas:
   - prefix: fnd
     slug: foundations
-    file: areas/00-foundations.yaml
+    file: areas/00-foundations.ayml
     summary: "Logic, sets, proof, basic combinatorics, computation models."
 
   - prefix: la
     slug: linear-algebra
-    file: areas/01-linear-algebra.yaml
+    file: areas/01-linear-algebra.ayml
     summary: "Vector spaces, linear maps, decompositions, matrix calculus, numerical linear algebra."
 
   - prefix: ana
     slug: analysis
-    file: areas/02-analysis.yaml
+    file: areas/02-analysis.ayml
     summary: "Real and multivariate analysis, metric/topological spaces, functional analysis, measure theory, Fourier analysis, distributions, calculus of variations."
 
   - prefix: prob
     slug: probability
-    file: areas/03-probability.yaml
+    file: areas/03-probability.ayml
     summary: "Probability theory, random variables, concentration, stochastic processes, stochastic calculus, statistical inference."
 
   - prefix: opt
     slug: optimization
-    file: areas/04-optimization.yaml
+    file: areas/04-optimization.ayml
     summary: "Convex analysis, first/second-order methods, stochastic optimization, min-max, online learning, optimal transport."
 
   - prefix: dis
     slug: discrete-and-complexity
-    file: areas/05-discrete-and-complexity.yaml
+    file: areas/05-discrete-and-complexity.ayml
     summary: "Combinatorics, graph theory, algorithms, complexity, Kolmogorov complexity / MDL."
 
   - prefix: num
     slug: numerical
-    file: areas/06-numerical.yaml
+    file: areas/06-numerical.ayml
     summary: "Floating point, numerical stability, ODE/SDE solvers, automatic differentiation, hardware-aware numerics."
 
   - prefix: geom
     slug: geometry-and-topology
-    file: areas/07-geometry-and-topology.yaml
+    file: areas/07-geometry-and-topology.ayml
     summary: "Manifolds, Riemannian geometry, Lie groups, group-equivariance, algebraic topology, information geometry, optimal transport geometry."
 
   - prefix: dyn
     slug: dynamical-systems
-    file: areas/08-dynamical-systems.yaml
+    file: areas/08-dynamical-systems.ayml
     summary: "ODEs, Hamiltonian/Lagrangian mechanics, PDEs, stochastic dynamics, statistical mechanics, continuous-time DL."
 
   - prefix: inf
     slug: information-theory
-    file: areas/09-information-theory.yaml
+    file: areas/09-information-theory.ayml
     summary: "Entropy, divergences, source/channel coding, MI estimation, information bottleneck."
 
   - prefix: lt
     slug: learning-theory
-    file: areas/10-learning-theory.yaml
+    file: areas/10-learning-theory.ayml
     summary: "Statistical learning, generalization bounds, NTK / mean-field, double descent, scaling laws, robustness, causality."
 
   - prefix: nn
     slug: neural-network-theory
-    file: areas/11-neural-network-theory.yaml
+    file: areas/11-neural-network-theory.ayml
     summary: "Architectures, training dynamics, expressivity, regularization, scaling, efficiency."
 
   - prefix: tx
     slug: transformers
-    file: areas/12-transformers.yaml
+    file: areas/12-transformers.ayml
     summary: "Attention, positional encoding, MoE, efficient attention, SSMs, tokenization, decoding, ICL, RLHF."
 
   - prefix: dif
     slug: diffusion-and-flow
-    file: areas/13-diffusion-and-flow.yaml
+    file: areas/13-diffusion-and-flow.ayml
     summary: "Score-based generative models, DDPM, SDE/ODE perspective, flow matching, distillation, guidance."
 
   - prefix: ssl
     slug: self-supervised-and-jepa
-    file: areas/14-self-supervised-and-jepa.yaml
+    file: areas/14-self-supervised-and-jepa.ayml
     summary: "Contrastive / non-contrastive SSL, EBMs, latent variable models, JEPA family, world models."
 
   - prefix: rl
     slug: reinforcement-learning
-    file: areas/15-reinforcement-learning.yaml
+    file: areas/15-reinforcement-learning.ayml
     summary: "MDPs, dynamic programming, model-free / policy gradient, KL-regularized RL, RLHF / DPO, exploration, model-based, offline."

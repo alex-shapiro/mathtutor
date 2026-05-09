@@ -2,13 +2,14 @@ schema_version: 1
 area: numerical
 prefix: num
 summary: "Floating point, numerical stability, ODE/SDE solvers, automatic differentiation, quadrature, hardware-aware numerics."
-why_for_dl: |
+why_for_dl: """
   Deep learning is numerical computing at scale. Mixed-precision training,
   loss scaling, quantization, and overflow-resistant softmax variants all
   rest on floating-point analysis. Reverse-mode AD is what makes training
   possible. ODE / SDE solvers are core to neural ODEs and diffusion model
   inference. Hardware-aware reasoning (BLAS levels, kernel fusion) is
   essential for understanding modern training-systems papers.
+  """
 cross_references:
   - linear-algebra
   - analysis

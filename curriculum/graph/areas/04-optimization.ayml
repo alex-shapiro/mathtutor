@@ -2,13 +2,14 @@ schema_version: 1
 area: optimization
 prefix: opt
 summary: "Convex analysis, first/second-order methods, stochastic and adaptive optimization, constrained / non-convex / min-max optimization, online learning, optimal transport."
-why_for_dl: |
+why_for_dl: """
   Training is optimization. Convex theory gives the cleanest results and
   the vocabulary (subgradient, dual, proximal, mirror, KKT). Stochastic
   methods (SGD, Adam, schedules, EMA) are the engine of every modern
   model. Non-convex landscape geometry, implicit bias, and saddle-point
   dynamics drive theoretical understanding of deep nets and GAN training.
   Optimal transport ties optimization to geometry and powers flow matching.
+  """
 cross_references:
   - linear-algebra
   - analysis

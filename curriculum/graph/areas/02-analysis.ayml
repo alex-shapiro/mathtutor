@@ -2,13 +2,14 @@ schema_version: 1
 area: analysis
 prefix: ana
 summary: "Real and multivariate analysis, metric/topological spaces, functional analysis, measure theory, Fourier analysis, distributions, calculus of variations, complex analysis."
-why_for_dl: |
+why_for_dl: """
   Continuity, differentiability, and integration are the language of every
   loss function and gradient. Hilbert spaces and RKHS underlie kernel
   methods, NTK, and attention-as-kernel-smoothing. Measure theory is the
   rigorous home of probability and pushforward distributions. Fourier
   analysis underlies positional encoding, convolutional theory, and
   spectral arguments throughout.
+  """
 cross_references:
   - linear-algebra
   - probability

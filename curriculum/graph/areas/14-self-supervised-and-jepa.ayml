@@ -2,7 +2,7 @@ schema_version: 1
 area: self-supervised-and-jepa
 prefix: ssl
 summary: "Self-supervised learning frameworks, contrastive and non-contrastive methods, masked / generative pretraining, JEPA family, energy-based models, latent variable models, identifiability, world models."
-why_for_dl: |
+why_for_dl: """
   SSL is the engine behind every modern foundation model — language,
   vision, video, and multimodal. The math splits into contrastive
   (NCE / InfoNCE), non-contrastive (BYOL / SimSiam), whitening
@@ -11,6 +11,7 @@ why_for_dl: |
   of these. Identifiability theory and predictive-coding / world-model
   views motivate JEPA's emphasis on latent prediction over pixel
   reconstruction.
+  """
 cross_references:
   - probability
   - information-theory

@@ -2,7 +2,7 @@ schema_version: 1
 area: geometry-and-topology
 prefix: geom
 summary: "Differential manifolds, Riemannian geometry, Lie groups, group equivariance, algebraic topology, information geometry, optimal-transport geometry."
-why_for_dl: |
+why_for_dl: """
   The manifold hypothesis underlies nearly every representation-learning
   argument. Riemannian geometry powers manifold optimization, hyperbolic
   embeddings, and geodesic interpolation in latent spaces. Lie groups
@@ -10,6 +10,7 @@ why_for_dl: |
   Information geometry gives the natural-gradient view of training.
   Optimal-transport geometry is the natural language for diffusion / flow
   matching and the Wasserstein space of distributions.
+  """
 cross_references:
   - linear-algebra
   - analysis

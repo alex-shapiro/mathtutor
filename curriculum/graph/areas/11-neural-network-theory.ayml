@@ -2,12 +2,13 @@ schema_version: 1
 area: neural-network-theory
 prefix: nn
 summary: "Neural network architectures, training dynamics, loss landscapes, expressivity, regularization, scaling, efficiency."
-why_for_dl: |
+why_for_dl: """
   This is the architecture-and-dynamics layer specific to neural networks
   but generic across modalities — the place where activations, layers,
   initialization, normalization, gradient flow, and scaling parameterizations
   live. Transformers and diffusion models inherit all of it before adding
   their own structure.
+  """
 cross_references:
   - linear-algebra
   - optimization

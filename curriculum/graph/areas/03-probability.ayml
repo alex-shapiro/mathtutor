@@ -2,13 +2,14 @@ schema_version: 1
 area: probability
 prefix: prob
 summary: "Probability theory, random variables, concentration, stochastic processes, stochastic calculus, statistical inference."
-why_for_dl: |
+why_for_dl: """
   Models output distributions; losses are expectations under data
   distributions; SGD is a stochastic approximation. Diffusion models are
   literally SDEs; flow matching, score matching, and Langevin sampling
   all rest on stochastic-process theory. Concentration inequalities
   power generalization bounds; statistical inference underpins Bayesian
   deep learning, calibration, and uncertainty quantification.
+  """
 cross_references:
   - analysis
   - linear-algebra

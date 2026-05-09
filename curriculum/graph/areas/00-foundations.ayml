@@ -2,11 +2,12 @@ schema_version: 2
 area: foundations
 prefix: fnd
 summary: "Logic, sets, functions, basic combinatorics, and computation models — the mathematical literacy underlying every other area."
-why_for_dl: |
+why_for_dl: """
   Every theorem, derivation, and pseudocode in deep-learning research is
   written in the language of sets, functions, and proofs. Asymptotics
   and the very definition of computability bound what training loops
   can do.
+  """
 cross_references:
   - linear-algebra
   - analysis

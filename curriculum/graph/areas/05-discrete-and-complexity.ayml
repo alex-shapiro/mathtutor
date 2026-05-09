@@ -2,7 +2,7 @@ schema_version: 1
 area: discrete-and-complexity
 prefix: dis
 summary: "Combinatorics, graph theory, algorithms, computational complexity, descriptive complexity / MDL."
-why_for_dl: |
+why_for_dl: """
   Combinatorial reasoning underlies counting in probability, capacity
   arguments in learning theory, and the design of attention masks.
   Graph theory is the substrate for GNNs, computation graphs, and
@@ -10,6 +10,7 @@ why_for_dl: |
   what gradient-based learning and inference can possibly achieve.
   Kolmogorov complexity / MDL provide the philosophical floor for
   generalization arguments.
+  """
 cross_references:
   - foundations
   - linear-algebra

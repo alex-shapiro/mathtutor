@@ -2,13 +2,14 @@ schema_version: 1
 area: dynamical-systems
 prefix: dyn
 summary: "ODE theory, Hamiltonian / Lagrangian mechanics, PDE basics, stochastic dynamics, statistical mechanics, continuous-time deep learning."
-why_for_dl: |
+why_for_dl: """
   Diffusion models and neural ODEs are dynamical systems with learned
   vector fields. Langevin dynamics, Fokker–Planck, and reverse-time SDEs
   are the language of score-based generative modeling. Hamiltonian and
   symplectic structure inspire physics-aware networks. Statistical
   mechanics gives the energy-based-model and free-energy view that
   connects EBMs, JEPA, and large-scale training to physical analogies.
+  """
 cross_references:
   - analysis
   - linear-algebra
