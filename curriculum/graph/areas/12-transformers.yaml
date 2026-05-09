@@ -1,0 +1,279 @@
+schema_version: 1
+area: transformers
+prefix: tx
+summary: "Attention mechanism, positional encoding, transformer blocks, efficient attention, state-space models, tokenization, decoding, in-context-learning theory, RLHF / alignment math."
+why_for_dl: |
+  Transformers dominate language and increasingly vision and audio.
+  Understanding attention as kernel smoothing, positional encodings as
+  Fourier-features, MoE routing as gating distributions, and state-space
+  models as linear RNNs gives the language to read modern architecture
+  papers. Tokenization, sampling, and decoding shape what models can
+  produce. RLHF / DPO / KTO sit on transformer LMs but are mathematically
+  separate (cross-link to `rl`).
+cross_references:
+  - linear-algebra
+  - probability
+  - analysis
+  - neural-network-theory
+  - reinforcement-learning
+
+topics:
+  - id: tx.1
+    name: "Attention mechanism"
+    leaves:
+      - id: tx.1.1
+        name: "Scaled dot-product attention"
+        description: "softmax(QKᵀ/√d) V; query-key-value formulation."
+        prerequisites: [la.2.2, nn.1.2]
+      - id: tx.1.2
+        name: "Multi-head attention"
+        description: "Independent attention heads concatenated."
+        prerequisites: [tx.1.1]
+      - id: tx.1.3
+        name: "Self vs cross attention"
+        description: "Same vs different sequences for QKV."
+        prerequisites: [tx.1.1]
+      - id: tx.1.4
+        name: "Causal masking"
+        description: "Triangular mask for autoregressive models."
+        prerequisites: [tx.1.1]
+      - id: tx.1.5
+        name: "Attention as kernel smoothing"
+        description: "Nadaraya–Watson view; soft kNN."
+        prerequisites: [ana.4.9, tx.1.1]
+      - id: tx.1.6
+        name: "Softmax and log-sum-exp"
+        description: "Numerical stability; gradients."
+        prerequisites: [num.1.3, nn.1.2]
+      - id: tx.1.7
+        name: "Attention sinks and outliers"
+        description: "Empirically observed structure with mathematical consequences."
+        prerequisites: [tx.1.1]
+      - id: tx.1.8
+        name: "KV-cache"
+        description: "Reuse of past keys / values for autoregressive inference."
+        prerequisites: [tx.1.4]
+
+  - id: tx.2
+    name: "Positional encoding"
+    leaves:
+      - id: tx.2.1
+        name: "Sinusoidal / absolute encodings"
+        description: "Original transformer positional embeddings."
+        prerequisites: [ana.6.1]
+      - id: tx.2.2
+        name: "Learned positional embeddings"
+        description: "Lookup tables for positions."
+        prerequisites: [tx.2.1]
+      - id: tx.2.3
+        name: "Relative position bias"
+        description: "Position-difference biases (T5 style)."
+        prerequisites: [tx.2.1]
+      - id: tx.2.4
+        name: "Rotary position embedding (RoPE)"
+        description: "Rotation in frequency basis applied to Q,K."
+        prerequisites: [la.4.4, ana.6.2]
+      - id: tx.2.5
+        name: "ALiBi"
+        description: "Linear decay bias on attention scores."
+        prerequisites: [tx.2.3]
+      - id: tx.2.6
+        name: "Fourier positional features"
+        description: "Coordinate inputs via Fourier basis."
+        prerequisites: [ana.6.2]
+      - id: tx.2.7
+        name: "Length generalization (NoPE etc.)"
+        description: "Behavior when sequences exceed training length."
+        prerequisites: [tx.2.4]
+
+  - id: tx.3
+    name: "Transformer blocks"
+    leaves:
+      - id: tx.3.1
+        name: "LayerNorm placement (pre / post)"
+        description: "Effect on stability and signal propagation."
+        prerequisites: [nn.1.9, nn.2.4]
+      - id: tx.3.2
+        name: "RMSNorm"
+        description: "Mean-free normalization variant."
+        prerequisites: [tx.3.1]
+      - id: tx.3.3
+        name: "FFN / MLP block and GLU variants"
+        description: "Feed-forward block; SwiGLU, GeGLU."
+        prerequisites: [nn.1.1, nn.1.2]
+      - id: tx.3.4
+        name: "Residual stream"
+        description: "Identity backbone with additive contributions."
+        prerequisites: [nn.1.8]
+      - id: tx.3.5
+        name: "Mixture of experts"
+        description: "Top-k routing; load-balancing losses; capacity."
+        prerequisites: [prob.2.7, opt.4.1]
+
+  - id: tx.4
+    name: "Efficient attention"
+    leaves:
+      - id: tx.4.1
+        name: "Linear attention"
+        description: "Kernel-feature factorization removes quadratic cost."
+        prerequisites: [tx.1.5]
+      - id: tx.4.2
+        name: "Performer / random features"
+        description: "Random Fourier / positive features for softmax."
+        prerequisites: [tx.4.1, prob.7.10]
+      - id: tx.4.3
+        name: "Sparse attention"
+        description: "Longformer, BigBird; structured sparsity."
+        prerequisites: [tx.1.1]
+      - id: tx.4.4
+        name: "FlashAttention"
+        description: "I/O-aware tiled exact attention."
+        prerequisites: [num.6.5]
+      - id: tx.4.5
+        name: "Sliding-window attention"
+        description: "Local-window approximation to full attention."
+        prerequisites: [tx.4.3]
+      - id: tx.4.6
+        name: "Approximate / nearest-neighbor attention"
+        description: "Reformer / kNN attention via LSH."
+        prerequisites: [dis.3.4, tx.1.1]
+
+  - id: tx.5
+    name: "State-space and alternatives"
+    leaves:
+      - id: tx.5.1
+        name: "Linear RNNs as state-space models"
+        description: "y = Cx, ẋ = Ax + Bu in continuous time."
+        prerequisites: [dyn.1.2]
+      - id: tx.5.2
+        name: "S4 / S5"
+        description: "HiPPO-initialized SSMs with fast convolution."
+        prerequisites: [tx.5.1, ana.6.4]
+      - id: tx.5.3
+        name: "Mamba / selective SSMs"
+        description: "Input-dependent state-space matrices."
+        prerequisites: [tx.5.2]
+      - id: tx.5.4
+        name: "RWKV / RetNet"
+        description: "Linear-attention / SSM hybrids."
+        prerequisites: [tx.4.1, tx.5.1]
+      - id: tx.5.5
+        name: "Hyena / convolutional alternatives"
+        description: "Long-convolution-based sequence models."
+        prerequisites: [ana.6.4]
+
+  - id: tx.6
+    name: "Tokenization and representations"
+    leaves:
+      - id: tx.6.1
+        name: "Byte-pair encoding"
+        description: "Greedy merge-based subword tokenization."
+        prerequisites: [dis.3.3]
+      - id: tx.6.2
+        name: "Unigram language-model tokenization"
+        description: "Probabilistic subword segmentation (SentencePiece)."
+        prerequisites: [prob.9.2]
+      - id: tx.6.3
+        name: "Byte-level / character-level tokenization"
+        description: "Trade-off vocab size vs sequence length."
+        prerequisites: [tx.6.1]
+      - id: tx.6.4
+        name: "Vocabulary scaling"
+        description: "Vocab size vs perplexity vs sequence length."
+        prerequisites: [tx.6.3]
+      - id: tx.6.5
+        name: "Embedding / unembedding tying"
+        description: "Sharing input/output projection matrices."
+        prerequisites: [la.2.2]
+
+  - id: tx.7
+    name: "Training objectives"
+    leaves:
+      - id: tx.7.1
+        name: "Causal language modeling"
+        description: "Next-token prediction; cross-entropy."
+        prerequisites: [inf.1.5]
+      - id: tx.7.2
+        name: "Masked language modeling"
+        description: "BERT-style fill-in-the-blanks."
+        prerequisites: [tx.7.1]
+      - id: tx.7.3
+        name: "Span and prefix LM"
+        description: "T5 / GLM-style objectives."
+        prerequisites: [tx.7.1]
+      - id: tx.7.4
+        name: "Mixture of denoisers (UL2)"
+        description: "Combined denoising / causal objectives."
+        prerequisites: [tx.7.1, tx.7.2]
+
+  - id: tx.8
+    name: "Inference and decoding"
+    leaves:
+      - id: tx.8.1
+        name: "Sampling: top-k, top-p, temperature"
+        description: "Truncated / temperature-controlled categorical sampling."
+        prerequisites: [prob.2.4]
+      - id: tx.8.2
+        name: "Beam search"
+        description: "Approximate MAP via fixed-width search."
+        prerequisites: [dis.3.2]
+      - id: tx.8.3
+        name: "Speculative decoding"
+        description: "Draft / verify two-model decoding."
+        prerequisites: [tx.8.1, prob.1.3]
+      - id: tx.8.4
+        name: "Constrained decoding"
+        description: "Decoding under regular / context-free constraints."
+        prerequisites: [dis.4.1]
+      - id: tx.8.5
+        name: "Logit lens and interpretability tools"
+        description: "Mid-layer projection to vocabulary; mathematical view."
+        prerequisites: [la.5.4, tx.3.4]
+
+  - id: tx.9
+    name: "Emergent and scaling phenomena"
+    leaves:
+      - id: tx.9.1
+        name: "In-context learning theory"
+        description: "Implicit gradient-descent / Bayesian-mixture views."
+        prerequisites: [tx.7.1, prob.9.4]
+      - id: tx.9.2
+        name: "Induction heads"
+        description: "Two-head circuit implementing pattern continuation."
+        prerequisites: [tx.1.2]
+      - id: tx.9.3
+        name: "Grokking"
+        description: "Late-onset generalization after memorization."
+        prerequisites: [lt.5.5]
+      - id: tx.9.4
+        name: "Phase transitions in scaling"
+        description: "Sharp emergence of capabilities; measurement caveats."
+        prerequisites: [lt.5.6]
+      - id: tx.9.5
+        name: "Circuits / superposition"
+        description: "Mechanistic-interpretability math: features as directions."
+        prerequisites: [la.5.4, geom.4.5]
+
+  - id: tx.10
+    name: "RLHF and alignment math"
+    leaves:
+      - id: tx.10.1
+        name: "Reward modeling (Bradley–Terry)"
+        description: "Pairwise-preference logistic model."
+        prerequisites: [prob.9.2]
+      - id: tx.10.2
+        name: "PPO for language models"
+        description: "Cross-link `rl.4.6`; LM-specific concerns (KL penalty)."
+        prerequisites: [rl.4.6]
+      - id: tx.10.3
+        name: "Direct preference optimization (DPO)"
+        description: "Closed-form RL-free preference fine-tuning."
+        prerequisites: [tx.10.1, rl.5.3]
+      - id: tx.10.4
+        name: "KL-constrained RL"
+        description: "Cross-link `rl.5.3`."
+        prerequisites: [rl.5.3]
+      - id: tx.10.5
+        name: "Best-of-N math"
+        description: "KL ↔ N relationship; reward hacking analysis."
+        prerequisites: [inf.1.4]

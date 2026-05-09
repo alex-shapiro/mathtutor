@@ -1,0 +1,141 @@
+schema_version: 1
+area: information-theory
+prefix: inf
+summary: "Entropy, divergences, source / channel coding, MI estimation, information bottleneck."
+why_for_dl: |
+  Cross-entropy, KL divergence, and mutual information are the loss
+  functions and bounds of nearly every probabilistic model. Source-coding
+  and rate-distortion intuitions underlie tokenization and compression
+  arguments. Variational MI bounds power InfoNCE / SimCLR / MINE and
+  most non-generative SSL losses. The information-bottleneck principle
+  organizes representation-learning theory.
+cross_references:
+  - probability
+  - analysis
+  - learning-theory
+  - self-supervised-and-jepa
+
+topics:
+  - id: inf.1
+    name: "Entropy and divergence"
+    leaves:
+      - id: inf.1.1
+        name: "Shannon entropy"
+        description: "H(X) = −∑ p log p; uncertainty measure."
+        prerequisites: [prob.2.2]
+      - id: inf.1.2
+        name: "Joint, conditional entropy"
+        description: "H(X,Y), H(X|Y); chain rule."
+        prerequisites: [inf.1.1, prob.4.1]
+      - id: inf.1.3
+        name: "Mutual information"
+        description: "I(X;Y) = H(X) − H(X|Y)."
+        prerequisites: [inf.1.2]
+      - id: inf.1.4
+        name: "KL divergence"
+        description: "D_KL(p‖q); relative entropy."
+        prerequisites: [inf.1.1, prob.3.1]
+      - id: inf.1.5
+        name: "Cross-entropy"
+        description: "H(p,q) = H(p) + D_KL(p‖q); training loss."
+        prerequisites: [inf.1.4]
+      - id: inf.1.6
+        name: "f-divergences"
+        description: "General family parameterized by convex f."
+        prerequisites: [inf.1.4, opt.1.5]
+      - id: inf.1.7
+        name: "Rényi entropy and divergence"
+        description: "α-parameterized generalization."
+        prerequisites: [inf.1.4]
+      - id: inf.1.8
+        name: "Total variation and Hellinger"
+        description: "Other distances on probability measures."
+        prerequisites: [inf.1.6]
+      - id: inf.1.9
+        name: "Wasserstein vs KL"
+        description: "Comparison and use cases."
+        prerequisites: [opt.10.2, inf.1.4]
+
+  - id: inf.2
+    name: "Source and channel coding (overview)"
+    leaves:
+      - id: inf.2.1
+        name: "Source coding theorem"
+        description: "Lossless compression limit = entropy."
+        prerequisites: [inf.1.1]
+      - id: inf.2.2
+        name: "Kraft's inequality and prefix codes"
+        description: "Constructive coding bounds."
+        prerequisites: [inf.2.1]
+      - id: inf.2.3
+        name: "Channel coding theorem"
+        description: "Reliable communication up to channel capacity."
+        prerequisites: [inf.2.1]
+      - id: inf.2.4
+        name: "Channel capacity"
+        description: "Max mutual information over inputs."
+        prerequisites: [inf.1.3, inf.2.3]
+      - id: inf.2.5
+        name: "Typical sequences and AEP"
+        description: "Asymptotic equipartition; high-probability set structure."
+        prerequisites: [prob.5.3, inf.1.1]
+      - id: inf.2.6
+        name: "Rate-distortion"
+        description: "Lossy compression trade-off."
+        prerequisites: [inf.1.3]
+
+  - id: inf.3
+    name: "Estimation–information bridges"
+    leaves:
+      - id: inf.3.1
+        name: "Fano's inequality"
+        description: "Lower bound on error probability via mutual information."
+        prerequisites: [inf.1.3]
+      - id: inf.3.2
+        name: "Data processing inequality"
+        description: "Mutual information cannot increase under processing."
+        prerequisites: [inf.1.3]
+      - id: inf.3.3
+        name: "Le Cam and Pinsker inequalities"
+        description: "Bounds between TV and KL."
+        prerequisites: [inf.1.8, inf.1.4]
+      - id: inf.3.4
+        name: "Mutual-information estimation"
+        description: "MINE, InfoNCE, NWJ estimators."
+        prerequisites: [inf.1.3, opt.4.1]
+      - id: inf.3.5
+        name: "Variational bounds on mutual information"
+        description: "Lower / upper bounds via auxiliary distributions."
+        prerequisites: [inf.3.4]
+
+  - id: inf.4
+    name: "Algorithmic information"
+    leaves:
+      - id: inf.4.1
+        name: "Kolmogorov complexity (cross-link)"
+        description: "Cross-link `dis.5.1`."
+        prerequisites: [dis.5.1]
+      - id: inf.4.2
+        name: "Minimum description length (cross-link)"
+        description: "Cross-link `dis.5.2`."
+        prerequisites: [dis.5.2]
+      - id: inf.4.3
+        name: "Solomonoff induction (overview)"
+        description: "Cross-link `dis.5.3`."
+        prerequisites: [dis.5.3]
+
+  - id: inf.5
+    name: "Information bottleneck and DL"
+    leaves:
+      - id: inf.5.1
+        name: "Information bottleneck principle"
+        description: "Trade prediction MI vs representation MI."
+        prerequisites: [inf.1.3]
+      - id: inf.5.2
+        name: "Variational information bottleneck"
+        description: "Tractable IB objective for deep models."
+        prerequisites: [inf.5.1, inf.3.5]
+      - id: inf.5.3
+        name: "Mutual information in deep nets (debate)"
+        description: "Empirical / methodological controversies (Tishby, Saxe et al.)."
+        prerequisites: [inf.5.1]

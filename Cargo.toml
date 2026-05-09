@@ -1,6 +1,12 @@
 [package]
-name = "mathcurriculum"
+name = "mathtutor"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+argh = "0.1.19"
+ayml = "0.1.0"
+fsrs = "5.2.0"
+serde = "1.0.228"
+thiserror = "2.0.18"
+tracing = "0.1.44"

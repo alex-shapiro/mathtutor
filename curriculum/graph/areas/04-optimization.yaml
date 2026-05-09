@@ -1,0 +1,298 @@
+schema_version: 1
+area: optimization
+prefix: opt
+summary: "Convex analysis, first/second-order methods, stochastic and adaptive optimization, constrained / non-convex / min-max optimization, online learning, optimal transport."
+why_for_dl: |
+  Training is optimization. Convex theory gives the cleanest results and
+  the vocabulary (subgradient, dual, proximal, mirror, KKT). Stochastic
+  methods (SGD, Adam, schedules, EMA) are the engine of every modern
+  model. Non-convex landscape geometry, implicit bias, and saddle-point
+  dynamics drive theoretical understanding of deep nets and GAN training.
+  Optimal transport ties optimization to geometry and powers flow matching.
+cross_references:
+  - linear-algebra
+  - analysis
+  - probability
+  - geometry-and-topology
+  - learning-theory
+
+topics:
+  - id: opt.1
+    name: "Convex analysis"
+    leaves:
+      - id: opt.1.1
+        name: "Convex sets"
+        description: "Hyperplanes, supporting and separating hyperplanes."
+        prerequisites: [la.1.4]
+      - id: opt.1.2
+        name: "Convex functions"
+        description: "Definitions and characterizations (Jensen, monotone gradient, PSD Hessian)."
+        prerequisites: [opt.1.1, ana.2.5]
+      - id: opt.1.3
+        name: "Strong and strict convexity"
+        description: "Quadratic lower bounds; uniqueness of minima."
+        prerequisites: [opt.1.2]
+      - id: opt.1.4
+        name: "Subgradients and subdifferentials"
+        description: "Generalized gradients for non-smooth convex functions."
+        prerequisites: [opt.1.2]
+      - id: opt.1.5
+        name: "Conjugate functions"
+        description: "Legendre–Fenchel transform; dual representations."
+        prerequisites: [opt.1.4]
+      - id: opt.1.6
+        name: "Smoothness (Lipschitz gradient)"
+        description: "L-smooth functions; quadratic upper bounds."
+        prerequisites: [opt.1.2]
+      - id: opt.1.7
+        name: "Proximal operators"
+        description: "prox_f(x) = argmin f(y) + ½‖y−x‖²."
+        prerequisites: [opt.1.4]
+      - id: opt.1.8
+        name: "Bregman divergences"
+        description: "Generalized 'distance' from a strictly convex potential."
+        prerequisites: [opt.1.5]
+
+  - id: opt.2
+    name: "Convex optimization problems"
+    leaves:
+      - id: opt.2.1
+        name: "LP, QP, SOCP, SDP"
+        description: "The standard cone hierarchy."
+        prerequisites: [opt.1.2, la.6.3]
+      - id: opt.2.2
+        name: "Lagrangian and dual function"
+        description: "Lagrangian duality construction."
+        prerequisites: [opt.2.1]
+      - id: opt.2.3
+        name: "Strong duality and Slater's condition"
+        description: "When primal and dual values coincide."
+        prerequisites: [opt.2.2]
+      - id: opt.2.4
+        name: "KKT conditions"
+        description: "First-order necessary conditions for constrained optima."
+        prerequisites: [opt.2.3]
+      - id: opt.2.5
+        name: "Sensitivity analysis"
+        description: "Dual variables as marginal values."
+        prerequisites: [opt.2.4]
+
+  - id: opt.3
+    name: "First-order methods"
+    leaves:
+      - id: opt.3.1
+        name: "Gradient descent"
+        description: "Convergence rates: smooth, smooth + strongly convex."
+        prerequisites: [opt.1.6, opt.1.3]
+      - id: opt.3.2
+        name: "Subgradient method"
+        description: "Non-smooth case; O(1/√k) rate."
+        prerequisites: [opt.1.4]
+      - id: opt.3.3
+        name: "Proximal gradient (ISTA)"
+        description: "Smooth + non-smooth splitting."
+        prerequisites: [opt.1.7, opt.3.1]
+      - id: opt.3.4
+        name: "Accelerated methods"
+        description: "Nesterov, FISTA; optimal rates for first-order."
+        prerequisites: [opt.3.1]
+      - id: opt.3.5
+        name: "Heavy ball / momentum"
+        description: "Polyak's method; ODE limits."
+        prerequisites: [opt.3.1]
+      - id: opt.3.6
+        name: "Mirror descent"
+        description: "Generalized GD using a Bregman divergence."
+        prerequisites: [opt.1.8]
+      - id: opt.3.7
+        name: "Frank–Wolfe / conditional gradient"
+        description: "Constraint set queried via linear minimization oracles."
+        prerequisites: [opt.2.1]
+      - id: opt.3.8
+        name: "Coordinate descent"
+        description: "Update one (block of) coordinate(s) at a time."
+        prerequisites: [opt.3.1]
+      - id: opt.3.9
+        name: "ADMM"
+        description: "Alternating direction method of multipliers."
+        prerequisites: [opt.2.4, opt.1.7]
+
+  - id: opt.4
+    name: "Stochastic optimization"
+    leaves:
+      - id: opt.4.1
+        name: "Stochastic gradient descent"
+        description: "Convergence rates under unbiased gradient estimates."
+        prerequisites: [opt.3.1, prob.5.2]
+      - id: opt.4.2
+        name: "Variance reduction"
+        description: "SVRG, SAGA; control variates for gradients."
+        prerequisites: [opt.4.1]
+      - id: opt.4.3
+        name: "Mini-batching and gradient noise"
+        description: "Effective batch size; SGD as SDE."
+        prerequisites: [opt.4.1]
+      - id: opt.4.4
+        name: "Adaptive methods"
+        description: "AdaGrad, RMSProp, Adam, AdamW, Lion, Shampoo."
+        prerequisites: [opt.4.1]
+      - id: opt.4.5
+        name: "Sign-based methods"
+        description: "signSGD, Lion; sign as 1-bit gradient."
+        prerequisites: [opt.4.4]
+      - id: opt.4.6
+        name: "Learning-rate schedules"
+        description: "Warmup, cosine, linear; decoupled weight decay."
+        prerequisites: [opt.4.1]
+      - id: opt.4.7
+        name: "Gradient clipping"
+        description: "Bounding ‖g‖ for stability."
+        prerequisites: [opt.4.1]
+      - id: opt.4.8
+        name: "Polyak averaging and EMA"
+        description: "Iterate / parameter averaging; teacher networks."
+        prerequisites: [opt.4.1]
+
+  - id: opt.5
+    name: "Second-order and curvature methods"
+    leaves:
+      - id: opt.5.1
+        name: "Newton's method"
+        description: "Quadratic local convergence near minima."
+        prerequisites: [opt.3.1, la.7.4]
+      - id: opt.5.2
+        name: "Quasi-Newton (BFGS, L-BFGS)"
+        description: "Approximating the Hessian incrementally."
+        prerequisites: [opt.5.1]
+      - id: opt.5.3
+        name: "Trust region methods"
+        description: "Restrict step within a region of model fidelity."
+        prerequisites: [opt.5.1]
+      - id: opt.5.4
+        name: "Gauss–Newton and Levenberg–Marquardt"
+        description: "Hessian approximation for least-squares."
+        prerequisites: [opt.5.1]
+      - id: opt.5.5
+        name: "Natural gradient"
+        description: "Steepest descent in the Fisher metric."
+        prerequisites: [prob.9.5, geom.6.2]
+      - id: opt.5.6
+        name: "K-FAC"
+        description: "Kronecker-factored approximate Fisher."
+        prerequisites: [opt.5.5, la.6.7]
+      - id: opt.5.7
+        name: "Hessian-free / CG-Newton"
+        description: "Iterative inexact Newton via Krylov."
+        prerequisites: [opt.5.1, la.8.3]
+
+  - id: opt.6
+    name: "Constrained and structured optimization"
+    leaves:
+      - id: opt.6.1
+        name: "Projected gradient"
+        description: "Project after each gradient step."
+        prerequisites: [opt.3.1, la.3.6]
+      - id: opt.6.2
+        name: "Penalty and barrier methods"
+        description: "Soft / interior reformulations of constraints."
+        prerequisites: [opt.2.1]
+      - id: opt.6.3
+        name: "Augmented Lagrangian"
+        description: "Lagrangian + quadratic penalty."
+        prerequisites: [opt.2.4]
+      - id: opt.6.4
+        name: "Manifold optimization"
+        description: "Riemannian gradient descent; retractions."
+        prerequisites: [geom.2.5, geom.2.3]
+      - id: opt.6.5
+        name: "Combinatorial relaxations"
+        description: "LP / SDP relaxation of integer programs."
+        prerequisites: [opt.2.1]
+
+  - id: opt.7
+    name: "Non-convex optimization"
+    leaves:
+      - id: opt.7.1
+        name: "Local minima and saddle points"
+        description: "Critical-point taxonomy; second-order conditions."
+        prerequisites: [la.7.4]
+      - id: opt.7.2
+        name: "Strict-saddle property and escape"
+        description: "When first-order methods avoid saddles."
+        prerequisites: [opt.7.1]
+      - id: opt.7.3
+        name: "Łojasiewicz / PL conditions"
+        description: "Gradient-domination implying linear convergence."
+        prerequisites: [opt.3.1]
+      - id: opt.7.4
+        name: "Convergence to stationary points"
+        description: "Guarantees for ‖∇f‖ → 0."
+        prerequisites: [opt.4.1]
+      - id: opt.7.5
+        name: "Implicit regularization (preview)"
+        description: "Algorithm-dependent inductive bias of the solution."
+        prerequisites: [opt.4.1]
+
+  - id: opt.8
+    name: "Min-max and game-theoretic optimization"
+    leaves:
+      - id: opt.8.1
+        name: "Saddle-point problems"
+        description: "min-max formulations; Sion's theorem."
+        prerequisites: [opt.2.2]
+      - id: opt.8.2
+        name: "Extragradient and optimistic methods"
+        description: "Stable algorithms for monotone variational inequalities."
+        prerequisites: [opt.8.1]
+      - id: opt.8.3
+        name: "Fictitious play"
+        description: "Best-response dynamics in games."
+        prerequisites: [opt.8.1]
+      - id: opt.8.4
+        name: "GAN training dynamics"
+        description: "Min-max optimization on neural-net pairs."
+        prerequisites: [opt.8.2]
+
+  - id: opt.9
+    name: "Online learning and bandits"
+    leaves:
+      - id: opt.9.1
+        name: "Online convex optimization"
+        description: "Regret minimization framework."
+        prerequisites: [opt.1.2]
+      - id: opt.9.2
+        name: "Online gradient descent / FTRL"
+        description: "Foundational online algorithms."
+        prerequisites: [opt.9.1]
+      - id: opt.9.3
+        name: "Multi-armed bandits"
+        description: "UCB, Thompson sampling."
+        prerequisites: [prob.9.4]
+      - id: opt.9.4
+        name: "Adversarial bandits"
+        description: "Exp3; partial-information regret."
+        prerequisites: [opt.9.3]
+
+  - id: opt.10
+    name: "Optimal transport"
+    leaves:
+      - id: opt.10.1
+        name: "Monge and Kantorovich problems"
+        description: "Two formulations of optimal coupling."
+        prerequisites: [ana.5.7]
+      - id: opt.10.2
+        name: "Wasserstein distance"
+        description: "Wₚ; metric on probability measures."
+        prerequisites: [opt.10.1]
+      - id: opt.10.3
+        name: "Sinkhorn / entropic OT"
+        description: "Entropy-regularized OT; matrix-scaling algorithm."
+        prerequisites: [opt.10.1, inf.1.4]
+      - id: opt.10.4
+        name: "Brenier's theorem"
+        description: "OT map = gradient of a convex potential."
+        prerequisites: [opt.10.1, opt.1.5]
+      - id: opt.10.5
+        name: "Dynamic OT (Benamou–Brenier)"
+        description: "Wasserstein as a fluid-dynamics geodesic."
+        prerequisites: [opt.10.2, dyn.3.4]

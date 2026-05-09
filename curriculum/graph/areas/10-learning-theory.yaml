@@ -1,0 +1,194 @@
+schema_version: 1
+area: learning-theory
+prefix: lt
+summary: "Statistical learning framework, generalization bounds, online learning, implicit bias, modern deep-net theory, robustness, causality."
+why_for_dl: |
+  Learning theory frames what generalization means, when it can be
+  guaranteed, and what scaling gives you. NTK, mean-field, double
+  descent, scaling laws, and benign-overfitting form the modern
+  vocabulary for analyzing transformers and diffusion models. Robustness
+  and causality bound what a model can be expected to do under
+  distribution shift, and underlie alignment-relevant arguments about
+  out-of-distribution behavior.
+cross_references:
+  - probability
+  - optimization
+  - information-theory
+  - neural-network-theory
+
+topics:
+  - id: lt.1
+    name: "Statistical learning framework"
+    leaves:
+      - id: lt.1.1
+        name: "Loss, risk, empirical risk minimization"
+        description: "Population vs empirical risk; ERM principle."
+        prerequisites: [prob.3.1]
+      - id: lt.1.2
+        name: "Bias–variance decomposition"
+        description: "Excess risk = bias² + variance + irreducible noise."
+        prerequisites: [prob.9.1]
+      - id: lt.1.3
+        name: "Bayes-optimal predictor"
+        description: "Lower bound on risk; conditional-expectation form."
+        prerequisites: [prob.3.6]
+      - id: lt.1.4
+        name: "Surrogate losses and calibration"
+        description: "Cross-entropy / hinge as proxies for 0–1 loss."
+        prerequisites: [opt.1.2, lt.1.1]
+      - id: lt.1.5
+        name: "Excess risk decomposition"
+        description: "Approximation, estimation, optimization errors."
+        prerequisites: [lt.1.1]
+
+  - id: lt.2
+    name: "Generalization bounds"
+    leaves:
+      - id: lt.2.1
+        name: "Uniform convergence"
+        description: "sup-norm bounds on empirical vs population risk."
+        prerequisites: [prob.5.3, prob.6.5]
+      - id: lt.2.2
+        name: "VC dimension"
+        description: "Combinatorial capacity for binary classes."
+        prerequisites: [lt.2.1]
+      - id: lt.2.3
+        name: "Rademacher / Gaussian complexity"
+        description: "Data-dependent complexity measures."
+        prerequisites: [lt.2.1]
+      - id: lt.2.4
+        name: "Covering numbers and metric entropy"
+        description: "Combinatorial / metric capacity of function classes."
+        prerequisites: [ana.3.3]
+      - id: lt.2.5
+        name: "Chaining and Dudley's inequality"
+        description: "From covering numbers to expectation bounds."
+        prerequisites: [lt.2.4, prob.6.6]
+      - id: lt.2.6
+        name: "PAC-Bayes"
+        description: "Posterior-dependent bounds; KL penalty."
+        prerequisites: [inf.1.4, prob.9.4]
+      - id: lt.2.7
+        name: "Algorithmic stability bounds"
+        description: "Generalization via output stability under data perturbation."
+        prerequisites: [lt.2.1]
+      - id: lt.2.8
+        name: "Compression bounds"
+        description: "Generalization via short certificate of the learner."
+        prerequisites: [dis.5.2]
+
+  - id: lt.3
+    name: "Online and adversarial learning"
+    leaves:
+      - id: lt.3.1
+        name: "Online regret bounds"
+        description: "Sublinear regret as the criterion."
+        prerequisites: [opt.9.1]
+      - id: lt.3.2
+        name: "Mistake bounds"
+        description: "Halving, perceptron, winnow."
+        prerequisites: [opt.9.2]
+      - id: lt.3.3
+        name: "Boosting analysis"
+        description: "Margin-based generalization for ensembles."
+        prerequisites: [lt.2.3]
+
+  - id: lt.4
+    name: "Implicit and inductive bias"
+    leaves:
+      - id: lt.4.1
+        name: "Implicit bias of GD / SGD"
+        description: "Solution selection in over-parameterized models."
+        prerequisites: [opt.4.1]
+      - id: lt.4.2
+        name: "Margin theory"
+        description: "Generalization via large margins."
+        prerequisites: [lt.2.2]
+      - id: lt.4.3
+        name: "Norm-based capacity"
+        description: "Path / spectral / Frobenius norm complexity."
+        prerequisites: [lt.2.3]
+      - id: lt.4.4
+        name: "Flatness and generalization"
+        description: "Sharpness measures and SAM."
+        prerequisites: [opt.7.1, lt.4.3]
+
+  - id: lt.5
+    name: "Modern deep-net theory"
+    leaves:
+      - id: lt.5.1
+        name: "Universal approximation"
+        description: "Density of NN function classes."
+        prerequisites: [ana.3.5]
+      - id: lt.5.2
+        name: "Depth separation"
+        description: "Depth-vs-width expressivity gaps."
+        prerequisites: [lt.5.1]
+      - id: lt.5.3
+        name: "Neural tangent kernel"
+        description: "Lazy / kernel regime of wide networks."
+        prerequisites: [ana.4.9, opt.3.1]
+      - id: lt.5.4
+        name: "Mean-field regime"
+        description: "Wide one-hidden-layer training as a measure flow."
+        prerequisites: [dyn.6.4]
+      - id: lt.5.5
+        name: "Double descent and benign overfitting"
+        description: "Test error U-shape and beyond."
+        prerequisites: [lt.1.2]
+      - id: lt.5.6
+        name: "Scaling laws"
+        description: "Power-law dependence on data, params, compute (Chinchilla)."
+        prerequisites: [lt.1.5]
+      - id: lt.5.7
+        name: "Feature learning vs lazy training"
+        description: "Beyond NTK — when do features actually move?"
+        prerequisites: [lt.5.3]
+      - id: lt.5.8
+        name: "Loss-landscape geometry"
+        description: "Hessian spectrum, basins, plateaus."
+        prerequisites: [opt.7.1, la.4.4]
+      - id: lt.5.9
+        name: "Mode connectivity"
+        description: "Low-loss paths between SGD solutions."
+        prerequisites: [lt.5.8]
+
+  - id: lt.6
+    name: "Robustness and out-of-distribution"
+    leaves:
+      - id: lt.6.1
+        name: "Adversarial robustness"
+        description: "Min-max formulation; certified defenses."
+        prerequisites: [opt.8.1]
+      - id: lt.6.2
+        name: "Distribution shift"
+        description: "Covariate, label, concept shift; population analyses."
+        prerequisites: [prob.5.1]
+      - id: lt.6.3
+        name: "Domain adaptation theory"
+        description: "Discrepancy bounds; Ben-David bound."
+        prerequisites: [lt.6.2, inf.1.8]
+      - id: lt.6.4
+        name: "Calibration and conformal prediction"
+        description: "Reliable uncertainty under finite samples."
+        prerequisites: [prob.9.1]
+
+  - id: lt.7
+    name: "Causality (light)"
+    leaves:
+      - id: lt.7.1
+        name: "Causal DAGs"
+        description: "Directed graphs encoding interventional structure."
+        prerequisites: [prob.4.4]
+      - id: lt.7.2
+        name: "Do-calculus"
+        description: "Pearl's calculus for interventions."
+        prerequisites: [lt.7.1]
+      - id: lt.7.3
+        name: "Counterfactuals"
+        description: "Structural causal models; potential outcomes."
+        prerequisites: [lt.7.2]
+      - id: lt.7.4
+        name: "Invariance and causality"
+        description: "ICP, IRM, invariance-based generalization."
+        prerequisites: [lt.7.1, lt.6.2]

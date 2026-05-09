@@ -1,0 +1,229 @@
+schema_version: 1
+area: neural-network-theory
+prefix: nn
+summary: "Neural network architectures, training dynamics, loss landscapes, expressivity, regularization, scaling, efficiency."
+why_for_dl: |
+  This is the architecture-and-dynamics layer specific to neural networks
+  but generic across modalities — the place where activations, layers,
+  initialization, normalization, gradient flow, and scaling parameterizations
+  live. Transformers and diffusion models inherit all of it before adding
+  their own structure.
+cross_references:
+  - linear-algebra
+  - optimization
+  - probability
+  - learning-theory
+  - numerical
+
+topics:
+  - id: nn.1
+    name: "Architectures (mathematical content)"
+    leaves:
+      - id: nn.1.1
+        name: "Multilayer perceptron"
+        description: "Stacked affine + nonlinear maps."
+        prerequisites: [la.2.1]
+      - id: nn.1.2
+        name: "Activation functions"
+        description: "ReLU, GELU, SiLU/Swish, tanh, sigmoid, softmax."
+        prerequisites: [ana.1.4]
+      - id: nn.1.3
+        name: "Convolutions"
+        description: "1D / 2D, separable, dilated; translation equivariance."
+        prerequisites: [ana.6.4, geom.4.4]
+      - id: nn.1.4
+        name: "Pooling"
+        description: "Max, average; pooling as down-sampling."
+        prerequisites: [nn.1.3]
+      - id: nn.1.5
+        name: "RNN, LSTM, GRU"
+        description: "Recurrent maps over sequences; gating."
+        prerequisites: [dyn.1.2]
+      - id: nn.1.6
+        name: "Graph neural networks / message passing"
+        description: "Permutation-equivariant aggregation on graphs."
+        prerequisites: [dis.2.8, geom.4.4]
+      - id: nn.1.7
+        name: "Attention (cross-link)"
+        description: "Cross-link `tx.1`."
+        prerequisites: [tx.1.1]
+      - id: nn.1.8
+        name: "Residual connections"
+        description: "Identity skip; gradient flow benefits."
+        prerequisites: [nn.1.1]
+      - id: nn.1.9
+        name: "Normalization layers"
+        description: "BatchNorm, LayerNorm, GroupNorm, RMSNorm."
+        prerequisites: [prob.3.2]
+      - id: nn.1.10
+        name: "Dropout and stochastic regularization"
+        description: "Multiplicative noise; ensembling interpretation."
+        prerequisites: [prob.2.4]
+
+  - id: nn.2
+    name: "Training dynamics"
+    leaves:
+      - id: nn.2.1
+        name: "Backpropagation algorithm"
+        description: "Chain rule applied to layered computation graphs."
+        prerequisites: [num.4.3, la.7.5]
+      - id: nn.2.2
+        name: "Gradient flow"
+        description: "Continuous-time limit of GD (cross-link `dyn.6.3`)."
+        prerequisites: [dyn.6.3]
+      - id: nn.2.3
+        name: "Initialization theory"
+        description: "Xavier, Kaiming, orthogonal initializations."
+        prerequisites: [prob.2.5, la.5.2]
+      - id: nn.2.4
+        name: "Variance propagation"
+        description: "Maintaining activation / gradient variance through depth."
+        prerequisites: [nn.2.3]
+      - id: nn.2.5
+        name: "Vanishing and exploding gradients"
+        description: "Failure modes of backprop in deep nets."
+        prerequisites: [nn.2.1]
+      - id: nn.2.6
+        name: "Dynamical isometry"
+        description: "Singular-value structure of Jacobian products."
+        prerequisites: [la.5.4, nn.2.4]
+      - id: nn.2.7
+        name: "NTK / lazy regime"
+        description: "Cross-link `lt.5.3`."
+        prerequisites: [lt.5.3]
+      - id: nn.2.8
+        name: "Feature-learning regime"
+        description: "Cross-link `lt.5.7`."
+        prerequisites: [lt.5.7]
+      - id: nn.2.9
+        name: "Mean-field analysis"
+        description: "Cross-link `lt.5.4`."
+        prerequisites: [lt.5.4]
+      - id: nn.2.10
+        name: "Deep linear networks"
+        description: "Tractable model isolating depth effects."
+        prerequisites: [la.4.3, opt.3.1]
+
+  - id: nn.3
+    name: "Loss landscape"
+    leaves:
+      - id: nn.3.1
+        name: "Saddle points and plateaus"
+        description: "Cross-link `opt.7.1`."
+        prerequisites: [opt.7.1]
+      - id: nn.3.2
+        name: "Mode connectivity"
+        description: "Cross-link `lt.5.9`."
+        prerequisites: [lt.5.9]
+      - id: nn.3.3
+        name: "Hessian spectrum"
+        description: "Bulk and outliers; bulk-spike phenomena."
+        prerequisites: [la.4.4, lt.5.8]
+      - id: nn.3.4
+        name: "Sharpness and flatness"
+        description: "Cross-link `lt.4.4`."
+        prerequisites: [lt.4.4]
+      - id: nn.3.5
+        name: "Lottery ticket hypothesis"
+        description: "Sparse subnetworks trainable in isolation."
+        prerequisites: [nn.7.5]
+
+  - id: nn.4
+    name: "Approximation and expressivity"
+    leaves:
+      - id: nn.4.1
+        name: "Universal approximation theorems"
+        description: "Cross-link `lt.5.1`."
+        prerequisites: [lt.5.1]
+      - id: nn.4.2
+        name: "Width / depth tradeoffs"
+        description: "Capacity vs trainability."
+        prerequisites: [nn.4.1, lt.5.2]
+      - id: nn.4.3
+        name: "Approximation rates"
+        description: "Rates over Sobolev / Barron classes."
+        prerequisites: [ana.4.10]
+      - id: nn.4.4
+        name: "Equivariance / invariance in architectures"
+        description: "Cross-link `geom.4.5`."
+        prerequisites: [geom.4.5]
+      - id: nn.4.5
+        name: "Implicit neural representations"
+        description: "SIRENs, Fourier features; coordinate networks."
+        prerequisites: [ana.6.1, nn.1.2]
+
+  - id: nn.5
+    name: "Regularization and augmentation"
+    leaves:
+      - id: nn.5.1
+        name: "L1 / L2 / weight decay"
+        description: "Decoupled weight decay (AdamW)."
+        prerequisites: [opt.4.6]
+      - id: nn.5.2
+        name: "Data augmentation"
+        description: "Group-equivariant noise injection."
+        prerequisites: [geom.4.4]
+      - id: nn.5.3
+        name: "Early stopping"
+        description: "Implicit regularization via training time."
+        prerequisites: [opt.4.1]
+      - id: nn.5.4
+        name: "Label smoothing"
+        description: "Soft targets; calibration trade-offs."
+        prerequisites: [inf.1.5]
+      - id: nn.5.5
+        name: "Mixup / CutMix"
+        description: "Convex combinations of inputs and targets."
+        prerequisites: [opt.1.2]
+      - id: nn.5.6
+        name: "Stochastic depth"
+        description: "Random layer dropout in residual nets."
+        prerequisites: [nn.1.10, nn.1.8]
+
+  - id: nn.6
+    name: "Scaling and parameterization"
+    leaves:
+      - id: nn.6.1
+        name: "Width / depth / data scaling"
+        description: "Empirical scaling regimes."
+        prerequisites: [lt.5.6]
+      - id: nn.6.2
+        name: "Compute-optimal training (Chinchilla)"
+        description: "Joint optimization of N and D under compute budget."
+        prerequisites: [nn.6.1]
+      - id: nn.6.3
+        name: "μP / unit scaling"
+        description: "Width-stable parameterizations enabling HP transfer."
+        prerequisites: [nn.2.3, nn.2.4]
+      - id: nn.6.4
+        name: "Hyperparameter transfer across scales"
+        description: "Enabled by μP and scaling exponents."
+        prerequisites: [nn.6.3]
+
+  - id: nn.7
+    name: "Memory and efficiency math"
+    leaves:
+      - id: nn.7.1
+        name: "Activation memory accounting"
+        description: "Per-layer footprint; sequence × hidden."
+        prerequisites: [num.4.3]
+      - id: nn.7.2
+        name: "Recomputation / checkpointing tradeoffs"
+        description: "Cross-link `num.4.7`."
+        prerequisites: [num.4.7]
+      - id: nn.7.3
+        name: "Quantization theory"
+        description: "Cross-link `num.1.6`."
+        prerequisites: [num.1.6]
+      - id: nn.7.4
+        name: "Knowledge distillation"
+        description: "Soft-target supervision; matched divergence."
+        prerequisites: [inf.1.4]
+      - id: nn.7.5
+        name: "Sparsity and pruning"
+        description: "Magnitude / movement pruning; mask theory."
+        prerequisites: [opt.1.4]
+      - id: nn.7.6
+        name: "Low-rank adaptation (LoRA)"
+        description: "Frozen W + low-rank ΔW; rank-budget analysis."
+        prerequisites: [la.5.9]

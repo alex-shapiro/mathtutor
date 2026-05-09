@@ -1,0 +1,181 @@
+schema_version: 1
+area: numerical
+prefix: num
+summary: "Floating point, numerical stability, ODE/SDE solvers, automatic differentiation, quadrature, hardware-aware numerics."
+why_for_dl: |
+  Deep learning is numerical computing at scale. Mixed-precision training,
+  loss scaling, quantization, and overflow-resistant softmax variants all
+  rest on floating-point analysis. Reverse-mode AD is what makes training
+  possible. ODE / SDE solvers are core to neural ODEs and diffusion model
+  inference. Hardware-aware reasoning (BLAS levels, kernel fusion) is
+  essential for understanding modern training-systems papers.
+cross_references:
+  - linear-algebra
+  - analysis
+  - probability
+  - dynamical-systems
+
+topics:
+  - id: num.1
+    name: "Floating point and numerical stability"
+    leaves:
+      - id: num.1.1
+        name: "IEEE 754 floats"
+        description: "Single, double, fp16, bf16, fp8 formats."
+        prerequisites: [fnd.5.3]
+      - id: num.1.2
+        name: "Rounding error and unit-in-last-place"
+        description: "ε_machine; round-to-nearest semantics."
+        prerequisites: [num.1.1]
+      - id: num.1.3
+        name: "Catastrophic cancellation"
+        description: "Subtraction of nearly-equal numbers; reformulations."
+        prerequisites: [num.1.2]
+      - id: num.1.4
+        name: "Backward and forward stability"
+        description: "Algorithm output is the exact answer to a perturbed problem."
+        prerequisites: [num.1.2, la.8.1]
+      - id: num.1.5
+        name: "Mixed precision and loss scaling"
+        description: "fp16/bf16 training; loss-scale to recover gradient range."
+        prerequisites: [num.1.1]
+      - id: num.1.6
+        name: "Quantization"
+        description: "int8 / int4 inference; PTQ vs QAT; outlier handling."
+        prerequisites: [num.1.5]
+
+  - id: num.2
+    name: "Numerical linear algebra in practice"
+    leaves:
+      - id: num.2.1
+        name: "Conditioning revisited"
+        description: "Numerical effects of ill-conditioning; preconditioning."
+        prerequisites: [la.8.1]
+      - id: num.2.2
+        name: "Iterative solvers in practice"
+        description: "CG/GMRES restarts; convergence diagnostics."
+        prerequisites: [la.8.3]
+      - id: num.2.3
+        name: "Preconditioning"
+        description: "Spectral clustering of the operator for faster convergence."
+        prerequisites: [num.2.2]
+      - id: num.2.4
+        name: "Randomized numerical linear algebra"
+        description: "Sketching, leverage scores, randomized SVD."
+        prerequisites: [la.8.5]
+      - id: num.2.5
+        name: "Block algorithms and cache-aware design"
+        description: "Tiling for memory-hierarchy efficiency."
+        prerequisites: [num.6.1]
+
+  - id: num.3
+    name: "Numerical ODE and SDE"
+    leaves:
+      - id: num.3.1
+        name: "Euler, Heun, Runge–Kutta"
+        description: "Explicit single-step integrators; order vs stability."
+        prerequisites: [dyn.1.1]
+      - id: num.3.2
+        name: "Adaptive step size"
+        description: "Embedded RK; error estimation."
+        prerequisites: [num.3.1]
+      - id: num.3.3
+        name: "Stiff equations and implicit methods"
+        description: "Backward Euler, BDF, Rosenbrock."
+        prerequisites: [num.3.1]
+      - id: num.3.4
+        name: "Symplectic integrators"
+        description: "Preserving Hamiltonian structure."
+        prerequisites: [dyn.2.3]
+      - id: num.3.5
+        name: "Euler–Maruyama and Milstein"
+        description: "Discretizations for SDEs."
+        prerequisites: [prob.8.3, num.3.1]
+      - id: num.3.6
+        name: "ODE solvers in deep learning"
+        description: "Neural ODEs, DPM-Solver, Heun's solver in diffusion."
+        prerequisites: [num.3.2]
+
+  - id: num.4
+    name: "Automatic differentiation"
+    leaves:
+      - id: num.4.1
+        name: "Symbolic vs numeric vs algorithmic differentiation"
+        description: "Distinctions and trade-offs."
+        prerequisites: [ana.2.2]
+      - id: num.4.2
+        name: "Forward-mode AD"
+        description: "Tangent propagation; dual numbers."
+        prerequisites: [num.4.1]
+      - id: num.4.3
+        name: "Reverse-mode AD (backprop)"
+        description: "Adjoint accumulation; basis of NN training."
+        prerequisites: [num.4.1, la.7.5]
+      - id: num.4.4
+        name: "Computational graphs"
+        description: "DAGs of primitive operations."
+        prerequisites: [dis.2.1]
+      - id: num.4.5
+        name: "Higher-order derivatives"
+        description: "Hessians and beyond via composed AD."
+        prerequisites: [num.4.3]
+      - id: num.4.6
+        name: "JVPs, VJPs, HVPs"
+        description: "Matrix-free building blocks."
+        prerequisites: [num.4.5]
+      - id: num.4.7
+        name: "Checkpointing and gradient accumulation"
+        description: "Memory–compute trade-offs in backprop."
+        prerequisites: [num.4.3]
+      - id: num.4.8
+        name: "Differentiable programming"
+        description: "Custom VJPs, control flow, stateful ops."
+        prerequisites: [num.4.6]
+      - id: num.4.9
+        name: "Implicit differentiation"
+        description: "Differentiating through fixed points / argmin."
+        prerequisites: [num.4.6, ana.2.6]
+
+  - id: num.5
+    name: "Quadrature and integration"
+    leaves:
+      - id: num.5.1
+        name: "Gaussian quadrature"
+        description: "Optimal nodes / weights; orthogonal polynomials."
+        prerequisites: [ana.4.2]
+      - id: num.5.2
+        name: "Monte Carlo integration"
+        description: "Unbiased estimates; variance scales as 1/n."
+        prerequisites: [prob.5.3]
+      - id: num.5.3
+        name: "Importance sampling"
+        description: "Variance reduction via reweighting."
+        prerequisites: [num.5.2]
+      - id: num.5.4
+        name: "Quasi-Monte Carlo"
+        description: "Low-discrepancy sequences; better-than-1/n rates."
+        prerequisites: [num.5.2]
+
+  - id: num.6
+    name: "Hardware-aware numerics"
+    leaves:
+      - id: num.6.1
+        name: "Memory hierarchy"
+        description: "Registers / cache / DRAM / disk; access cost gradients."
+        prerequisites: []
+      - id: num.6.2
+        name: "BLAS levels 1–3"
+        description: "Vector / matrix-vector / matrix-matrix arithmetic intensity."
+        prerequisites: [num.6.1]
+      - id: num.6.3
+        name: "GPU matmul throughput"
+        description: "Tensor cores; arithmetic intensity; roofline model."
+        prerequisites: [num.6.2]
+      - id: num.6.4
+        name: "Numerical reproducibility"
+        description: "Reduction order, deterministic algorithms."
+        prerequisites: [num.1.2]
+      - id: num.6.5
+        name: "Kernel fusion and compiler intuition"
+        description: "Memory-bound vs compute-bound ops; fused softmax / attention."
+        prerequisites: [num.6.3]

@@ -1,0 +1,202 @@
+schema_version: 1
+area: reinforcement-learning
+prefix: rl
+summary: "Markov decision processes, dynamic programming, model-free / policy-gradient methods, KL-regularized RL (RLHF / DPO / KTO), exploration, model-based RL, offline RL."
+why_for_dl: |
+  RL is the language of preference fine-tuning (RLHF, DPO, KTO, IPO),
+  reasoning agents, and embodied / robotic systems. The MDP / Bellman
+  framework, policy gradient theorem, and KL-regularized formulations
+  underpin nearly all alignment-relevant fine-tuning of language models.
+  Model-based and offline RL connect to world models (cross-link `ssl.10`)
+  and dataset-based fine-tuning.
+cross_references:
+  - probability
+  - optimization
+  - information-theory
+  - self-supervised-and-jepa
+  - transformers
+
+topics:
+  - id: rl.1
+    name: "Markov decision processes"
+    leaves:
+      - id: rl.1.1
+        name: "MDP definition"
+        description: "(S, A, P, R, γ); policies and trajectories."
+        prerequisites: [prob.7.1]
+      - id: rl.1.2
+        name: "Value functions"
+        description: "Vπ and Qπ; expected discounted return."
+        prerequisites: [rl.1.1, prob.3.6]
+      - id: rl.1.3
+        name: "Bellman equations"
+        description: "Recursive consistency for value functions."
+        prerequisites: [rl.1.2]
+      - id: rl.1.4
+        name: "Optimality"
+        description: "V* and Q*; existence of optimal policies."
+        prerequisites: [rl.1.3]
+      - id: rl.1.5
+        name: "Discount factor and horizon types"
+        description: "Episodic, infinite-horizon discounted, average reward."
+        prerequisites: [rl.1.1]
+
+  - id: rl.2
+    name: "Dynamic programming"
+    leaves:
+      - id: rl.2.1
+        name: "Policy evaluation"
+        description: "Iterative solution of the Bellman expectation equation."
+        prerequisites: [rl.1.3]
+      - id: rl.2.2
+        name: "Policy iteration"
+        description: "Alternate evaluation and improvement."
+        prerequisites: [rl.2.1]
+      - id: rl.2.3
+        name: "Value iteration"
+        description: "Bellman-optimality fixed-point iteration."
+        prerequisites: [rl.1.4]
+      - id: rl.2.4
+        name: "Generalized policy iteration"
+        description: "Unifying view of evaluation / improvement schemes."
+        prerequisites: [rl.2.2]
+
+  - id: rl.3
+    name: "Model-free value methods"
+    leaves:
+      - id: rl.3.1
+        name: "Monte Carlo methods"
+        description: "Episode-based value estimation."
+        prerequisites: [num.5.2, rl.1.2]
+      - id: rl.3.2
+        name: "TD(0) and TD(λ)"
+        description: "Bootstrapped value updates; eligibility traces."
+        prerequisites: [rl.1.3]
+      - id: rl.3.3
+        name: "SARSA"
+        description: "On-policy TD control."
+        prerequisites: [rl.3.2]
+      - id: rl.3.4
+        name: "Q-learning"
+        description: "Off-policy TD control on Q*."
+        prerequisites: [rl.3.2]
+      - id: rl.3.5
+        name: "Function approximation and the deadly triad"
+        description: "Off-policy + bootstrap + approximation = instability."
+        prerequisites: [rl.3.4, opt.4.1]
+      - id: rl.3.6
+        name: "DQN"
+        description: "Deep Q-learning with replay and target networks."
+        prerequisites: [rl.3.5, nn.1.1]
+
+  - id: rl.4
+    name: "Policy gradient methods"
+    leaves:
+      - id: rl.4.1
+        name: "Policy gradient theorem"
+        description: "∇J = E[∇log π · Q]; score-function estimator."
+        prerequisites: [prob.4.5, rl.1.2]
+      - id: rl.4.2
+        name: "REINFORCE"
+        description: "Monte-Carlo policy gradient; baseline subtraction."
+        prerequisites: [rl.4.1]
+      - id: rl.4.3
+        name: "Actor–critic"
+        description: "Value function as variance-reducing baseline / critic."
+        prerequisites: [rl.4.2, rl.3.2]
+      - id: rl.4.4
+        name: "Advantage estimation (GAE)"
+        description: "Generalized advantage estimation; bias–variance tradeoff."
+        prerequisites: [rl.4.3]
+      - id: rl.4.5
+        name: "Trust region policy optimization (TRPO)"
+        description: "Constrained policy update under KL trust region."
+        prerequisites: [rl.4.3, opt.2.4, inf.1.4]
+      - id: rl.4.6
+        name: "Proximal policy optimization (PPO)"
+        description: "Clipped-objective approximation to TRPO."
+        prerequisites: [rl.4.5]
+      - id: rl.4.7
+        name: "Natural policy gradient"
+        description: "Policy gradient under Fisher metric (cross-link `opt.5.5`)."
+        prerequisites: [opt.5.5, rl.4.1]
+
+  - id: rl.5
+    name: "KL-regularized RL and preference learning"
+    leaves:
+      - id: rl.5.1
+        name: "Entropy regularization"
+        description: "Maximum-entropy RL; soft Bellman backups."
+        prerequisites: [rl.1.3, inf.1.1]
+      - id: rl.5.2
+        name: "Soft actor-critic (SAC)"
+        description: "Off-policy max-ent actor-critic."
+        prerequisites: [rl.5.1, rl.4.3]
+      - id: rl.5.3
+        name: "KL-controlled policies"
+        description: "RL fine-tuning under KL to a reference policy."
+        prerequisites: [rl.5.1, inf.1.4]
+      - id: rl.5.4
+        name: "Reward modeling (cross-link)"
+        description: "Cross-link `tx.10.1`."
+        prerequisites: [tx.10.1]
+      - id: rl.5.5
+        name: "DPO / IPO / KTO"
+        description: "Closed-form preference fine-tuning derivations."
+        prerequisites: [rl.5.3, tx.10.1]
+      - id: rl.5.6
+        name: "RLAIF and constitutional methods (math)"
+        description: "AI-generated preferences as a stand-in for human labels."
+        prerequisites: [rl.5.4]
+
+  - id: rl.6
+    name: "Exploration"
+    leaves:
+      - id: rl.6.1
+        name: "ε-greedy and Boltzmann exploration"
+        description: "Simple stochastic policies for exploration."
+        prerequisites: [rl.3.4]
+      - id: rl.6.2
+        name: "UCB and Thompson sampling"
+        description: "Cross-link `opt.9.3`."
+        prerequisites: [opt.9.3]
+      - id: rl.6.3
+        name: "Intrinsic motivation / curiosity"
+        description: "Prediction-error / information-gain bonuses."
+        prerequisites: [inf.1.3]
+
+  - id: rl.7
+    name: "Model-based RL"
+    leaves:
+      - id: rl.7.1
+        name: "Planning with learned models"
+        description: "Search / rollout in a learned dynamics model."
+        prerequisites: [rl.1.1]
+      - id: rl.7.2
+        name: "Model-predictive control"
+        description: "Receding-horizon optimization."
+        prerequisites: [rl.7.1, opt.6.2]
+      - id: rl.7.3
+        name: "Dyna-style methods"
+        description: "Mix of real and imagined experience."
+        prerequisites: [rl.7.1]
+      - id: rl.7.4
+        name: "World-model RL"
+        description: "Cross-link `ssl.10.3` (Dreamer-style agents)."
+        prerequisites: [ssl.10.3]
+
+  - id: rl.8
+    name: "Offline RL"
+    leaves:
+      - id: rl.8.1
+        name: "Distributional shift in offline data"
+        description: "Action coverage and bootstrapping pathologies."
+        prerequisites: [rl.3.5, lt.6.2]
+      - id: rl.8.2
+        name: "Conservative methods (CQL, IQL)"
+        description: "Pessimistic value learning under coverage uncertainty."
+        prerequisites: [rl.8.1]
+      - id: rl.8.3
+        name: "Behavior cloning vs RL"
+        description: "Imitation as a special case; when each wins."
+        prerequisites: [rl.4.1]

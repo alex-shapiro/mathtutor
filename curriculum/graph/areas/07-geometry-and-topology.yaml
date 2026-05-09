@@ -1,0 +1,219 @@
+schema_version: 1
+area: geometry-and-topology
+prefix: geom
+summary: "Differential manifolds, Riemannian geometry, Lie groups, group equivariance, algebraic topology, information geometry, optimal-transport geometry."
+why_for_dl: |
+  The manifold hypothesis underlies nearly every representation-learning
+  argument. Riemannian geometry powers manifold optimization, hyperbolic
+  embeddings, and geodesic interpolation in latent spaces. Lie groups
+  formalize equivariant networks (CNNs, GNNs, equivariant transformers).
+  Information geometry gives the natural-gradient view of training.
+  Optimal-transport geometry is the natural language for diffusion / flow
+  matching and the Wasserstein space of distributions.
+cross_references:
+  - linear-algebra
+  - analysis
+  - probability
+  - optimization
+  - dynamical-systems
+
+topics:
+  - id: geom.1
+    name: "Differential manifolds"
+    leaves:
+      - id: geom.1.1
+        name: "Manifolds, charts, atlases"
+        description: "Locally Euclidean spaces with smooth transitions."
+        prerequisites: [ana.3.5]
+      - id: geom.1.2
+        name: "Tangent and cotangent spaces"
+        description: "Linearized directions and dual covectors."
+        prerequisites: [geom.1.1, la.1.4]
+      - id: geom.1.3
+        name: "Differential forms"
+        description: "Antisymmetric multilinear maps; exterior calculus."
+        prerequisites: [geom.1.2, la.6.5]
+      - id: geom.1.4
+        name: "Vector fields and flows"
+        description: "Smooth assignment of tangent vectors; integral curves."
+        prerequisites: [geom.1.2, dyn.1.1]
+      - id: geom.1.5
+        name: "Pushforward and pullback"
+        description: "Transport of vectors / forms under smooth maps."
+        prerequisites: [geom.1.3]
+      - id: geom.1.6
+        name: "Submanifolds, immersions, embeddings"
+        description: "Inclusion structures and rank conditions."
+        prerequisites: [geom.1.1]
+
+  - id: geom.2
+    name: "Riemannian geometry"
+    leaves:
+      - id: geom.2.1
+        name: "Riemannian metrics"
+        description: "Inner product on each tangent space, smoothly varying."
+        prerequisites: [geom.1.2, la.3.1]
+      - id: geom.2.2
+        name: "Connections and parallel transport"
+        description: "Differentiating vector fields; Levi-Civita connection."
+        prerequisites: [geom.2.1]
+      - id: geom.2.3
+        name: "Geodesics"
+        description: "Locally length-minimizing curves."
+        prerequisites: [geom.2.2]
+      - id: geom.2.4
+        name: "Curvature"
+        description: "Riemann, Ricci, sectional, scalar curvature."
+        prerequisites: [geom.2.2]
+      - id: geom.2.5
+        name: "Exponential and log maps"
+        description: "Local diffeomorphism between tangent space and manifold."
+        prerequisites: [geom.2.3]
+      - id: geom.2.6
+        name: "Stiefel and Grassmann manifolds"
+        description: "Orthonormal frames; subspaces — natural for orthogonal weights."
+        prerequisites: [la.3.3, geom.1.1]
+      - id: geom.2.7
+        name: "Hyperbolic space"
+        description: "Constant negative curvature; Poincaré ball, Lorentz models."
+        prerequisites: [geom.2.4]
+      - id: geom.2.8
+        name: "Manifold optimization (link)"
+        description: "Riemannian gradient / Hessian methods (cross-link `opt.6.4`)."
+        prerequisites: [opt.6.4]
+
+  - id: geom.3
+    name: "Lie groups and Lie algebras"
+    leaves:
+      - id: geom.3.1
+        name: "Lie groups"
+        description: "Smooth manifolds with compatible group structure."
+        prerequisites: [geom.1.1, fnd.2.2]
+      - id: geom.3.2
+        name: "Lie algebras and exponential map"
+        description: "Tangent space at identity; bracket; matrix exp."
+        prerequisites: [geom.3.1, geom.1.2]
+      - id: geom.3.3
+        name: "Matrix Lie groups"
+        description: "GL, SO(n), SE(n), SU(n), Sp(n)."
+        prerequisites: [geom.3.2]
+      - id: geom.3.4
+        name: "Adjoint representation"
+        description: "Lie group / algebra acting on its own algebra."
+        prerequisites: [geom.3.2]
+      - id: geom.3.5
+        name: "Haar measure"
+        description: "Translation-invariant integration on locally compact groups."
+        prerequisites: [geom.3.1, ana.5.2]
+      - id: geom.3.6
+        name: "Representation theory basics"
+        description: "Group homomorphisms into GL(V); irreducible reps."
+        prerequisites: [geom.3.1, la.2.4]
+
+  - id: geom.4
+    name: "Group theory and equivariance"
+    leaves:
+      - id: geom.4.1
+        name: "Groups, subgroups, cosets"
+        description: "Algebraic structure of symmetries."
+        prerequisites: [fnd.2.2]
+      - id: geom.4.2
+        name: "Group actions and orbits"
+        description: "G acting on a set X; stabilizers, quotients."
+        prerequisites: [geom.4.1]
+      - id: geom.4.3
+        name: "Symmetric / permutation group"
+        description: "Sₙ; cycle structure; central in set / sequence symmetries."
+        prerequisites: [geom.4.1]
+      - id: geom.4.4
+        name: "Equivariance vs invariance"
+        description: "f(gx)=g·f(x) vs f(gx)=f(x); formal definitions."
+        prerequisites: [geom.4.2]
+      - id: geom.4.5
+        name: "Equivariant neural networks"
+        description: "Group-CNNs, deep sets, EGNNs, SE(3)-transformers (math view)."
+        prerequisites: [geom.4.4, geom.3.6]
+
+  - id: geom.5
+    name: "Algebraic topology (light)"
+    leaves:
+      - id: geom.5.1
+        name: "Simplicial complexes"
+        description: "Combinatorial models of topological spaces."
+        prerequisites: [ana.3.5]
+      - id: geom.5.2
+        name: "Homotopy"
+        description: "Continuous deformations; fundamental group."
+        prerequisites: [ana.3.4]
+      - id: geom.5.3
+        name: "Homology"
+        description: "Cycles modulo boundaries; topological invariants."
+        prerequisites: [geom.5.1]
+      - id: geom.5.4
+        name: "Persistent homology / TDA"
+        description: "Multi-scale topological features of data."
+        prerequisites: [geom.5.3]
+
+  - id: geom.6
+    name: "Information geometry"
+    leaves:
+      - id: geom.6.1
+        name: "Statistical manifolds"
+        description: "Parameter space of distributions as a manifold."
+        prerequisites: [geom.1.1, prob.2.6]
+      - id: geom.6.2
+        name: "Fisher information metric"
+        description: "Riemannian metric induced by KL divergence."
+        prerequisites: [prob.9.5, geom.2.1]
+      - id: geom.6.3
+        name: "Dual connections / α-geometry"
+        description: "e- and m-connections; ±1 dualities."
+        prerequisites: [geom.6.2, geom.2.2]
+      - id: geom.6.4
+        name: "Natural gradient via information geometry"
+        description: "Steepest descent in Fisher metric (cross-link `opt.5.5`)."
+        prerequisites: [opt.5.5]
+      - id: geom.6.5
+        name: "Bregman geometry"
+        description: "Geometry from a strictly convex potential (cross-link `opt.1.8`)."
+        prerequisites: [opt.1.8]
+
+  - id: geom.7
+    name: "Optimal transport geometry"
+    leaves:
+      - id: geom.7.1
+        name: "Wasserstein space"
+        description: "Space of probability measures with W₂ distance."
+        prerequisites: [opt.10.2]
+      - id: geom.7.2
+        name: "Geodesics in Wasserstein space"
+        description: "Displacement interpolation; McCann's theorem."
+        prerequisites: [geom.7.1, opt.10.4]
+      - id: geom.7.3
+        name: "Otto calculus"
+        description: "Formal Riemannian structure on probability measures."
+        prerequisites: [geom.7.2]
+      - id: geom.7.4
+        name: "JKO scheme and gradient flows"
+        description: "Time-discretized Wasserstein gradient flows."
+        prerequisites: [geom.7.3, prob.8.4]
+      - id: geom.7.5
+        name: "Schrödinger bridge"
+        description: "Entropic dynamic OT; relative entropy minimization."
+        prerequisites: [opt.10.3, prob.8.7]
+
+  - id: geom.8
+    name: "Curvature and the manifold hypothesis"
+    leaves:
+      - id: geom.8.1
+        name: "Manifold hypothesis"
+        description: "High-dim data concentrating on lower-dim manifolds."
+        prerequisites: [geom.1.1]
+      - id: geom.8.2
+        name: "Intrinsic dimension estimation"
+        description: "TwoNN, MLE, persistent-homology estimators."
+        prerequisites: [geom.5.4, prob.9.2]
+      - id: geom.8.3
+        name: "Latent-manifold geometry of neural nets"
+        description: "Curvature, geodesics, and visualization in learned latents."
+        prerequisites: [geom.2.3]

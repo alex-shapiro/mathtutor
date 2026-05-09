@@ -1,0 +1,174 @@
+schema_version: 1
+area: dynamical-systems
+prefix: dyn
+summary: "ODE theory, Hamiltonian / Lagrangian mechanics, PDE basics, stochastic dynamics, statistical mechanics, continuous-time deep learning."
+why_for_dl: |
+  Diffusion models and neural ODEs are dynamical systems with learned
+  vector fields. Langevin dynamics, Fokker–Planck, and reverse-time SDEs
+  are the language of score-based generative modeling. Hamiltonian and
+  symplectic structure inspire physics-aware networks. Statistical
+  mechanics gives the energy-based-model and free-energy view that
+  connects EBMs, JEPA, and large-scale training to physical analogies.
+cross_references:
+  - analysis
+  - linear-algebra
+  - probability
+  - geometry-and-topology
+  - numerical
+
+topics:
+  - id: dyn.1
+    name: "ODE theory"
+    leaves:
+      - id: dyn.1.1
+        name: "Existence and uniqueness"
+        description: "Picard–Lindelöf theorem; Lipschitz fields."
+        prerequisites: [ana.3.1, ana.2.2]
+      - id: dyn.1.2
+        name: "Linear ODEs and matrix exponential"
+        description: "Solutions of ẋ=Ax via exp(At)."
+        prerequisites: [la.4.3]
+      - id: dyn.1.3
+        name: "Stability and Lyapunov functions"
+        description: "Equilibria, asymptotic stability, Lyapunov's method."
+        prerequisites: [dyn.1.2]
+      - id: dyn.1.4
+        name: "Phase space and fixed points"
+        description: "Trajectory portraits; classification of equilibria."
+        prerequisites: [dyn.1.3]
+      - id: dyn.1.5
+        name: "Bifurcations"
+        description: "Saddle-node, Hopf, pitchfork bifurcations (overview)."
+        prerequisites: [dyn.1.4]
+      - id: dyn.1.6
+        name: "Limit cycles and attractors"
+        description: "Closed orbits; basins of attraction."
+        prerequisites: [dyn.1.4]
+      - id: dyn.1.7
+        name: "Chaos (light)"
+        description: "Sensitive dependence; Lyapunov exponents."
+        prerequisites: [dyn.1.6]
+
+  - id: dyn.2
+    name: "Hamiltonian and Lagrangian mechanics"
+    leaves:
+      - id: dyn.2.1
+        name: "Lagrangian formulation"
+        description: "L = T − V; principle of stationary action."
+        prerequisites: [ana.8.2]
+      - id: dyn.2.2
+        name: "Hamilton's equations"
+        description: "Phase-space formulation; canonical coordinates."
+        prerequisites: [dyn.2.1]
+      - id: dyn.2.3
+        name: "Symplectic structure"
+        description: "Closed non-degenerate 2-form; preserved by Hamiltonian flow."
+        prerequisites: [dyn.2.2, geom.1.3]
+      - id: dyn.2.4
+        name: "Noether's theorem"
+        description: "Continuous symmetries ↔ conserved quantities."
+        prerequisites: [dyn.2.1, geom.4.4]
+      - id: dyn.2.5
+        name: "Hamiltonian neural networks"
+        description: "Networks whose dynamics conserve a learned Hamiltonian."
+        prerequisites: [dyn.2.2]
+
+  - id: dyn.3
+    name: "PDE basics"
+    leaves:
+      - id: dyn.3.1
+        name: "Heat / diffusion equation"
+        description: "∂ₜu = Δu; smoothing semigroup."
+        prerequisites: [ana.2.4, ana.4.2]
+      - id: dyn.3.2
+        name: "Wave equation"
+        description: "Hyperbolic PDE; characteristics."
+        prerequisites: [ana.2.4]
+      - id: dyn.3.3
+        name: "Laplace and Poisson equations"
+        description: "Δu = 0 / Δu = f; harmonic functions."
+        prerequisites: [ana.2.4]
+      - id: dyn.3.4
+        name: "Continuity equation"
+        description: "Conservation law for densities ∂ₜρ + ∇·(ρv) = 0."
+        prerequisites: [ana.2.8]
+      - id: dyn.3.5
+        name: "Hamilton–Jacobi equations"
+        description: "First-order PDE with deep optimization links."
+        prerequisites: [dyn.2.2]
+      - id: dyn.3.6
+        name: "Reaction–diffusion (light)"
+        description: "Pattern-forming PDEs; ties to growth processes."
+        prerequisites: [dyn.3.1]
+
+  - id: dyn.4
+    name: "Stochastic dynamics"
+    leaves:
+      - id: dyn.4.1
+        name: "Langevin dynamics"
+        description: "ẋ = −∇U + √(2T) ξ; sampling Gibbs distributions."
+        prerequisites: [prob.8.3, prob.7.9]
+      - id: dyn.4.2
+        name: "Overdamped vs underdamped Langevin"
+        description: "First- vs second-order stochastic dynamics."
+        prerequisites: [dyn.4.1]
+      - id: dyn.4.3
+        name: "Fokker–Planck (cross-link)"
+        description: "Density evolution of Langevin / SDEs (cross-link `prob.8.4`)."
+        prerequisites: [prob.8.4]
+      - id: dyn.4.4
+        name: "Detailed balance and ergodicity"
+        description: "Reversibility and convergence to equilibrium."
+        prerequisites: [dyn.4.3]
+      - id: dyn.4.5
+        name: "Stationary distributions of SDEs"
+        description: "Conditions for invariant measure existence."
+        prerequisites: [dyn.4.3]
+      - id: dyn.4.6
+        name: "Reverse-time SDEs (cross-link)"
+        description: "Anderson's theorem (cross-link `prob.8.6`)."
+        prerequisites: [prob.8.6]
+
+  - id: dyn.5
+    name: "Statistical mechanics"
+    leaves:
+      - id: dyn.5.1
+        name: "Boltzmann distribution"
+        description: "p(x) ∝ e^{−E(x)/T}; canonical ensemble."
+        prerequisites: [prob.2.4]
+      - id: dyn.5.2
+        name: "Partition function and free energy"
+        description: "Z, F = −T log Z; thermodynamic potentials."
+        prerequisites: [dyn.5.1]
+      - id: dyn.5.3
+        name: "Variational free energy"
+        description: "Gibbs / Bogoliubov inequality; ELBO connection."
+        prerequisites: [dyn.5.2, inf.1.4]
+      - id: dyn.5.4
+        name: "Spin glasses"
+        description: "Replica method; loss landscape analogies."
+        prerequisites: [dyn.5.1]
+      - id: dyn.5.5
+        name: "Renormalization (intuition)"
+        description: "Scale invariance; intuitions for deep nets."
+        prerequisites: [dyn.5.2]
+
+  - id: dyn.6
+    name: "Continuous-time deep learning"
+    leaves:
+      - id: dyn.6.1
+        name: "Neural ODE"
+        description: "Hidden state as ODE solution; adjoint method."
+        prerequisites: [num.3.6, num.4.9]
+      - id: dyn.6.2
+        name: "Continuous normalizing flows"
+        description: "ODE-defined invertible transforms; instantaneous change-of-variables."
+        prerequisites: [dyn.6.1, ana.2.9]
+      - id: dyn.6.3
+        name: "Gradient flow as a model of training"
+        description: "ẋ = −∇L; ODE limit of GD as learning rate → 0."
+        prerequisites: [opt.3.1, dyn.1.2]
+      - id: dyn.6.4
+        name: "Mean-field limits"
+        description: "Wide networks as evolving distributions of weights."
+        prerequisites: [dyn.6.3, prob.5.7]

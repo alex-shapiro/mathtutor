@@ -1,0 +1,245 @@
+schema_version: 1
+area: self-supervised-and-jepa
+prefix: ssl
+summary: "Self-supervised learning frameworks, contrastive and non-contrastive methods, masked / generative pretraining, JEPA family, energy-based models, latent variable models, identifiability, world models."
+why_for_dl: |
+  SSL is the engine behind every modern foundation model — language,
+  vision, video, and multimodal. The math splits into contrastive
+  (NCE / InfoNCE), non-contrastive (BYOL / SimSiam), whitening
+  (Barlow / VICReg), masked / generative (MAE, MLM), and predictive
+  (JEPA family). Energy-based and latent-variable models unify many
+  of these. Identifiability theory and predictive-coding / world-model
+  views motivate JEPA's emphasis on latent prediction over pixel
+  reconstruction.
+cross_references:
+  - probability
+  - information-theory
+  - linear-algebra
+  - dynamical-systems
+  - geometry-and-topology
+  - neural-network-theory
+
+topics:
+  - id: ssl.1
+    name: "SSL framework"
+    leaves:
+      - id: ssl.1.1
+        name: "Pretext tasks"
+        description: "Auxiliary supervision derived from data alone."
+        prerequisites: [lt.1.1]
+      - id: ssl.1.2
+        name: "Generative vs discriminative SSL"
+        description: "Reconstructing vs distinguishing transformations."
+        prerequisites: [ssl.1.1]
+      - id: ssl.1.3
+        name: "Joint-embedding architectures"
+        description: "Two-stream networks with shared / momentum encoders."
+        prerequisites: [ssl.1.1]
+
+  - id: ssl.2
+    name: "Contrastive learning"
+    leaves:
+      - id: ssl.2.1
+        name: "Noise-contrastive estimation (NCE)"
+        description: "Estimate density ratios via binary classification."
+        prerequisites: [prob.9.2]
+      - id: ssl.2.2
+        name: "InfoNCE / mutual-info bound"
+        description: "Cross-link `inf.3.4`; van den Oord et al."
+        prerequisites: [inf.3.4]
+      - id: ssl.2.3
+        name: "SimCLR / MoCo"
+        description: "Augmentation-based contrast; momentum queues."
+        prerequisites: [ssl.2.2, ssl.1.3]
+      - id: ssl.2.4
+        name: "Negative-sample theory"
+        description: "Hard negatives; sample complexity."
+        prerequisites: [ssl.2.2]
+      - id: ssl.2.5
+        name: "Alignment and uniformity"
+        description: "Wang–Isola decomposition of contrastive loss."
+        prerequisites: [ssl.2.3]
+
+  - id: ssl.3
+    name: "Non-contrastive SSL"
+    leaves:
+      - id: ssl.3.1
+        name: "BYOL and SimSiam"
+        description: "Online–target asymmetric self-distillation."
+        prerequisites: [ssl.1.3]
+      - id: ssl.3.2
+        name: "Stop-gradient analysis"
+        description: "Why stop-gradient prevents collapse."
+        prerequisites: [ssl.3.1, opt.4.1]
+      - id: ssl.3.3
+        name: "Predictor and EMA dynamics"
+        description: "Slow target updates; spectral analyses."
+        prerequisites: [opt.4.8]
+
+  - id: ssl.4
+    name: "Whitening and decorrelation"
+    leaves:
+      - id: ssl.4.1
+        name: "Barlow Twins"
+        description: "Cross-correlation matrix → identity loss."
+        prerequisites: [prob.3.2]
+      - id: ssl.4.2
+        name: "VICReg"
+        description: "Variance, invariance, covariance regularization."
+        prerequisites: [ssl.4.1]
+      - id: ssl.4.3
+        name: "Whitening as collapse prevention"
+        description: "Why decorrelation rules out trivial solutions."
+        prerequisites: [la.5.4, ssl.4.2]
+
+  - id: ssl.5
+    name: "Masked / generative SSL"
+    leaves:
+      - id: ssl.5.1
+        name: "Masked image modeling (MAE)"
+        description: "Reconstruct heavily masked patches."
+        prerequisites: [tx.1.1, ssl.1.2]
+      - id: ssl.5.2
+        name: "Masked language modeling (link)"
+        description: "Cross-link `tx.7.2`."
+        prerequisites: [tx.7.2]
+      - id: ssl.5.3
+        name: "BEiT / discrete-token MIM"
+        description: "Predict discrete visual tokens instead of pixels."
+        prerequisites: [ssl.5.1]
+
+  - id: ssl.6
+    name: "JEPA family"
+    leaves:
+      - id: ssl.6.1
+        name: "Joint-embedding predictive architecture"
+        description: "Predict latent of target from context, not pixels."
+        prerequisites: [ssl.1.3, ssl.3.1]
+      - id: ssl.6.2
+        name: "I-JEPA (image)"
+        description: "Image-domain JEPA with masked context blocks."
+        prerequisites: [ssl.6.1, tx.1.1]
+      - id: ssl.6.3
+        name: "V-JEPA (video)"
+        description: "JEPA over video tokens."
+        prerequisites: [ssl.6.2]
+      - id: ssl.6.4
+        name: "Hierarchical / H-JEPA"
+        description: "Stacked predictors over abstraction levels."
+        prerequisites: [ssl.6.1]
+      - id: ssl.6.5
+        name: "Latent vs pixel reconstruction"
+        description: "Why latent prediction avoids modeling unpredictable details."
+        prerequisites: [ssl.5.1, ssl.6.1]
+      - id: ssl.6.6
+        name: "Energy-based view of JEPA"
+        description: "Compatibility energy between context and target latents."
+        prerequisites: [ssl.7.1, ssl.6.1]
+
+  - id: ssl.7
+    name: "Energy-based models"
+    leaves:
+      - id: ssl.7.1
+        name: "EBM definitions"
+        description: "p(x) ∝ e^{−E(x)}; partition function Z."
+        prerequisites: [dyn.5.1]
+      - id: ssl.7.2
+        name: "Contrastive divergence"
+        description: "Approximate gradient of log Z via short MCMC."
+        prerequisites: [ssl.7.1, prob.7.3]
+      - id: ssl.7.3
+        name: "Score matching for EBMs"
+        description: "Cross-link `dif.1.2`; avoids Z."
+        prerequisites: [dif.1.2]
+      - id: ssl.7.4
+        name: "Persistent / parallel chains"
+        description: "Long-running MCMC chains for training stability."
+        prerequisites: [ssl.7.2]
+      - id: ssl.7.5
+        name: "EBM training pathologies"
+        description: "Mode collapse, energy flatness, mixing failures."
+        prerequisites: [ssl.7.2]
+
+  - id: ssl.8
+    name: "Latent variable models"
+    leaves:
+      - id: ssl.8.1
+        name: "VAE derivation and ELBO"
+        description: "Variational lower bound on log p(x)."
+        prerequisites: [inf.1.4, prob.4.5]
+      - id: ssl.8.2
+        name: "Reparameterization trick"
+        description: "Cross-link `prob.4.5`; backprop through stochastic nodes."
+        prerequisites: [prob.4.5]
+      - id: ssl.8.3
+        name: "Posterior collapse"
+        description: "Latents become uninformative; KL annealing."
+        prerequisites: [ssl.8.1]
+      - id: ssl.8.4
+        name: "β-VAE and info-VAE"
+        description: "ELBO reweightings; rate-distortion view."
+        prerequisites: [inf.2.6, ssl.8.1]
+      - id: ssl.8.5
+        name: "Normalizing flows"
+        description: "Invertible neural maps; exact log-likelihood."
+        prerequisites: [ana.2.9]
+      - id: ssl.8.6
+        name: "Hierarchical VAE"
+        description: "Multi-level latents; deep generative chains."
+        prerequisites: [ssl.8.1]
+
+  - id: ssl.9
+    name: "Identifiability and disentanglement"
+    leaves:
+      - id: ssl.9.1
+        name: "Classical ICA"
+        description: "Independent-component analysis under non-Gaussianity."
+        prerequisites: [prob.2.5, la.5.4]
+      - id: ssl.9.2
+        name: "Nonlinear ICA"
+        description: "Identifiable representations via auxiliary variables."
+        prerequisites: [ssl.9.1, prob.2.6]
+      - id: ssl.9.3
+        name: "Identifiability via contrast / time"
+        description: "Time-contrastive learning; identifiability proofs."
+        prerequisites: [ssl.9.2]
+      - id: ssl.9.4
+        name: "Disentanglement (im)possibility"
+        description: "Locatello et al. — limits without inductive bias."
+        prerequisites: [ssl.9.2]
+
+  - id: ssl.10
+    name: "World models and predictive coding"
+    leaves:
+      - id: ssl.10.1
+        name: "Predictive coding (Rao–Ballard)"
+        description: "Top-down prediction with bottom-up error correction."
+        prerequisites: [ssl.1.2]
+      - id: ssl.10.2
+        name: "Free-energy principle (overview)"
+        description: "Friston's variational free-energy framing."
+        prerequisites: [dyn.5.3, ssl.8.1]
+      - id: ssl.10.3
+        name: "World models"
+        description: "Latent dynamics for planning (Dreamer-style)."
+        prerequisites: [ssl.6.1, dyn.6.1]
+      - id: ssl.10.4
+        name: "Latent dynamics learning"
+        description: "Learning forward models over compact latents."
+        prerequisites: [ssl.10.3]
+
+  - id: ssl.11
+    name: "Information-theoretic SSL"
+    leaves:
+      - id: ssl.11.1
+        name: "Predictive information"
+        description: "Past–future mutual information as a learning signal."
+        prerequisites: [inf.1.3]
+      - id: ssl.11.2
+        name: "Information bottleneck for SSL"
+        description: "Cross-link `inf.5.1` applied to representations."
+        prerequisites: [inf.5.1]
+      - id: ssl.11.3
+        name: "Sufficient and minimal sufficient statistics"
+        description: "Cross-link `prob.9.5`; ideal-representation arguments."
+        prerequisites: [prob.9.5]

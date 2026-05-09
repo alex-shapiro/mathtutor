@@ -1,0 +1,1775 @@
+schema_version: 2
+area: linear-algebra
+prefix: la
+summary: "Vector spaces, linear maps, matrix decompositions, inner-product geometry, tensor algebra, matrix calculus, numerical linear algebra."
+why_for_dl: |
+  Every learned object is a tensor; every layer is a (multi)linear map
+  composed with nonlinearity; attention is a sequence of matrix products;
+  gradients live in cotangent spaces; LoRA, PCA, weight-spectrum analysis,
+  and most theory bounds rest on decompositions and norms.
+cross_references:
+  - foundations
+  - analysis
+  - numerical
+  - geometry-and-topology
+
+children:
+  - id: la.1
+    name: "Vector spaces"
+    description: "Algebraic stage on which linear algebra plays out."
+    children:
+
+      - id: la.1.1
+        name: "Fields and vector space axioms"
+        description: "Scalars and vectors at the axiomatic level."
+        children:
+          - id: la.1.1.1
+            name: "Field axioms"
+            description: "Commutative ring with multiplicative inverses for non-zero elements; satisfies + and · axioms."
+            prerequisites: [fnd.2.3.1]
+          - id: la.1.1.2
+            name: "Common fields"
+            description: "ℝ, ℂ, ℚ, finite fields 𝔽_p; the scalars used throughout DL math are ℝ and ℂ."
+            prerequisites: [la.1.1.1]
+          - id: la.1.1.3
+            name: "Field characteristic"
+            description: "Smallest n with n·1 = 0; 0 if no such n. ℝ and ℂ have characteristic 0."
+            prerequisites: [la.1.1.1]
+          - id: la.1.1.4
+            name: "Vector space axioms"
+            description: "Abelian group under +, compatible scalar action by a field, distributive over both sums."
+            prerequisites: [la.1.1.1]
+          - id: la.1.1.5
+            name: "Common vector spaces"
+            description: "𝔽ⁿ, polynomials of degree ≤ n, m×n matrices, continuous functions, sequences."
+            prerequisites: [la.1.1.4]
+          - id: la.1.1.6
+            name: "Zero vector uniqueness"
+            description: "The additive identity in a vector space is unique."
+            prerequisites: [la.1.1.4]
+          - id: la.1.1.7
+            name: "Additive inverse uniqueness"
+            description: "Each vector has exactly one additive inverse."
+            prerequisites: [la.1.1.4]
+          - id: la.1.1.8
+            name: "0 · v = 0"
+            description: "Scalar zero annihilates any vector."
+            prerequisites: [la.1.1.4]
+          - id: la.1.1.9
+            name: "(−1) · v = −v"
+            description: "Multiplying by −1 yields the additive inverse."
+            prerequisites: [la.1.1.8]
+          - id: la.1.1.10
+            name: "Cancellation property"
+            description: "u + w = v + w → u = v in any vector space."
+            prerequisites: [la.1.1.7]
+
+      - id: la.1.2
+        name: "Subspaces"
+        description: "Subsets closed under the vector-space operations."
+        children:
+          - id: la.1.2.1
+            name: "Subspace"
+            description: "Subset that is itself a vector space under inherited operations."
+            prerequisites: [la.1.1.4]
+          - id: la.1.2.2
+            name: "Subspace test"
+            description: "Non-empty + closed under addition + closed under scalar multiplication suffices."
+            prerequisites: [la.1.2.1]
+          - id: la.1.2.3
+            name: "Trivial subspaces"
+            description: "{0} and V are always subspaces of V."
+            prerequisites: [la.1.2.1]
+          - id: la.1.2.4
+            name: "Intersection of subspaces"
+            description: "Arbitrary intersection of subspaces is again a subspace."
+            prerequisites: [la.1.2.2]
+          - id: la.1.2.5
+            name: "Union is generally not a subspace"
+            description: "U ∪ W is a subspace iff U ⊆ W or W ⊆ U."
+            prerequisites: [la.1.2.2]
+          - id: la.1.2.6
+            name: "Sum of subspaces"
+            description: "U + W = {u + w : u ∈ U, w ∈ W}; the smallest subspace containing both."
+            prerequisites: [la.1.2.4]
+          - id: la.1.2.7
+            name: "Span as smallest subspace"
+            description: "The intersection of all subspaces containing S equals span(S)."
+            prerequisites: [la.1.2.4, la.1.3.2]
+
+      - id: la.1.3
+        name: "Span and linear independence"
+        description: "Generation and non-redundancy of vectors."
+        children:
+          - id: la.1.3.1
+            name: "Linear combination"
+            description: "Σᵢ cᵢ vᵢ with scalars cᵢ and vectors vᵢ; finite sums by convention."
+            prerequisites: [la.1.1.4]
+          - id: la.1.3.2
+            name: "Span"
+            description: "span(S) = set of all finite linear combinations of vectors in S."
+            prerequisites: [la.1.3.1]
+          - id: la.1.3.3
+            name: "Spanning set"
+            description: "S spans V iff span(S) = V."
+            prerequisites: [la.1.3.2]
+          - id: la.1.3.4
+            name: "Linear independence"
+            description: "Σ cᵢ vᵢ = 0 forces all cᵢ = 0."
+            prerequisites: [la.1.3.1]
+          - id: la.1.3.5
+            name: "Linear dependence"
+            description: "Negation of independence; some non-trivial combination equals 0."
+            prerequisites: [la.1.3.4]
+          - id: la.1.3.6
+            name: "Linear dependence relation"
+            description: "Concrete witness Σ cᵢ vᵢ = 0 with not all cᵢ = 0."
+            prerequisites: [la.1.3.5]
+          - id: la.1.3.7
+            name: "Zero vector forces dependence"
+            description: "Any set containing 0 is linearly dependent."
+            prerequisites: [la.1.3.5]
+          - id: la.1.3.8
+            name: "Steinitz exchange lemma"
+            description: "Each vector of a spanning set can be exchanged for a vector of an LI set; LI ≤ spanning."
+            prerequisites: [la.1.3.4, la.1.3.3]
+
+      - id: la.1.4
+        name: "Basis and dimension"
+        description: "Coordinates from independent spanning sets."
+        children:
+          - id: la.1.4.1
+            name: "Basis"
+            description: "Linearly independent spanning set."
+            prerequisites: [la.1.3.4, la.1.3.3]
+          - id: la.1.4.2
+            name: "Standard basis of ℝⁿ"
+            description: "{e₁, …, eₙ} with eᵢ having 1 in position i and 0 elsewhere."
+            prerequisites: [la.1.4.1]
+          - id: la.1.4.3
+            name: "Coordinate vector"
+            description: "[v]_B ∈ 𝔽ⁿ giving the unique scalars expressing v in the basis B."
+            prerequisites: [la.1.4.1]
+          - id: la.1.4.4
+            name: "All bases have the same cardinality"
+            description: "Any two bases of a finite-dimensional space have the same number of vectors."
+            prerequisites: [la.1.3.8]
+          - id: la.1.4.5
+            name: "Dimension"
+            description: "dim V = cardinality of any basis."
+            prerequisites: [la.1.4.4]
+          - id: la.1.4.6
+            name: "Finite vs infinite-dimensional"
+            description: "Finite-dimensional iff there exists a finite spanning set."
+            prerequisites: [la.1.4.5]
+          - id: la.1.4.7
+            name: "Dimensions of common spaces"
+            description: "dim 𝔽ⁿ = n, dim 𝒫_n = n+1, dim M_{m,n} = mn."
+            prerequisites: [la.1.4.5]
+          - id: la.1.4.8
+            name: "Extending an LI set to a basis"
+            description: "Any LI set in a finite-dim V can be extended to a basis of V."
+            prerequisites: [la.1.4.4]
+          - id: la.1.4.9
+            name: "Reducing a spanning set to a basis"
+            description: "Any spanning set of a finite-dim V can be reduced to a basis."
+            prerequisites: [la.1.4.4]
+          - id: la.1.4.10
+            name: "n LI vectors in n-dim V form a basis"
+            description: "If dim V = n, any LI set of size n is automatically a basis."
+            prerequisites: [la.1.4.5]
+
+      - id: la.1.5
+        name: "Direct sums and complements"
+        description: "Decompositions of vector spaces."
+        children:
+          - id: la.1.5.1
+            name: "Internal direct sum"
+            description: "V = U ⊕ W iff every v ∈ V is uniquely u + w with u ∈ U, w ∈ W."
+            prerequisites: [la.1.2.6]
+          - id: la.1.5.2
+            name: "Direct-sum criterion"
+            description: "V = U + W and U ∩ W = {0} iff V = U ⊕ W."
+            prerequisites: [la.1.5.1]
+          - id: la.1.5.3
+            name: "External direct sum"
+            description: "U ⊕ W = U × W with componentwise operations."
+            prerequisites: [la.1.5.1]
+          - id: la.1.5.4
+            name: "Complementary subspace"
+            description: "Every subspace U has a complement W with V = U ⊕ W; W is not unique."
+            prerequisites: [la.1.5.2, la.1.4.8]
+          - id: la.1.5.5
+            name: "Dimension formula for sums"
+            description: "dim(U + W) = dim U + dim W − dim(U ∩ W)."
+            prerequisites: [la.1.4.5, la.1.2.6]
+
+      - id: la.1.6
+        name: "Quotient spaces"
+        description: "Collapsing a subspace to zero."
+        children:
+          - id: la.1.6.1
+            name: "Coset"
+            description: "v + U = {v + u : u ∈ U}; an equivalence class under v ∼ v' iff v − v' ∈ U."
+            prerequisites: [la.1.2.1, fnd.2.2.7]
+          - id: la.1.6.2
+            name: "Quotient space"
+            description: "V/U is the set of cosets v + U with the inherited operations."
+            prerequisites: [la.1.6.1]
+          - id: la.1.6.3
+            name: "Well-definedness of quotient operations"
+            description: "(v+U) + (v'+U) and c(v+U) do not depend on the chosen representatives."
+            prerequisites: [la.1.6.2]
+          - id: la.1.6.4
+            name: "Quotient dimension formula"
+            description: "dim(V/U) = dim V − dim U."
+            prerequisites: [la.1.6.2, la.1.4.5]
+
+  - id: la.2
+    name: "Linear maps and matrices"
+    description: "Maps that respect the vector-space structure."
+    children:
+
+      - id: la.2.1
+        name: "Linear maps"
+        description: "Functions preserving addition and scalar multiplication."
+        children:
+          - id: la.2.1.1
+            name: "Linear map"
+            description: "T: V → W with T(au + bv) = aT(u) + bT(v) for all u, v, a, b."
+            prerequisites: [la.1.1.4]
+          - id: la.2.1.2
+            name: "Examples of linear maps"
+            description: "Zero map, identity, scaling, projection, rotation, differentiation, integration."
+            prerequisites: [la.2.1.1]
+          - id: la.2.1.3
+            name: "Linear maps preserve 0"
+            description: "T(0_V) = 0_W."
+            prerequisites: [la.2.1.1]
+          - id: la.2.1.4
+            name: "Linear map determined by basis images"
+            description: "Specifying T on a basis uniquely determines T everywhere."
+            prerequisites: [la.2.1.1, la.1.4.1]
+          - id: la.2.1.5
+            name: "Hom(V, W) is a vector space"
+            description: "Set of linear maps V → W with pointwise + and scalar multiplication."
+            prerequisites: [la.2.1.1]
+          - id: la.2.1.6
+            name: "dim Hom(V, W)"
+            description: "dim Hom(V, W) = (dim V)(dim W) for finite-dimensional V, W."
+            prerequisites: [la.2.1.5]
+
+      - id: la.2.2
+        name: "Matrix representation and change of basis"
+        description: "Coordinate-dependent encoding of linear maps."
+        children:
+          - id: la.2.2.1
+            name: "Matrix of a linear map"
+            description: "Columns of [T]_{B,C} are the coordinate vectors of T(b_j) in the basis C."
+            prerequisites: [la.2.1.4, la.1.4.3]
+          - id: la.2.2.2
+            name: "Change-of-basis matrix"
+            description: "P_{B → B'} expresses each new basis vector in the old basis."
+            prerequisites: [la.2.2.1]
+          - id: la.2.2.3
+            name: "Similar matrices"
+            description: "B = P⁻¹ A P; same linear map in two bases."
+            prerequisites: [la.2.2.2]
+          - id: la.2.2.4
+            name: "Matrix multiplication = composition"
+            description: "[T ∘ S] = [T][S] in compatible bases."
+            prerequisites: [la.2.2.1]
+          - id: la.2.2.5
+            name: "Matrix-vector product"
+            description: "(Av)_i = Σⱼ A_{ij} v_j; T(v) in coordinates."
+            prerequisites: [la.2.2.1]
+          - id: la.2.2.6
+            name: "Algebraic properties of matrix multiplication"
+            description: "Associative, distributive over addition; not commutative in general."
+            prerequisites: [la.2.2.4]
+          - id: la.2.2.7
+            name: "Transpose"
+            description: "(Aᵀ)_{ij} = A_{ji}."
+            prerequisites: [la.2.2.5]
+          - id: la.2.2.8
+            name: "(AB)ᵀ = BᵀAᵀ"
+            description: "Transpose reverses order in a product."
+            prerequisites: [la.2.2.7]
+          - id: la.2.2.9
+            name: "Conjugate transpose"
+            description: "A* = (Ā)ᵀ; the natural adjoint over ℂ."
+            prerequisites: [la.2.2.7]
+
+      - id: la.2.3
+        name: "Kernel, image, rank–nullity"
+        description: "Fundamental subspaces of a linear map."
+        children:
+          - id: la.2.3.1
+            name: "Kernel (null space)"
+            description: "ker T = {v : T(v) = 0}; a subspace of the domain."
+            prerequisites: [la.2.1.1, la.1.2.1]
+          - id: la.2.3.2
+            name: "Image (column space)"
+            description: "im T = {T(v) : v ∈ V} = column span of A; a subspace of the codomain."
+            prerequisites: [la.2.1.1]
+          - id: la.2.3.3
+            name: "Row space"
+            description: "Span of the rows of A = column space of Aᵀ."
+            prerequisites: [la.2.2.7]
+          - id: la.2.3.4
+            name: "Rank"
+            description: "rank(A) = dim(im A) = dim(column space)."
+            prerequisites: [la.2.3.2, la.1.4.5]
+          - id: la.2.3.5
+            name: "Nullity"
+            description: "nullity(A) = dim(ker A)."
+            prerequisites: [la.2.3.1, la.1.4.5]
+          - id: la.2.3.6
+            name: "Rank–nullity theorem"
+            description: "dim V = rank(T) + nullity(T) for T : V → W."
+            prerequisites: [la.2.3.4, la.2.3.5]
+          - id: la.2.3.7
+            name: "Row rank = column rank"
+            description: "rank from rows equals rank from columns; both equal rank A."
+            prerequisites: [la.2.3.4, la.2.3.3]
+          - id: la.2.3.8
+            name: "Rank ≤ min(m, n)"
+            description: "An m × n matrix has rank at most min(m, n)."
+            prerequisites: [la.2.3.4]
+          - id: la.2.3.9
+            name: "rank(AB) ≤ min(rank A, rank B)"
+            description: "Matrix product cannot increase rank."
+            prerequisites: [la.2.3.4]
+          - id: la.2.3.10
+            name: "rank(A + B) ≤ rank A + rank B"
+            description: "Subadditivity of rank under addition."
+            prerequisites: [la.2.3.4]
+
+      - id: la.2.4
+        name: "Composition and invertibility"
+        description: "Inverses of linear maps."
+        children:
+          - id: la.2.4.1
+            name: "Identity matrix"
+            description: "I_n with ones on the diagonal and zeros elsewhere; AI = IA = A."
+            prerequisites: [la.2.2.5]
+          - id: la.2.4.2
+            name: "Invertible linear map"
+            description: "T is invertible iff there exists S with ST = TS = id."
+            prerequisites: [la.2.4.1, fnd.2.3.8]
+          - id: la.2.4.3
+            name: "Invertibility ↔ bijection"
+            description: "A linear map is invertible iff it is bijective."
+            prerequisites: [la.2.4.2, fnd.2.3.9]
+          - id: la.2.4.4
+            name: "Square invertibility characterizations"
+            description: "A is invertible iff det A ≠ 0 iff full rank iff trivial kernel iff columns LI."
+            prerequisites: [la.2.4.3, la.2.6.10, la.2.3.4]
+          - id: la.2.4.5
+            name: "Inverse of a product"
+            description: "(AB)⁻¹ = B⁻¹A⁻¹."
+            prerequisites: [la.2.4.2]
+          - id: la.2.4.6
+            name: "Inverse of transpose"
+            description: "(Aᵀ)⁻¹ = (A⁻¹)ᵀ."
+            prerequisites: [la.2.4.2, la.2.2.7]
+          - id: la.2.4.7
+            name: "General linear group GL(n)"
+            description: "Group of n × n invertible matrices over a field."
+            prerequisites: [la.2.4.2]
+          - id: la.2.4.8
+            name: "Computing the inverse via row reduction"
+            description: "Augment [A | I] and row-reduce to [I | A⁻¹]."
+            prerequisites: [la.2.4.2]
+
+      - id: la.2.5
+        name: "Block matrices"
+        description: "Partitioned matrices and Schur complement."
+        children:
+          - id: la.2.5.1
+            name: "Block matrix"
+            description: "Matrix partitioned into rectangular sub-matrices."
+            prerequisites: [la.2.2.5]
+          - id: la.2.5.2
+            name: "Block matrix multiplication"
+            description: "Multiply partitioned matrices block-wise when partitions are compatible."
+            prerequisites: [la.2.5.1]
+          - id: la.2.5.3
+            name: "Block triangular matrix"
+            description: "Off-diagonal blocks zero on one side; eigenvalues = union of diagonal blocks."
+            prerequisites: [la.2.5.1]
+          - id: la.2.5.4
+            name: "Block diagonal matrix"
+            description: "Direct sum of square diagonal blocks."
+            prerequisites: [la.2.5.3]
+          - id: la.2.5.5
+            name: "Schur complement"
+            description: "S = D − CA⁻¹B in M = [[A, B],[C, D]]."
+            prerequisites: [la.2.5.1, la.2.4.2]
+          - id: la.2.5.6
+            name: "Block inverse via Schur complement"
+            description: "Inverse formula expressing M⁻¹ in terms of A⁻¹ and S⁻¹."
+            prerequisites: [la.2.5.5]
+          - id: la.2.5.7
+            name: "Block determinant via Schur complement"
+            description: "det M = det A · det S."
+            prerequisites: [la.2.5.5, la.2.6.6]
+
+      - id: la.2.6
+        name: "Determinant and trace"
+        description: "Two scalar invariants of a square matrix."
+        children:
+          - id: la.2.6.1
+            name: "Trace"
+            description: "tr(A) = Σ A_{ii}; sum of diagonal entries."
+            prerequisites: [la.2.2.1]
+          - id: la.2.6.2
+            name: "Trace is linear"
+            description: "tr(αA + βB) = α tr A + β tr B."
+            prerequisites: [la.2.6.1]
+          - id: la.2.6.3
+            name: "Cyclic property of trace"
+            description: "tr(AB) = tr(BA); generalizes to tr(A₁ A₂ … Aₖ) cyclically invariant."
+            prerequisites: [la.2.6.1]
+          - id: la.2.6.4
+            name: "Trace = sum of eigenvalues"
+            description: "tr A equals the sum of eigenvalues counted with algebraic multiplicity."
+            prerequisites: [la.2.6.1, la.4.1.6]
+          - id: la.2.6.5
+            name: "Trace invariant under similarity"
+            description: "tr(P⁻¹ A P) = tr A."
+            prerequisites: [la.2.6.3]
+          - id: la.2.6.6
+            name: "Determinant axiomatic definition"
+            description: "Multilinear and alternating in the rows / columns; det(I) = 1."
+            prerequisites: [la.2.2.1]
+          - id: la.2.6.7
+            name: "Leibniz formula"
+            description: "det A = Σ_{σ ∈ Sₙ} sgn(σ) ∏ A_{i, σ(i)}."
+            prerequisites: [la.2.6.6, fnd.4.2.1]
+          - id: la.2.6.8
+            name: "Determinant as signed volume"
+            description: "|det A| is the volume of the parallelepiped spanned by A's columns; sign tracks orientation."
+            prerequisites: [la.2.6.6]
+          - id: la.2.6.9
+            name: "det(AB) = det A · det B"
+            description: "Determinant is multiplicative."
+            prerequisites: [la.2.6.6]
+          - id: la.2.6.10
+            name: "Singular ↔ det = 0"
+            description: "A is invertible iff det A ≠ 0."
+            prerequisites: [la.2.6.6]
+          - id: la.2.6.11
+            name: "Determinant of a triangular matrix"
+            description: "Equal to the product of diagonal entries."
+            prerequisites: [la.2.6.6]
+          - id: la.2.6.12
+            name: "det(I) = 1"
+            description: "Identity has unit determinant."
+            prerequisites: [la.2.6.6]
+          - id: la.2.6.13
+            name: "det(Aᵀ) = det A"
+            description: "Determinant is invariant under transposition."
+            prerequisites: [la.2.6.7]
+          - id: la.2.6.14
+            name: "Cofactor expansion"
+            description: "Laplace expansion along any row or column."
+            prerequisites: [la.2.6.7]
+          - id: la.2.6.15
+            name: "Determinant via row operations"
+            description: "Row swap negates det; row scaling multiplies; row addition leaves det unchanged."
+            prerequisites: [la.2.6.6]
+          - id: la.2.6.16
+            name: "2 × 2 determinant"
+            description: "det [[a, b], [c, d]] = ad − bc."
+            prerequisites: [la.2.6.7]
+          - id: la.2.6.17
+            name: "Determinant = product of eigenvalues"
+            description: "det A equals the product of eigenvalues with algebraic multiplicity."
+            prerequisites: [la.2.6.6, la.4.1.7]
+          - id: la.2.6.18
+            name: "Cramer's rule"
+            description: "x_i = det(A_i) / det A, where A_i replaces column i of A by b."
+            prerequisites: [la.2.6.10]
+          - id: la.2.6.19
+            name: "Vandermonde determinant"
+            description: "det(x_i^{j-1}) = ∏_{i < j} (x_j − x_i)."
+            prerequisites: [la.2.6.7]
+          - id: la.2.6.20
+            name: "Cauchy–Binet formula"
+            description: "det(AB) for non-square A, B as a sum over square sub-matrices."
+            prerequisites: [la.2.6.9]
+
+      - id: la.2.7
+        name: "Permutation matrices"
+        description: "Matrices encoding permutations of coordinates."
+        children:
+          - id: la.2.7.1
+            name: "Permutation matrix"
+            description: "Square matrix with exactly one 1 per row and per column; rest zero."
+            prerequisites: [la.2.2.5]
+          - id: la.2.7.2
+            name: "Sign of a permutation"
+            description: "sgn(σ) = (−1)^{# inversions} = ±1."
+            prerequisites: [fnd.4.2.1]
+          - id: la.2.7.3
+            name: "det of permutation matrix = sign"
+            description: "det P_σ = sgn(σ)."
+            prerequisites: [la.2.7.1, la.2.7.2]
+          - id: la.2.7.4
+            name: "Permutation matrices form a group"
+            description: "Closed under product and inverse; isomorphic to Sₙ."
+            prerequisites: [la.2.7.1]
+
+  - id: la.3
+    name: "Inner-product spaces"
+    description: "Vector spaces with a notion of length and angle."
+    children:
+
+      - id: la.3.1
+        name: "Inner products"
+        description: "Bilinear / sesquilinear forms inducing geometry."
+        children:
+          - id: la.3.1.1
+            name: "Real inner product axioms"
+            description: "Bilinear, symmetric, positive-definite ⟨v, v⟩ ≥ 0 with equality iff v = 0."
+            prerequisites: [la.6.1.1]
+          - id: la.3.1.2
+            name: "Complex inner product axioms"
+            description: "Sesquilinear, conjugate-symmetric, positive-definite."
+            prerequisites: [la.3.1.1]
+          - id: la.3.1.3
+            name: "Standard inner product on ℝⁿ / ℂⁿ"
+            description: "⟨x, y⟩ = Σ x̄ᵢ yᵢ; the dot product over ℝ."
+            prerequisites: [la.3.1.2]
+          - id: la.3.1.4
+            name: "L² inner product on functions"
+            description: "⟨f, g⟩ = ∫ f̄(x) g(x) dx; basis of Hilbert-space analysis."
+            prerequisites: [la.3.1.2]
+          - id: la.3.1.5
+            name: "Frobenius inner product"
+            description: "⟨A, B⟩_F = tr(A* B); makes matrices an inner-product space."
+            prerequisites: [la.3.1.2, la.2.6.1]
+          - id: la.3.1.6
+            name: "Cauchy–Schwarz inequality"
+            description: "|⟨u, v⟩| ≤ ‖u‖ ‖v‖, equality iff one is a scalar multiple of the other."
+            prerequisites: [la.3.1.1, la.3.2.13]
+          - id: la.3.1.7
+            name: "Triangle inequality from Cauchy–Schwarz"
+            description: "‖u + v‖ ≤ ‖u‖ + ‖v‖."
+            prerequisites: [la.3.1.6]
+          - id: la.3.1.8
+            name: "Polarization identity"
+            description: "Recover ⟨u, v⟩ from norms via 4⟨u, v⟩ = ‖u + v‖² − ‖u − v‖² (real case)."
+            prerequisites: [la.3.2.13]
+          - id: la.3.1.9
+            name: "Parallelogram law"
+            description: "‖u + v‖² + ‖u − v‖² = 2(‖u‖² + ‖v‖²)."
+            prerequisites: [la.3.2.13]
+
+      - id: la.3.2
+        name: "Norms"
+        description: "Length functions on vector spaces."
+        children:
+          - id: la.3.2.1
+            name: "Norm axioms"
+            description: "Positive-definite, absolutely homogeneous, satisfies triangle inequality."
+            prerequisites: [la.1.1.4]
+          - id: la.3.2.2
+            name: "ℓᵖ norm"
+            description: "‖x‖ₚ = (Σ |xᵢ|ᵖ)^{1/p} for 1 ≤ p ≤ ∞."
+            prerequisites: [la.3.2.1]
+          - id: la.3.2.3
+            name: "ℓ¹ norm"
+            description: "Sum of absolute values; promotes sparsity in regularization."
+            prerequisites: [la.3.2.2]
+          - id: la.3.2.4
+            name: "ℓ² (Euclidean) norm"
+            description: "Square root of sum of squares; induced by the standard inner product."
+            prerequisites: [la.3.2.2]
+          - id: la.3.2.5
+            name: "ℓ∞ norm"
+            description: "‖x‖_∞ = maxᵢ |xᵢ|."
+            prerequisites: [la.3.2.2]
+          - id: la.3.2.6
+            name: "Norm equivalence in finite dimensions"
+            description: "Any two norms on a finite-dim space are equivalent (induce the same topology)."
+            prerequisites: [la.3.2.1, la.1.4.6]
+          - id: la.3.2.7
+            name: "Operator norm"
+            description: "‖A‖_op = sup_{‖x‖=1} ‖Ax‖; depends on the chosen vector norms."
+            prerequisites: [la.3.2.1]
+          - id: la.3.2.8
+            name: "Frobenius norm"
+            description: "‖A‖_F = √(Σ |A_{ij}|²) = √(tr A* A)."
+            prerequisites: [la.3.1.5]
+          - id: la.3.2.9
+            name: "Spectral norm"
+            description: "Operator 2-norm = largest singular value of A."
+            prerequisites: [la.3.2.7, la.5.4.2]
+          - id: la.3.2.10
+            name: "Nuclear (trace) norm"
+            description: "‖A‖_* = sum of singular values; convex relaxation of rank."
+            prerequisites: [la.5.4.2]
+          - id: la.3.2.11
+            name: "Schatten p-norms"
+            description: "‖A‖_{S_p} = (Σ σᵢᵖ)^{1/p}; unifies Frobenius (p=2), nuclear (p=1), spectral (p=∞)."
+            prerequisites: [la.3.2.10]
+          - id: la.3.2.12
+            name: "Submultiplicativity"
+            description: "‖AB‖ ≤ ‖A‖ ‖B‖ for operator and Frobenius norms."
+            prerequisites: [la.3.2.7, la.3.2.8]
+          - id: la.3.2.13
+            name: "Norm induced by an inner product"
+            description: "‖v‖ = √⟨v, v⟩; satisfies parallelogram law."
+            prerequisites: [la.3.1.1, la.3.2.1]
+
+      - id: la.3.3
+        name: "Orthogonality and Gram–Schmidt"
+        description: "Building orthonormal bases."
+        children:
+          - id: la.3.3.1
+            name: "Orthogonal vectors"
+            description: "u ⊥ v iff ⟨u, v⟩ = 0."
+            prerequisites: [la.3.1.1]
+          - id: la.3.3.2
+            name: "Orthonormal set"
+            description: "Pairwise orthogonal unit vectors."
+            prerequisites: [la.3.3.1, la.3.2.13]
+          - id: la.3.3.3
+            name: "Orthonormal basis"
+            description: "Orthonormal set that spans the space."
+            prerequisites: [la.3.3.2, la.1.4.1]
+          - id: la.3.3.4
+            name: "Pythagorean theorem"
+            description: "u ⊥ v ⇒ ‖u + v‖² = ‖u‖² + ‖v‖²."
+            prerequisites: [la.3.3.1, la.3.2.13]
+          - id: la.3.3.5
+            name: "Bessel's inequality"
+            description: "Σ |⟨v, eᵢ⟩|² ≤ ‖v‖² for any orthonormal {eᵢ}."
+            prerequisites: [la.3.3.2]
+          - id: la.3.3.6
+            name: "Parseval's identity"
+            description: "Equality in Bessel's inequality when {eᵢ} is an ONB."
+            prerequisites: [la.3.3.5, la.3.3.3]
+          - id: la.3.3.7
+            name: "Gram–Schmidt process"
+            description: "Algorithm producing an orthonormal basis from any LI set."
+            prerequisites: [la.3.3.2, la.1.3.4]
+          - id: la.3.3.8
+            name: "Orthogonal complement"
+            description: "W⊥ = {v : ⟨v, w⟩ = 0 ∀ w ∈ W}; a subspace."
+            prerequisites: [la.3.3.1]
+          - id: la.3.3.9
+            name: "V = W ⊕ W⊥"
+            description: "Every finite-dim inner-product space splits as a subspace plus its orthogonal complement."
+            prerequisites: [la.3.3.8, la.1.5.1]
+
+      - id: la.3.4
+        name: "Adjoint operators"
+        description: "Matrix transpose / conjugate transpose at the operator level."
+        children:
+          - id: la.3.4.1
+            name: "Adjoint definition"
+            description: "A* satisfies ⟨Ax, y⟩ = ⟨x, A*y⟩ for all x, y."
+            prerequisites: [la.3.1.1, la.2.1.1]
+          - id: la.3.4.2
+            name: "Adjoint = conjugate transpose"
+            description: "Coordinatized: A* = (Ā)ᵀ."
+            prerequisites: [la.3.4.1, la.2.2.9]
+          - id: la.3.4.3
+            name: "(A*)* = A"
+            description: "Taking adjoints is involutive."
+            prerequisites: [la.3.4.1]
+          - id: la.3.4.4
+            name: "(AB)* = B* A*"
+            description: "Adjoint reverses order in a product."
+            prerequisites: [la.3.4.1]
+          - id: la.3.4.5
+            name: "ker A* = (im A)⊥"
+            description: "Fundamental orthogonality between row / column space and the corresponding kernels."
+            prerequisites: [la.3.4.1, la.3.3.8]
+
+      - id: la.3.5
+        name: "Self-adjoint, unitary, and normal operators"
+        description: "Operator classes that admit clean spectral structure."
+        children:
+          - id: la.3.5.1
+            name: "Self-adjoint (Hermitian) operator"
+            description: "A = A*."
+            prerequisites: [la.3.4.1]
+          - id: la.3.5.2
+            name: "Skew-Hermitian operator"
+            description: "A = −A*."
+            prerequisites: [la.3.4.1]
+          - id: la.3.5.3
+            name: "Unitary operator"
+            description: "U* U = U U* = I; over ℝ called orthogonal."
+            prerequisites: [la.3.4.1]
+          - id: la.3.5.4
+            name: "Unitary preserves the inner product"
+            description: "⟨Uv, Uw⟩ = ⟨v, w⟩; in particular preserves length."
+            prerequisites: [la.3.5.3]
+          - id: la.3.5.5
+            name: "Normal operator"
+            description: "AA* = A*A."
+            prerequisites: [la.3.4.1]
+          - id: la.3.5.6
+            name: "Normal ↔ unitarily diagonalizable"
+            description: "A is normal iff there exist U unitary and Λ diagonal with A = U Λ U*."
+            prerequisites: [la.3.5.5, la.4.4.5]
+          - id: la.3.5.7
+            name: "Self-adjoint operators have real eigenvalues"
+            description: "If A = A*, every eigenvalue is real."
+            prerequisites: [la.3.5.1, la.4.1.1]
+          - id: la.3.5.8
+            name: "Eigenvectors of self-adjoint with distinct eigenvalues are orthogonal"
+            description: "Distinct eigenvalues of A = A* yield orthogonal eigenvectors."
+            prerequisites: [la.3.5.7]
+          - id: la.3.5.9
+            name: "Classical matrix groups"
+            description: "U(n), O(n), SO(n) — groups of unitary / orthogonal / determinant-1 orthogonal matrices."
+            prerequisites: [la.3.5.3]
+
+      - id: la.3.6
+        name: "Orthogonal projections"
+        description: "Idempotent, self-adjoint operators."
+        children:
+          - id: la.3.6.1
+            name: "Idempotent operator"
+            description: "P² = P."
+            prerequisites: [la.2.1.1]
+          - id: la.3.6.2
+            name: "Orthogonal projection"
+            description: "Idempotent and self-adjoint: P² = P, P = P*."
+            prerequisites: [la.3.6.1, la.3.5.1]
+          - id: la.3.6.3
+            name: "Projection onto a subspace"
+            description: "Unique orthogonal projection onto W: image is W, kernel is W⊥."
+            prerequisites: [la.3.6.2, la.3.3.9]
+          - id: la.3.6.4
+            name: "Projection via orthonormal basis"
+            description: "P_W v = Σ ⟨v, eᵢ⟩ eᵢ for an ONB {eᵢ} of W."
+            prerequisites: [la.3.6.3, la.3.3.3]
+          - id: la.3.6.5
+            name: "Projection onto column space"
+            description: "P = A(AᵀA)⁻¹Aᵀ when A has full column rank."
+            prerequisites: [la.3.6.3]
+          - id: la.3.6.6
+            name: "Eigenvalues of an orthogonal projection"
+            description: "All eigenvalues are 0 or 1; multiplicities are dim(W⊥) and dim W."
+            prerequisites: [la.3.6.2, la.4.1.1]
+
+  - id: la.4
+    name: "Eigentheory"
+    description: "Eigenvalues, eigenvectors, and the canonical forms they enable."
+    children:
+
+      - id: la.4.1
+        name: "Eigenvalues and eigenvectors"
+        description: "Invariant directions of a linear map."
+        children:
+          - id: la.4.1.1
+            name: "Eigenvalue / eigenvector"
+            description: "Av = λv with v ≠ 0; λ ∈ 𝔽 is the eigenvalue."
+            prerequisites: [la.2.1.1]
+          - id: la.4.1.2
+            name: "Eigenspace"
+            description: "E_λ = ker(A − λI); subspace of all eigenvectors of λ together with 0."
+            prerequisites: [la.4.1.1]
+          - id: la.4.1.3
+            name: "Geometric multiplicity"
+            description: "dim E_λ; number of LI eigenvectors of λ."
+            prerequisites: [la.4.1.2]
+          - id: la.4.1.4
+            name: "Algebraic multiplicity"
+            description: "Multiplicity of λ as a root of the characteristic polynomial."
+            prerequisites: [la.4.2.1]
+          - id: la.4.1.5
+            name: "Geom mult ≤ alg mult"
+            description: "For each eigenvalue, geometric multiplicity is at most algebraic multiplicity."
+            prerequisites: [la.4.1.3, la.4.1.4]
+          - id: la.4.1.6
+            name: "Sum of eigenvalues = trace"
+            description: "Σ λᵢ (with algebraic multiplicities) = tr A."
+            prerequisites: [la.4.2.1, la.2.6.1]
+          - id: la.4.1.7
+            name: "Product of eigenvalues = determinant"
+            description: "∏ λᵢ (with algebraic multiplicities) = det A."
+            prerequisites: [la.4.2.1, la.2.6.6]
+          - id: la.4.1.8
+            name: "Eigenvalues of A and Aᵀ are equal"
+            description: "Same characteristic polynomial."
+            prerequisites: [la.4.2.1, la.2.6.13]
+          - id: la.4.1.9
+            name: "Eigenvalues of Aᵏ are λᵏ"
+            description: "If Av = λv, then Aᵏ v = λᵏ v."
+            prerequisites: [la.4.1.1]
+          - id: la.4.1.10
+            name: "Eigenvalues of A⁻¹ are 1/λ"
+            description: "Holds when A is invertible (so all λ ≠ 0)."
+            prerequisites: [la.4.1.9, la.2.4.4]
+          - id: la.4.1.11
+            name: "Eigenvalues of cA are c λ"
+            description: "Scalar scaling scales the spectrum."
+            prerequisites: [la.4.1.1]
+          - id: la.4.1.12
+            name: "LI eigenvectors of distinct eigenvalues"
+            description: "Eigenvectors corresponding to distinct eigenvalues are linearly independent."
+            prerequisites: [la.4.1.1, la.1.3.4]
+          - id: la.4.1.13
+            name: "Similar matrices share spectrum"
+            description: "P⁻¹AP and A have identical eigenvalues with multiplicities."
+            prerequisites: [la.4.1.1, la.2.2.3]
+          - id: la.4.1.14
+            name: "Eigenvalues of a triangular matrix"
+            description: "Equal to its diagonal entries."
+            prerequisites: [la.4.2.1, la.2.6.11]
+
+      - id: la.4.2
+        name: "Characteristic polynomial"
+        description: "Polynomial whose roots are the eigenvalues."
+        children:
+          - id: la.4.2.1
+            name: "Characteristic polynomial"
+            description: "p_A(λ) = det(λ I − A); roots are eigenvalues."
+            prerequisites: [la.2.6.6, la.4.1.1]
+          - id: la.4.2.2
+            name: "Degree equals dimension"
+            description: "p_A is monic of degree n for an n × n matrix."
+            prerequisites: [la.4.2.1]
+          - id: la.4.2.3
+            name: "Coefficient relations (Vieta)"
+            description: "Coefficients of p_A are (signed) elementary symmetric functions of the eigenvalues."
+            prerequisites: [la.4.2.1]
+          - id: la.4.2.4
+            name: "Cayley–Hamilton theorem"
+            description: "Every square matrix satisfies its own characteristic polynomial: p_A(A) = 0."
+            prerequisites: [la.4.2.1]
+
+      - id: la.4.3
+        name: "Diagonalization"
+        description: "When does a matrix admit an eigenbasis?"
+        children:
+          - id: la.4.3.1
+            name: "Diagonalizable matrix"
+            description: "A = P D P⁻¹ for some diagonal D."
+            prerequisites: [la.4.1.1, la.2.2.3]
+          - id: la.4.3.2
+            name: "Diagonalizability via n LI eigenvectors"
+            description: "A is diagonalizable iff it has n LI eigenvectors."
+            prerequisites: [la.4.3.1, la.4.1.12]
+          - id: la.4.3.3
+            name: "Distinct eigenvalues ⇒ diagonalizable"
+            description: "n distinct eigenvalues guarantee diagonalizability."
+            prerequisites: [la.4.3.2]
+          - id: la.4.3.4
+            name: "Geom = alg for every eigenvalue ↔ diagonalizable"
+            description: "A is diagonalizable iff geometric and algebraic multiplicities match for every eigenvalue."
+            prerequisites: [la.4.1.5, la.4.3.2]
+          - id: la.4.3.5
+            name: "Simultaneous diagonalization"
+            description: "Diagonalizable matrices are simultaneously diagonalizable iff they commute."
+            prerequisites: [la.4.3.1]
+          - id: la.4.3.6
+            name: "Functions of diagonalizable matrices"
+            description: "f(A) = P f(D) P⁻¹ where f(D) applies f to the diagonal."
+            prerequisites: [la.4.3.1]
+
+      - id: la.4.4
+        name: "Spectral theorem"
+        description: "Self-adjoint and normal operators diagonalize unitarily."
+        children:
+          - id: la.4.4.1
+            name: "Real spectral theorem"
+            description: "A real symmetric matrix is orthogonally diagonalizable: A = Q Λ Qᵀ."
+            prerequisites: [la.3.5.1, la.4.3.1]
+          - id: la.4.4.2
+            name: "Complex spectral theorem"
+            description: "A Hermitian matrix is unitarily diagonalizable: A = U Λ U*."
+            prerequisites: [la.3.5.1]
+          - id: la.4.4.3
+            name: "Spectral decomposition"
+            description: "A = Σ λᵢ Pᵢ where Pᵢ projects onto the eigenspace of λᵢ."
+            prerequisites: [la.4.4.1, la.3.6.3]
+          - id: la.4.4.4
+            name: "Outer-product spectral form"
+            description: "A = Σ λᵢ qᵢ qᵢᵀ for orthonormal eigenvectors qᵢ."
+            prerequisites: [la.4.4.3, la.3.3.3]
+          - id: la.4.4.5
+            name: "Spectral theorem for normal operators"
+            description: "A is unitarily diagonalizable iff A is normal."
+            prerequisites: [la.3.5.5, la.4.4.2]
+          - id: la.4.4.6
+            name: "Functional calculus"
+            description: "f(A) = U f(Λ) U* for any function f defined on the spectrum."
+            prerequisites: [la.4.4.2, la.4.3.6]
+
+      - id: la.4.5
+        name: "Jordan normal form"
+        description: "Canonical form when diagonalization fails."
+        children:
+          - id: la.4.5.1
+            name: "Generalized eigenvector"
+            description: "v with (A − λI)ᵏ v = 0 for some k ≥ 1."
+            prerequisites: [la.4.1.2]
+          - id: la.4.5.2
+            name: "Jordan block"
+            description: "J_k(λ) = upper-bidiagonal block with λ on diagonal and 1s above."
+            prerequisites: [la.4.5.1]
+          - id: la.4.5.3
+            name: "Jordan canonical form"
+            description: "Every complex square matrix is similar to a block-diagonal matrix of Jordan blocks."
+            prerequisites: [la.4.5.2]
+          - id: la.4.5.4
+            name: "Uniqueness of Jordan form"
+            description: "The block sizes are determined by A up to ordering."
+            prerequisites: [la.4.5.3]
+          - id: la.4.5.5
+            name: "Functions of non-diagonalizable matrices"
+            description: "f(A) computed block-wise via Taylor expansion within each Jordan block."
+            prerequisites: [la.4.5.3]
+
+      - id: la.4.6
+        name: "Schur decomposition"
+        description: "Unitary triangularization."
+        children:
+          - id: la.4.6.1
+            name: "Schur decomposition"
+            description: "Any complex square A can be written A = U T U* with U unitary and T upper triangular."
+            prerequisites: [la.3.5.3, la.4.1.1]
+          - id: la.4.6.2
+            name: "Real Schur form"
+            description: "Any real square A satisfies A = Q T Qᵀ with T block-upper-triangular (1×1 / 2×2 blocks)."
+            prerequisites: [la.4.6.1]
+          - id: la.4.6.3
+            name: "Schur via QR iteration"
+            description: "Practical computation of Schur form by repeated QR factorizations."
+            prerequisites: [la.5.2.1]
+
+      - id: la.4.7
+        name: "Minimal polynomial"
+        description: "Smallest annihilator polynomial."
+        children:
+          - id: la.4.7.1
+            name: "Minimal polynomial"
+            description: "Monic polynomial m_A of least degree with m_A(A) = 0."
+            prerequisites: [la.4.2.4]
+          - id: la.4.7.2
+            name: "Minimal divides characteristic"
+            description: "m_A | p_A; both share the same roots (the eigenvalues)."
+            prerequisites: [la.4.7.1, la.4.2.1]
+          - id: la.4.7.3
+            name: "Minimal polynomial and diagonalizability"
+            description: "A is diagonalizable iff m_A has no repeated roots."
+            prerequisites: [la.4.7.2, la.4.3.4]
+
+  - id: la.5
+    name: "Matrix factorizations"
+    description: "Decomposing a matrix into simpler factors."
+    children:
+
+      - id: la.5.1
+        name: "LU decomposition"
+        description: "Lower × upper triangular factorization."
+        children:
+          - id: la.5.1.1
+            name: "LU decomposition"
+            description: "A = L U with L lower-triangular and U upper-triangular."
+            prerequisites: [la.2.5.3]
+          - id: la.5.1.2
+            name: "PLU with partial pivoting"
+            description: "PA = LU with P a permutation matrix; required for numerical stability."
+            prerequisites: [la.5.1.1, la.2.7.1]
+          - id: la.5.1.3
+            name: "LU existence"
+            description: "Exists iff every leading principal minor of A is non-zero."
+            prerequisites: [la.5.1.1]
+          - id: la.5.1.4
+            name: "LU uniqueness"
+            description: "Unique under unit-diagonal L."
+            prerequisites: [la.5.1.1]
+          - id: la.5.1.5
+            name: "Solving Ax = b via LU"
+            description: "Forward-solve L y = b, then back-solve U x = y."
+            prerequisites: [la.5.1.2]
+          - id: la.5.1.6
+            name: "LU computational cost"
+            description: "≈ ⅔ n³ flops for an n × n matrix."
+            prerequisites: [la.5.1.1]
+
+      - id: la.5.2
+        name: "QR decomposition"
+        description: "Orthogonal × triangular factorization."
+        children:
+          - id: la.5.2.1
+            name: "QR decomposition"
+            description: "A = Q R with Q (semi-)orthogonal columns and R upper-triangular."
+            prerequisites: [la.3.3.3]
+          - id: la.5.2.2
+            name: "QR via Gram–Schmidt"
+            description: "Sequential orthonormalization yields a QR factorization."
+            prerequisites: [la.5.2.1, la.3.3.7]
+          - id: la.5.2.3
+            name: "QR via Householder reflections"
+            description: "Numerically stable construction using elementary unitary reflectors."
+            prerequisites: [la.5.2.1]
+          - id: la.5.2.4
+            name: "QR via Givens rotations"
+            description: "Selectively zeros entries via 2 × 2 rotations; useful for sparse / streaming."
+            prerequisites: [la.5.2.1]
+          - id: la.5.2.5
+            name: "Reduced vs full QR"
+            description: "Reduced: Q is m × n, R is n × n. Full: Q is m × m, R is m × n."
+            prerequisites: [la.5.2.1]
+          - id: la.5.2.6
+            name: "Least squares via QR"
+            description: "min ‖Ax − b‖ solved by R x = Qᵀ b."
+            prerequisites: [la.5.2.1, la.3.6.5]
+
+      - id: la.5.3
+        name: "Cholesky decomposition"
+        description: "Symmetric positive-(semi)definite factorization."
+        children:
+          - id: la.5.3.1
+            name: "Cholesky decomposition"
+            description: "A = L Lᵀ for L lower-triangular with positive diagonal; A must be symmetric PD."
+            prerequisites: [la.6.3.1, la.5.1.1]
+          - id: la.5.3.2
+            name: "LDLᵀ variant"
+            description: "A = L D Lᵀ with L unit-lower-triangular and D diagonal; works for PSD with adjustments."
+            prerequisites: [la.5.3.1]
+          - id: la.5.3.3
+            name: "Cholesky existence and uniqueness"
+            description: "A symmetric PD ⇒ unique Cholesky factor with positive diagonal."
+            prerequisites: [la.5.3.1]
+          - id: la.5.3.4
+            name: "Cholesky cost"
+            description: "≈ ½ n³ flops; half of LU since structure is exploited."
+            prerequisites: [la.5.3.1]
+          - id: la.5.3.5
+            name: "Pivoted Cholesky"
+            description: "Symmetric pivoting for rank-revealing / numerically robust factorization."
+            prerequisites: [la.5.3.1]
+
+      - id: la.5.4
+        name: "Singular value decomposition"
+        description: "Spectral structure of any rectangular matrix."
+        children:
+          - id: la.5.4.1
+            name: "SVD existence theorem"
+            description: "Any complex m × n matrix has a factorization A = U Σ V* with U, V unitary and Σ diagonal nonneg."
+            prerequisites: [la.4.4.2, la.3.5.3]
+          - id: la.5.4.2
+            name: "Singular value"
+            description: "Diagonal entry of Σ; non-negative real number."
+            prerequisites: [la.5.4.1]
+          - id: la.5.4.3
+            name: "Left singular vector"
+            description: "Column of U; an eigenvector of A A*."
+            prerequisites: [la.5.4.1]
+          - id: la.5.4.4
+            name: "Right singular vector"
+            description: "Column of V; an eigenvector of A* A."
+            prerequisites: [la.5.4.1]
+          - id: la.5.4.5
+            name: "Full vs reduced SVD"
+            description: "Reduced (thin) SVD keeps only the leading r = rank A columns / rows."
+            prerequisites: [la.5.4.1]
+          - id: la.5.4.6
+            name: "Singular values are non-negative and sorted"
+            description: "By convention σ₁ ≥ σ₂ ≥ … ≥ σ_r > 0."
+            prerequisites: [la.5.4.2]
+          - id: la.5.4.7
+            name: "Singular values from A*A eigenvalues"
+            description: "σᵢ² are the non-zero eigenvalues of A* A."
+            prerequisites: [la.5.4.2, la.4.1.1]
+          - id: la.5.4.8
+            name: "Singular values from A A* eigenvalues"
+            description: "σᵢ² are also the non-zero eigenvalues of A A*."
+            prerequisites: [la.5.4.7]
+          - id: la.5.4.9
+            name: "SVD geometric interpretation"
+            description: "A acts as: rotate by V*, scale by Σ, rotate by U; maps the unit ball to an ellipsoid with semi-axes σᵢ."
+            prerequisites: [la.5.4.1]
+          - id: la.5.4.10
+            name: "SVD and matrix rank"
+            description: "rank A = number of non-zero singular values."
+            prerequisites: [la.5.4.6, la.2.3.4]
+          - id: la.5.4.11
+            name: "Four fundamental subspaces from SVD"
+            description: "Columns of U / V partition into bases of im A, ker A*, ker A, im A*."
+            prerequisites: [la.5.4.1, la.3.4.5]
+          - id: la.5.4.12
+            name: "Condition number from SVD"
+            description: "κ₂(A) = σ_max / σ_min."
+            prerequisites: [la.5.4.6, la.8.1.1]
+          - id: la.5.4.13
+            name: "SVD uniqueness"
+            description: "Σ is unique; U, V unique up to multiplications by phases / rotations within repeated singular values."
+            prerequisites: [la.5.4.1]
+          - id: la.5.4.14
+            name: "Computing SVD outline"
+            description: "Bidiagonalize via Householder, then iterate QR on the bidiagonal form."
+            prerequisites: [la.5.2.3, la.4.6.3]
+
+      - id: la.5.5
+        name: "Polar decomposition"
+        description: "Unitary × PSD factorization."
+        children:
+          - id: la.5.5.1
+            name: "Polar decomposition"
+            description: "A = U P with U unitary (or partial isometry) and P = (A* A)^{1/2} positive semidefinite."
+            prerequisites: [la.5.4.1, la.6.3.1]
+          - id: la.5.5.2
+            name: "Polar from SVD"
+            description: "If A = UΣV*, then U_polar = U V* and P = V Σ V*."
+            prerequisites: [la.5.5.1]
+          - id: la.5.5.3
+            name: "Closest orthogonal matrix"
+            description: "Polar factor U_polar minimizes ‖A − Q‖_F over orthogonal Q (orthogonal Procrustes)."
+            prerequisites: [la.5.5.1]
+
+      - id: la.5.6
+        name: "Eigendecomposition (link)"
+        description: "Spectral factorization for diagonalizable A; see also `la.4.3`."
+        children:
+          - id: la.5.6.1
+            name: "Eigendecomposition A = P D P⁻¹"
+            description: "Cross-link to `la.4.3.1`; appears as a factorization for diagonalizable A."
+            prerequisites: [la.4.3.1]
+
+      - id: la.5.7
+        name: "Pseudoinverse"
+        description: "Generalized inverse via SVD."
+        children:
+          - id: la.5.7.1
+            name: "Moore–Penrose pseudoinverse"
+            description: "A⁺ — the unique matrix satisfying the four Moore–Penrose conditions."
+            prerequisites: [la.5.4.1]
+          - id: la.5.7.2
+            name: "Four defining conditions"
+            description: "AA⁺A = A, A⁺AA⁺ = A⁺, (AA⁺)* = AA⁺, (A⁺A)* = A⁺A."
+            prerequisites: [la.5.7.1]
+          - id: la.5.7.3
+            name: "Pseudoinverse from SVD"
+            description: "If A = U Σ V* then A⁺ = V Σ⁺ U*, where Σ⁺ inverts non-zero σᵢ."
+            prerequisites: [la.5.4.1, la.5.7.1]
+          - id: la.5.7.4
+            name: "Least-squares solution via pseudoinverse"
+            description: "x* = A⁺ b minimizes ‖Ax − b‖₂."
+            prerequisites: [la.5.7.3, la.5.2.6]
+          - id: la.5.7.5
+            name: "Minimum-norm solution"
+            description: "Among all least-squares solutions, A⁺ b has smallest ‖x‖₂."
+            prerequisites: [la.5.7.4]
+          - id: la.5.7.6
+            name: "Pseudoinverse instability"
+            description: "Discontinuous in A: small singular values amplify perturbations."
+            prerequisites: [la.5.7.3, la.5.4.12]
+
+      - id: la.5.8
+        name: "CUR / interpolative decomposition"
+        description: "Factorizations preserving original entries / columns."
+        children:
+          - id: la.5.8.1
+            name: "CUR decomposition"
+            description: "A ≈ C U R with C, R sub-columns / rows of A."
+            prerequisites: [la.5.4.1]
+          - id: la.5.8.2
+            name: "Interpolative decomposition (ID)"
+            description: "A ≈ C T with C subset of A's columns and T a 'small' coefficient matrix."
+            prerequisites: [la.5.8.1]
+          - id: la.5.8.3
+            name: "Leverage scores"
+            description: "Importance scores derived from singular vectors; basis of randomized CUR."
+            prerequisites: [la.5.4.1]
+
+      - id: la.5.9
+        name: "Eckart–Young theorem"
+        description: "Best low-rank approximation."
+        children:
+          - id: la.5.9.1
+            name: "Eckart–Young (Frobenius)"
+            description: "min_{rank B ≤ k} ‖A − B‖_F is achieved by the truncated SVD."
+            prerequisites: [la.5.4.1, la.3.2.8]
+          - id: la.5.9.2
+            name: "Eckart–Young (spectral)"
+            description: "min_{rank B ≤ k} ‖A − B‖_2 = σ_{k+1}, achieved by truncated SVD."
+            prerequisites: [la.5.9.1, la.3.2.9]
+          - id: la.5.9.3
+            name: "Truncated SVD"
+            description: "A_k = Σ_{i=1}^{k} σᵢ uᵢ vᵢ*."
+            prerequisites: [la.5.4.1]
+          - id: la.5.9.4
+            name: "Approximation error formula"
+            description: "‖A − A_k‖_F² = Σ_{i>k} σᵢ²."
+            prerequisites: [la.5.9.3]
+
+  - id: la.6
+    name: "Bilinear, quadratic, multilinear"
+    description: "Multi-argument linear structure beyond plain linear maps."
+    children:
+
+      - id: la.6.1
+        name: "Bilinear forms"
+        description: "Maps V × V → 𝔽 linear in each argument."
+        children:
+          - id: la.6.1.1
+            name: "Bilinear form"
+            description: "B: V × V → 𝔽, linear in each argument with the other fixed."
+            prerequisites: [la.2.1.1]
+          - id: la.6.1.2
+            name: "Symmetric bilinear form"
+            description: "B(v, w) = B(w, v)."
+            prerequisites: [la.6.1.1]
+          - id: la.6.1.3
+            name: "Skew-symmetric bilinear form"
+            description: "B(v, w) = −B(w, v); B(v, v) = 0 in characteristic ≠ 2."
+            prerequisites: [la.6.1.1]
+          - id: la.6.1.4
+            name: "Matrix of a bilinear form"
+            description: "[B]_E = (B(eᵢ, eⱼ)); B(v, w) = vᵀ [B]_E w."
+            prerequisites: [la.6.1.1]
+          - id: la.6.1.5
+            name: "Change of basis for a bilinear form"
+            description: "[B]_{E'} = Pᵀ [B]_E P."
+            prerequisites: [la.6.1.4, la.2.2.2]
+          - id: la.6.1.6
+            name: "Non-degenerate bilinear form"
+            description: "B(v, w) = 0 ∀ w ⇒ v = 0."
+            prerequisites: [la.6.1.1]
+
+      - id: la.6.2
+        name: "Quadratic forms"
+        description: "Diagonal sesquilinear forms induced by symmetric bilinear forms."
+        children:
+          - id: la.6.2.1
+            name: "Quadratic form"
+            description: "Q(v) = B(v, v) for a symmetric bilinear form B."
+            prerequisites: [la.6.1.2]
+          - id: la.6.2.2
+            name: "Matrix of a quadratic form"
+            description: "Q(v) = vᵀ A v with A symmetric."
+            prerequisites: [la.6.2.1, la.6.1.4]
+          - id: la.6.2.3
+            name: "Diagonalization of a quadratic form"
+            description: "Change of basis can put any real Q in form Σ ±yᵢ²."
+            prerequisites: [la.6.2.2, la.4.4.1]
+          - id: la.6.2.4
+            name: "Sylvester's law of inertia"
+            description: "The numbers of +, −, 0 eigenvalues are basis-independent invariants."
+            prerequisites: [la.6.2.3]
+          - id: la.6.2.5
+            name: "Signature"
+            description: "(p, q, z) of (positive, negative, zero) inertia counts."
+            prerequisites: [la.6.2.4]
+          - id: la.6.2.6
+            name: "Definite, semi-definite, indefinite forms"
+            description: "Characterized by signs of eigenvalues."
+            prerequisites: [la.6.2.5]
+
+      - id: la.6.3
+        name: "Positive (semi)definite matrices"
+        description: "PSD matrices and their characterizations."
+        children:
+          - id: la.6.3.1
+            name: "Positive definite (PD)"
+            description: "vᵀ A v > 0 for all v ≠ 0."
+            prerequisites: [la.6.2.1]
+          - id: la.6.3.2
+            name: "Positive semidefinite (PSD)"
+            description: "vᵀ A v ≥ 0 for all v."
+            prerequisites: [la.6.3.1]
+          - id: la.6.3.3
+            name: "PD ↔ all eigenvalues > 0"
+            description: "Symmetric A is PD iff every eigenvalue is positive."
+            prerequisites: [la.6.3.1, la.4.4.1]
+          - id: la.6.3.4
+            name: "PSD ↔ all eigenvalues ≥ 0"
+            description: "Symmetric A is PSD iff every eigenvalue is non-negative."
+            prerequisites: [la.6.3.2, la.4.4.1]
+          - id: la.6.3.5
+            name: "PD ↔ leading minors > 0"
+            description: "Sylvester criterion: all leading principal minors positive."
+            prerequisites: [la.6.3.1]
+          - id: la.6.3.6
+            name: "PD ↔ Cholesky exists"
+            description: "Symmetric A is PD iff A = L Lᵀ for some L with positive diagonal."
+            prerequisites: [la.5.3.3]
+          - id: la.6.3.7
+            name: "Loewner order"
+            description: "A ⪰ B iff A − B is PSD; partial order on symmetric matrices."
+            prerequisites: [la.6.3.2]
+          - id: la.6.3.8
+            name: "Schur complement criterion"
+            description: "A symmetric block matrix is PSD iff its diagonal blocks and Schur complements are PSD."
+            prerequisites: [la.6.3.2, la.2.5.5]
+
+      - id: la.6.4
+        name: "Tensor product"
+        description: "Universal construction for multilinear maps."
+        children:
+          - id: la.6.4.1
+            name: "Universal property of ⊗"
+            description: "Any bilinear map V × W → X factors uniquely through V ⊗ W."
+            prerequisites: [la.6.1.1]
+          - id: la.6.4.2
+            name: "Coordinate construction"
+            description: "Tensor product is built from formal symbols v ⊗ w modulo bilinearity."
+            prerequisites: [la.6.4.1]
+          - id: la.6.4.3
+            name: "Basis of V ⊗ W"
+            description: "If {eᵢ}, {fⱼ} are bases, then {eᵢ ⊗ fⱼ} is a basis of V ⊗ W."
+            prerequisites: [la.6.4.2, la.1.4.1]
+          - id: la.6.4.4
+            name: "dim(V ⊗ W) = dim V · dim W"
+            description: "Dimensions multiply for tensor products."
+            prerequisites: [la.6.4.3, la.1.4.5]
+          - id: la.6.4.5
+            name: "Tensor product of linear maps"
+            description: "T ⊗ S: V ⊗ W → V' ⊗ W' with (T⊗S)(v⊗w) = T(v) ⊗ S(w)."
+            prerequisites: [la.6.4.1]
+
+      - id: la.6.5
+        name: "Multilinear maps and tensors"
+        description: "Higher-order linear structure."
+        children:
+          - id: la.6.5.1
+            name: "k-linear map"
+            description: "Function V₁ × … × V_k → W linear in each argument."
+            prerequisites: [la.2.1.1]
+          - id: la.6.5.2
+            name: "Tensor as multilinear map"
+            description: "A type-(p, q) tensor is a multilinear functional on p covectors and q vectors."
+            prerequisites: [la.6.5.1]
+          - id: la.6.5.3
+            name: "Symmetric tensors"
+            description: "Invariant under any permutation of arguments."
+            prerequisites: [la.6.5.2]
+          - id: la.6.5.4
+            name: "Antisymmetric (alternating) tensors"
+            description: "Permuting two arguments negates the value."
+            prerequisites: [la.6.5.2]
+          - id: la.6.5.5
+            name: "Wedge product"
+            description: "Antisymmetrized tensor product; basis for differential forms."
+            prerequisites: [la.6.5.4]
+          - id: la.6.5.6
+            name: "Tensor contraction"
+            description: "Pairing one upper and one lower index reduces tensor type."
+            prerequisites: [la.6.5.2]
+
+      - id: la.6.6
+        name: "Tensor rank decompositions"
+        description: "Generalizations of matrix factorizations to higher orders."
+        children:
+          - id: la.6.6.1
+            name: "Tensor rank"
+            description: "Smallest r such that the tensor is a sum of r rank-1 (outer-product) tensors."
+            prerequisites: [la.6.5.2]
+          - id: la.6.6.2
+            name: "CP decomposition"
+            description: "Sum of outer products: T = Σᵣ aᵣ ⊗ bᵣ ⊗ cᵣ."
+            prerequisites: [la.6.6.1]
+          - id: la.6.6.3
+            name: "Tucker decomposition"
+            description: "T = G ×₁ U₁ ×₂ U₂ ×₃ U₃; core tensor with factor matrices."
+            prerequisites: [la.6.6.1]
+          - id: la.6.6.4
+            name: "Tensor train / hierarchical Tucker"
+            description: "Chain of small core tensors; efficient for high-order tensors."
+            prerequisites: [la.6.6.3]
+          - id: la.6.6.5
+            name: "Computing tensor rank is NP-hard"
+            description: "Unlike matrix rank, exact tensor rank computation is intractable in general."
+            prerequisites: [la.6.6.1, dis.4.2]
+
+      - id: la.6.7
+        name: "Kronecker and Khatri–Rao products"
+        description: "Tensor products in matrix coordinates."
+        children:
+          - id: la.6.7.1
+            name: "Kronecker product"
+            description: "(A ⊗ B)_{(i,k),(j,l)} = A_{ij} B_{kl}; block-encoded tensor product."
+            prerequisites: [la.6.4.5]
+          - id: la.6.7.2
+            name: "Mixed-product property"
+            description: "(A ⊗ B)(C ⊗ D) = AC ⊗ BD."
+            prerequisites: [la.6.7.1]
+          - id: la.6.7.3
+            name: "Eigenvalues of Kronecker product"
+            description: "If A has eigenvalues λᵢ and B has eigenvalues μⱼ, then A ⊗ B has eigenvalues λᵢ μⱼ."
+            prerequisites: [la.6.7.1, la.4.1.1]
+          - id: la.6.7.4
+            name: "Khatri–Rao product"
+            description: "Column-wise Kronecker product; appears in CP decomposition."
+            prerequisites: [la.6.7.1]
+
+      - id: la.6.8
+        name: "Vectorization identities"
+        description: "Manipulating matrix expressions via vec."
+        children:
+          - id: la.6.8.1
+            name: "vec operator"
+            description: "Stacks columns of a matrix into a column vector."
+            prerequisites: [la.2.2.1]
+          - id: la.6.8.2
+            name: "vec(AXB) identity"
+            description: "vec(AXB) = (Bᵀ ⊗ A) vec(X)."
+            prerequisites: [la.6.8.1, la.6.7.2]
+          - id: la.6.8.3
+            name: "vec / trace duality"
+            description: "tr(AᵀB) = vec(A)ᵀ vec(B)."
+            prerequisites: [la.6.8.1, la.2.6.3]
+
+      - id: la.6.9
+        name: "Einstein summation"
+        description: "Index conventions for tensor contractions."
+        children:
+          - id: la.6.9.1
+            name: "Einstein summation convention"
+            description: "Repeated indices imply summation; e.g. yᵢ = A_{ij} xⱼ."
+            prerequisites: [la.6.5.6]
+          - id: la.6.9.2
+            name: "Covariant vs contravariant indices"
+            description: "Lower indices transform with the basis (covariant), upper indices oppositely (contravariant)."
+            prerequisites: [la.6.9.1]
+          - id: la.6.9.3
+            name: "Contraction in index notation"
+            description: "Pair an upper with a lower index by repeating its name."
+            prerequisites: [la.6.9.1, la.6.9.2]
+
+  - id: la.7
+    name: "Matrix calculus"
+    description: "Derivatives of matrix- and vector-valued expressions."
+    children:
+
+      - id: la.7.1
+        name: "Vector-by-vector derivatives"
+        description: "Jacobians and their layout."
+        children:
+          - id: la.7.1.1
+            name: "Jacobian"
+            description: "(∂f/∂x)_{ij} = ∂fᵢ/∂xⱼ; the matrix of partial derivatives."
+            prerequisites: [ana.2.2]
+          - id: la.7.1.2
+            name: "Numerator vs denominator layout"
+            description: "Numerator layout: rows indexed by output. Denominator: rows indexed by input. Pick one and stick with it."
+            prerequisites: [la.7.1.1]
+          - id: la.7.1.3
+            name: "Jacobian of a linear map"
+            description: "If f(x) = Ax, then ∂f/∂x = A."
+            prerequisites: [la.7.1.1]
+          - id: la.7.1.4
+            name: "Jacobian chain rule"
+            description: "∂(g ∘ f)/∂x = (∂g/∂y)(∂f/∂x), where y = f(x)."
+            prerequisites: [la.7.1.1]
+
+      - id: la.7.2
+        name: "Scalar / matrix derivatives"
+        description: "Derivatives involving matrices."
+        children:
+          - id: la.7.2.1
+            name: "Scalar-by-matrix derivative"
+            description: "(∂f/∂X)_{ij} = ∂f/∂X_{ij} for scalar f."
+            prerequisites: [la.7.1.1]
+          - id: la.7.2.2
+            name: "Matrix-by-matrix derivative"
+            description: "Fourth-order tensor in general; usually accessed via differentials."
+            prerequisites: [la.7.2.1]
+          - id: la.7.2.3
+            name: "Layout pitfalls"
+            description: "Mixing layouts is the most common source of matrix-calculus errors."
+            prerequisites: [la.7.1.2]
+
+      - id: la.7.3
+        name: "Differentials and identification"
+        description: "First-differential calculus on matrices."
+        children:
+          - id: la.7.3.1
+            name: "Differential of a matrix function"
+            description: "dF expresses the linear part of F(X + dX) − F(X) ignoring higher-order terms."
+            prerequisites: [ana.2.2]
+          - id: la.7.3.2
+            name: "Identification rule"
+            description: "From dF = A : dX (Frobenius pairing) read ∂F/∂X = A."
+            prerequisites: [la.7.3.1, la.3.1.5]
+          - id: la.7.3.3
+            name: "Basic differential rules"
+            description: "d(A + B) = dA + dB, d(AB) = (dA)B + A dB, d(A⁻¹) = −A⁻¹ (dA) A⁻¹, d(det A) = det(A) tr(A⁻¹ dA)."
+            prerequisites: [la.7.3.1]
+
+      - id: la.7.4
+        name: "Gradient and Hessian"
+        description: "First and second-order objects of scalar fields."
+        children:
+          - id: la.7.4.1
+            name: "Gradient"
+            description: "∇f as a column vector; ∇f(x)ᵀ y = directional derivative in direction y."
+            prerequisites: [la.7.1.1]
+          - id: la.7.4.2
+            name: "Hessian"
+            description: "Hᵢⱼ = ∂²f/∂xᵢ ∂xⱼ; symmetric for C² functions."
+            prerequisites: [la.7.4.1]
+          - id: la.7.4.3
+            name: "Symmetry of the Hessian (Schwarz)"
+            description: "If second partials are continuous, ∂²f/∂xᵢ ∂xⱼ = ∂²f/∂xⱼ ∂xᵢ."
+            prerequisites: [la.7.4.2]
+          - id: la.7.4.4
+            name: "Second-order Taylor approximation"
+            description: "f(x + h) ≈ f(x) + ∇f(x)ᵀ h + ½ hᵀ H h."
+            prerequisites: [la.7.4.2]
+
+      - id: la.7.5
+        name: "Calculus identities"
+        description: "Common matrix-calculus formulas."
+        children:
+          - id: la.7.5.1
+            name: "∂(Ax)/∂x = A"
+            description: "Jacobian of a linear map."
+            prerequisites: [la.7.1.3]
+          - id: la.7.5.2
+            name: "∂(xᵀ A x)/∂x = (A + Aᵀ)x"
+            description: "Reduces to 2 A x for symmetric A."
+            prerequisites: [la.7.4.1]
+          - id: la.7.5.3
+            name: "∂(tr(AX))/∂X = Aᵀ"
+            description: "Frobenius pairing identifies the differential."
+            prerequisites: [la.7.3.2]
+          - id: la.7.5.4
+            name: "∂(tr(X A Xᵀ))/∂X = X(A + Aᵀ)"
+            description: "Quadratic-in-X form."
+            prerequisites: [la.7.5.3]
+          - id: la.7.5.5
+            name: "∂(log det X)/∂X = (X⁻¹)ᵀ"
+            description: "Foundational for likelihoods involving log-det."
+            prerequisites: [la.7.3.3]
+          - id: la.7.5.6
+            name: "∂(X⁻¹)/∂X"
+            description: "d(X⁻¹) = −X⁻¹ dX X⁻¹."
+            prerequisites: [la.7.3.3]
+          - id: la.7.5.7
+            name: "Matrix chain rule"
+            description: "Apply chain rule to differentials, then use the identification rule."
+            prerequisites: [la.7.3.2]
+          - id: la.7.5.8
+            name: "Matrix product rule"
+            description: "d(A(t) B(t)) = A'(t) B(t) + A(t) B'(t)."
+            prerequisites: [la.7.3.3]
+          - id: la.7.5.9
+            name: "Trace trick"
+            description: "Insert tr(·) to move scalars under cyclic / Frobenius identities."
+            prerequisites: [la.2.6.3]
+
+      - id: la.7.6
+        name: "Implicit differentiation"
+        description: "Differentiating through equations and optimizations."
+        children:
+          - id: la.7.6.1
+            name: "Implicit function theorem application"
+            description: "Differentiate F(x, y) = 0 to obtain dy/dx."
+            prerequisites: [ana.2.6, la.7.3.1]
+          - id: la.7.6.2
+            name: "Differentiating through fixed points"
+            description: "If x* = T(x*, θ), then dx*/dθ via implicit differentiation of x − T(x, θ) = 0."
+            prerequisites: [la.7.6.1, fnd.5.4.4]
+          - id: la.7.6.3
+            name: "Differentiating through argmin"
+            description: "Use first-order optimality conditions ∇_x L(x*, θ) = 0 and apply IFT."
+            prerequisites: [la.7.6.1]
+
+  - id: la.8
+    name: "Numerical linear algebra"
+    description: "Algorithms and numerical considerations."
+    children:
+
+      - id: la.8.1
+        name: "Conditioning"
+        description: "Sensitivity to perturbations."
+        children:
+          - id: la.8.1.1
+            name: "Condition number"
+            description: "κ(A) = ‖A‖ ‖A⁻¹‖; how much a relative perturbation in b can be amplified in x."
+            prerequisites: [la.3.2.7]
+          - id: la.8.1.2
+            name: "ℓ²-condition number"
+            description: "κ₂(A) = σ_max / σ_min; the most common choice."
+            prerequisites: [la.8.1.1, la.5.4.12]
+          - id: la.8.1.3
+            name: "Effect on solution accuracy"
+            description: "Loss of ≈ log₁₀ κ digits in Ax = b under double precision."
+            prerequisites: [la.8.1.1]
+          - id: la.8.1.4
+            name: "Ill-conditioned vs well-conditioned"
+            description: "Heuristic threshold near κ ≈ 1/ε_machine."
+            prerequisites: [la.8.1.3]
+
+      - id: la.8.2
+        name: "Stability of factorizations"
+        description: "Backward error and pivoting."
+        children:
+          - id: la.8.2.1
+            name: "Forward error"
+            description: "‖x̂ − x‖; how far the computed answer is from truth."
+            prerequisites: [la.8.1.3]
+          - id: la.8.2.2
+            name: "Backward error"
+            description: "Smallest perturbation Δ_A such that x̂ exactly solves (A + Δ_A) x = b."
+            prerequisites: [la.8.2.1]
+          - id: la.8.2.3
+            name: "Backward stability"
+            description: "Algorithm is backward stable iff its backward error is O(ε_machine)."
+            prerequisites: [la.8.2.2]
+          - id: la.8.2.4
+            name: "LU stability vs QR stability"
+            description: "QR with Householder is unconditionally backward stable; LU needs partial pivoting."
+            prerequisites: [la.8.2.3]
+          - id: la.8.2.5
+            name: "Pivoting strategies"
+            description: "Partial, complete, rook pivoting; trade speed for stability."
+            prerequisites: [la.5.1.2]
+          - id: la.8.2.6
+            name: "Loss of orthogonality in Gram–Schmidt"
+            description: "Classical GS loses orthogonality; modified GS or Householder is preferred."
+            prerequisites: [la.5.2.2]
+
+      - id: la.8.3
+        name: "Iterative methods"
+        description: "Krylov-subspace solvers."
+        children:
+          - id: la.8.3.1
+            name: "Conjugate gradient (CG)"
+            description: "Iterative solver for symmetric PD systems; converges in n steps in exact arithmetic."
+            prerequisites: [la.8.3.5]
+          - id: la.8.3.2
+            name: "GMRES"
+            description: "Iterative solver for general non-symmetric systems via Arnoldi."
+            prerequisites: [la.8.3.4]
+          - id: la.8.3.3
+            name: "Lanczos algorithm"
+            description: "Iterative tridiagonalization of a symmetric matrix; basis for symmetric eigensolvers."
+            prerequisites: [la.8.3.5]
+          - id: la.8.3.4
+            name: "Arnoldi algorithm"
+            description: "Builds an orthonormal Krylov basis with an upper-Hessenberg projection of A."
+            prerequisites: [la.8.6.1]
+          - id: la.8.3.5
+            name: "CG convergence rate"
+            description: "Error contracts geometrically with rate ≈ (√κ − 1)/(√κ + 1)."
+            prerequisites: [la.8.3.1, la.8.1.2]
+          - id: la.8.3.6
+            name: "Stopping criteria"
+            description: "Residual norm thresholds, energy norm, relative tolerance vs absolute."
+            prerequisites: [la.8.3.1]
+
+      - id: la.8.4
+        name: "Power iteration and friends"
+        description: "Computing dominant eigenpairs."
+        children:
+          - id: la.8.4.1
+            name: "Power iteration"
+            description: "Repeated x ← Ax / ‖Ax‖ converges to the eigenvector of largest |λ|."
+            prerequisites: [la.4.1.1]
+          - id: la.8.4.2
+            name: "Power-iteration rate"
+            description: "Convergence rate is |λ₂/λ₁|."
+            prerequisites: [la.8.4.1]
+          - id: la.8.4.3
+            name: "Inverse power iteration"
+            description: "Power iteration on A⁻¹ converges to the eigenvector of smallest |λ|."
+            prerequisites: [la.8.4.1]
+          - id: la.8.4.4
+            name: "Rayleigh-quotient iteration"
+            description: "Use Rayleigh quotient to shift; cubic convergence near eigenpairs."
+            prerequisites: [la.8.4.3]
+          - id: la.8.4.5
+            name: "Subspace / orthogonal iteration"
+            description: "Power iteration applied to a subspace; basis for QR algorithm."
+            prerequisites: [la.8.4.1]
+
+      - id: la.8.5
+        name: "Randomized linear algebra"
+        description: "Sketching and randomized factorizations."
+        children:
+          - id: la.8.5.1
+            name: "Random projection"
+            description: "Multiply by a random Ω with i.i.d. sub-Gaussian entries to reduce dimension."
+            prerequisites: [prob.6.6]
+          - id: la.8.5.2
+            name: "Johnson–Lindenstrauss lemma"
+            description: "Random projection to O(log n / ε²) dimensions preserves pairwise distances within (1 ± ε)."
+            prerequisites: [la.8.5.1]
+          - id: la.8.5.3
+            name: "Randomized range finder"
+            description: "Approximate range of A by orthonormalizing AΩ for random Ω."
+            prerequisites: [la.8.5.1]
+          - id: la.8.5.4
+            name: "Randomized SVD"
+            description: "Form Y = AΩ, QR-decompose Y = QR, factor B = Q*A, take SVD of B."
+            prerequisites: [la.8.5.3]
+          - id: la.8.5.5
+            name: "Error guarantees for randomized SVD"
+            description: "Spectral / Frobenius error bounded in terms of σ_{k+1}(A) and oversampling parameter."
+            prerequisites: [la.8.5.4, la.5.9.1]
+
+      - id: la.8.6
+        name: "Krylov subspaces"
+        description: "Common substrate for iterative methods."
+        children:
+          - id: la.8.6.1
+            name: "Krylov subspace"
+            description: "K_m(A, v) = span{v, Av, A²v, …, A^{m−1} v}."
+            prerequisites: [la.4.1.1]
+          - id: la.8.6.2
+            name: "Krylov ↔ CG / GMRES / Lanczos / Arnoldi"
+            description: "All four methods build approximations within Krylov subspaces."
+            prerequisites: [la.8.6.1]
+
+  - id: la.9
+    name: "Operator perspective (preview)"
+    description: "Finite-dim warm-up for functional analysis."
+    children:
+
+      - id: la.9.1
+        name: "Bounded operators"
+        description: "Linear operators on inner-product spaces."
+        children:
+          - id: la.9.1.1
+            name: "Bounded linear operator"
+            description: "‖A‖_op = sup_{‖x‖ ≤ 1} ‖Ax‖ < ∞; automatic in finite dimensions."
+            prerequisites: [la.3.4.1, la.3.2.7]
+          - id: la.9.1.2
+            name: "Operator-norm equivalence"
+            description: "‖·‖_op induced by different vector norms are equivalent in finite dimensions."
+            prerequisites: [la.9.1.1, la.3.2.6]
+
+      - id: la.9.2
+        name: "Spectrum"
+        description: "Generalization of eigenvalues."
+        children:
+          - id: la.9.2.1
+            name: "Spectrum (finite-dim)"
+            description: "Set of eigenvalues; finite of size ≤ n."
+            prerequisites: [la.4.1.1]
+          - id: la.9.2.2
+            name: "Spectral radius"
+            description: "ρ(A) = max{|λ| : λ ∈ spec(A)}."
+            prerequisites: [la.9.2.1]
+          - id: la.9.2.3
+            name: "Spectral radius vs operator norm"
+            description: "ρ(A) ≤ ‖A‖_op; equality for normal A."
+            prerequisites: [la.9.2.2, la.9.1.1]
+
+      - id: la.9.3
+        name: "Resolvent"
+        description: "Holomorphic structure of (λI − A)⁻¹."
+        children:
+          - id: la.9.3.1
+            name: "Resolvent operator"
+            description: "R(λ; A) = (λI − A)⁻¹ for λ ∉ spec(A)."
+            prerequisites: [la.9.2.1, la.2.4.2]
+          - id: la.9.3.2
+            name: "Resolvent set"
+            description: "Complement of the spectrum; open in λ."
+            prerequisites: [la.9.3.1]

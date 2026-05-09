@@ -1,0 +1,326 @@
+schema_version: 1
+area: probability
+prefix: prob
+summary: "Probability theory, random variables, concentration, stochastic processes, stochastic calculus, statistical inference."
+why_for_dl: |
+  Models output distributions; losses are expectations under data
+  distributions; SGD is a stochastic approximation. Diffusion models are
+  literally SDEs; flow matching, score matching, and Langevin sampling
+  all rest on stochastic-process theory. Concentration inequalities
+  power generalization bounds; statistical inference underpins Bayesian
+  deep learning, calibration, and uncertainty quantification.
+cross_references:
+  - analysis
+  - linear-algebra
+  - information-theory
+  - learning-theory
+  - dynamical-systems
+
+topics:
+  - id: prob.1
+    name: "Foundations"
+    leaves:
+      - id: prob.1.1
+        name: "Probability spaces"
+        description: "(Ω, ℱ, P); axiomatic foundation."
+        prerequisites: [ana.5.2]
+      - id: prob.1.2
+        name: "σ-algebras for events"
+        description: "Generated, Borel, product σ-algebras."
+        prerequisites: [ana.5.1]
+      - id: prob.1.3
+        name: "Conditional probability and Bayes' rule"
+        description: "P(A|B), partition formula, Bayes inversion."
+        prerequisites: [prob.1.1]
+      - id: prob.1.4
+        name: "Independence"
+        description: "Events and σ-algebras; pairwise vs mutual."
+        prerequisites: [prob.1.1]
+      - id: prob.1.5
+        name: "Borel–Cantelli lemmas"
+        description: "Tail-event probabilities and a.s. behavior."
+        prerequisites: [prob.1.4]
+
+  - id: prob.2
+    name: "Random variables and distributions"
+    leaves:
+      - id: prob.2.1
+        name: "Random variables"
+        description: "Measurable functions; discrete and continuous."
+        prerequisites: [prob.1.1, ana.5.3]
+      - id: prob.2.2
+        name: "CDF, PDF, PMF"
+        description: "Cumulative, probability density, mass functions."
+        prerequisites: [prob.2.1]
+      - id: prob.2.3
+        name: "Pushforward distributions"
+        description: "Distribution of f(X); change-of-variable formula."
+        prerequisites: [prob.2.1, ana.5.9]
+      - id: prob.2.4
+        name: "Standard distributions"
+        description: "Gaussian, exponential, gamma, beta, Dirichlet, Student-t, categorical, multinomial, Poisson, binomial, geometric."
+        prerequisites: [prob.2.2]
+      - id: prob.2.5
+        name: "Multivariate Gaussian"
+        description: "Mean, covariance; conditioning, marginalization."
+        prerequisites: [prob.2.4, la.6.3]
+      - id: prob.2.6
+        name: "Exponential family"
+        description: "Sufficient statistics, natural parameters, log-partition."
+        prerequisites: [prob.2.4]
+      - id: prob.2.7
+        name: "Mixture distributions"
+        description: "Latent-discrete distributions; identifiability issues."
+        prerequisites: [prob.2.4]
+      - id: prob.2.8
+        name: "Copulas"
+        description: "Decoupling marginals from dependence structure."
+        prerequisites: [prob.2.5]
+
+  - id: prob.3
+    name: "Expectation and moments"
+    leaves:
+      - id: prob.3.1
+        name: "Expectation"
+        description: "Lebesgue integral against probability measure."
+        prerequisites: [prob.2.1, ana.5.4]
+      - id: prob.3.2
+        name: "Variance, covariance, correlation"
+        description: "Second-moment structure."
+        prerequisites: [prob.3.1]
+      - id: prob.3.3
+        name: "Higher moments"
+        description: "Skewness, kurtosis; moment problem."
+        prerequisites: [prob.3.2]
+      - id: prob.3.4
+        name: "MGF and characteristic function"
+        description: "Moment-generating; Fourier transform of the law."
+        prerequisites: [prob.3.1, ana.6.2]
+      - id: prob.3.5
+        name: "Cumulants"
+        description: "Log of MGF; additivity under independence."
+        prerequisites: [prob.3.4]
+      - id: prob.3.6
+        name: "Conditional expectation"
+        description: "E[X|G]; tower property; orthogonal projection in L²."
+        prerequisites: [prob.3.1, ana.4.2]
+      - id: prob.3.7
+        name: "Jensen's inequality"
+        description: "E[ϕ(X)] ≥ ϕ(E[X]) for convex ϕ."
+        prerequisites: [prob.3.1, opt.1.2]
+
+  - id: prob.4
+    name: "Joint, conditional, marginal"
+    leaves:
+      - id: prob.4.1
+        name: "Joint distributions"
+        description: "Distribution of (X, Y); product measures."
+        prerequisites: [prob.2.1, ana.5.7]
+      - id: prob.4.2
+        name: "Marginalization and conditioning"
+        description: "Computing P(X), P(X|Y) from joint."
+        prerequisites: [prob.4.1, prob.3.6]
+      - id: prob.4.3
+        name: "Conditional independence"
+        description: "X ⊥ Y | Z; d-separation in DAGs."
+        prerequisites: [prob.4.2]
+      - id: prob.4.4
+        name: "Graphical models"
+        description: "Bayes nets and Markov random fields."
+        prerequisites: [prob.4.3, dis.2.1]
+      - id: prob.4.5
+        name: "Reparameterization"
+        description: "Expressing X = g(ε); enables low-variance gradients."
+        prerequisites: [prob.2.3]
+
+  - id: prob.5
+    name: "Convergence and limit theorems"
+    leaves:
+      - id: prob.5.1
+        name: "Modes of convergence"
+        description: "a.s., in probability, in Lᵖ, in distribution."
+        prerequisites: [prob.2.1, ana.5.5]
+      - id: prob.5.2
+        name: "Weak law of large numbers"
+        description: "Sample mean converges in probability to expectation."
+        prerequisites: [prob.5.1]
+      - id: prob.5.3
+        name: "Strong law of large numbers"
+        description: "Almost-sure convergence under integrability."
+        prerequisites: [prob.5.2]
+      - id: prob.5.4
+        name: "Central limit theorem"
+        description: "Properly normalized sums converge to Gaussian."
+        prerequisites: [prob.5.3, prob.3.4]
+      - id: prob.5.5
+        name: "Slutsky and continuous mapping"
+        description: "Algebra of convergence in distribution."
+        prerequisites: [prob.5.1]
+      - id: prob.5.6
+        name: "Delta method"
+        description: "Asymptotic distribution of smooth transforms."
+        prerequisites: [prob.5.4]
+      - id: prob.5.7
+        name: "Donsker / functional CLT"
+        description: "Convergence to Brownian motion as a process."
+        prerequisites: [prob.5.4, prob.7.9]
+
+  - id: prob.6
+    name: "Concentration inequalities"
+    leaves:
+      - id: prob.6.1
+        name: "Markov and Chebyshev"
+        description: "First / second-moment tail bounds."
+        prerequisites: [prob.3.2]
+      - id: prob.6.2
+        name: "Chernoff bounds"
+        description: "Exponential tails via MGF."
+        prerequisites: [prob.3.4]
+      - id: prob.6.3
+        name: "Hoeffding's inequality"
+        description: "Bounded random variables; sub-Gaussian tail."
+        prerequisites: [prob.6.2]
+      - id: prob.6.4
+        name: "Bernstein and Bennett inequalities"
+        description: "Variance-aware refinements."
+        prerequisites: [prob.6.3]
+      - id: prob.6.5
+        name: "McDiarmid's inequality"
+        description: "Bounded-differences concentration."
+        prerequisites: [prob.6.3]
+      - id: prob.6.6
+        name: "Sub-Gaussian and sub-exponential variables"
+        description: "Orlicz norms; tail-class characterizations."
+        prerequisites: [prob.6.3]
+      - id: prob.6.7
+        name: "Talagrand's inequality"
+        description: "Concentration on product spaces."
+        prerequisites: [prob.6.5]
+      - id: prob.6.8
+        name: "Matrix concentration"
+        description: "Tropp-style matrix Bernstein / Chernoff."
+        prerequisites: [prob.6.4, la.4.4]
+
+  - id: prob.7
+    name: "Stochastic processes"
+    leaves:
+      - id: prob.7.1
+        name: "Discrete-time Markov chains"
+        description: "Memoryless transitions; stationary distributions."
+        prerequisites: [prob.4.3]
+      - id: prob.7.2
+        name: "Stationary distributions and ergodicity"
+        description: "Time averages = space averages."
+        prerequisites: [prob.7.1]
+      - id: prob.7.3
+        name: "MCMC"
+        description: "Metropolis–Hastings, Gibbs sampling."
+        prerequisites: [prob.7.2]
+      - id: prob.7.4
+        name: "Mixing times and spectral gap"
+        description: "Rate of convergence to equilibrium."
+        prerequisites: [prob.7.2, dis.2.4]
+      - id: prob.7.5
+        name: "Continuous-time Markov chains"
+        description: "Generators; transition semigroups."
+        prerequisites: [prob.7.1]
+      - id: prob.7.6
+        name: "Martingales"
+        description: "Conditional expectation = present value."
+        prerequisites: [prob.3.6]
+      - id: prob.7.7
+        name: "Optional stopping theorem"
+        description: "When stopping a martingale preserves expectation."
+        prerequisites: [prob.7.6]
+      - id: prob.7.8
+        name: "Poisson processes"
+        description: "Memoryless arrivals; spatial Poisson."
+        prerequisites: [prob.7.5]
+      - id: prob.7.9
+        name: "Brownian motion / Wiener process"
+        description: "Continuous Gaussian process with independent increments."
+        prerequisites: [prob.5.4, prob.7.6]
+      - id: prob.7.10
+        name: "Gaussian processes"
+        description: "Distributions over functions; covariance kernels."
+        prerequisites: [prob.2.5, ana.4.9]
+      - id: prob.7.11
+        name: "Renewal theory"
+        description: "Inter-arrival times; renewal equation."
+        prerequisites: [prob.7.8]
+
+  - id: prob.8
+    name: "Stochastic calculus"
+    leaves:
+      - id: prob.8.1
+        name: "Itô integral"
+        description: "Integral against Brownian motion."
+        prerequisites: [prob.7.9, prob.7.6]
+      - id: prob.8.2
+        name: "Itô's lemma"
+        description: "Chain rule for stochastic processes."
+        prerequisites: [prob.8.1]
+      - id: prob.8.3
+        name: "Stochastic differential equations"
+        description: "Existence and uniqueness; strong vs weak solutions."
+        prerequisites: [prob.8.2]
+      - id: prob.8.4
+        name: "Fokker–Planck / Kolmogorov forward"
+        description: "PDE for evolving density of an SDE."
+        prerequisites: [prob.8.3, dyn.3.1]
+      - id: prob.8.5
+        name: "Backward Kolmogorov equation"
+        description: "PDE for conditional expectations."
+        prerequisites: [prob.8.3]
+      - id: prob.8.6
+        name: "Time-reversal of diffusions"
+        description: "Anderson's theorem; reverse-time SDE."
+        prerequisites: [prob.8.4]
+      - id: prob.8.7
+        name: "Girsanov's theorem"
+        description: "Change of measure for SDEs."
+        prerequisites: [prob.8.3, ana.5.8]
+      - id: prob.8.8
+        name: "Feynman–Kac formula"
+        description: "Solution of parabolic PDEs as expectations."
+        prerequisites: [prob.8.5]
+
+  - id: prob.9
+    name: "Statistical inference"
+    leaves:
+      - id: prob.9.1
+        name: "Estimators: bias, variance, MSE"
+        description: "Decomposition and trade-offs."
+        prerequisites: [prob.3.2]
+      - id: prob.9.2
+        name: "Maximum likelihood estimation"
+        description: "ML as KL minimization to data distribution."
+        prerequisites: [prob.2.6, opt.3.1]
+      - id: prob.9.3
+        name: "Maximum a posteriori"
+        description: "MAP via prior × likelihood."
+        prerequisites: [prob.9.2, prob.1.3]
+      - id: prob.9.4
+        name: "Bayesian inference"
+        description: "Posteriors, predictive distributions, conjugate priors."
+        prerequisites: [prob.9.3]
+      - id: prob.9.5
+        name: "Sufficiency and Fisher information"
+        description: "Sufficient statistics; Fisher info matrix."
+        prerequisites: [prob.9.2, la.6.3]
+      - id: prob.9.6
+        name: "Cramér–Rao bound"
+        description: "Lower bound on unbiased estimator variance."
+        prerequisites: [prob.9.5]
+      - id: prob.9.7
+        name: "Hypothesis testing"
+        description: "Type I/II error; Neyman–Pearson; p-values."
+        prerequisites: [prob.9.1]
+      - id: prob.9.8
+        name: "Bootstrap and resampling"
+        description: "Empirical sampling for inference."
+        prerequisites: [prob.5.3]
+      - id: prob.9.9
+        name: "Empirical processes"
+        description: "Uniform laws of large numbers; entropy methods."
+        prerequisites: [prob.5.3, lt.2.4]

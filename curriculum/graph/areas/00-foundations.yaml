@@ -1,0 +1,1076 @@
+schema_version: 2
+area: foundations
+prefix: fnd
+summary: "Logic, sets, functions, basic combinatorics, and computation models — the mathematical literacy underlying every other area."
+why_for_dl: |
+  Every theorem, derivation, and pseudocode in deep-learning research is
+  written in the language of sets, functions, and proofs. Asymptotics
+  and the very definition of computability bound what training loops
+  can do.
+cross_references:
+  - linear-algebra
+  - analysis
+  - discrete-and-complexity
+  - probability
+
+children:
+  - id: fnd.1
+    name: "Logic and proof"
+    description: "Propositions, predicates, quantifiers, proof techniques."
+    children:
+
+      - id: fnd.1.1
+        name: "Propositional logic"
+        description: "Boolean reasoning at sentence level."
+        children:
+          - id: fnd.1.1.1
+            name: "Proposition"
+            description: "Declarative statement that is either true or false; the atomic unit of propositional logic."
+            prerequisites: []
+          - id: fnd.1.1.2
+            name: "Negation (¬P)"
+            description: "Truth-flipping unary connective; involutive (¬¬P ≡ P)."
+            prerequisites: [fnd.1.1.1]
+          - id: fnd.1.1.3
+            name: "Conjunction (P ∧ Q)"
+            description: "Logical AND; true iff both conjuncts are true."
+            prerequisites: [fnd.1.1.1]
+          - id: fnd.1.1.4
+            name: "Disjunction (P ∨ Q)"
+            description: "Inclusive OR; true iff at least one disjunct is true."
+            prerequisites: [fnd.1.1.1]
+          - id: fnd.1.1.5
+            name: "Exclusive or (P ⊕ Q)"
+            description: "True iff exactly one of P, Q is true; equals ¬(P ↔ Q)."
+            prerequisites: [fnd.1.1.4]
+          - id: fnd.1.1.6
+            name: "Implication (P → Q)"
+            description: "False only when P true and Q false; vacuously true when P is false."
+            prerequisites: [fnd.1.1.1]
+          - id: fnd.1.1.7
+            name: "Biconditional (P ↔ Q)"
+            description: "True iff P and Q share the same truth value."
+            prerequisites: [fnd.1.1.6]
+          - id: fnd.1.1.8
+            name: "Operator precedence"
+            description: "Standard binding order: ¬, ∧, ∨, →, ↔; parenthesize when in doubt."
+            prerequisites: [fnd.1.1.6, fnd.1.1.7]
+          - id: fnd.1.1.9
+            name: "Truth tables"
+            description: "Enumerate all 2ⁿ assignments to verify formulas."
+            prerequisites: [fnd.1.1.8]
+          - id: fnd.1.1.10
+            name: "Logical equivalence (≡)"
+            description: "Two formulas with identical truth tables; substitutable in any context."
+            prerequisites: [fnd.1.1.9]
+          - id: fnd.1.1.11
+            name: "Tautology"
+            description: "Formula true under every truth assignment."
+            prerequisites: [fnd.1.1.9]
+          - id: fnd.1.1.12
+            name: "Contradiction"
+            description: "Formula false under every truth assignment."
+            prerequisites: [fnd.1.1.9]
+          - id: fnd.1.1.13
+            name: "Contingency"
+            description: "Formula that is sometimes true, sometimes false."
+            prerequisites: [fnd.1.1.11, fnd.1.1.12]
+          - id: fnd.1.1.14
+            name: "Vacuous truth"
+            description: "Implication P → Q is automatically true when P is false."
+            prerequisites: [fnd.1.1.6]
+          - id: fnd.1.1.15
+            name: "Double-negation law"
+            description: "¬¬P ≡ P."
+            prerequisites: [fnd.1.1.10, fnd.1.1.2]
+          - id: fnd.1.1.16
+            name: "De Morgan's first law"
+            description: "¬(P ∧ Q) ≡ ¬P ∨ ¬Q."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.17
+            name: "De Morgan's second law"
+            description: "¬(P ∨ Q) ≡ ¬P ∧ ¬Q."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.18
+            name: "Commutativity of ∧"
+            description: "P ∧ Q ≡ Q ∧ P."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.19
+            name: "Commutativity of ∨"
+            description: "P ∨ Q ≡ Q ∨ P."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.20
+            name: "Associativity of ∧"
+            description: "(P ∧ Q) ∧ R ≡ P ∧ (Q ∧ R)."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.21
+            name: "Associativity of ∨"
+            description: "(P ∨ Q) ∨ R ≡ P ∨ (Q ∨ R)."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.22
+            name: "Distributivity of ∧ over ∨"
+            description: "P ∧ (Q ∨ R) ≡ (P ∧ Q) ∨ (P ∧ R)."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.23
+            name: "Distributivity of ∨ over ∧"
+            description: "P ∨ (Q ∧ R) ≡ (P ∨ Q) ∧ (P ∨ R)."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.24
+            name: "Identity laws"
+            description: "P ∧ T ≡ P; P ∨ F ≡ P."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.25
+            name: "Domination laws"
+            description: "P ∨ T ≡ T; P ∧ F ≡ F."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.26
+            name: "Idempotent laws"
+            description: "P ∧ P ≡ P; P ∨ P ≡ P."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.27
+            name: "Absorption laws"
+            description: "P ∨ (P ∧ Q) ≡ P; P ∧ (P ∨ Q) ≡ P."
+            prerequisites: [fnd.1.1.10]
+          - id: fnd.1.1.28
+            name: "Material implication identity"
+            description: "P → Q ≡ ¬P ∨ Q."
+            prerequisites: [fnd.1.1.6, fnd.1.1.10]
+          - id: fnd.1.1.29
+            name: "Contrapositive equivalence"
+            description: "P → Q ≡ ¬Q → ¬P."
+            prerequisites: [fnd.1.1.28]
+          - id: fnd.1.1.30
+            name: "Converse"
+            description: "Q → P; not equivalent to P → Q in general."
+            prerequisites: [fnd.1.1.6]
+          - id: fnd.1.1.31
+            name: "Inverse"
+            description: "¬P → ¬Q; equivalent to the converse, not to the original."
+            prerequisites: [fnd.1.1.30]
+          - id: fnd.1.1.32
+            name: "Modus ponens"
+            description: "From P and P → Q infer Q."
+            prerequisites: [fnd.1.1.6]
+          - id: fnd.1.1.33
+            name: "Modus tollens"
+            description: "From ¬Q and P → Q infer ¬P."
+            prerequisites: [fnd.1.1.32, fnd.1.1.29]
+          - id: fnd.1.1.34
+            name: "Hypothetical syllogism"
+            description: "From P → Q and Q → R infer P → R."
+            prerequisites: [fnd.1.1.32]
+          - id: fnd.1.1.35
+            name: "Disjunctive syllogism"
+            description: "From P ∨ Q and ¬P infer Q."
+            prerequisites: [fnd.1.1.4, fnd.1.1.2]
+          - id: fnd.1.1.36
+            name: "Conjunctive normal form (CNF)"
+            description: "Conjunction of disjunctions of literals; canonical form for SAT."
+            prerequisites: [fnd.1.1.16, fnd.1.1.22]
+          - id: fnd.1.1.37
+            name: "Disjunctive normal form (DNF)"
+            description: "Disjunction of conjunctions of literals."
+            prerequisites: [fnd.1.1.17, fnd.1.1.23]
+          - id: fnd.1.1.38
+            name: "Boolean satisfiability (SAT)"
+            description: "Decision problem: does an assignment make a propositional formula true?"
+            prerequisites: [fnd.1.1.36]
+
+      - id: fnd.1.2
+        name: "Predicate logic and quantifiers"
+        description: "First-order logic with variables, predicates, and quantifiers."
+        children:
+          - id: fnd.1.2.1
+            name: "Predicate"
+            description: "Function from a domain to {T, F}; e.g., P(x) = 'x is prime.'"
+            prerequisites: [fnd.1.1.1]
+          - id: fnd.1.2.2
+            name: "Domain of discourse"
+            description: "The set over which variables range."
+            prerequisites: [fnd.1.2.1]
+          - id: fnd.1.2.3
+            name: "Universal quantifier (∀)"
+            description: "∀x P(x) is true iff P(x) is true for every x in the domain."
+            prerequisites: [fnd.1.2.2]
+          - id: fnd.1.2.4
+            name: "Existential quantifier (∃)"
+            description: "∃x P(x) is true iff P(x) is true for some x in the domain."
+            prerequisites: [fnd.1.2.2]
+          - id: fnd.1.2.5
+            name: "Bound and free variables"
+            description: "A variable is bound by a quantifier in its scope; free otherwise."
+            prerequisites: [fnd.1.2.3, fnd.1.2.4]
+          - id: fnd.1.2.6
+            name: "Scope of a quantifier"
+            description: "The sub-formula to which the quantifier applies."
+            prerequisites: [fnd.1.2.5]
+          - id: fnd.1.2.7
+            name: "Quantifier negation: ¬∀x P ≡ ∃x ¬P"
+            description: "Pushing ¬ past ∀ flips it to ∃."
+            prerequisites: [fnd.1.2.3]
+          - id: fnd.1.2.8
+            name: "Quantifier negation: ¬∃x P ≡ ∀x ¬P"
+            description: "Pushing ¬ past ∃ flips it to ∀."
+            prerequisites: [fnd.1.2.4]
+          - id: fnd.1.2.9
+            name: "Mixed quantifier order matters"
+            description: "∀x ∃y P(x,y) is generally weaker than ∃y ∀x P(x,y)."
+            prerequisites: [fnd.1.2.3, fnd.1.2.4]
+          - id: fnd.1.2.10
+            name: "Restricted quantification"
+            description: "∀x ∈ S, P(x) abbreviates ∀x (x ∈ S → P(x))."
+            prerequisites: [fnd.1.2.3]
+          - id: fnd.1.2.11
+            name: "Uniqueness quantifier (∃!)"
+            description: "∃!x P(x) means exactly one x satisfies P."
+            prerequisites: [fnd.1.2.4]
+          - id: fnd.1.2.12
+            name: "Prenex normal form"
+            description: "All quantifiers pulled to the front of the formula."
+            prerequisites: [fnd.1.2.7, fnd.1.2.8]
+          - id: fnd.1.2.13
+            name: "Capture-avoiding substitution"
+            description: "Renaming bound variables so substitution doesn't bind a free occurrence."
+            prerequisites: [fnd.1.2.5]
+          - id: fnd.1.2.14
+            name: "First-order vs higher-order logic"
+            description: "First-order quantifies over individuals; higher-order also over predicates / sets."
+            prerequisites: [fnd.1.2.1]
+
+      - id: fnd.1.3
+        name: "Proof techniques"
+        description: "Patterns of valid mathematical argument."
+        children:
+          - id: fnd.1.3.1
+            name: "What a proof is"
+            description: "A finite chain of valid inferences from accepted premises to a conclusion."
+            prerequisites: [fnd.1.1.32]
+          - id: fnd.1.3.2
+            name: "Direct proof"
+            description: "Assume the hypothesis, derive the conclusion via accepted rules."
+            prerequisites: [fnd.1.3.1]
+          - id: fnd.1.3.3
+            name: "Proof by contrapositive"
+            description: "Prove ¬Q → ¬P instead of P → Q (logically equivalent)."
+            prerequisites: [fnd.1.1.29, fnd.1.3.2]
+          - id: fnd.1.3.4
+            name: "Proof by contradiction"
+            description: "Assume ¬P, derive a contradiction, conclude P."
+            prerequisites: [fnd.1.1.12]
+          - id: fnd.1.3.5
+            name: "Proof by cases"
+            description: "Split the hypothesis into exhaustive cases and prove each."
+            prerequisites: [fnd.1.3.2]
+          - id: fnd.1.3.6
+            name: "Constructive existence proof"
+            description: "Exhibit an explicit example satisfying the existential claim."
+            prerequisites: [fnd.1.2.4]
+          - id: fnd.1.3.7
+            name: "Non-constructive existence proof"
+            description: "Show existence without producing a witness, often via contradiction."
+            prerequisites: [fnd.1.3.4, fnd.1.2.4]
+          - id: fnd.1.3.8
+            name: "Counterexample"
+            description: "Disprove a universal claim by exhibiting a single failing instance."
+            prerequisites: [fnd.1.2.7]
+          - id: fnd.1.3.9
+            name: "Mathematical induction"
+            description: "Prove P(0) and P(n) → P(n+1) to conclude ∀n ∈ ℕ, P(n)."
+            prerequisites: [fnd.1.2.3]
+          - id: fnd.1.3.10
+            name: "Strong induction"
+            description: "Assume P(k) for all k ≤ n in the inductive step; equivalent to ordinary induction."
+            prerequisites: [fnd.1.3.9]
+          - id: fnd.1.3.11
+            name: "Structural induction"
+            description: "Induct over the recursive structure of an inductively defined object."
+            prerequisites: [fnd.1.3.9, fnd.5.4.1]
+          - id: fnd.1.3.12
+            name: "Well-ordering principle"
+            description: "Every non-empty subset of ℕ has a least element."
+            prerequisites: [fnd.1.3.9]
+          - id: fnd.1.3.13
+            name: "Equivalence of induction and well-ordering"
+            description: "Each implies the other on ℕ."
+            prerequisites: [fnd.1.3.12, fnd.1.3.10]
+          - id: fnd.1.3.14
+            name: "Diagonalization argument"
+            description: "Construct an object differing from each member of an enumeration in the n-th place."
+            prerequisites: [fnd.1.3.4]
+
+      - id: fnd.1.4
+        name: "Definitions, axioms, theorems"
+        description: "Vocabulary of mathematical writing."
+        children:
+          - id: fnd.1.4.1
+            name: "Definition"
+            description: "Stipulates the meaning of a term; not a claim that can be true or false."
+            prerequisites: []
+          - id: fnd.1.4.2
+            name: "Axiom"
+            description: "Statement accepted without proof as a starting point."
+            prerequisites: [fnd.1.4.1]
+          - id: fnd.1.4.3
+            name: "Theorem"
+            description: "A proven, important statement."
+            prerequisites: [fnd.1.3.1]
+          - id: fnd.1.4.4
+            name: "Lemma"
+            description: "Auxiliary proven statement used to support a theorem."
+            prerequisites: [fnd.1.4.3]
+          - id: fnd.1.4.5
+            name: "Corollary"
+            description: "Statement that follows quickly from a theorem."
+            prerequisites: [fnd.1.4.3]
+          - id: fnd.1.4.6
+            name: "Proposition (publishing sense)"
+            description: "Proven statement of intermediate importance — less central than a theorem."
+            prerequisites: [fnd.1.4.3]
+          - id: fnd.1.4.7
+            name: "Conjecture"
+            description: "Statement believed true but not yet proven."
+            prerequisites: [fnd.1.4.3]
+          - id: fnd.1.4.8
+            name: "Necessary condition"
+            description: "Q is necessary for P if P → Q (P fails without Q)."
+            prerequisites: [fnd.1.1.6]
+          - id: fnd.1.4.9
+            name: "Sufficient condition"
+            description: "P is sufficient for Q if P → Q (P guarantees Q)."
+            prerequisites: [fnd.1.1.6]
+          - id: fnd.1.4.10
+            name: "Necessary and sufficient (iff)"
+            description: "P ↔ Q; both directions of implication."
+            prerequisites: [fnd.1.4.8, fnd.1.4.9]
+          - id: fnd.1.4.11
+            name: "Characterization"
+            description: "An iff statement that pins down a concept by an equivalent property."
+            prerequisites: [fnd.1.4.10]
+          - id: fnd.1.4.12
+            name: "Well-defined"
+            description: "Definition does not depend on incidental representational choices."
+            prerequisites: [fnd.1.4.1]
+
+      - id: fnd.1.5
+        name: "Boolean algebra"
+        description: "Algebraic structure abstracting propositional logic."
+        children:
+          - id: fnd.1.5.1
+            name: "Boolean algebra (axiomatic definition)"
+            description: "Set with two binary ops (∧, ∨), unary ¬, identities 0, 1, satisfying complement and distribution laws."
+            prerequisites: [fnd.1.1.27]
+          - id: fnd.1.5.2
+            name: "Boolean function"
+            description: "Function {0,1}ⁿ → {0,1}; equivalently, a propositional formula."
+            prerequisites: [fnd.1.5.1]
+          - id: fnd.1.5.3
+            name: "Boolean homomorphism"
+            description: "Map preserving ∧, ∨, ¬, 0, 1."
+            prerequisites: [fnd.1.5.1]
+          - id: fnd.1.5.4
+            name: "Lattice of propositions"
+            description: "Propositions modulo equivalence form a Boolean (hence distributive, complemented) lattice."
+            prerequisites: [fnd.1.5.1, fnd.3.2.1]
+
+  - id: fnd.2
+    name: "Sets, relations, functions"
+    description: "Set theory primitives and the relations / functions built from them."
+    children:
+
+      - id: fnd.2.1
+        name: "Set operations"
+        description: "Algebra of subsets of a universe."
+        children:
+          - id: fnd.2.1.1
+            name: "Set (naive definition)"
+            description: "An unordered collection of distinct elements."
+            prerequisites: []
+          - id: fnd.2.1.2
+            name: "Set membership (∈)"
+            description: "x ∈ A means x is an element of A; primitive relation."
+            prerequisites: [fnd.2.1.1]
+          - id: fnd.2.1.3
+            name: "Subset (⊆)"
+            description: "A ⊆ B iff every element of A is in B."
+            prerequisites: [fnd.2.1.2]
+          - id: fnd.2.1.4
+            name: "Proper subset (⊊)"
+            description: "A ⊊ B iff A ⊆ B and A ≠ B."
+            prerequisites: [fnd.2.1.3]
+          - id: fnd.2.1.5
+            name: "Set equality (extensionality)"
+            description: "A = B iff A ⊆ B and B ⊆ A."
+            prerequisites: [fnd.2.1.3]
+          - id: fnd.2.1.6
+            name: "Empty set (∅)"
+            description: "Unique set with no elements; subset of every set."
+            prerequisites: [fnd.2.1.1]
+          - id: fnd.2.1.7
+            name: "Universal set"
+            description: "A fixed set U whose subsets are under discussion; relative to context."
+            prerequisites: [fnd.2.1.1]
+          - id: fnd.2.1.8
+            name: "Union (A ∪ B)"
+            description: "Set of elements in A or B (or both)."
+            prerequisites: [fnd.2.1.2]
+          - id: fnd.2.1.9
+            name: "Intersection (A ∩ B)"
+            description: "Set of elements in both A and B."
+            prerequisites: [fnd.2.1.2]
+          - id: fnd.2.1.10
+            name: "Set difference (A \\ B)"
+            description: "Elements in A but not in B."
+            prerequisites: [fnd.2.1.2]
+          - id: fnd.2.1.11
+            name: "Symmetric difference (A △ B)"
+            description: "(A \\ B) ∪ (B \\ A); 'XOR' of sets."
+            prerequisites: [fnd.2.1.10]
+          - id: fnd.2.1.12
+            name: "Complement (Aᶜ)"
+            description: "U \\ A, relative to a chosen universal set U."
+            prerequisites: [fnd.2.1.7, fnd.2.1.10]
+          - id: fnd.2.1.13
+            name: "De Morgan's laws for sets"
+            description: "(A ∪ B)ᶜ = Aᶜ ∩ Bᶜ; (A ∩ B)ᶜ = Aᶜ ∪ Bᶜ."
+            prerequisites: [fnd.2.1.12, fnd.1.1.16]
+          - id: fnd.2.1.14
+            name: "Distributivity for sets"
+            description: "A ∩ (B ∪ C) = (A ∩ B) ∪ (A ∩ C); dually for ∪ over ∩."
+            prerequisites: [fnd.1.1.22]
+          - id: fnd.2.1.15
+            name: "Disjoint sets"
+            description: "A and B are disjoint iff A ∩ B = ∅."
+            prerequisites: [fnd.2.1.9]
+          - id: fnd.2.1.16
+            name: "Set-builder notation"
+            description: "{x ∈ U : φ(x)} — the subset of U satisfying φ."
+            prerequisites: [fnd.2.1.7, fnd.1.2.1]
+          - id: fnd.2.1.17
+            name: "Russell's paradox"
+            description: "{x : x ∉ x} cannot be a set; motivates restricted comprehension."
+            prerequisites: [fnd.2.1.16, fnd.1.3.4]
+          - id: fnd.2.1.18
+            name: "ZFC overview"
+            description: "Zermelo–Fraenkel + Choice — the standard axiomatic foundation of set theory."
+            prerequisites: [fnd.2.1.17]
+
+      - id: fnd.2.2
+        name: "Relations"
+        description: "Subsets of A × B, with structure."
+        children:
+          - id: fnd.2.2.1
+            name: "Binary relation"
+            description: "A subset R ⊆ A × B; write a R b for (a, b) ∈ R."
+            prerequisites: [fnd.2.5.2]
+          - id: fnd.2.2.2
+            name: "Reflexive relation"
+            description: "∀a ∈ A, a R a."
+            prerequisites: [fnd.2.2.1]
+          - id: fnd.2.2.3
+            name: "Symmetric relation"
+            description: "a R b → b R a."
+            prerequisites: [fnd.2.2.1]
+          - id: fnd.2.2.4
+            name: "Antisymmetric relation"
+            description: "(a R b ∧ b R a) → a = b."
+            prerequisites: [fnd.2.2.1]
+          - id: fnd.2.2.5
+            name: "Transitive relation"
+            description: "(a R b ∧ b R c) → a R c."
+            prerequisites: [fnd.2.2.1]
+          - id: fnd.2.2.6
+            name: "Equivalence relation"
+            description: "Reflexive, symmetric, and transitive."
+            prerequisites: [fnd.2.2.2, fnd.2.2.3, fnd.2.2.5]
+          - id: fnd.2.2.7
+            name: "Equivalence class"
+            description: "[a] = {x : x ~ a} — set of elements equivalent to a."
+            prerequisites: [fnd.2.2.6]
+          - id: fnd.2.2.8
+            name: "Quotient set / partition"
+            description: "Set of equivalence classes; a partition of the underlying set."
+            prerequisites: [fnd.2.2.7]
+          - id: fnd.2.2.9
+            name: "Equivalence ↔ partition"
+            description: "Equivalence relations on A correspond bijectively to partitions of A."
+            prerequisites: [fnd.2.2.8]
+          - id: fnd.2.2.10
+            name: "Partial order"
+            description: "Reflexive, antisymmetric, transitive."
+            prerequisites: [fnd.2.2.2, fnd.2.2.4, fnd.2.2.5]
+          - id: fnd.2.2.11
+            name: "Total (linear) order"
+            description: "Partial order in which any two elements are comparable."
+            prerequisites: [fnd.2.2.10]
+          - id: fnd.2.2.12
+            name: "Strict vs non-strict order"
+            description: "Strict (<) is irreflexive and transitive; non-strict (≤) adds reflexivity."
+            prerequisites: [fnd.2.2.10]
+          - id: fnd.2.2.13
+            name: "Composition of relations"
+            description: "(R ∘ S)(a, c) iff ∃b: a R b and b S c."
+            prerequisites: [fnd.2.2.1]
+          - id: fnd.2.2.14
+            name: "Inverse relation"
+            description: "R⁻¹ = {(b, a) : a R b}."
+            prerequisites: [fnd.2.2.1]
+
+      - id: fnd.2.3
+        name: "Functions"
+        description: "Single-valued total relations and their properties."
+        children:
+          - id: fnd.2.3.1
+            name: "Function (definition)"
+            description: "A relation f ⊆ A × B such that each a ∈ A has exactly one b with (a, b) ∈ f."
+            prerequisites: [fnd.2.2.1]
+          - id: fnd.2.3.2
+            name: "Domain, codomain, range"
+            description: "Domain A, codomain B, range = f(A) ⊆ B."
+            prerequisites: [fnd.2.3.1]
+          - id: fnd.2.3.3
+            name: "Injection (one-to-one)"
+            description: "f(x₁) = f(x₂) → x₁ = x₂."
+            prerequisites: [fnd.2.3.1]
+          - id: fnd.2.3.4
+            name: "Surjection (onto)"
+            description: "Every b ∈ B has some a with f(a) = b; range = codomain."
+            prerequisites: [fnd.2.3.2]
+          - id: fnd.2.3.5
+            name: "Bijection"
+            description: "Both injective and surjective."
+            prerequisites: [fnd.2.3.3, fnd.2.3.4]
+          - id: fnd.2.3.6
+            name: "Function composition"
+            description: "(g ∘ f)(x) = g(f(x)); associative; identity acts as unit."
+            prerequisites: [fnd.2.3.1]
+          - id: fnd.2.3.7
+            name: "Identity function"
+            description: "id_A(a) = a."
+            prerequisites: [fnd.2.3.1]
+          - id: fnd.2.3.8
+            name: "Inverse function"
+            description: "f⁻¹ such that f ∘ f⁻¹ = id and f⁻¹ ∘ f = id."
+            prerequisites: [fnd.2.3.6, fnd.2.3.7]
+          - id: fnd.2.3.9
+            name: "Inverse exists ↔ bijection"
+            description: "f has a two-sided inverse iff f is a bijection."
+            prerequisites: [fnd.2.3.5, fnd.2.3.8]
+          - id: fnd.2.3.10
+            name: "Restriction and extension"
+            description: "f|_S limits the domain to S; an extension undoes that."
+            prerequisites: [fnd.2.3.2]
+          - id: fnd.2.3.11
+            name: "Partial function"
+            description: "A function defined on a subset of the nominal domain."
+            prerequisites: [fnd.2.3.1]
+
+      - id: fnd.2.4
+        name: "Cardinality and countability"
+        description: "Comparing the sizes of sets."
+        children:
+          - id: fnd.2.4.1
+            name: "Cardinality via bijection"
+            description: "|A| = |B| iff there is a bijection A → B."
+            prerequisites: [fnd.2.3.5]
+          - id: fnd.2.4.2
+            name: "Finite set"
+            description: "Set in bijection with {1, …, n} for some n ∈ ℕ."
+            prerequisites: [fnd.2.4.1]
+          - id: fnd.2.4.3
+            name: "Infinite set"
+            description: "Set not in bijection with any {1, …, n}."
+            prerequisites: [fnd.2.4.2]
+          - id: fnd.2.4.4
+            name: "Countable set"
+            description: "Set in bijection with a subset of ℕ; finite or countably infinite."
+            prerequisites: [fnd.2.4.3]
+          - id: fnd.2.4.5
+            name: "Uncountable set"
+            description: "Infinite set that is not countable."
+            prerequisites: [fnd.2.4.4]
+          - id: fnd.2.4.6
+            name: "ℕ, ℤ, ℚ are countable"
+            description: "Standard pairing / enumeration arguments."
+            prerequisites: [fnd.2.4.4]
+          - id: fnd.2.4.7
+            name: "ℝ is uncountable"
+            description: "Cantor's diagonal argument."
+            prerequisites: [fnd.2.4.5, fnd.1.3.14]
+          - id: fnd.2.4.8
+            name: "Cantor–Bernstein–Schroeder theorem"
+            description: "Injections A → B and B → A imply |A| = |B|."
+            prerequisites: [fnd.2.4.1]
+          - id: fnd.2.4.9
+            name: "Aleph numbers (overview)"
+            description: "Hierarchy of infinite cardinals ℵ₀, ℵ₁, …"
+            prerequisites: [fnd.2.4.5]
+
+      - id: fnd.2.5
+        name: "Cartesian products and power sets"
+        description: "Constructions producing larger sets from smaller ones."
+        children:
+          - id: fnd.2.5.1
+            name: "Ordered pair"
+            description: "(a, b); equality iff components match in order."
+            prerequisites: [fnd.2.1.1]
+          - id: fnd.2.5.2
+            name: "Cartesian product (A × B)"
+            description: "Set of ordered pairs {(a, b) : a ∈ A, b ∈ B}."
+            prerequisites: [fnd.2.5.1]
+          - id: fnd.2.5.3
+            name: "n-ary Cartesian product"
+            description: "A₁ × … × Aₙ; tuples of length n."
+            prerequisites: [fnd.2.5.2]
+          - id: fnd.2.5.4
+            name: "Power set (2^A)"
+            description: "Set of all subsets of A; |2^A| = 2^|A| for finite A."
+            prerequisites: [fnd.2.1.3]
+          - id: fnd.2.5.5
+            name: "Cantor's theorem"
+            description: "|2^A| > |A| for every set A."
+            prerequisites: [fnd.2.5.4, fnd.1.3.14]
+
+      - id: fnd.2.6
+        name: "Image and preimage"
+        description: "Set-valued operations under a function."
+        children:
+          - id: fnd.2.6.1
+            name: "Image of a set"
+            description: "f(S) = {f(x) : x ∈ S}."
+            prerequisites: [fnd.2.3.1]
+          - id: fnd.2.6.2
+            name: "Preimage of a set"
+            description: "f⁻¹(T) = {x : f(x) ∈ T}."
+            prerequisites: [fnd.2.3.1]
+          - id: fnd.2.6.3
+            name: "Image preserves union"
+            description: "f(A ∪ B) = f(A) ∪ f(B)."
+            prerequisites: [fnd.2.6.1]
+          - id: fnd.2.6.4
+            name: "Image and intersection"
+            description: "f(A ∩ B) ⊆ f(A) ∩ f(B); equality may fail unless f is injective."
+            prerequisites: [fnd.2.6.1]
+          - id: fnd.2.6.5
+            name: "Preimage preserves union and intersection"
+            description: "f⁻¹(A ∪ B) = f⁻¹(A) ∪ f⁻¹(B); same for ∩."
+            prerequisites: [fnd.2.6.2]
+          - id: fnd.2.6.6
+            name: "Preimage and complement"
+            description: "f⁻¹(Bᶜ) = (f⁻¹(B))ᶜ."
+            prerequisites: [fnd.2.6.2]
+          - id: fnd.2.6.7
+            name: "f(f⁻¹(B)) ⊆ B"
+            description: "Equality holds iff f is surjective onto B."
+            prerequisites: [fnd.2.6.1, fnd.2.6.2]
+          - id: fnd.2.6.8
+            name: "A ⊆ f⁻¹(f(A))"
+            description: "Equality holds iff f is injective on A."
+            prerequisites: [fnd.2.6.1, fnd.2.6.2]
+
+  - id: fnd.3
+    name: "Order and lattices"
+    description: "Posets, lattices, sup/inf, and choice principles."
+    children:
+
+      - id: fnd.3.1
+        name: "Posets"
+        description: "Partially ordered sets and their structure."
+        children:
+          - id: fnd.3.1.1
+            name: "Poset"
+            description: "Set with a partial order ≤."
+            prerequisites: [fnd.2.2.10]
+          - id: fnd.3.1.2
+            name: "Hasse diagram"
+            description: "Graph of cover relations of a finite poset."
+            prerequisites: [fnd.3.1.1]
+          - id: fnd.3.1.3
+            name: "Comparable / incomparable elements"
+            description: "x and y are comparable iff x ≤ y or y ≤ x."
+            prerequisites: [fnd.3.1.1]
+          - id: fnd.3.1.4
+            name: "Chain"
+            description: "A totally ordered subset."
+            prerequisites: [fnd.3.1.3]
+          - id: fnd.3.1.5
+            name: "Antichain"
+            description: "A subset of pairwise incomparable elements."
+            prerequisites: [fnd.3.1.3]
+          - id: fnd.3.1.6
+            name: "Maximal vs greatest element"
+            description: "Maximal = nothing strictly above it; greatest = above everything else."
+            prerequisites: [fnd.3.1.1]
+          - id: fnd.3.1.7
+            name: "Minimal vs least element"
+            description: "Dual of maximal / greatest."
+            prerequisites: [fnd.3.1.6]
+          - id: fnd.3.1.8
+            name: "Upper / lower bounds"
+            description: "u upper-bounds S iff s ≤ u for all s ∈ S; lower bound dually."
+            prerequisites: [fnd.3.1.1]
+          - id: fnd.3.1.9
+            name: "Supremum (least upper bound)"
+            description: "Least element of the set of upper bounds; may not exist."
+            prerequisites: [fnd.3.1.8, fnd.3.1.7]
+          - id: fnd.3.1.10
+            name: "Infimum (greatest lower bound)"
+            description: "Greatest element of the set of lower bounds."
+            prerequisites: [fnd.3.1.8, fnd.3.1.6]
+          - id: fnd.3.1.11
+            name: "Bounded poset"
+            description: "Has both a least and a greatest element."
+            prerequisites: [fnd.3.1.6, fnd.3.1.7]
+
+      - id: fnd.3.2
+        name: "Lattices"
+        description: "Posets where every pair has a sup and inf."
+        children:
+          - id: fnd.3.2.1
+            name: "Lattice"
+            description: "Poset where every two elements have a sup and an inf."
+            prerequisites: [fnd.3.1.9, fnd.3.1.10]
+          - id: fnd.3.2.2
+            name: "Join (∨) and meet (∧)"
+            description: "Lattice operations: x ∨ y = sup{x,y}, x ∧ y = inf{x,y}."
+            prerequisites: [fnd.3.2.1]
+          - id: fnd.3.2.3
+            name: "Bounded lattice"
+            description: "Lattice with global ⊤ and ⊥."
+            prerequisites: [fnd.3.2.1, fnd.3.1.11]
+          - id: fnd.3.2.4
+            name: "Distributive lattice"
+            description: "x ∧ (y ∨ z) = (x ∧ y) ∨ (x ∧ z)."
+            prerequisites: [fnd.3.2.2]
+          - id: fnd.3.2.5
+            name: "Complete lattice"
+            description: "Every (possibly infinite) subset has a sup and an inf."
+            prerequisites: [fnd.3.2.1]
+          - id: fnd.3.2.6
+            name: "Modular lattice"
+            description: "x ≤ z → x ∨ (y ∧ z) = (x ∨ y) ∧ z."
+            prerequisites: [fnd.3.2.1]
+          - id: fnd.3.2.7
+            name: "Lattice morphism"
+            description: "Map preserving ∨ and ∧."
+            prerequisites: [fnd.3.2.2]
+
+      - id: fnd.3.3
+        name: "Axiom of choice and Zorn's lemma"
+        description: "Choice principles equivalent over ZF."
+        children:
+          - id: fnd.3.3.1
+            name: "Axiom of choice"
+            description: "For any family of non-empty sets there is a function picking one element from each."
+            prerequisites: [fnd.2.3.1]
+          - id: fnd.3.3.2
+            name: "Zorn's lemma"
+            description: "Every poset in which every chain has an upper bound has a maximal element."
+            prerequisites: [fnd.3.1.4, fnd.3.1.6]
+          - id: fnd.3.3.3
+            name: "Well-ordering principle"
+            description: "Every set can be totally ordered so that every non-empty subset has a least element."
+            prerequisites: [fnd.2.2.11]
+          - id: fnd.3.3.4
+            name: "AC ↔ Zorn ↔ well-ordering"
+            description: "These three are equivalent over ZF."
+            prerequisites: [fnd.3.3.1, fnd.3.3.2, fnd.3.3.3]
+          - id: fnd.3.3.5
+            name: "AC consequences in DL math"
+            description: "Existence of a basis for every vector space, Hahn–Banach, Tychonoff."
+            prerequisites: [fnd.3.3.1]
+
+  - id: fnd.4
+    name: "Combinatorial reasoning"
+    description: "Counting, pigeonhole, inclusion–exclusion, recurrences."
+    children:
+
+      - id: fnd.4.1
+        name: "Counting principles"
+        description: "Foundational counting rules."
+        children:
+          - id: fnd.4.1.1
+            name: "Sum rule"
+            description: "Disjoint cases add: |A ⊔ B| = |A| + |B|."
+            prerequisites: [fnd.2.1.15]
+          - id: fnd.4.1.2
+            name: "Product rule"
+            description: "Independent choices multiply: |A × B| = |A|·|B|."
+            prerequisites: [fnd.2.5.2]
+          - id: fnd.4.1.3
+            name: "Bijective counting"
+            description: "If there is a bijection A → B, then |A| = |B|."
+            prerequisites: [fnd.2.4.1]
+          - id: fnd.4.1.4
+            name: "Counting by complement"
+            description: "Count |Aᶜ| in the universe and subtract: |A| = |U| − |Aᶜ|."
+            prerequisites: [fnd.2.1.12, fnd.4.1.1]
+
+      - id: fnd.4.2
+        name: "Permutations and combinations"
+        description: "Counting orderings and selections."
+        children:
+          - id: fnd.4.2.1
+            name: "Factorial (n!)"
+            description: "n! = n · (n−1) · … · 1; counts permutations of n items."
+            prerequisites: [fnd.4.1.2]
+          - id: fnd.4.2.2
+            name: "Permutation P(n, k)"
+            description: "n!/(n−k)!; ordered selections of k from n."
+            prerequisites: [fnd.4.2.1]
+          - id: fnd.4.2.3
+            name: "Combination C(n, k)"
+            description: "n!/(k!(n−k)!); unordered selections of k from n."
+            prerequisites: [fnd.4.2.2]
+          - id: fnd.4.2.4
+            name: "Pascal's identity"
+            description: "C(n, k) = C(n−1, k−1) + C(n−1, k)."
+            prerequisites: [fnd.4.2.3]
+          - id: fnd.4.2.5
+            name: "Binomial theorem"
+            description: "(x + y)ⁿ = Σ C(n, k) xᵏ yⁿ⁻ᵏ."
+            prerequisites: [fnd.4.2.3]
+          - id: fnd.4.2.6
+            name: "Multinomial coefficient"
+            description: "n! / (k₁! … kₘ!); multi-way unordered partitions."
+            prerequisites: [fnd.4.2.3]
+          - id: fnd.4.2.7
+            name: "Multinomial theorem"
+            description: "(x₁ + … + xₘ)ⁿ = Σ (n!/(k₁!…kₘ!)) ∏ xᵢᵏⁱ."
+            prerequisites: [fnd.4.2.6]
+          - id: fnd.4.2.8
+            name: "Permutations with repetition"
+            description: "n^k arrangements when each of k positions can be any of n values."
+            prerequisites: [fnd.4.1.2]
+          - id: fnd.4.2.9
+            name: "Stars and bars"
+            description: "Number of non-negative integer solutions to x₁+…+xₖ = n is C(n+k−1, k−1)."
+            prerequisites: [fnd.4.2.3]
+          - id: fnd.4.2.10
+            name: "Vandermonde's identity"
+            description: "Σⱼ C(m, j) C(n, k−j) = C(m+n, k)."
+            prerequisites: [fnd.4.2.4]
+
+      - id: fnd.4.3
+        name: "Pigeonhole principle"
+        description: "Forcing collisions by counting."
+        children:
+          - id: fnd.4.3.1
+            name: "Basic pigeonhole principle"
+            description: "Putting n+1 objects in n boxes forces some box to hold ≥ 2."
+            prerequisites: [fnd.4.1.1]
+          - id: fnd.4.3.2
+            name: "Generalized pigeonhole principle"
+            description: "n objects in k boxes force some box to hold ≥ ⌈n/k⌉."
+            prerequisites: [fnd.4.3.1]
+          - id: fnd.4.3.3
+            name: "Pigeonhole-style proof patterns"
+            description: "Translate the problem to choosing pigeonholes that capture relevant structure."
+            prerequisites: [fnd.4.3.2]
+
+      - id: fnd.4.4
+        name: "Inclusion–exclusion"
+        description: "Counting unions correctly."
+        children:
+          - id: fnd.4.4.1
+            name: "Two-set inclusion–exclusion"
+            description: "|A ∪ B| = |A| + |B| − |A ∩ B|."
+            prerequisites: [fnd.4.1.1]
+          - id: fnd.4.4.2
+            name: "Three-set inclusion–exclusion"
+            description: "Add singletons, subtract pairwise, add triple intersection."
+            prerequisites: [fnd.4.4.1]
+          - id: fnd.4.4.3
+            name: "General inclusion–exclusion"
+            description: "|⋃Aᵢ| = Σ_{S≠∅} (−1)^{|S|+1} |⋂_{i∈S} Aᵢ|."
+            prerequisites: [fnd.4.4.2]
+          - id: fnd.4.4.4
+            name: "Derangements"
+            description: "!n = n! Σ (−1)ᵏ/k! ≈ n!/e via inclusion–exclusion."
+            prerequisites: [fnd.4.4.3]
+
+      - id: fnd.4.5
+        name: "Recurrence relations"
+        description: "Solving sequences defined by self-reference."
+        children:
+          - id: fnd.4.5.1
+            name: "Recurrence relation"
+            description: "Equation expressing aₙ in terms of earlier terms."
+            prerequisites: [fnd.5.4.1]
+          - id: fnd.4.5.2
+            name: "Linear homogeneous recurrence"
+            description: "aₙ = c₁ aₙ₋₁ + … + cₖ aₙ₋ₖ."
+            prerequisites: [fnd.4.5.1]
+          - id: fnd.4.5.3
+            name: "Linear non-homogeneous recurrence"
+            description: "Homogeneous part + a particular forcing term."
+            prerequisites: [fnd.4.5.2]
+          - id: fnd.4.5.4
+            name: "Characteristic equation"
+            description: "Solve roots of xᵏ − c₁ xᵏ⁻¹ − … − cₖ = 0; superpose corresponding modes."
+            prerequisites: [fnd.4.5.2]
+          - id: fnd.4.5.5
+            name: "Fibonacci closed form (Binet)"
+            description: "Fₙ = (φⁿ − ψⁿ) / √5 with φ = (1+√5)/2."
+            prerequisites: [fnd.4.5.4]
+
+  - id: fnd.5
+    name: "Computation and asymptotics"
+    description: "Models of computation, decidability, growth rates, recursion."
+    children:
+
+      - id: fnd.5.1
+        name: "Turing machines"
+        description: "Formal models of computation."
+        children:
+          - id: fnd.5.1.1
+            name: "Turing machine model"
+            description: "Tape, head, finite control, transition function; computes on inputs encoded as tape strings."
+            prerequisites: [fnd.2.3.1]
+          - id: fnd.5.1.2
+            name: "Configuration"
+            description: "State + tape contents + head position; instantaneous description of a TM."
+            prerequisites: [fnd.5.1.1]
+          - id: fnd.5.1.3
+            name: "Deterministic vs nondeterministic TM"
+            description: "Determinism: at most one transition per (state, symbol)."
+            prerequisites: [fnd.5.1.1]
+          - id: fnd.5.1.4
+            name: "Multi-tape TM equivalence"
+            description: "Multi-tape TMs compute the same languages as single-tape TMs (with polynomial slowdown)."
+            prerequisites: [fnd.5.1.1]
+          - id: fnd.5.1.5
+            name: "Universal Turing machine"
+            description: "TM that, given a description of any TM M and input x, simulates M on x."
+            prerequisites: [fnd.5.1.1]
+          - id: fnd.5.1.6
+            name: "Church–Turing thesis"
+            description: "All reasonable models of effective computation are equivalent in computational power."
+            prerequisites: [fnd.5.1.5]
+
+      - id: fnd.5.2
+        name: "Decidability and the halting problem"
+        description: "Limits of effective computation."
+        children:
+          - id: fnd.5.2.1
+            name: "Decidable language"
+            description: "Recognized by a TM that halts on every input."
+            prerequisites: [fnd.5.1.1]
+          - id: fnd.5.2.2
+            name: "Recognizable (r.e.) language"
+            description: "Recognized by a TM that halts on every yes-input; may loop on no-inputs."
+            prerequisites: [fnd.5.2.1]
+          - id: fnd.5.2.3
+            name: "Halting problem"
+            description: "HALT = {(M, x) : M halts on x}."
+            prerequisites: [fnd.5.1.5]
+          - id: fnd.5.2.4
+            name: "Halting problem is undecidable"
+            description: "Diagonalization: no TM decides HALT."
+            prerequisites: [fnd.5.2.3, fnd.1.3.14]
+          - id: fnd.5.2.5
+            name: "Reduction to halting"
+            description: "If A reduces to HALT and HALT is undecidable, A is undecidable too."
+            prerequisites: [fnd.5.2.4]
+          - id: fnd.5.2.6
+            name: "Rice's theorem"
+            description: "Every non-trivial semantic property of TMs is undecidable."
+            prerequisites: [fnd.5.2.5]
+
+      - id: fnd.5.3
+        name: "Asymptotic notation"
+        description: "Comparing growth rates of functions."
+        children:
+          - id: fnd.5.3.1
+            name: "Big-O"
+            description: "f = O(g) iff ∃ c, n₀: f(n) ≤ c·g(n) for n ≥ n₀."
+            prerequisites: []
+          - id: fnd.5.3.2
+            name: "Big-Ω"
+            description: "f = Ω(g) iff ∃ c > 0, n₀: f(n) ≥ c·g(n) for n ≥ n₀."
+            prerequisites: [fnd.5.3.1]
+          - id: fnd.5.3.3
+            name: "Big-Θ"
+            description: "f = Θ(g) iff f = O(g) and f = Ω(g)."
+            prerequisites: [fnd.5.3.1, fnd.5.3.2]
+          - id: fnd.5.3.4
+            name: "Little-o"
+            description: "f = o(g) iff f(n)/g(n) → 0; strictly slower growth."
+            prerequisites: [fnd.5.3.1]
+          - id: fnd.5.3.5
+            name: "Little-ω"
+            description: "f = ω(g) iff f(n)/g(n) → ∞; strictly faster growth."
+            prerequisites: [fnd.5.3.4]
+          - id: fnd.5.3.6
+            name: "Asymptotic equivalence (~)"
+            description: "f ~ g iff f(n)/g(n) → 1."
+            prerequisites: [fnd.5.3.4]
+          - id: fnd.5.3.7
+            name: "Common growth ranking"
+            description: "1 ≪ log n ≪ √n ≪ n ≪ n log n ≪ n² ≪ 2ⁿ ≪ n!."
+            prerequisites: [fnd.5.3.5]
+          - id: fnd.5.3.8
+            name: "Stirling's approximation"
+            description: "n! ~ √(2πn) (n/e)ⁿ."
+            prerequisites: [fnd.5.3.6]
+
+      - id: fnd.5.4
+        name: "Recursion and fixed points"
+        description: "Self-referential definitions and contraction."
+        children:
+          - id: fnd.5.4.1
+            name: "Recursive definition"
+            description: "Defines an object in terms of smaller instances of itself plus base cases."
+            prerequisites: [fnd.1.3.9]
+          - id: fnd.5.4.2
+            name: "Primitive recursion"
+            description: "Schema with explicit base case and one-step recursion; total."
+            prerequisites: [fnd.5.4.1]
+          - id: fnd.5.4.3
+            name: "μ-recursion"
+            description: "Adds the unbounded minimization operator; captures all computable functions."
+            prerequisites: [fnd.5.4.2]
+          - id: fnd.5.4.4
+            name: "Fixed point"
+            description: "x with f(x) = x."
+            prerequisites: [fnd.2.3.1]
+          - id: fnd.5.4.5
+            name: "Y combinator"
+            description: "Untyped λ-term producing the fixed point of any function."
+            prerequisites: [fnd.5.4.4]
+          - id: fnd.5.4.6
+            name: "Banach fixed-point preview"
+            description: "Contraction maps on complete metric spaces have unique fixed points (full statement in `ana.3.1`)."
+            prerequisites: [fnd.5.4.4]
+          - id: fnd.5.4.7
+            name: "Knaster–Tarski theorem"
+            description: "A monotone map on a complete lattice has a complete lattice of fixed points."
+            prerequisites: [fnd.5.4.4, fnd.3.2.5]
+
+      - id: fnd.5.5
+        name: "Lambda calculus"
+        description: "Untyped λ-calculus as a model of computation."
+        children:
+          - id: fnd.5.5.1
+            name: "Lambda term"
+            description: "Variable, abstraction (λx.M), or application (M N)."
+            prerequisites: []
+          - id: fnd.5.5.2
+            name: "α-equivalence"
+            description: "Renaming bound variables yields equivalent terms."
+            prerequisites: [fnd.5.5.1, fnd.1.2.5]
+          - id: fnd.5.5.3
+            name: "β-reduction"
+            description: "(λx.M) N → M[x := N]; the computational step."
+            prerequisites: [fnd.5.5.2, fnd.1.2.13]
+          - id: fnd.5.5.4
+            name: "η-reduction"
+            description: "λx. (M x) → M when x is not free in M."
+            prerequisites: [fnd.5.5.3]
+          - id: fnd.5.5.5
+            name: "Church numerals"
+            description: "Encode n as λf.λx. fⁿ x; arithmetic via composition."
+            prerequisites: [fnd.5.5.3]
+          - id: fnd.5.5.6
+            name: "Church–Turing equivalence"
+            description: "λ-calculus and Turing machines compute the same functions."
+            prerequisites: [fnd.5.5.5, fnd.5.1.6]

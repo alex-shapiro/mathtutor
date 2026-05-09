@@ -1,0 +1,252 @@
+schema_version: 1
+area: diffusion-and-flow
+prefix: dif
+summary: "Score-based generative models, DDPM, continuous-time SDE/ODE perspective, conditioning and guidance, flow matching, distillation, latent / discrete / structured diffusion."
+why_for_dl: |
+  Diffusion and flow-matching are the dominant paradigm for generative
+  modeling outside of language. Built on stochastic calculus, score
+  matching, and optimal transport, they unify denoising, score-based
+  modeling, and continuous normalizing flows into a single framework.
+  Distillation and consistency models compress sampling cost; latent /
+  DiT designs scale the architecture. Theoretical understanding combines
+  most areas in this curriculum.
+cross_references:
+  - probability
+  - dynamical-systems
+  - analysis
+  - optimization
+  - geometry-and-topology
+  - neural-network-theory
+
+topics:
+  - id: dif.1
+    name: "Score-based foundations"
+    leaves:
+      - id: dif.1.1
+        name: "Score function ∇ log p"
+        description: "Gradient of log density; reparameterization-free quantity."
+        prerequisites: [prob.2.2, ana.2.4]
+      - id: dif.1.2
+        name: "Score matching (explicit)"
+        description: "Hyvärinen's identity; Fisher divergence training."
+        prerequisites: [dif.1.1]
+      - id: dif.1.3
+        name: "Denoising score matching"
+        description: "Vincent's DSM; equivalence with explicit score matching."
+        prerequisites: [dif.1.2]
+      - id: dif.1.4
+        name: "Sliced score matching"
+        description: "Random projections to avoid Hessian trace."
+        prerequisites: [dif.1.2]
+      - id: dif.1.5
+        name: "Tweedie's formula"
+        description: "Posterior mean = noisy x + σ² ∇ log p."
+        prerequisites: [dif.1.1, prob.2.5]
+
+  - id: dif.2
+    name: "DDPM and discrete-time diffusion"
+    leaves:
+      - id: dif.2.1
+        name: "Forward Markov chain"
+        description: "Gaussian noising chain x₀ → … → x_T."
+        prerequisites: [prob.7.1, prob.2.5]
+      - id: dif.2.2
+        name: "Reverse process parameterization"
+        description: "Trainable Gaussian transitions x_t → x_{t-1}."
+        prerequisites: [dif.2.1, prob.4.2]
+      - id: dif.2.3
+        name: "ELBO / variational bound"
+        description: "Sum of KL terms across timesteps."
+        prerequisites: [inf.1.4, ssl.8.1]
+      - id: dif.2.4
+        name: "Loss equivalences (ε / x₀ / v / score)"
+        description: "Reparameterizations of the same MSE loss."
+        prerequisites: [dif.2.3, dif.1.3]
+      - id: dif.2.5
+        name: "Noise schedules"
+        description: "Linear, cosine, EDM-style schedules."
+        prerequisites: [dif.2.1]
+      - id: dif.2.6
+        name: "SNR-based loss weighting"
+        description: "Weight by signal-to-noise ratio across t."
+        prerequisites: [dif.2.5]
+
+  - id: dif.3
+    name: "Continuous-time SDE / ODE perspective"
+    leaves:
+      - id: dif.3.1
+        name: "Forward SDEs (VE, VP, sub-VP)"
+        description: "Variance-exploding / -preserving noise injection."
+        prerequisites: [prob.8.3, dyn.4.1]
+      - id: dif.3.2
+        name: "Reverse-time SDE"
+        description: "Anderson's reverse-time SDE involves the score."
+        prerequisites: [prob.8.6, dif.1.1]
+      - id: dif.3.3
+        name: "Probability flow ODE"
+        description: "Deterministic ODE with the same marginals."
+        prerequisites: [dif.3.2, dyn.6.2]
+      - id: dif.3.4
+        name: "Equivalence of objectives"
+        description: "DDPM ≈ score matching ≈ variational SDE."
+        prerequisites: [dif.2.4, dif.3.2]
+      - id: dif.3.5
+        name: "EDM framework"
+        description: "Karras et al.'s unified parameterization."
+        prerequisites: [dif.3.3]
+      - id: dif.3.6
+        name: "Numerical integrators for sampling"
+        description: "DPM-Solver, Heun, DDIM, exponential integrators."
+        prerequisites: [num.3.6, dif.3.3]
+
+  - id: dif.4
+    name: "Conditioning and guidance"
+    leaves:
+      - id: dif.4.1
+        name: "Classifier guidance"
+        description: "Tilt the score by ∇ log p(y|x_t)."
+        prerequisites: [dif.1.1, prob.1.3]
+      - id: dif.4.2
+        name: "Classifier-free guidance"
+        description: "Mix conditional and unconditional score predictions."
+        prerequisites: [dif.4.1]
+      - id: dif.4.3
+        name: "Conditional score estimation"
+        description: "Direct training of conditional ε / score networks."
+        prerequisites: [dif.1.3]
+      - id: dif.4.4
+        name: "Inpainting and inverse problems"
+        description: "Guidance with measurement operators; DPS, ΠGDM."
+        prerequisites: [dif.4.1, opt.6.1]
+      - id: dif.4.5
+        name: "Negative prompting (math)"
+        description: "Subtractive guidance and its failure modes."
+        prerequisites: [dif.4.2]
+
+  - id: dif.5
+    name: "Flow matching and rectified flow"
+    leaves:
+      - id: dif.5.1
+        name: "Continuous normalizing flows"
+        description: "Cross-link `dyn.6.2`."
+        prerequisites: [dyn.6.2]
+      - id: dif.5.2
+        name: "Conditional flow matching"
+        description: "Regress vector field along chosen probability path."
+        prerequisites: [dif.5.1, dif.3.3]
+      - id: dif.5.3
+        name: "Rectified flow / reflow"
+        description: "Straighten trajectories via iterative reflow."
+        prerequisites: [dif.5.2]
+      - id: dif.5.4
+        name: "Stochastic interpolants"
+        description: "Unify flow / diffusion via interpolant pairs."
+        prerequisites: [dif.5.2, dif.3.1]
+      - id: dif.5.5
+        name: "Optimal-transport CFM"
+        description: "OT couplings as conditional paths."
+        prerequisites: [dif.5.2, opt.10.1]
+      - id: dif.5.6
+        name: "Schrödinger-bridge perspective"
+        description: "Cross-link `geom.7.5`."
+        prerequisites: [geom.7.5]
+
+  - id: dif.6
+    name: "Distillation and fast sampling"
+    leaves:
+      - id: dif.6.1
+        name: "Progressive distillation"
+        description: "Halve sampling steps iteratively."
+        prerequisites: [dif.3.6, nn.7.4]
+      - id: dif.6.2
+        name: "Consistency models"
+        description: "Map any t to x₀ in one step; consistency loss."
+        prerequisites: [dif.3.3]
+      - id: dif.6.3
+        name: "Latent consistency models / consistency distillation"
+        description: "Consistency on top of latent diffusion."
+        prerequisites: [dif.6.2, dif.7.1]
+      - id: dif.6.4
+        name: "Score distillation sampling (SDS)"
+        description: "Use diffusion priors for non-image generators (DreamFusion)."
+        prerequisites: [dif.4.2]
+
+  - id: dif.7
+    name: "Latent and architectural"
+    leaves:
+      - id: dif.7.1
+        name: "Latent diffusion (LDMs)"
+        description: "Diffuse in VAE-encoded latent space."
+        prerequisites: [ssl.8.1]
+      - id: dif.7.2
+        name: "Diffusion transformers (DiT)"
+        description: "Replace U-Net with transformer backbone."
+        prerequisites: [tx.1.1, dif.2.2]
+      - id: dif.7.3
+        name: "U-Net design"
+        description: "Encoder/decoder with skip connections; spectral view."
+        prerequisites: [nn.1.3, nn.1.8]
+      - id: dif.7.4
+        name: "Cross-attention conditioning"
+        description: "Inject conditioning tokens via cross-attention."
+        prerequisites: [tx.1.3, dif.4.3]
+
+  - id: dif.8
+    name: "Theory and generalization"
+    leaves:
+      - id: dif.8.1
+        name: "Convergence under score error"
+        description: "How sampling error depends on score-MSE."
+        prerequisites: [dif.3.2, prob.6.6]
+      - id: dif.8.2
+        name: "Manifold learning by diffusion"
+        description: "How diffusion models recover data manifolds."
+        prerequisites: [geom.8.1, dif.1.1]
+      - id: dif.8.3
+        name: "Memorization vs generalization"
+        description: "When diffusion models reproduce training data."
+        prerequisites: [lt.1.5, dif.2.3]
+      - id: dif.8.4
+        name: "Diffusion as RKHS / kernel methods"
+        description: "Score smoothing as kernel regression."
+        prerequisites: [ana.4.9, dif.1.3]
+
+  - id: dif.9
+    name: "Discrete and structured diffusion"
+    leaves:
+      - id: dif.9.1
+        name: "Discrete diffusion (D3PM)"
+        description: "Categorical noising chains."
+        prerequisites: [dif.2.1, prob.7.1]
+      - id: dif.9.2
+        name: "Continuous-time discrete diffusion"
+        description: "Continuous-time Markov chains for tokens."
+        prerequisites: [dif.9.1, prob.7.5]
+      - id: dif.9.3
+        name: "Diffusion on manifolds"
+        description: "Riemannian generalizations (e.g., SO(3))."
+        prerequisites: [dif.3.1, geom.2.1]
+      - id: dif.9.4
+        name: "Score-entropy diffusion (SEDD)"
+        description: "Score-matching for categorical / token data."
+        prerequisites: [dif.9.2, dif.1.2]
+
+  - id: dif.10
+    name: "Connections"
+    leaves:
+      - id: dif.10.1
+        name: "Energy-based models (link)"
+        description: "Cross-link `ssl.7`."
+        prerequisites: [ssl.7.1]
+      - id: dif.10.2
+        name: "Relation to Langevin dynamics"
+        description: "Cross-link `dyn.4.1`."
+        prerequisites: [dyn.4.1]
+      - id: dif.10.3
+        name: "Diffusion ⇄ flow ⇄ OT"
+        description: "Unifying view of generative paths."
+        prerequisites: [dif.5.4, opt.10.5]
+      - id: dif.10.4
+        name: "Diffusion as VAE limit"
+        description: "Hierarchical-VAE viewpoint of DDPM."
+        prerequisites: [ssl.8.6]

@@ -1,0 +1,313 @@
+schema_version: 1
+area: analysis
+prefix: ana
+summary: "Real and multivariate analysis, metric/topological spaces, functional analysis, measure theory, Fourier analysis, distributions, calculus of variations, complex analysis."
+why_for_dl: |
+  Continuity, differentiability, and integration are the language of every
+  loss function and gradient. Hilbert spaces and RKHS underlie kernel
+  methods, NTK, and attention-as-kernel-smoothing. Measure theory is the
+  rigorous home of probability and pushforward distributions. Fourier
+  analysis underlies positional encoding, convolutional theory, and
+  spectral arguments throughout.
+cross_references:
+  - linear-algebra
+  - probability
+  - numerical
+  - geometry-and-topology
+
+topics:
+  - id: ana.1
+    name: "Real analysis"
+    leaves:
+      - id: ana.1.1
+        name: "Sequences and limits"
+        description: "ε-N definition; bounded / monotone convergence."
+        prerequisites: [fnd.2.3]
+      - id: ana.1.2
+        name: "Series and convergence tests"
+        description: "Absolute vs conditional; comparison, ratio, root tests."
+        prerequisites: [ana.1.1]
+      - id: ana.1.3
+        name: "Continuity"
+        description: "Pointwise, uniform, Lipschitz; ε-δ formulations."
+        prerequisites: [ana.1.1]
+      - id: ana.1.4
+        name: "Differentiability (single variable)"
+        description: "Derivative as linear approximation."
+        prerequisites: [ana.1.3]
+      - id: ana.1.5
+        name: "Riemann integration"
+        description: "Darboux sums; fundamental theorem of calculus."
+        prerequisites: [ana.1.4]
+      - id: ana.1.6
+        name: "Mean value theorems"
+        description: "Rolle, Lagrange, Cauchy."
+        prerequisites: [ana.1.4]
+      - id: ana.1.7
+        name: "Taylor's theorem"
+        description: "Polynomial approximation with remainder forms."
+        prerequisites: [ana.1.6]
+      - id: ana.1.8
+        name: "Power series"
+        description: "Radius of convergence; analytic functions."
+        prerequisites: [ana.1.2]
+
+  - id: ana.2
+    name: "Multivariable calculus"
+    leaves:
+      - id: ana.2.1
+        name: "Partial derivatives"
+        description: "Direction-by-direction differentiation."
+        prerequisites: [ana.1.4]
+      - id: ana.2.2
+        name: "Total / Fréchet derivative"
+        description: "Best linear approximation; Jacobian."
+        prerequisites: [ana.2.1, la.2.2]
+      - id: ana.2.3
+        name: "Multivariable chain rule"
+        description: "Composition of Jacobians."
+        prerequisites: [ana.2.2]
+      - id: ana.2.4
+        name: "Gradient, divergence, curl"
+        description: "Vector calculus operators in ℝ³ / ℝᵈ."
+        prerequisites: [ana.2.2]
+      - id: ana.2.5
+        name: "Multivariable Taylor expansion"
+        description: "Hessian and higher-order tensors."
+        prerequisites: [ana.1.7, ana.2.2]
+      - id: ana.2.6
+        name: "Inverse and implicit function theorems"
+        description: "Local invertibility under regularity."
+        prerequisites: [ana.2.2]
+      - id: ana.2.7
+        name: "Line and surface integrals"
+        description: "Integration along curves and over surfaces."
+        prerequisites: [ana.2.4]
+      - id: ana.2.8
+        name: "Stokes / Green / divergence theorems"
+        description: "Generalized fundamental theorem of calculus."
+        prerequisites: [ana.2.7]
+      - id: ana.2.9
+        name: "Change of variables"
+        description: "Jacobian determinant in multivariable integrals."
+        prerequisites: [ana.2.6, la.2.6]
+
+  - id: ana.3
+    name: "Metric and topological spaces"
+    leaves:
+      - id: ana.3.1
+        name: "Metric spaces and completeness"
+        description: "Cauchy sequences; Banach fixed-point theorem."
+        prerequisites: [ana.1.1]
+      - id: ana.3.2
+        name: "Open / closed sets"
+        description: "Closure, interior, boundary."
+        prerequisites: [ana.3.1]
+      - id: ana.3.3
+        name: "Compactness"
+        description: "Heine–Borel; sequential compactness."
+        prerequisites: [ana.3.2]
+      - id: ana.3.4
+        name: "Connectedness"
+        description: "Connected and path-connected sets."
+        prerequisites: [ana.3.2]
+      - id: ana.3.5
+        name: "Topological spaces"
+        description: "Open sets as primitive structure."
+        prerequisites: [ana.3.2]
+      - id: ana.3.6
+        name: "Continuity in topological terms"
+        description: "Preimage of opens is open."
+        prerequisites: [ana.3.5]
+      - id: ana.3.7
+        name: "Separation axioms"
+        description: "T0–T4 hierarchy; Hausdorff."
+        prerequisites: [ana.3.5]
+      - id: ana.3.8
+        name: "Convergence of sequences and nets"
+        description: "Generalizing limits to non-metrizable spaces."
+        prerequisites: [ana.3.5]
+
+  - id: ana.4
+    name: "Functional analysis"
+    leaves:
+      - id: ana.4.1
+        name: "Banach spaces"
+        description: "Complete normed vector spaces."
+        prerequisites: [ana.3.1, la.3.2]
+      - id: ana.4.2
+        name: "Hilbert spaces"
+        description: "Complete inner-product spaces; orthonormal bases."
+        prerequisites: [ana.4.1, la.3.1]
+      - id: ana.4.3
+        name: "Bounded linear operators"
+        description: "Operator norm; B(X,Y) as a Banach space."
+        prerequisites: [ana.4.1, la.2.1]
+      - id: ana.4.4
+        name: "Dual spaces and Riesz representation"
+        description: "Bounded linear functionals; Hilbert duality."
+        prerequisites: [ana.4.2]
+      - id: ana.4.5
+        name: "Hahn–Banach theorem"
+        description: "Extension and separation; convex separation."
+        prerequisites: [ana.4.3]
+      - id: ana.4.6
+        name: "Open mapping, closed graph, uniform boundedness"
+        description: "Three pillars built on Baire category."
+        prerequisites: [ana.4.3]
+      - id: ana.4.7
+        name: "Compact operators"
+        description: "Limit of finite-rank; spectral structure."
+        prerequisites: [ana.4.3]
+      - id: ana.4.8
+        name: "Spectral theorem (compact self-adjoint)"
+        description: "Hilbert space generalization of `la.4.4`."
+        prerequisites: [ana.4.7, la.4.4]
+      - id: ana.4.9
+        name: "Reproducing kernel Hilbert spaces"
+        description: "RKHS; positive-definite kernels; representer theorem."
+        prerequisites: [ana.4.2]
+      - id: ana.4.10
+        name: "Sobolev spaces (light)"
+        description: "Weak derivatives; embeddings; PDE solution spaces."
+        prerequisites: [ana.4.1, ana.7.3]
+
+  - id: ana.5
+    name: "Measure theory"
+    leaves:
+      - id: ana.5.1
+        name: "σ-algebras and measurable spaces"
+        description: "Closed under countable unions and complements."
+        prerequisites: [fnd.2.5]
+      - id: ana.5.2
+        name: "Measures and Lebesgue measure"
+        description: "Countably additive set functions; Lebesgue on ℝᵈ."
+        prerequisites: [ana.5.1]
+      - id: ana.5.3
+        name: "Measurable functions"
+        description: "Preimage of Borel sets is measurable."
+        prerequisites: [ana.5.1]
+      - id: ana.5.4
+        name: "Lebesgue integral"
+        description: "Constructed via simple functions; integrability."
+        prerequisites: [ana.5.3]
+      - id: ana.5.5
+        name: "Convergence theorems"
+        description: "Monotone, dominated, Fatou's lemma."
+        prerequisites: [ana.5.4]
+      - id: ana.5.6
+        name: "Lᵖ spaces"
+        description: "Hölder, Minkowski; Lᵖ as Banach (Hilbert if p=2)."
+        prerequisites: [ana.5.4]
+      - id: ana.5.7
+        name: "Product measures and Fubini–Tonelli"
+        description: "Iterated vs joint integrals."
+        prerequisites: [ana.5.4]
+      - id: ana.5.8
+        name: "Radon–Nikodym theorem"
+        description: "Density of one measure w.r.t. another."
+        prerequisites: [ana.5.7]
+      - id: ana.5.9
+        name: "Pushforward measures"
+        description: "Distribution of f(X) under a measure."
+        prerequisites: [ana.5.4]
+      - id: ana.5.10
+        name: "Signed measures"
+        description: "Hahn–Jordan decomposition."
+        prerequisites: [ana.5.2]
+
+  - id: ana.6
+    name: "Fourier analysis"
+    leaves:
+      - id: ana.6.1
+        name: "Fourier series"
+        description: "Orthogonal expansion on the circle."
+        prerequisites: [ana.4.2]
+      - id: ana.6.2
+        name: "Fourier transform on ℝᵈ"
+        description: "Continuous spectral decomposition."
+        prerequisites: [ana.5.6]
+      - id: ana.6.3
+        name: "Plancherel / Parseval identities"
+        description: "Energy preservation under Fourier transform."
+        prerequisites: [ana.6.2]
+      - id: ana.6.4
+        name: "Convolution theorem"
+        description: "Convolution becomes pointwise multiplication."
+        prerequisites: [ana.6.2]
+      - id: ana.6.5
+        name: "Sampling theorem"
+        description: "Nyquist–Shannon reconstruction."
+        prerequisites: [ana.6.2]
+      - id: ana.6.6
+        name: "DFT and FFT"
+        description: "Discrete analogue; O(n log n) algorithm."
+        prerequisites: [ana.6.1]
+      - id: ana.6.7
+        name: "Wavelets"
+        description: "Multi-resolution analysis; localized basis."
+        prerequisites: [ana.6.1]
+      - id: ana.6.8
+        name: "Schwartz space and tempered distributions"
+        description: "Rapidly decaying functions; Fourier-stable."
+        prerequisites: [ana.6.2]
+
+  - id: ana.7
+    name: "Distribution theory"
+    leaves:
+      - id: ana.7.1
+        name: "Test functions"
+        description: "Smooth, compactly supported."
+        prerequisites: [ana.1.4]
+      - id: ana.7.2
+        name: "Distributions / generalized functions"
+        description: "Continuous linear functionals on test functions."
+        prerequisites: [ana.7.1]
+      - id: ana.7.3
+        name: "Weak derivatives"
+        description: "Derivatives in the distributional sense."
+        prerequisites: [ana.7.2]
+      - id: ana.7.4
+        name: "Dirac delta"
+        description: "Point evaluation as a distribution."
+        prerequisites: [ana.7.2]
+
+  - id: ana.8
+    name: "Calculus of variations"
+    leaves:
+      - id: ana.8.1
+        name: "Functionals and variations"
+        description: "Optimization over function spaces."
+        prerequisites: [ana.2.5]
+      - id: ana.8.2
+        name: "Euler–Lagrange equations"
+        description: "First-order conditions for variational problems."
+        prerequisites: [ana.8.1]
+      - id: ana.8.3
+        name: "Constrained variations"
+        description: "Lagrange multipliers in infinite dimensions."
+        prerequisites: [ana.8.2]
+      - id: ana.8.4
+        name: "Hamilton's principle"
+        description: "Action principle (preview of `dyn.2`)."
+        prerequisites: [ana.8.2]
+
+  - id: ana.9
+    name: "Complex analysis (light)"
+    leaves:
+      - id: ana.9.1
+        name: "Holomorphic functions"
+        description: "Complex differentiability; rigidity."
+        prerequisites: [ana.1.4]
+      - id: ana.9.2
+        name: "Cauchy–Riemann equations"
+        description: "PDE characterization of holomorphy."
+        prerequisites: [ana.9.1]
+      - id: ana.9.3
+        name: "Contour integration and residues"
+        description: "Closed-curve integrals; pole contributions."
+        prerequisites: [ana.9.1]
+      - id: ana.9.4
+        name: "Analytic continuation"
+        description: "Uniqueness of extension; Riemann surfaces."
+        prerequisites: [ana.9.3]
