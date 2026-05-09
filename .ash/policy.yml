@@ -3,7 +3,8 @@
 schema_version: 1
 dependencies:
   ash/base-macos: ^0
-  ash/claude-code: ^0.0.8
+  ash/claude-code: ^0
+  ash/gemini-cli: ^0
   ash/git: ^0
   ash/rust-dev: ^0
 files:
@@ -14,4 +15,6 @@ network:
 exec:
   rules: []
 io_devices:
-  rules: []
+  rules:
+  - class: AGXDeviceUserClient
+  - class: IOSurfaceRootUserClient
