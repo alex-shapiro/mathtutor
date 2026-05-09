@@ -3,7 +3,10 @@ use std::process::ExitCode;
 
 use argh::FromArgs;
 
+mod event_log;
 mod graph;
+mod path;
+mod scheduler;
 
 #[derive(FromArgs, Debug)]
 /// Math Tutor — small lessons + spaced repetition over a curriculum graph.
@@ -16,6 +19,9 @@ struct Mt {
 #[argh(subcommand)]
 enum Cmd {
     Graph(GraphCmd),
+    New(NewCmd),
+    Next(NextCmd),
+    State(StateCmd),
 }
 
 /// Operate on the curriculum graph.
@@ -41,6 +47,45 @@ struct GraphCheck {
     path: PathBuf,
 }
 
+/// Start a new learning path.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "new")]
+struct NewCmd {
+    /// the user's goal in plain text
+    #[argh(positional)]
+    goal: String,
+
+    /// target atom ID (repeatable)
+    #[argh(option)]
+    atom: Vec<String>,
+
+    /// path to the curriculum graph directory (default: curriculum/graph)
+    #[argh(option, default = "PathBuf::from(\"curriculum/graph\")")]
+    graph: PathBuf,
+}
+
+/// Get the next action for a learning path.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "next")]
+struct NextCmd {
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    path: Option<String>,
+
+    /// path to the curriculum graph directory (default: curriculum/graph)
+    #[argh(option, default = "PathBuf::from(\"curriculum/graph\")")]
+    graph: PathBuf,
+}
+
+/// Show the state of a learning path.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "state")]
+struct StateCmd {
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    path: Option<String>,
+}
+
 fn main() -> ExitCode {
     let cli: Mt = argh::from_env();
     match cli.cmd {
@@ -59,6 +104,30 @@ fn main() -> ExitCode {
                     ExitCode::from(2)
                 }
             },
+        },
+        Cmd::New(c) => match path::cmd_new(&c.goal, &c.atom, &c.graph) {
+            Ok(id) => {
+                eprintln!("created path: {id}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            }
+        },
+        Cmd::Next(c) => match scheduler::cmd_next(c.path.as_deref(), &c.graph) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(1)
+            }
+        },
+        Cmd::State(c) => match path::cmd_state(c.path.as_deref()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(1)
+            }
         },
     }
 }

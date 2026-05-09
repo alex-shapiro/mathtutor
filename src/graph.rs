@@ -78,6 +78,10 @@ pub struct LeafRaw {
     pub status: Option<String>,
     #[serde(default)]
     pub difficulty: Option<u32>,
+    #[serde(default)]
+    pub lesson: Option<String>,
+    #[serde(default)]
+    pub quizzes: Option<Vec<QuizRaw>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,18 +102,59 @@ pub struct NodeRaw {
     pub status: Option<String>,
     #[serde(default)]
     pub difficulty: Option<u32>,
+    #[serde(default)]
+    pub lesson: Option<String>,
+    #[serde(default)]
+    pub quizzes: Option<Vec<QuizRaw>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct QuizRaw {
+    pub id: String,
+    pub difficulty: String,
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
+    pub question: String,
+    pub answer: String,
+    #[serde(default)]
+    pub rubric: Option<String>,
 }
 
 // ── Unified concept tree ────────────────────────────────────────────
 
-/// Normalized concept node — used for validation regardless of schema.
-#[derive(Debug)]
+/// Normalized concept node — used for validation and scheduling regardless of schema.
+#[derive(Debug, Clone)]
 pub struct Concept {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
     pub prerequisites: Vec<String>,
     pub children: Vec<Concept>,
+    pub lesson: Option<String>,
+    pub quizzes: Vec<Quiz>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Quiz {
+    pub id: String,
+    pub difficulty: String,
+    pub kind: Option<String>,
+    pub question: String,
+    pub answer: String,
+    pub rubric: Option<String>,
+}
+
+impl From<QuizRaw> for Quiz {
+    fn from(q: QuizRaw) -> Self {
+        Quiz {
+            id: q.id,
+            difficulty: q.difficulty,
+            kind: q.kind,
+            question: q.question,
+            answer: q.answer,
+            rubric: q.rubric,
+        }
+    }
 }
 
 impl Concept {
@@ -139,8 +184,17 @@ impl AreaFileRaw {
                             description: Some(l.description),
                             prerequisites: l.prerequisites,
                             children: Vec::new(),
+                            lesson: l.lesson,
+                            quizzes: l
+                                .quizzes
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(Quiz::from)
+                                .collect(),
                         })
                         .collect(),
+                    lesson: None,
+                    quizzes: Vec::new(),
                 })
                 .collect(),
             2 => self
@@ -165,6 +219,13 @@ fn node_to_concept(n: NodeRaw) -> Concept {
             .unwrap_or_default()
             .into_iter()
             .map(node_to_concept)
+            .collect(),
+        lesson: n.lesson,
+        quizzes: n
+            .quizzes
+            .unwrap_or_default()
+            .into_iter()
+            .map(Quiz::from)
             .collect(),
     }
 }
@@ -191,6 +252,72 @@ pub fn load_area(path: &Path) -> Result<AreaFileRaw, LoadError> {
         path: path.to_path_buf(),
         message: e.to_string(),
     })
+}
+
+// ── Flat graph (for scheduler / `mt new`) ──────────────────────────
+
+/// Flattened lookup view: every concept (cluster + atom) keyed by ID.
+/// Built once via `Graph::load`.
+#[derive(Debug)]
+pub struct Graph {
+    pub manifest: Manifest,
+    pub by_id: HashMap<String, FlatConcept>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FlatConcept {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub prerequisites: Vec<String>,
+    pub children_ids: Vec<String>,
+    pub lesson: Option<String>,
+    pub quizzes: Vec<Quiz>,
+    pub area: String,
+}
+
+impl Graph {
+    pub fn load(graph_dir: &Path) -> Result<Self, LoadError> {
+        let manifest = load_manifest(&graph_dir.join("manifest.ayml"))?;
+        let mut by_id = HashMap::new();
+        for entry in &manifest.areas {
+            let area_path = graph_dir.join(&entry.file);
+            let raw = load_area(&area_path)?;
+            for c in raw.into_concepts() {
+                flatten(c, &entry.slug, &mut by_id);
+            }
+        }
+        Ok(Self { manifest, by_id })
+    }
+
+    pub fn is_atom(&self, id: &str) -> bool {
+        self.by_id
+            .get(id)
+            .map(|c| c.children_ids.is_empty())
+            .unwrap_or(false)
+    }
+}
+
+fn flatten(c: Concept, area: &str, by_id: &mut HashMap<String, FlatConcept>) {
+    let children = c.children;
+    let children_ids: Vec<String> = children.iter().map(|x| x.id.clone()).collect();
+    let id = c.id;
+    by_id.insert(
+        id.clone(),
+        FlatConcept {
+            id,
+            name: c.name,
+            description: c.description,
+            prerequisites: c.prerequisites,
+            children_ids,
+            lesson: c.lesson,
+            quizzes: c.quizzes,
+            area: area.to_string(),
+        },
+    );
+    for child in children {
+        flatten(child, area, by_id);
+    }
 }
 
 // ── Validation ──────────────────────────────────────────────────────

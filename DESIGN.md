@@ -32,9 +32,9 @@ lessons — never on lookahead material.
 
 ```bash
 # Path lifecycle
-mt new   <GOAL>                                  # start a new learning path
-mt state [--path P]                              # current status of a path
-mt next  [--path P]                              # next action (AYML on stdout)
+mt new   <GOAL>      # start a new learning path
+mt state [--path P]  # current status of a path
+mt next  [--path P]  # next action (AYML on stdout)
 
 # LLM stores authored content
 mt store lesson <ATOM>      --body TEXT
@@ -43,14 +43,14 @@ mt store quiz   <ATOM>      --difficulty D \
                             [--type {free_text,multiple_choice}]
 
 # LLM logs outcomes
-mt answer  <QUIZ_ID>        --rating {again,hard,good,easy}   # FSRS grade
-mt skip    <ATOM>           [--reason STR]
+mt answer  <QUIZ_ID> --rating {again,hard,good,easy}   # FSRS grade
+mt skip    <ATOM> [--reason STR]
 mt hint    <ATOM>
 mt relearn <ATOM>
 
 # LLM amends canonical content
-mt amend lesson <ATOM>      --body TEXT
-mt amend quiz   <QUIZ_ID>   [--question TEXT] [--answer TEXT] [--rubric TEXT]
+mt amend lesson <ATOM> --body TEXT
+mt amend quiz   <QUIZ_ID> [--question TEXT] [--answer TEXT] [--rubric TEXT]
 
 # Maintenance
 mt graph check                                   # validate curriculum graph
