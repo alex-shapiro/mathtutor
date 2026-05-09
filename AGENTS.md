@@ -25,7 +25,9 @@ If the user wants to continue the existing path, enter the main loop with `mt ne
 
 ### Starting a new path
 
-If the user wants a new path, ask what they want to learn, translate the goal into a list of target IDs from the curriculum, and run:
+If the user wants a new path, ask what they want to learn, translate
+the goal into a list of target IDs from the curriculum (use the
+browsing commands below to find them), and run:
 
     mt new "Understand SVD" --atom la.5.4
 
@@ -37,9 +39,39 @@ Each `--atom` argument can be:
 - an **area prefix** (e.g. `tx`, `la`) — expands to every atom in
   that area
 
-If you don't know which IDs apply, ask the user. `mt new` returns a
-path ID on stdout and that path becomes the default for subsequent
-commands.
+`mt new` returns a path ID on stdout and that path becomes the
+default for subsequent commands.
+
+## Browsing the curriculum
+
+Two read-only commands for discovering atom IDs and looking up
+concept details. Both emit structured output (same format as
+`mt next`).
+
+    mt list                # all areas (high-level overview)
+    mt list <id>           # children of a cluster, topics in an area
+    mt show <id>           # details of an atom, cluster, or area
+
+Use `mt list` with no argument first to see the area set. Then drill
+down: `mt list la` for the linear-algebra topics, `mt list la.5` for
+the matrix-factorizations cluster's children, and so on until you
+hit atom IDs (where `is_atom: true`).
+
+Use `mt show` for full details on a single concept:
+
+- atom output → id, name, description, prerequisites (with names),
+  whether a lesson is stored, quiz count
+- cluster output → adds `children` and `atomic_descendants`
+- area output → cluster-shaped, with the area's slug as `name` and
+  summary as `description`
+
+Use these to:
+
+- pick `--atom` arguments for `mt new` when the user gives a
+  high-level goal ("teach me linear algebra" → `mt list` → `mt list
+  la` → choose `--atom la` or pick specific topics)
+- look up a prerequisite's name while authoring a lesson
+- check whether a concept exists before referencing it
 
 ## Main loop
 
@@ -164,7 +196,7 @@ Path goal reached. Tell the user, suggest a new path or pause.
 ## Errors
 
 - `error: no learning path found` → the user has no active path. Run `mt new` first.
-- `error: unknown id: X` → that ID isn't an atom, cluster, or area in the curriculum. Ask the user for a different ID.
+- `error: unknown id: X` → that ID isn't an atom, cluster, or area in the curriculum. Use `mt list` to browse, or ask the user.
 - `error: cluster 'X' has no atomic descendants` → the cluster is empty (no concepts under it yet). Pick a populated branch.
 - `Error parsing option '--rating' / '--difficulty' / '--type'` → the value isn't one of the allowed enum variants. The error message lists valid ones.
 - Anything else → surface the message verbatim to the user; it's a configuration issue for whoever set you up.

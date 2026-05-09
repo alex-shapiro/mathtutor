@@ -29,7 +29,35 @@ pub enum Cmd {
     Next(NextCmd),
     Store(StoreCmd),
     Answer(AnswerCmd),
+    Show(ShowCmd),
+    List(ListCmd),
     Graph(GraphCmd),
+}
+
+/// Look up a single curriculum entry (atom, cluster, or area).
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "show")]
+pub struct ShowCmd {
+    /// id to show (atom, cluster, or area prefix)
+    #[argh(positional)]
+    pub id: String,
+
+    /// path to the curriculum graph directory (default: `$MT_GRAPH` or `curriculum/graph`)
+    #[argh(option, default = "default_graph_dir()")]
+    pub graph: PathBuf,
+}
+
+/// List entries in the curriculum.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "list")]
+pub struct ListCmd {
+    /// id to list children of (omit for all areas)
+    #[argh(positional)]
+    pub id: Option<String>,
+
+    /// path to the curriculum graph directory (default: `$MT_GRAPH` or `curriculum/graph`)
+    #[argh(option, default = "default_graph_dir()")]
+    pub graph: PathBuf,
 }
 
 /// Operate on the curriculum graph.

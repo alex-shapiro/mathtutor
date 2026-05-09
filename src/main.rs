@@ -2,6 +2,7 @@ use std::process::ExitCode;
 
 mod answer;
 mod cli;
+mod discover;
 mod event_log;
 mod graph;
 mod path;
@@ -11,6 +12,20 @@ mod store;
 mod types;
 
 use cli::{Cmd, GraphOp, Mt, StoreOp};
+
+fn run_simple<E: std::fmt::Display>(
+    result: Result<(), E>,
+    ok_code: ExitCode,
+    err_code: u8,
+) -> ExitCode {
+    match result {
+        Ok(()) => ok_code,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(err_code)
+        }
+    }
+}
 
 fn main() -> ExitCode {
     let cli: Mt = argh::from_env();
@@ -100,5 +115,11 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Cmd::Show(c) => run_simple(discover::cmd_show(&c.id, &c.graph), ExitCode::SUCCESS, 2),
+        Cmd::List(c) => run_simple(
+            discover::cmd_list(c.id.as_deref(), &c.graph),
+            ExitCode::SUCCESS,
+            2,
+        ),
     }
 }
