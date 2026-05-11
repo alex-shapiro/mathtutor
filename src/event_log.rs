@@ -18,6 +18,7 @@ use crate::types::Rating;
 pub enum EventKind {
     PathCreated,
     LessonAuthored,
+    LessonTaught,
     QuizAuthored,
     QuizPresented,
     QuizAnswered,
@@ -70,6 +71,17 @@ pub fn lesson_authored(path: String, atom: String) -> Event {
     Event {
         ts: Utc::now(),
         kind: EventKind::LessonAuthored,
+        path,
+        atom: Some(atom),
+        quiz: None,
+        payload: EventPayload::default(),
+    }
+}
+
+pub fn lesson_taught(path: String, atom: String) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::LessonTaught,
         path,
         atom: Some(atom),
         quiz: None,

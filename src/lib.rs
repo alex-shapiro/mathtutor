@@ -17,4 +17,5 @@ pub mod path;
 pub mod scheduler;
 pub mod state;
 pub mod store;
+pub mod tree;
 pub mod types;

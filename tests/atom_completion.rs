@@ -74,6 +74,17 @@ fn answered(quiz_id: &str, rating: Rating, ts: DateTime<Utc>) -> Event {
     }
 }
 
+fn taught(atom_id: &str) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::LessonTaught,
+        path: PATH_ID.into(),
+        atom: Some(atom_id.into()),
+        quiz: None,
+        payload: EventPayload::default(),
+    }
+}
+
 fn assert_create_lesson(action: &Action, expected_atom: &str) {
     match action {
         Action::CreateLesson { atom_id } => assert_eq!(atom_id, expected_atom),
@@ -104,6 +115,13 @@ fn assert_present_quiz(action: &Action, expected_atom: &str, expected_quiz: &str
     }
 }
 
+fn assert_present_lesson(action: &Action, expected_atom: &str) {
+    match action {
+        Action::PresentLesson { atom_id } => assert_eq!(atom_id, expected_atom),
+        other => panic!("expected PresentLesson({expected_atom}), got {other:?}"),
+    }
+}
+
 // ── Walker contract ────────────────────────────────────────────────
 
 #[test]
@@ -114,10 +132,48 @@ fn create_lesson_when_atom_has_none() {
 }
 
 #[test]
-fn create_easy_quiz_when_lesson_stored_and_no_quizzes() {
+fn present_lesson_when_stored_but_not_taught_in_path() {
+    // Lesson body exists in the graph (perhaps authored under a prior
+    // path), but this path has no `LessonTaught` event yet — surface
+    // the stored body before any quiz work.
     let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
     let p = path_with(&["a"]);
-    assert_create_quiz(&scheduler::next_action(&g, &p, &[]), "a", Difficulty::Easy);
+    assert_present_lesson(&scheduler::next_action(&g, &p, &[]), "a");
+}
+
+#[test]
+fn lesson_authored_event_satisfies_taught_check() {
+    // Paths created before `LessonTaught` existed only have
+    // `LessonAuthored` events. Those must still register as "taught"
+    // so the scheduler doesn't re-present every lesson the user
+    // already authored in this path.
+    let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
+    let p = path_with(&["a"]);
+    let events = vec![Event {
+        ts: Utc::now(),
+        kind: EventKind::LessonAuthored,
+        path: PATH_ID.into(),
+        atom: Some("a".into()),
+        quiz: None,
+        payload: EventPayload::default(),
+    }];
+    assert_create_quiz(
+        &scheduler::next_action(&g, &p, &events),
+        "a",
+        Difficulty::Easy,
+    );
+}
+
+#[test]
+fn create_easy_quiz_when_lesson_stored_and_taught() {
+    let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
+    let p = path_with(&["a"]);
+    let events = vec![taught("a")];
+    assert_create_quiz(
+        &scheduler::next_action(&g, &p, &events),
+        "a",
+        Difficulty::Easy,
+    );
 }
 
 #[test]
@@ -129,7 +185,8 @@ fn present_easy_quiz_when_authored_but_unanswered() {
         vec![quiz("a.q1", Difficulty::Easy)],
     )]);
     let p = path_with(&["a"]);
-    assert_present_quiz(&scheduler::next_action(&g, &p, &[]), "a", "a.q1");
+    let events = vec![taught("a")];
+    assert_present_quiz(&scheduler::next_action(&g, &p, &events), "a", "a.q1");
 }
 
 #[test]
@@ -141,7 +198,7 @@ fn keep_presenting_easy_after_again_rating() {
         vec![quiz("a.q1", Difficulty::Easy)],
     )]);
     let p = path_with(&["a"]);
-    let events = vec![answered("a.q1", Rating::Again, Utc::now())];
+    let events = vec![taught("a"), answered("a.q1", Rating::Again, Utc::now())];
     assert_present_quiz(&scheduler::next_action(&g, &p, &events), "a", "a.q1");
 }
 
@@ -155,7 +212,7 @@ fn keep_presenting_easy_after_hard_rating() {
         vec![quiz("a.q1", Difficulty::Easy)],
     )]);
     let p = path_with(&["a"]);
-    let events = vec![answered("a.q1", Rating::Hard, Utc::now())];
+    let events = vec![taught("a"), answered("a.q1", Rating::Hard, Utc::now())];
     assert_present_quiz(&scheduler::next_action(&g, &p, &events), "a", "a.q1");
 }
 
@@ -168,7 +225,7 @@ fn advance_to_medium_after_easy_correct() {
         vec![quiz("a.q1", Difficulty::Easy)],
     )]);
     let p = path_with(&["a"]);
-    let events = vec![answered("a.q1", Rating::Good, Utc::now())];
+    let events = vec![taught("a"), answered("a.q1", Rating::Good, Utc::now())];
     assert_create_quiz(
         &scheduler::next_action(&g, &p, &events),
         "a",
@@ -189,6 +246,7 @@ fn advance_to_hard_after_easy_and_medium_correct() {
     )]);
     let p = path_with(&["a"]);
     let events = vec![
+        taught("a"),
         answered("a.q1", Rating::Easy, Utc::now()),
         answered("a.q2", Rating::Good, Utc::now()),
     ];
@@ -213,6 +271,7 @@ fn done_after_all_three_correct_on_only_target() {
     )]);
     let p = path_with(&["a"]);
     let events = vec![
+        taught("a"),
         answered("a.q1", Rating::Good, Utc::now()),
         answered("a.q2", Rating::Good, Utc::now()),
         answered("a.q3", Rating::Easy, Utc::now()),
@@ -240,6 +299,7 @@ fn advance_to_next_target_lesson_after_first_complete() {
     ]);
     let p = path_with(&["a", "b"]);
     let events = vec![
+        taught("a"),
         answered("a.q1", Rating::Good, Utc::now()),
         answered("a.q2", Rating::Good, Utc::now()),
         answered("a.q3", Rating::Good, Utc::now()),
@@ -250,13 +310,15 @@ fn advance_to_next_target_lesson_after_first_complete() {
 #[test]
 fn does_not_advance_after_only_lesson_stored() {
     // The exact regression: after `create_lesson` on `a`, `mt next`
-    // must NOT jump to `b`'s lesson.
+    // must NOT jump to `b`'s lesson. With the present_lesson step in
+    // place, the precise next action is to re-surface `a`'s lesson
+    // (since this path has no `LessonTaught` for it yet).
     let g = graph_of(vec![
         atom("a", &[], Some("body"), vec![]),
         atom("b", &[], None, vec![]),
     ]);
     let p = path_with(&["a", "b"]);
-    assert_create_quiz(&scheduler::next_action(&g, &p, &[]), "a", Difficulty::Easy);
+    assert_present_lesson(&scheduler::next_action(&g, &p, &[]), "a");
 }
 
 #[test]
@@ -281,7 +343,8 @@ fn finishes_prereq_quizzes_before_target_lesson() {
         atom("target", &["pre"], None, vec![]),
     ]);
     let p = path_with(&["target"]);
-    assert_present_quiz(&scheduler::next_action(&g, &p, &[]), "pre", "pre.q1");
+    let events = vec![taught("pre")];
+    assert_present_quiz(&scheduler::next_action(&g, &p, &events), "pre", "pre.q1");
 }
 
 // ── is_atom_complete / atom_completed_at ───────────────────────────

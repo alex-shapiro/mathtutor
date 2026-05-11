@@ -43,7 +43,9 @@ pub enum PersistError {
 // ── Public commands ────────────────────────────────────────────────
 
 /// Persist a lesson body for an atom into the canonical graph and log
-/// `lesson_authored` against the active learning path.
+/// `lesson_authored` + `lesson_taught` against the active learning path.
+/// Per AGENTS.md the agent presents the body to the user immediately
+/// after authoring, so storing implies teaching.
 pub fn cmd_store_lesson(
     atom_id: &str,
     body: String,
@@ -53,7 +55,8 @@ pub fn cmd_store_lesson(
     store_lesson_in_graph(graph_dir, atom_id, body)?;
 
     let id = path::resolve_id(path_id)?;
-    event_log::append(event_log::lesson_authored(id, atom_id.to_string()))?;
+    event_log::append(event_log::lesson_authored(id.clone(), atom_id.to_string()))?;
+    event_log::append(event_log::lesson_taught(id, atom_id.to_string()))?;
 
     Ok(())
 }

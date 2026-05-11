@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 use mathtutor::cli::{Cmd, GraphOp, Mt, StoreOp};
-use mathtutor::{answer, discover, graph, path, scheduler, state, store};
+use mathtutor::{answer, discover, graph, path, scheduler, state, store, tree};
 
 fn run_simple<E: std::fmt::Display>(
     result: Result<(), E>,
@@ -17,6 +17,7 @@ fn run_simple<E: std::fmt::Display>(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> ExitCode {
     let cli: Mt = argh::from_env();
     match cli.cmd {
@@ -54,6 +55,13 @@ fn main() -> ExitCode {
             }
         },
         Cmd::State(c) => match state::cmd_state(c.path.as_deref(), &c.graph) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(1)
+            }
+        },
+        Cmd::Tree(c) => match tree::cmd_tree(c.path.as_deref(), &c.graph) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");

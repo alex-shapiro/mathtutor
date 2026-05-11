@@ -108,6 +108,34 @@ You:
 3. Present the lesson to the user in conversation.
 4. Stop. Let the user read, ask questions, request examples, or ask for clarification. Do not call `mt next` until the user explicitly signals they are ready to continue.
 
+### `present_lesson`
+
+A lesson body is already stored for this atom (probably authored under a
+previous learning path), but the current path has never taught it. The
+scheduler re-surfaces the stored body so the user gets the lesson
+in-context before any quiz.
+
+Payload:
+
+- `atom` — id, name, description, and the stored lesson body
+- `reason` — currently always `not_taught` (the user hasn't seen this
+  lesson in this path yet); future reasons may include `relearn_requested`
+- `history` — `repetitions` and `last_presented_at` for past presentations
+  of this lesson within this path (zero / absent on the first showing)
+- `next_step` — the command to call back
+
+You:
+
+1. Show the stored `atom.lesson` body to the user **verbatim** — do not
+   re-author or paraphrase. The canonical content is locked in.
+2. Stop. Let the user read, ask questions, request examples, or ask for
+   clarification. Do not call `mt next` until the user explicitly signals
+   they are ready to continue.
+
+`mt next` auto-logs `lesson_taught` when it returns this action, so you
+do not need to call any "I taught it" command — moving on to the next
+`mt next` is enough.
+
 ### `create_quiz`
 
 A taught atom has an empty difficulty slot.

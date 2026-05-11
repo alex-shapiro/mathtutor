@@ -1,4 +1,5 @@
-/target
+.claude/worktrees
 .mathtutor
 .mathtutor-state
+/target
 tmp-curriculum

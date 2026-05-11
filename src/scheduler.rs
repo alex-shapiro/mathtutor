@@ -36,12 +36,18 @@ pub fn cmd_next(path_id: Option<&str>, graph_dir: &Path) -> Result<(), Scheduler
     // not the one we are about to log below.
     let envelope = Envelope::build(&g, &p, action.clone());
 
-    if let Action::PresentQuiz { quiz_id, atom_id } = &action {
-        let _ = event_log::append(event_log::quiz_presented(
-            p.id.clone(),
-            atom_id.clone(),
-            quiz_id.clone(),
-        ));
+    match &action {
+        Action::PresentQuiz { quiz_id, atom_id } => {
+            let _ = event_log::append(event_log::quiz_presented(
+                p.id.clone(),
+                atom_id.clone(),
+                quiz_id.clone(),
+            ));
+        }
+        Action::PresentLesson { atom_id } => {
+            let _ = event_log::append(event_log::lesson_taught(p.id.clone(), atom_id.clone()));
+        }
+        _ => {}
     }
 
     let text = ayml::to_string(&envelope).map_err(|e| SchedulerError::Serialize(e.to_string()))?;
@@ -59,6 +65,9 @@ pub enum Action {
     CreateLesson {
         atom_id: String,
     },
+    PresentLesson {
+        atom_id: String,
+    },
     CreateQuiz {
         atom_id: String,
         difficulty: Difficulty,
@@ -70,6 +79,7 @@ impl Action {
     pub fn atom_id(&self) -> Option<&str> {
         match self {
             Action::CreateLesson { atom_id }
+            | Action::PresentLesson { atom_id }
             | Action::CreateQuiz { atom_id, .. }
             | Action::PresentQuiz { atom_id, .. } => Some(atom_id),
             Action::Done => None,
@@ -138,6 +148,15 @@ fn next_atom_action(
             atom_id: id.to_string(),
         });
     }
+    // Lesson exists in the graph but hasn't been taught in *this* path
+    // yet (e.g. authored under a previous path, or this is the first
+    // walk and we haven't created/presented it yet). Surface the stored
+    // body before any quiz so the user gets context.
+    if !lesson_taught_in_path(events, id) {
+        return Some(Action::PresentLesson {
+            atom_id: id.to_string(),
+        });
+    }
     for diff in DIFFICULTIES {
         match c.quizzes.iter().find(|q| q.difficulty == diff) {
             None => {
@@ -180,6 +199,23 @@ pub fn quiz_answered_correctly(events: &[Event], quiz_id: &str) -> bool {
         matches!(e.kind, EventKind::QuizAnswered)
             && e.quiz.as_deref() == Some(quiz_id)
             && matches!(e.payload.rating, Some(Rating::Good | Rating::Easy))
+    })
+}
+
+/// Has this atom's lesson been presented to the user during *this* path?
+/// `mt store lesson` and `mt next → present_lesson` both auto-log
+/// `LessonTaught` so authoring or re-presenting count as teaching.
+///
+/// `LessonAuthored` is accepted as an equivalent signal so that paths
+/// created before `LessonTaught` existed still register correctly —
+/// authoring a lesson always implies presenting it (see AGENTS.md's
+/// `create_lesson` playbook).
+pub fn lesson_taught_in_path(events: &[Event], atom_id: &str) -> bool {
+    events.iter().any(|e| {
+        matches!(
+            e.kind,
+            EventKind::LessonTaught | EventKind::LessonAuthored
+        ) && e.atom.as_deref() == Some(atom_id)
     })
 }
 
@@ -273,6 +309,24 @@ fn compute_quiz_history(p: &PathFile, quiz_id: &str) -> QuizHistory {
     h
 }
 
+fn compute_lesson_history(p: &PathFile, atom_id: &str) -> LessonHistory {
+    let Ok(events) = event_log::load(&p.id) else {
+        return LessonHistory::default();
+    };
+
+    let mut h = LessonHistory::default();
+    for e in &events {
+        if e.atom.as_deref() != Some(atom_id) {
+            continue;
+        }
+        if matches!(e.kind, EventKind::LessonTaught) {
+            h.repetitions += 1;
+            h.last_presented_at = Some(e.ts);
+        }
+    }
+    h
+}
+
 // ── AYML output shape ──────────────────────────────────────────────
 
 #[derive(Serialize)]
@@ -287,6 +341,7 @@ struct Envelope {
 #[serde(untagged)]
 enum Payload {
     PresentQuiz(PresentQuizPayload),
+    PresentLesson(PresentLessonPayload),
     CreateLesson(CreateLessonPayload),
     CreateQuiz(CreateQuizPayload),
     Done(DonePayload),
@@ -297,6 +352,21 @@ struct CreateLessonPayload {
     atom: AtomBrief,
     prerequisites: Vec<PrereqBrief>,
     next_step: String,
+}
+
+#[derive(Serialize)]
+struct PresentLessonPayload {
+    atom: AtomBrief,
+    reason: &'static str,
+    history: LessonHistory,
+    next_step: String,
+}
+
+#[derive(Serialize, Default)]
+struct LessonHistory {
+    repetitions: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_presented_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -364,6 +434,27 @@ impl Envelope {
     #[allow(clippy::too_many_lines)]
     fn build(g: &Graph, p: &PathFile, action: Action) -> Self {
         match action {
+            Action::PresentLesson { atom_id } => {
+                let c = g.by_id.get(&atom_id).expect("atom exists in graph");
+                let atom = AtomBrief {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    description: c.description.clone(),
+                    lesson: c.lesson.clone(),
+                };
+                let history = compute_lesson_history(p, &atom_id);
+                Envelope {
+                    schema_version: 1,
+                    action: "present_lesson".to_string(),
+                    path: p.id.clone(),
+                    payload: Payload::PresentLesson(PresentLessonPayload {
+                        atom,
+                        reason: "not_taught",
+                        history,
+                        next_step: "mt next".to_string(),
+                    }),
+                }
+            }
             Action::PresentQuiz { quiz_id, atom_id } => {
                 let c = g.by_id.get(&atom_id).expect("atom exists in graph");
                 let q = c

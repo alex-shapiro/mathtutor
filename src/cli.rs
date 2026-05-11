@@ -31,6 +31,7 @@ pub enum Cmd {
     Answer(AnswerCmd),
     Show(ShowCmd),
     List(ListCmd),
+    Tree(TreeCmd),
     Graph(GraphCmd),
 }
 
@@ -117,6 +118,19 @@ pub struct NextCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "state")]
 pub struct StateCmd {
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    pub path: Option<String>,
+
+    /// path to the curriculum graph directory (default: `$MT_GRAPH` or `curriculum/graph`)
+    #[argh(option, default = "default_graph_dir()")]
+    pub graph: PathBuf,
+}
+
+/// Show the path's full prerequisite tree with per-atom progress.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "tree")]
+pub struct TreeCmd {
     /// path id (defaults to most recent)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
