@@ -110,8 +110,8 @@ pub fn generate_path_id(now: DateTime<Utc>) -> String {
 
 // ── Commands ────────────────────────────────────────────────────────
 
-pub fn cmd_new(goal: &str, ids: &[String], graph_dir: &Path) -> Result<String, PathError> {
-    let g = Graph::load(graph_dir)?;
+pub fn cmd_new(goal: &str, ids: &[String], graph_dir: Option<&Path>) -> Result<String, PathError> {
+    let g = Graph::load_default(graph_dir)?;
     let expanded = expand_to_atoms(&g, ids)?;
     let sorted = topo_sort(&g, &expanded)?;
 

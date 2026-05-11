@@ -235,6 +235,21 @@ Path goal reached. Tell the user, suggest a new path or pause.
 
 `mt state` (covered above as the session-start step) is also useful mid-session to summarize how far the user has gotten. Run it whenever the user asks "where am I?" or before suggesting a long stretch of work.
 
+## Where authored content lives
+
+`mt` ships with a copy of the curriculum baked into the binary. When you
+call `mt store lesson` or `mt store quiz`, the new content is written to
+the **active path's overlay** at `~/.mathtutor/paths/<id>/overlay.ayml`,
+not back into the shipped curriculum. The shipped graph is read-only;
+the overlay is the per-path "what this user authored on top of it."
+
+This is transparent to you for normal authoring: `mt next` returns the
+overlay-merged view, so subsequent reads see whatever you've stored.
+
+Operator-only: `mt overlay dump [--path P]` prints the overlay as AYML
+suitable for review and eventual merge into the canonical curriculum
+repo. Don't run it during a session unless asked.
+
 ## Errors
 
 - `error: no learning path found` → the user has no active path. Run `mt new` first.

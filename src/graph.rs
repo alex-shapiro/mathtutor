@@ -5,10 +5,17 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
+use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::types::{Difficulty, QuizType};
+
+/// Curriculum bytes baked into the binary at compile time. Lets `mt`
+/// ship as a single artifact — no checked-out repo required at runtime.
+/// The `--graph DIR` CLI flag and `MT_GRAPH` env var both override this
+/// for development against a working tree.
+static EMBEDDED_GRAPH: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/curriculum/graph");
 
 // ── Errors ──────────────────────────────────────────────────────────
 
@@ -47,72 +54,72 @@ pub struct ManifestArea {
 // are skip-serialized to keep files free of default-valued lines.
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct AreaFileRaw {
-    pub schema_version: u32,
-    pub area: String,
-    pub prefix: String,
-    pub summary: String,
-    pub motivation: String,
+struct AreaFileRaw {
+    schema_version: u32,
+    area: String,
+    prefix: String,
+    summary: String,
+    motivation: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cross_references: Vec<String>,
+    cross_references: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub topics: Option<Vec<TopicRaw>>,
+    topics: Option<Vec<TopicRaw>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub children: Option<Vec<NodeRaw>>,
+    children: Option<Vec<NodeRaw>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct TopicRaw {
-    pub id: String,
-    pub name: String,
+struct TopicRaw {
+    id: String,
+    name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub why: Option<String>,
-    pub leaves: Vec<LeafRaw>,
+    why: Option<String>,
+    leaves: Vec<LeafRaw>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct LeafRaw {
-    pub id: String,
-    pub name: String,
-    pub description: String,
+struct LeafRaw {
+    id: String,
+    name: String,
+    description: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub prerequisites: Vec<String>,
+    prerequisites: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lesson: Option<String>,
+    lesson: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quizzes: Option<Vec<QuizRaw>>,
+    quizzes: Option<Vec<QuizRaw>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub relevant_for: Vec<String>,
+    relevant_for: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
+    tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
+    status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub difficulty: Option<u32>,
+    difficulty: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct NodeRaw {
-    pub id: String,
-    pub name: String,
+struct NodeRaw {
+    id: String,
+    name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub prerequisites: Vec<String>,
+    prerequisites: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub children: Option<Vec<NodeRaw>>,
+    children: Option<Vec<NodeRaw>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lesson: Option<String>,
+    lesson: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quizzes: Option<Vec<QuizRaw>>,
+    quizzes: Option<Vec<QuizRaw>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub relevant_for: Vec<String>,
+    relevant_for: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
+    tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
+    status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub difficulty: Option<u32>,
+    difficulty: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -131,14 +138,14 @@ pub struct QuizRaw {
 
 /// Normalized concept node — used for validation and scheduling regardless of schema.
 #[derive(Debug, Clone)]
-pub struct Concept {
-    pub id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub prerequisites: Vec<String>,
-    pub children: Vec<Concept>,
-    pub lesson: Option<String>,
-    pub quizzes: Vec<Quiz>,
+struct Concept {
+    id: String,
+    name: String,
+    description: Option<String>,
+    prerequisites: Vec<String>,
+    children: Vec<Concept>,
+    lesson: Option<String>,
+    quizzes: Vec<Quiz>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,13 +172,13 @@ impl From<QuizRaw> for Quiz {
 }
 
 impl Concept {
-    pub fn is_atom(&self) -> bool {
+    fn is_atom(&self) -> bool {
         self.children.is_empty()
     }
 }
 
 impl AreaFileRaw {
-    pub fn into_concepts(self) -> Vec<Concept> {
+    fn into_concepts(self) -> Vec<Concept> {
         match self.schema_version {
             1 => self
                 .topics
@@ -239,7 +246,7 @@ fn node_to_concept(n: NodeRaw) -> Concept {
 
 // ── Loaders ─────────────────────────────────────────────────────────
 
-pub fn load_manifest(path: &Path) -> Result<Manifest, LoadError> {
+fn load_manifest(path: &Path) -> Result<Manifest, LoadError> {
     let reader = open_reader(path)?;
     ayml::from_reader(reader).map_err(|e| LoadError::Parse {
         path: path.to_path_buf(),
@@ -247,7 +254,7 @@ pub fn load_manifest(path: &Path) -> Result<Manifest, LoadError> {
     })
 }
 
-pub fn load_area(path: &Path) -> Result<AreaFileRaw, LoadError> {
+fn load_area(path: &Path) -> Result<AreaFileRaw, LoadError> {
     let reader = open_reader(path)?;
     ayml::from_reader(reader).map_err(|e| LoadError::Parse {
         path: path.to_path_buf(),
@@ -262,6 +269,69 @@ fn open_reader(path: &Path) -> Result<BufReader<File>, LoadError> {
     })?;
     Ok(BufReader::new(file))
 }
+
+// ── Embedded loaders ────────────────────────────────────────────────
+
+/// Display-only sentinel path used in `LoadError` when parsing the
+/// compiled-in curriculum. Lets the error pinpoint the offending file
+/// without lying about its location on disk.
+fn embedded_path(name: &str) -> PathBuf {
+    PathBuf::from(format!("<embedded>/{name}"))
+}
+
+fn embedded_file_str(name: &str) -> Result<&'static str, LoadError> {
+    let file = EMBEDDED_GRAPH.get_file(name).ok_or_else(|| LoadError::Io {
+        path: embedded_path(name),
+        source: std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "file not found in embedded curriculum",
+        ),
+    })?;
+    file.contents_utf8().ok_or_else(|| LoadError::Parse {
+        path: embedded_path(name),
+        message: "embedded file is not valid UTF-8".into(),
+    })
+}
+
+fn load_manifest_embedded() -> Result<Manifest, LoadError> {
+    let s = embedded_file_str("manifest.ayml")?;
+    ayml::from_str(s).map_err(|e| LoadError::Parse {
+        path: embedded_path("manifest.ayml"),
+        message: e.to_string(),
+    })
+}
+
+fn load_area_embedded(filename: &str) -> Result<AreaFileRaw, LoadError> {
+    let s = embedded_file_str(filename)?;
+    ayml::from_str(s).map_err(|e| LoadError::Parse {
+        path: embedded_path(filename),
+        message: e.to_string(),
+    })
+}
+
+/// Resolve where to load curriculum from, honoring (in order) the
+/// explicit `--graph DIR` flag, the `MT_GRAPH` env var, and otherwise
+/// the embedded copy.
+pub fn load_manifest_default(explicit: Option<&Path>) -> Result<Manifest, LoadError> {
+    if let Some(p) = explicit {
+        return load_manifest(&p.join("manifest.ayml"));
+    }
+    if let Some(env_path) = std::env::var_os("MT_GRAPH") {
+        return load_manifest(&Path::new(&env_path).join("manifest.ayml"));
+    }
+    load_manifest_embedded()
+}
+
+fn load_area_default(explicit: Option<&Path>, filename: &str) -> Result<AreaFileRaw, LoadError> {
+    if let Some(p) = explicit {
+        return load_area(&p.join(filename));
+    }
+    if let Some(env_path) = std::env::var_os("MT_GRAPH") {
+        return load_area(&Path::new(&env_path).join(filename));
+    }
+    load_area_embedded(filename)
+}
+
 
 // ── Flat graph (for scheduler / `mt new`) ──────────────────────────
 
@@ -294,6 +364,65 @@ impl Graph {
             }
         }
         Ok(Self { by_id })
+    }
+
+    /// Load curriculum from compiled-in bytes — no filesystem access.
+    pub fn load_embedded() -> Result<Self, LoadError> {
+        let manifest = load_manifest_embedded()?;
+        let mut by_id = HashMap::new();
+        for entry in &manifest.areas {
+            let raw = load_area_embedded(&entry.file)?;
+            for c in raw.into_concepts() {
+                flatten(c, &mut by_id);
+            }
+        }
+        Ok(Self { by_id })
+    }
+
+    /// Source priority: explicit `--graph DIR` → `MT_GRAPH` env →
+    /// embedded copy. The embedded variant is the default for shipped
+    /// binaries; the others exist for development against a working
+    /// tree.
+    pub fn load_default(explicit: Option<&Path>) -> Result<Self, LoadError> {
+        if let Some(p) = explicit {
+            return Self::load(p);
+        }
+        if let Some(env_path) = std::env::var_os("MT_GRAPH") {
+            return Self::load(Path::new(&env_path));
+        }
+        Self::load_embedded()
+    }
+
+    /// Effective graph "as the given path sees it" — shipped curriculum
+    /// with the path's overlay applied. The single entry point for
+    /// scheduler / tree / state queries; consumers stay overlay-unaware.
+    pub fn load_for_path(path_id: &str, graph_dir: Option<&Path>) -> Result<Self, LoadError> {
+        let mut g = Self::load_default(graph_dir)?;
+        let overlay = crate::overlay::load(path_id).map_err(|e| LoadError::Parse {
+            path: PathBuf::from(format!("<overlay>/{path_id}")),
+            message: e.to_string(),
+        })?;
+        g.apply_overlay(&overlay);
+        Ok(g)
+    }
+
+    /// Apply a per-path overlay to this graph in place. Additive: an
+    /// overlay lesson fills in an atom's missing lesson (but never
+    /// shadows a shipped one); overlay quizzes are appended.
+    fn apply_overlay(&mut self, overlay: &crate::overlay::Overlay) {
+        for (atom_id, entry) in &overlay.atoms {
+            let Some(c) = self.by_id.get_mut(atom_id) else {
+                // Atom isn't in the shipped graph — skip silently. A
+                // future graph version may add it, at which point the
+                // overlay starts taking effect; or the user is welcome
+                // to clean up the overlay manually.
+                continue;
+            };
+            if c.lesson.is_none() && entry.lesson.is_some() {
+                c.lesson.clone_from(&entry.lesson);
+            }
+            c.quizzes.extend(entry.quizzes_flat());
+        }
     }
 }
 
@@ -338,9 +467,8 @@ pub struct CheckReport {
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn run_check(graph_dir: &Path) -> Result<CheckReport, LoadError> {
-    let manifest_path = graph_dir.join("manifest.ayml");
-    let manifest = load_manifest(&manifest_path)?;
+pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport, LoadError> {
+    let manifest = load_manifest_default(graph_dir)?;
 
     let mut report = CheckReport {
         areas: manifest.areas.len(),
@@ -357,8 +485,7 @@ pub fn run_check(graph_dir: &Path) -> Result<CheckReport, LoadError> {
     eprintln!("loaded manifest: {} areas", manifest.areas.len());
 
     for entry in &manifest.areas {
-        let area_path = graph_dir.join(&entry.file);
-        let raw = match load_area(&area_path) {
+        let raw = match load_area_default(graph_dir, &entry.file) {
             Ok(a) => a,
             Err(e) => {
                 report.issues.push(CheckIssue {

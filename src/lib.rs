@@ -11,6 +11,7 @@
 pub mod answer;
 pub mod cards;
 pub mod cli;
+pub mod overlay;
 pub mod discover;
 pub mod event_log;
 pub mod graph;

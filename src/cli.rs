@@ -1,18 +1,17 @@
 //! CLI surface — every `argh::FromArgs` struct lives here. main.rs
 //! imports the top-level `Mt` parser and dispatches on its variants.
+//!
+//! Curriculum location: the binary ships an embedded copy of the
+//! curriculum graph (see `graph::EMBEDDED_GRAPH`). The `--graph DIR`
+//! flag and `MT_GRAPH` environment variable both override this for
+//! development against a working tree. Per-command, `graph` is an
+//! `Option<PathBuf>` whose absence means "use embedded / env".
 
 use std::path::PathBuf;
 
 use argh::FromArgs;
 
 use crate::types;
-
-/// Curriculum-graph location for `--graph` / `-p` defaults. `MT_GRAPH`
-/// lets the agent run `mt` from any cwd; falling back to the
-/// project-relative path matches in-tree development.
-fn default_graph_dir() -> PathBuf {
-    std::env::var_os("MT_GRAPH").map_or_else(|| PathBuf::from("curriculum/graph"), PathBuf::from)
-}
 
 #[derive(FromArgs, Debug)]
 /// Math Tutor — small lessons + spaced repetition over a curriculum graph.
@@ -32,6 +31,7 @@ pub enum Cmd {
     Show(ShowCmd),
     List(ListCmd),
     Tree(TreeCmd),
+    Overlay(OverlayCmd),
     Graph(GraphCmd),
 }
 
@@ -43,9 +43,9 @@ pub struct ShowCmd {
     #[argh(positional)]
     pub id: String,
 
-    /// path to the curriculum graph directory (default: `$MT_GRAPH` or `curriculum/graph`)
-    #[argh(option, default = "default_graph_dir()")]
-    pub graph: PathBuf,
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
 }
 
 /// List entries in the curriculum.
@@ -56,9 +56,9 @@ pub struct ListCmd {
     #[argh(positional)]
     pub id: Option<String>,
 
-    /// path to the curriculum graph directory (default: `$MT_GRAPH` or `curriculum/graph`)
-    #[argh(option, default = "default_graph_dir()")]
-    pub graph: PathBuf,
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
 }
 
 /// Operate on the curriculum graph.
@@ -79,9 +79,9 @@ pub enum GraphOp {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "check")]
 pub struct GraphCheck {
-    /// path to the graph directory (default: `$MT_GRAPH` or `curriculum/graph`)
-    #[argh(option, short = 'p', default = "default_graph_dir()")]
-    pub path: PathBuf,
+    /// override path to a graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option, short = 'p')]
+    pub path: Option<PathBuf>,
 }
 
 /// Start a new learning path.
@@ -96,9 +96,9 @@ pub struct NewCmd {
     #[argh(option)]
     pub atom: Vec<String>,
 
-    /// path to the curriculum graph directory (default: curriculum/graph)
-    #[argh(option, default = "default_graph_dir()")]
-    pub graph: PathBuf,
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
 }
 
 /// Get the next action for a learning path.
@@ -109,9 +109,9 @@ pub struct NextCmd {
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// path to the curriculum graph directory (default: curriculum/graph)
-    #[argh(option, default = "default_graph_dir()")]
-    pub graph: PathBuf,
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
 }
 
 /// Show the state of a learning path.
@@ -122,9 +122,9 @@ pub struct StateCmd {
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// path to the curriculum graph directory (default: `$MT_GRAPH` or `curriculum/graph`)
-    #[argh(option, default = "default_graph_dir()")]
-    pub graph: PathBuf,
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
 }
 
 /// Show the path's full prerequisite tree with per-atom progress.
@@ -135,12 +135,12 @@ pub struct TreeCmd {
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// path to the curriculum graph directory (default: `$MT_GRAPH` or `curriculum/graph`)
-    #[argh(option, default = "default_graph_dir()")]
-    pub graph: PathBuf,
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
 }
 
-/// Store agent-authored content into the canonical curriculum graph.
+/// Store agent-authored content into the active learning path's overlay.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "store")]
 pub struct StoreCmd {
@@ -171,9 +171,9 @@ pub struct StoreLessonCmd {
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// path to the curriculum graph directory (default: curriculum/graph)
-    #[argh(option, default = "default_graph_dir()")]
-    pub graph: PathBuf,
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
 }
 
 /// Persist a quiz on an atom (free-text by default).
@@ -208,9 +208,9 @@ pub struct StoreQuizCmd {
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// path to the curriculum graph directory (default: curriculum/graph)
-    #[argh(option, default = "default_graph_dir()")]
-    pub graph: PathBuf,
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
 }
 
 /// Record a quiz answer as an FSRS rating.
@@ -232,8 +232,27 @@ pub struct AnswerCmd {
     /// path id (defaults to most recent)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
+}
 
-    /// path to the curriculum graph directory (default: curriculum/graph)
-    #[argh(option, default = "default_graph_dir()")]
-    pub graph: PathBuf,
+/// Operate on a learning path's user-authored overlay.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "overlay")]
+pub struct OverlayCmd {
+    #[argh(subcommand)]
+    pub op: OverlayOp,
+}
+
+#[derive(FromArgs, Debug)]
+#[argh(subcommand)]
+pub enum OverlayOp {
+    Dump(OverlayDumpCmd),
+}
+
+/// Print the active path's overlay to stdout, for review or upstreaming.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "dump")]
+pub struct OverlayDumpCmd {
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    pub path: Option<String>,
 }

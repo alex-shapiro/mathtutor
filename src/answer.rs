@@ -3,8 +3,6 @@
 //! FSRS card state is derived from the event log on demand (see
 //! `crate::cards`), so this command's job is just to log the answer.
 
-use std::path::Path;
-
 use crate::event_log;
 use crate::path::{self, PathError};
 use crate::types::Rating;
@@ -20,7 +18,6 @@ pub fn cmd_answer(
     rating: Rating,
     user_answer: Option<String>,
     path_id: Option<&str>,
-    _graph_dir: &Path,
 ) -> Result<(), AnswerError> {
     let id = path::resolve_id(path_id)?;
     event_log::append(event_log::quiz_answered(

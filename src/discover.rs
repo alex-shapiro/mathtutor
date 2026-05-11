@@ -19,9 +19,9 @@ pub enum DiscoverError {
 
 // ── Commands ───────────────────────────────────────────────────────
 
-pub fn cmd_show(id: &str, graph_dir: &Path) -> Result<(), DiscoverError> {
-    let manifest = graph::load_manifest(&graph_dir.join("manifest.ayml"))?;
-    let g = Graph::load(graph_dir)?;
+pub fn cmd_show(id: &str, graph_dir: Option<&Path>) -> Result<(), DiscoverError> {
+    let manifest = graph::load_manifest_default(graph_dir)?;
+    let g = Graph::load_default(graph_dir)?;
 
     if let Some(c) = g.by_id.get(id) {
         return emit(&concept_view(&g, c));
@@ -32,9 +32,9 @@ pub fn cmd_show(id: &str, graph_dir: &Path) -> Result<(), DiscoverError> {
     Err(DiscoverError::UnknownId(id.to_string()))
 }
 
-pub fn cmd_list(id: Option<&str>, graph_dir: &Path) -> Result<(), DiscoverError> {
-    let manifest = graph::load_manifest(&graph_dir.join("manifest.ayml"))?;
-    let g = Graph::load(graph_dir)?;
+pub fn cmd_list(id: Option<&str>, graph_dir: Option<&Path>) -> Result<(), DiscoverError> {
+    let manifest = graph::load_manifest_default(graph_dir)?;
+    let g = Graph::load_default(graph_dir)?;
 
     let Some(id) = id else {
         return emit(&areas_view(&manifest));

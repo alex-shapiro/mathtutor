@@ -15,11 +15,11 @@ use crate::path::{PathError, load_path, resolve_id};
 use crate::scheduler;
 use crate::types::Difficulty;
 
-pub fn cmd_tree(explicit_id: Option<&str>, graph_dir: &Path) -> Result<(), PathError> {
+pub fn cmd_tree(explicit_id: Option<&str>, graph_dir: Option<&Path>) -> Result<(), PathError> {
     let id = resolve_id(explicit_id)?;
     let p = load_path(&id)?;
-    let g = Graph::load(graph_dir)?;
-    let manifest = graph::load_manifest(&graph_dir.join("manifest.ayml"))?;
+    let g = Graph::load_for_path(&id, graph_dir)?;
+    let manifest = graph::load_manifest_default(graph_dir)?;
     let events = event_log::load(&id)?;
 
     let targets: HashSet<String> = p.target_atoms.iter().cloned().collect();

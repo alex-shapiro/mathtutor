@@ -25,9 +25,9 @@ pub enum SchedulerError {
     Serialize(String),
 }
 
-pub fn cmd_next(path_id: Option<&str>, graph_dir: &Path) -> Result<(), SchedulerError> {
-    let g = Graph::load(graph_dir)?;
+pub fn cmd_next(path_id: Option<&str>, graph_dir: Option<&Path>) -> Result<(), SchedulerError> {
     let id = path::resolve_id(path_id)?;
+    let g = Graph::load_for_path(&id, graph_dir)?;
     let p = path::load_path(&id)?;
     let events = event_log::load(&id)?;
 

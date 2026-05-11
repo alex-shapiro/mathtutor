@@ -8,10 +8,10 @@ use crate::graph::Graph;
 use crate::path::{PathError, load_path, path_dir, resolve_id};
 use crate::scheduler;
 
-pub fn cmd_state(explicit_id: Option<&str>, graph_dir: &Path) -> Result<(), PathError> {
+pub fn cmd_state(explicit_id: Option<&str>, graph_dir: Option<&Path>) -> Result<(), PathError> {
     let id = resolve_id(explicit_id)?;
     let p = load_path(&id)?;
-    let g = Graph::load(graph_dir)?;
+    let g = Graph::load_for_path(&id, graph_dir)?;
     let location = path_dir(&id)?;
     let events = event_log::load(&id)?;
 
