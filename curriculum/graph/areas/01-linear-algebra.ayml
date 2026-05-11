@@ -36,6 +36,19 @@ children:
               3. **Inverses:** Every $a$ has an additive inverse $-a$ such that $a + (-a) = 0$. Every non-zero $a$ has a multiplicative inverse $a^{-1}$ such that $a \\cdot a^{-1} = 1$.
               4. **Distributivity:** Multiplication distributes over addition: $a \\cdot (b + c) = a \\cdot b + a \\cdot c$.
               """
+            quizzes:
+              - id: la.1.1.1.q1
+                difficulty: easy
+                question: "Equipped with the usual addition and multiplication, which of the following are fields? For each non-field, name **one specific axiom** that fails. (a) the integers $\\mathbb{Z}$ (b) the rationals $\\mathbb{Q}$ (c) the reals $\\mathbb{R}$ (d) the natural numbers $\\mathbb{N} = \\{0, 1, 2, \\ldots\\}$"
+                answer: "(a) $\\mathbb{Z}$ is **not** a field. Multiplicative inverses fail: for example, $2 \\in \\mathbb{Z}$ has no multiplicative inverse in $\\mathbb{Z}$ (since $1/2 \\notin \\mathbb{Z}$). All other axioms hold, but this one is enough to disqualify it. (b) $\\mathbb{Q}$ **is** a field — every nonzero rational $a/b$ has a rational reciprocal $b/a$, and all the other axioms (commutativity, associativity, identities, additive inverses, distributivity) hold. (c) $\\mathbb{R}$ **is** a field — the canonical example. (d) $\\mathbb{N}$ is **not** a field. Additive inverses fail: $3 \\in \\mathbb{N}$ has no additive inverse in $\\mathbb{N}$ (since $-3 \\notin \\mathbb{N}$). (Multiplicative inverses also fail.)"
+              - id: la.1.1.1.q2
+                difficulty: medium
+                question: "Consider the set of even integers $2\\mathbb{Z} = \\{\\ldots, -4, -2, 0, 2, 4, \\ldots\\}$ with the usual addition and multiplication. Is this a field? If not, name **two distinct axioms** that fail, and give a specific element witnessing each failure."
+                answer: "No, $2\\mathbb{Z}$ is not a field. Two distinct axioms fail: (1) **Multiplicative identity** — there is no $1 \\in 2\\mathbb{Z}$, since $1$ is odd. The axiom requires an element $e$ with $e \\cdot a = a$ for all $a$; no even integer satisfies this for, e.g., $a = 2$ (we'd need $e = 1$). (2) **Multiplicative inverses** — even setting (1) aside, the element $2 \\in 2\\mathbb{Z}$ has no multiplicative inverse in $2\\mathbb{Z}$, since $1/2 \\notin 2\\mathbb{Z}$. (Note: addition still works fine — $2\\mathbb{Z}$ is closed under $+$, has $0$, has additive inverses, etc.)"
+              - id: la.1.1.1.q3
+                difficulty: hard
+                question: "Using **only the field axioms** (no appeal to 'how multiplication usually works'), prove that for any field $F$ and any element $a \\in F$: $0 \\cdot a = 0$. Cite the specific axiom you use at each step."
+                answer: "Proof. Start with the additive identity axiom: $0 = 0 + 0$. Multiply both sides on the right by $a$: $0 \\cdot a = (0 + 0) \\cdot a$. By **distributivity**, $(0 + 0) \\cdot a = 0 \\cdot a + 0 \\cdot a$. So $0 \\cdot a = 0 \\cdot a + 0 \\cdot a$. Now use the **additive inverse** axiom: let $-(0 \\cdot a)$ be the additive inverse of $0 \\cdot a$, and add it to both sides: $0 \\cdot a + (-(0 \\cdot a)) = (0 \\cdot a + 0 \\cdot a) + (-(0 \\cdot a))$. The left side equals $0$ by the additive inverse axiom. By **associativity** of addition, the right side becomes $0 \\cdot a + (0 \\cdot a + (-(0 \\cdot a))) = 0 \\cdot a + 0$ (additive inverse) $ = 0 \\cdot a$ (additive identity). So $0 = 0 \\cdot a$, i.e. $0 \\cdot a = 0$. $\\blacksquare$"
           - id: la.1.1.2
             name: Common fields
             description: "ℝ, ℂ, ℚ, finite fields 𝔽_p; the scalars used throughout DL math are ℝ and ℂ."
