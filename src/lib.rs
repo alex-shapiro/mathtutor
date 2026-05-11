@@ -12,6 +12,7 @@ pub mod answer;
 pub mod cards;
 pub mod cli;
 pub mod error;
+pub mod instruct;
 pub mod overlay;
 
 pub use error::{Error, Result};

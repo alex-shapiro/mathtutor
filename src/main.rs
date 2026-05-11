@@ -1,7 +1,9 @@
 use std::process::ExitCode;
 
 use mathtutor::cli::{Cmd, GraphOp, Mt, OverlayOp, StoreOp};
-use mathtutor::{Result, answer, discover, graph, overlay, path, scheduler, state, store, tree};
+use mathtutor::{
+    Result, answer, discover, graph, instruct, overlay, path, scheduler, state, store, tree,
+};
 
 fn main() -> ExitCode {
     let cli: Mt = argh::from_env();
@@ -97,5 +99,6 @@ fn dispatch(cmd: Cmd) -> (Result<()>, u8) {
         Cmd::Overlay(o) => match o.op {
             OverlayOp::Dump(c) => (overlay::cmd_dump(c.path.as_deref()), 1),
         },
+        Cmd::Instruct(_) => (instruct::cmd_instruct(), 1),
     }
 }

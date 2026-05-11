@@ -33,7 +33,13 @@ pub enum Cmd {
     Tree(TreeCmd),
     Overlay(OverlayCmd),
     Graph(GraphCmd),
+    Instruct(InstructCmd),
 }
+
+/// Print the agent operator playbook embedded in the binary.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "instruct")]
+pub struct InstructCmd {}
 
 /// Look up a single curriculum entry (atom, cluster, or area).
 #[derive(FromArgs, Debug)]
