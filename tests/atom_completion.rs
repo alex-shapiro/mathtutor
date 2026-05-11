@@ -202,8 +202,11 @@ fn keep_presenting_easy_after_again_rating() {
 }
 
 #[test]
-fn keep_presenting_easy_after_hard_rating() {
-    // `hard` (the rating) is not "complete" — only good/easy advance.
+fn advance_to_medium_after_hard_rating() {
+    // `hard` counts as a correct answer (the user got it right, just
+    // with effort) — FSRS handles re-presentation timing for hard, so
+    // the per-atom walker advances rather than re-surfacing the easy
+    // quiz immediately. Only `Again` triggers immediate re-presentation.
     let g = graph_of(vec![atom(
         "a",
         &[],
@@ -212,7 +215,11 @@ fn keep_presenting_easy_after_hard_rating() {
     )]);
     let p = path_with(&["a"]);
     let events = vec![taught("a"), answered("a.q1", Rating::Hard, Utc::now())];
-    assert_present_quiz(&scheduler::next_action(&g, &p, &events), "a", "a.q1");
+    assert_create_quiz(
+        &scheduler::next_action(&g, &p, &events),
+        "a",
+        Difficulty::Medium,
+    );
 }
 
 #[test]

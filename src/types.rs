@@ -17,6 +17,18 @@ pub enum Rating {
     Easy,
 }
 
+impl Rating {
+    /// All ratings except `Again` count as a correct answer. `Hard`
+    /// means "got it right but with effort"; FSRS still schedules a
+    /// sooner re-presentation than `Good`/`Easy`, but the per-atom
+    /// walker treats it as correct enough to advance — otherwise a
+    /// `Hard` rating would re-surface the quiz immediately, even when
+    /// FSRS says wait.
+    pub fn is_correct(self) -> bool {
+        !matches!(self, Rating::Again)
+    }
+}
+
 impl std::fmt::Display for Rating {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {

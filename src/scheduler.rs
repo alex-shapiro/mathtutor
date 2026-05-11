@@ -188,12 +188,16 @@ fn first_due_card(g: &Graph, events: &[Event], now: DateTime<Utc>) -> Option<(St
     None
 }
 
-/// Has this quiz ever been answered with `good` or `easy`?
+/// Has this quiz ever been answered correctly (any rating except
+/// `Again`)? Used by the per-atom walker to decide whether to advance
+/// past a quiz; `Again` is the only rating that triggers immediate
+/// re-presentation, since `Hard`/`Good`/`Easy` all mean "got it right"
+/// and re-presentation timing for those is FSRS's job.
 pub fn quiz_answered_correctly(events: &[Event], quiz_id: &str) -> bool {
     events.iter().any(|e| {
         matches!(e.kind, EventKind::QuizAnswered)
             && e.quiz.as_deref() == Some(quiz_id)
-            && matches!(e.payload.rating, Some(Rating::Good | Rating::Easy))
+            && e.payload.rating.is_some_and(Rating::is_correct)
     })
 }
 
@@ -240,7 +244,7 @@ pub fn atom_completed_at(g: &Graph, events: &[Event], atom_id: &str) -> Option<D
         let first_correct = events.iter().find(|e| {
             matches!(e.kind, EventKind::QuizAnswered)
                 && e.quiz.as_deref() == Some(&quiz.id)
-                && matches!(e.payload.rating, Some(Rating::Good | Rating::Easy))
+                && e.payload.rating.is_some_and(Rating::is_correct)
         })?;
         latest = Some(latest.map_or(first_correct.ts, |l| l.max(first_correct.ts)));
     }
@@ -285,7 +289,7 @@ fn compute_quiz_history(p: &PathFile, quiz_id: &str) -> QuizHistory {
                 if let Some(r) = e.payload.rating {
                     h.recent_ratings.insert(0, r);
                     h.recent_ratings.truncate(10);
-                    if matches!(r, Rating::Good | Rating::Easy) {
+                    if r.is_correct() {
                         h.correct_count += 1;
                     }
                     h.total_count += 1;

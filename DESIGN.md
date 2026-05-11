@@ -392,6 +392,12 @@ performed. FSRS state is derived from `quiz_answered` events on demand
   freshly-taught atom always gets all three quizzes authored and
   answered before the next target's lesson is requested.
 
+  "Correct" means anything except `Again` — i.e. `Hard`, `Good`, or
+  `Easy`. `Hard` is "got it right, with effort"; FSRS handles its
+  shorter follow-up interval. The per-atom walker only re-presents
+  immediately on `Again`, so a `Hard`-rated card doesn't loop back the
+  moment the user finishes answering it.
+
 ## Tool I/O
 
 - Structured output: AYML on stdout (one record per call).
