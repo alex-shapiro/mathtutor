@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use mathtutor::cli::{Cmd, GraphOp, Mt, OverlayOp, StoreOp};
+use mathtutor::cli::{AmendOp, Cmd, GraphOp, Mt, OverlayOp, RemoveOp, StoreOp};
 use mathtutor::{
     Result, answer, discover, graph, instruct, overlay, path, scheduler, state, store, tree,
 };
@@ -100,5 +100,35 @@ fn dispatch(cmd: Cmd) -> (Result<()>, u8) {
             OverlayOp::Dump(c) => (overlay::cmd_dump(c.path.as_deref()), 1),
         },
         Cmd::Instruct(_) => (instruct::cmd_instruct(), 1),
+        Cmd::Amend(a) => match a.op {
+            AmendOp::Quiz(c) => {
+                let quiz = c.quiz.clone();
+                let r = store::cmd_amend_quiz(
+                    &c.quiz,
+                    c.question,
+                    c.answer,
+                    c.rubric,
+                    c.difficulty,
+                    c.quiz_type,
+                    c.path.as_deref(),
+                    c.graph.as_deref(),
+                )
+                .map(|()| {
+                    eprintln!("amended quiz: {quiz}");
+                });
+                (r, 2)
+            }
+        },
+        Cmd::Remove(r) => match r.op {
+            RemoveOp::Quiz(c) => {
+                let quiz = c.quiz.clone();
+                let r = store::cmd_remove_quiz(&c.quiz, c.path.as_deref(), c.graph.as_deref()).map(
+                    |()| {
+                        eprintln!("removed quiz: {quiz}");
+                    },
+                );
+                (r, 2)
+            }
+        },
     }
 }

@@ -12,7 +12,7 @@
 //! `mt overlay dump` prints a path's overlay for review and eventual
 //! merge into the canonical curriculum.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::PathBuf;
@@ -38,13 +38,22 @@ pub struct Overlay {
 pub struct OverlayAtom {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lesson: Option<String>,
+    /// Authored quizzes for this atom. An entry whose id matches a
+    /// shipped quiz id overrides the shipped version during merge;
+    /// otherwise it's a new quiz appended after the shipped ones.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub quizzes: Vec<QuizRaw>,
+    /// Quiz ids that should not appear in the merged view, whether
+    /// they originated in the shipped curriculum or the overlay's own
+    /// `quizzes`. The `QuizAnswered` events for these ids remain in the
+    /// log for audit; the scheduler simply stops surfacing them.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub removed: BTreeSet<String>,
 }
 
 impl OverlayAtom {
     pub fn is_empty(&self) -> bool {
-        self.lesson.is_none() && self.quizzes.is_empty()
+        self.lesson.is_none() && self.quizzes.is_empty() && self.removed.is_empty()
     }
 
     /// Quizzes in `FlatConcept` form, for merge into the shipped graph.
@@ -142,6 +151,57 @@ pub fn add_quiz(
         answer,
         rubric,
     });
+    save(path_id, &overlay)
+}
+
+/// Apply field changes to an existing quiz in this path's overlay.
+/// If the quiz currently lives in the shipped curriculum (no overlay
+/// entry yet), the overlay gains a new entry that shadows it; if the
+/// quiz is already overlay-authored, that entry is mutated in place.
+///
+/// `base` is the quiz's current state in the *merged* view, supplied
+/// by the caller (typically `store::cmd_amend_quiz` looked it up via
+/// `Graph::load_for_path`). Only fields supplied here change.
+#[allow(clippy::too_many_arguments)]
+pub fn amend_quiz(
+    path_id: &str,
+    atom_id: &str,
+    base: &QuizRaw,
+    new_difficulty: Option<Difficulty>,
+    new_question: Option<String>,
+    new_answer: Option<String>,
+    new_rubric: Option<String>,
+    new_type: Option<QuizType>,
+) -> Result<()> {
+    let updated = QuizRaw {
+        id: base.id.clone(),
+        difficulty: new_difficulty.unwrap_or(base.difficulty),
+        kind: match new_type {
+            Some(t) => (t != QuizType::FreeText).then_some(t),
+            None => base.kind,
+        },
+        question: new_question.unwrap_or_else(|| base.question.clone()),
+        answer: new_answer.unwrap_or_else(|| base.answer.clone()),
+        rubric: new_rubric.or_else(|| base.rubric.clone()),
+    };
+
+    let mut overlay = load(path_id)?;
+    let entry = overlay.atoms.entry(atom_id.to_string()).or_default();
+    match entry.quizzes.iter_mut().find(|q| q.id == updated.id) {
+        Some(existing) => *existing = updated,
+        None => entry.quizzes.push(updated),
+    }
+    // Amending un-tombstones, in case the quiz had been removed.
+    entry.removed.remove(&base.id);
+    save(path_id, &overlay)
+}
+
+/// Tombstone a quiz id in this path's overlay so it stops appearing in
+/// the merged view. Idempotent.
+pub fn remove_quiz(path_id: &str, atom_id: &str, quiz_id: &str) -> Result<()> {
+    let mut overlay = load(path_id)?;
+    let entry = overlay.atoms.entry(atom_id.to_string()).or_default();
+    entry.removed.insert(quiz_id.to_string());
     save(path_id, &overlay)
 }
 

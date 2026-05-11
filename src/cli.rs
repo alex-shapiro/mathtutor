@@ -34,12 +34,99 @@ pub enum Cmd {
     Overlay(OverlayCmd),
     Graph(GraphCmd),
     Instruct(InstructCmd),
+    Amend(AmendCmd),
+    Remove(RemoveCmd),
 }
 
 /// Print the agent operator playbook embedded in the binary.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "instruct")]
 pub struct InstructCmd {}
+
+/// Amend an existing quiz (or other authored entity) in the active path.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "amend")]
+pub struct AmendCmd {
+    #[argh(subcommand)]
+    pub op: AmendOp,
+}
+
+#[derive(FromArgs, Debug)]
+#[argh(subcommand)]
+pub enum AmendOp {
+    Quiz(AmendQuizCmd),
+}
+
+/// Apply field edits to an existing quiz. Only the supplied fields
+/// change; the quiz id and FSRS history are preserved.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "quiz")]
+pub struct AmendQuizCmd {
+    /// quiz id (e.g. fnd.1.1.1.q1)
+    #[argh(positional)]
+    pub quiz: String,
+
+    /// new question text
+    #[argh(option)]
+    pub question: Option<String>,
+
+    /// new reference answer
+    #[argh(option)]
+    pub answer: Option<String>,
+
+    /// new grading rubric
+    #[argh(option)]
+    pub rubric: Option<String>,
+
+    /// new difficulty: easy | medium | hard
+    #[argh(option)]
+    pub difficulty: Option<types::Difficulty>,
+
+    /// new quiz type: `free_text` | `multiple_choice`
+    #[argh(option, long = "type")]
+    pub quiz_type: Option<types::QuizType>,
+
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    pub path: Option<String>,
+
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
+}
+
+/// Remove an existing authored entity (currently: quiz) from the active path.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "remove")]
+pub struct RemoveCmd {
+    #[argh(subcommand)]
+    pub op: RemoveOp,
+}
+
+#[derive(FromArgs, Debug)]
+#[argh(subcommand)]
+pub enum RemoveOp {
+    Quiz(RemoveQuizCmd),
+}
+
+/// Tombstone a quiz so it no longer appears in the merged view for
+/// this path. The quiz's `QuizAnswered` events stay in the log for
+/// audit; the scheduler just stops surfacing it.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "quiz")]
+pub struct RemoveQuizCmd {
+    /// quiz id (e.g. fnd.1.1.1.q1)
+    #[argh(positional)]
+    pub quiz: String,
+
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    pub path: Option<String>,
+
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
+}
 
 /// Look up a single curriculum entry (atom, cluster, or area).
 #[derive(FromArgs, Debug)]

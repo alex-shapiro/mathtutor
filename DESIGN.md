@@ -1,60 +1,77 @@
 # Math Tutor
 
-Math Tutor is a tool for learning math via a DAG of small lessons and quizzes.
-It incorporates spaced repetition so that learned concepts stay learned.
-It runs as a CLI and stores all data in [AYML](https://crates.io/crates/ayml)
-text files. AYML is a safe, serde-compatible variant of YAML; the only
-practical difference is that AYML uses triple-quoted multiline strings (like
-Swift) instead of `|`, and disallows YAML's long tail of fringe features.
+Math Tutor is a tool for learning math via a DAG of small lessons and
+quizzes. It incorporates spaced repetition so that learned concepts stay
+learned. It runs as a CLI: the curriculum graph is compiled into the
+binary, per-user state lives as [AYML](https://crates.io/crates/ayml)
+text files under `~/.mathtutor/`. AYML is a safe, serde-compatible variant
+of YAML; the only practical difference is that AYML uses triple-quoted
+multiline strings (like Swift) instead of `|`, and disallows YAML's long
+tail of fringe features.
 
 ## Roles
 
 `mt` is invoked as a tool from inside an existing LLM agent loop
-(e.g. Claude Code, Codex). The two-actor split:
+(e.g. Claude Code, Claude iOS via MCP, Codex). The two-actor split:
 
-- **`mt`** owns scheduling, persistence, deterministic reuse, and graph
-  validation.
-- **The LLM agent** owns authoring lessons / quizzes, user-facing presentation,
-  and grading of free-text answers.
+- **`mt`** owns scheduling, persistence, deterministic reuse, graph
+  validation, and the per-path overlay where the user's authored
+  content lives.
+- **The LLM agent** owns authoring lessons / quizzes, user-facing
+  presentation, and grading of free-text answers.
 
-`mt next` decides _what_ should be presented; the agent decides _how_ it is
-presented. When a lesson or quiz is presented for the first time, the agent
-authors it and writes it back into the graph; every subsequent presentation
-is deterministic. If the user finds wording confusing, the agent calls
-`mt amend …` and the canonical content is rewritten.
+`mt next` decides _what_ should be presented; the agent decides _how_ it
+is presented. When a lesson or quiz is presented for the first time on
+a given path, the agent authors it and persists via `mt store …`; every
+subsequent presentation on that path is deterministic. If the user
+objects to a question's wording, the agent calls `mt amend quiz` or
+`mt remove quiz`; both write to the path's overlay, never to the shipped
+curriculum.
 
 Each atom is one concept. Lessons are short (1–2 paragraphs, ≤ 2 minutes
-reading, ≤ 1 theorem / rule / definition). Quizzes are short, free-text by
-default, and depend only on the current lesson plus previously-taught
+reading, ≤ 1 theorem / rule / definition). Quizzes are short, free-text
+by default, and depend only on the current lesson plus previously-taught
 lessons — never on lookahead material.
+
+The agent's operator playbook is embedded in the binary; run
+`mt instruct` to print it.
 
 ## Commands
 
 ```bash
 # Path lifecycle
 mt new <GOAL> --atom <ID>...   # start a new learning path
-mt state [--path P]            # current status of a path
-mt next  [--path P]            # next action (AYML on stdout)
+mt state [--path P]            # one-screen status summary
+mt next  [--path P]            # next scheduled action (AYML on stdout)
+mt tree  [--path P]            # full reachable-graph progress view
 
-# LLM stores authored content
-mt store lesson <ATOM>      --body TEXT
-mt store quiz   <ATOM>      --difficulty D \
+# Curriculum lookup (read-only, no path context)
+mt list [<ID>]                 # areas, or children of a cluster
+mt show <ID>                   # full detail on atom / cluster / area
+mt graph check                 # validate the shipped curriculum
+
+# Authoring (writes to the active path's overlay, not to shipped data)
+mt store  lesson <ATOM>     --body TEXT
+mt store  quiz   <ATOM>     --difficulty D \
                             --question TEXT --answer TEXT [--rubric TEXT] \
                             [--type {free_text,multiple_choice}]
+mt amend  quiz   <QUIZ_ID>  [--question TEXT] [--answer TEXT] [--rubric TEXT] \
+                            [--difficulty D] [--type T]
+mt remove quiz   <QUIZ_ID>
 
-# LLM logs outcomes
-mt answer  <QUIZ_ID> --rating {again,hard,good,easy}   # FSRS grade
-mt skip    <ATOM> [--reason STR]
-mt hint    <ATOM>
-mt relearn <ATOM>
+# User outcomes
+mt answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT]
 
-# LLM amends canonical content
-mt amend lesson <ATOM> --body TEXT
-mt amend quiz   <QUIZ_ID> [--question TEXT] [--answer TEXT] [--rubric TEXT]
+# Overlay
+mt overlay dump [--path P]     # print the active path's overlay AYML
 
-# Maintenance
-mt graph check                                   # validate curriculum graph
+# Agent operator playbook
+mt instruct                    # print AGENTS playbook embedded in binary
 ```
+
+Every command that writes appends a structured event to the per-path
+log (see "Event log" below). Agents read the log if they need history;
+nothing else is needed to reconstruct user state.
 
 ### `--atom` ID resolution on `mt new`
 
@@ -70,23 +87,25 @@ Mixing forms is allowed; results are deduplicated and topologically
 sorted by prerequisite order before being stored as the path's
 `target_atoms`.
 
-All commands write a structured AYML record to the per-path event log;
-agents read the log if they need history.
+## Lifecycle of an atom (within a path)
 
-## Lifecycle of an atom
-
-1. **Bare.** Atom exists in the canonical graph with `id`, `name`,
-   `description`, `prerequisites`. No `lesson`, no `quizzes`.
-2. **Lesson stored.** `mt next` returns `create_lesson`. The agent authors
-   a body and calls `mt store lesson`. The body is persisted into the
-   atom's `lesson:` field.
-3. **Quiz stored (per slot, lazy).** `mt next` later returns
-   `create_quiz` for some difficulty slot. The agent authors a question,
-   reference answer, and optional rubric, then calls `mt store quiz`.
-   The quiz is persisted into the atom's `quizzes:` list under a stable ID.
-4. **Quiz answered.** `mt next` returns `present_quiz` with the stored
-   `q`, `a`, `rubric`. The agent presents the question, grades the user's
-   reply against the rubric, and calls `mt answer <quiz-id> --rating …`.
+1. **Bare in the path.** Atom exists in the shipped curriculum with
+   `id`, `name`, `description`, `prerequisites`. The path's overlay
+   has no entry for it.
+2. **Lesson present.** Either the shipped curriculum already has a
+   lesson body for the atom, or the agent authors one via
+   `mt store lesson` (overlay).
+3. **Lesson taught.** Once the path's log records `lesson_taught` (or
+   the implicitly-equivalent `lesson_authored`) for the atom, the
+   scheduler considers the lesson "delivered" for this path and moves
+   on to quiz work.
+4. **Quiz stored (per slot, lazy).** When `mt next` returns
+   `create_quiz` for a difficulty slot, the agent authors a question,
+   reference answer, and optional rubric, then calls `mt store quiz`
+   — which appends to the overlay.
+5. **Quiz answered.** `mt next` returns `present_quiz`. The agent
+   presents the stored question, grades the user's reply against the
+   reference answer + rubric, and calls `mt answer <quiz-id> --rating …`.
 
 Each lesson and each individual quiz is generated lazily — only when the
 scheduler first asks for it. An atom can be in a partial state (lesson
@@ -98,9 +117,9 @@ exists, only the easy quiz exists) for arbitrarily long.
 
 ```yaml
 schema_version: 1
-action: create_lesson | create_quiz | present_lesson | present_quiz | done | idle
+action: create_lesson | present_lesson | create_quiz | present_quiz | done
 path: <path-id>
-payload: ... action-specific (see below)
+payload: ...   # action-specific (see below)
 ```
 
 Conventions for every payload:
@@ -108,19 +127,17 @@ Conventions for every payload:
 - IDs are stable curriculum-graph identifiers (`la.5.4.7`, `la.5.4.7.q2`).
 - Multi-paragraph fields (`lesson`, `question`, `answer`, `rubric`) are
   AYML triple-quoted strings.
-- `next_step` is an informational hint for the agent; it is the canonical
-  command the agent should call after acting on this output. The agent
-  may derive the same command from the spec — the field exists for
-  ergonomics, not authority.
+- `next_step` is an informational hint for the agent — the canonical
+  command to call after acting on this output.
 - All atoms `mt next` returns satisfy the prerequisite invariant: every
-  direct prerequisite has a stored lesson. The agent does not have to
-  worry about teaching out of order.
+  direct prerequisite already has a stored lesson in the merged view.
 
 ### `create_lesson`
 
-The next path-target atom has no stored lesson. The agent should author
-one (1–2 paragraphs, ≤ 1 theorem / rule / definition), present it to the
-user, and call `mt store lesson` to persist.
+The next path-target atom has no stored lesson anywhere (neither in the
+shipped curriculum nor the overlay). The agent authors one (1–2
+paragraphs, ≤ 1 theorem / rule / definition), persists via
+`mt store lesson`, and presents to the user.
 
 ```yaml
 action: create_lesson
@@ -130,11 +147,11 @@ payload:
     id: la.5.4.7
     name: "Singular values from A*A eigenvalues"
     description: "σᵢ² are the non-zero eigenvalues of A* A."
-  prerequisites:                          # direct prereqs only
+  prerequisites:                          # direct prereqs, with their stored lessons
     - id: la.5.4.2
       name: "Singular value"
       description: "Diagonal entry of Σ; non-negative real number."
-      lesson: """..."""                   # included; every direct prereq has a lesson
+      lesson: """..."""
     - id: la.4.1.1
       name: "Eigenvalue / eigenvector"
       description: "Av = λv with v ≠ 0; λ ∈ 𝔽 is the eigenvalue."
@@ -142,12 +159,37 @@ payload:
   next_step: "mt store lesson la.5.4.7 --body TEXT"
 ```
 
+### `present_lesson`
+
+A lesson body already exists for this atom (shipped, or authored under
+a previous path), but the current path has never taught it. The
+scheduler re-surfaces the stored body so the user gets context before
+any quiz. The agent shows the body verbatim — not re-authored — then
+calls `mt next` again. `mt next` auto-logs `lesson_taught` when it
+returns this action, so no explicit "I taught it" command is needed.
+
+```yaml
+action: present_lesson
+path: p_2026_05_09_173_42
+payload:
+  atom:
+    id: la.5.4.7
+    name: "Singular values from A*A eigenvalues"
+    description: "σᵢ² are the non-zero eigenvalues of A* A."
+    lesson: """...stored body..."""
+  reason: not_taught                # the only reason currently emitted
+  history:
+    repetitions: 0                  # past `lesson_taught` events for this atom in this path
+  next_step: "mt next"
+```
+
 ### `create_quiz`
 
-The atom has a lesson but a difficulty slot has no quiz yet. The agent
-authors a (preferably free-text) question + reference answer + optional
-rubric, presents the question to the user, and persists via
-`mt store quiz`. The reply rating is logged with `mt answer` afterwards.
+The atom has a lesson (shipped or overlay) and the path is taught it,
+but a difficulty slot has no quiz yet. The agent authors a free-text
+question + reference answer + optional rubric, persists via
+`mt store quiz`, then presents to the user. The reply rating is logged
+with `mt answer` afterwards.
 
 ```yaml
 action: create_quiz
@@ -159,11 +201,11 @@ payload:
     description: "σᵢ² are the non-zero eigenvalues of A* A."
     lesson: """..."""
   target_difficulty: medium               # easy | medium | hard
-  existing_quizzes:                       # other quizzes already on this atom (avoid duplicates)
+  existing_quizzes:                       # avoid duplicates
     - id: la.5.4.7.q1
       difficulty: easy
       question: """..."""
-  prerequisites:
+  prerequisites:                          # for context while authoring
     - id: la.5.4.2
       name: "Singular value"
       description: "..."
@@ -171,34 +213,11 @@ payload:
   next_step: "mt store quiz la.5.4.7 --difficulty medium --question TEXT --answer TEXT [--rubric TEXT]"
 ```
 
-### `present_lesson`
-
-A previously-taught lesson is being re-presented (e.g. after `mt relearn`).
-The agent shows the stored body verbatim — not re-authored. After
-showing, the agent calls `mt next` again.
-
-```yaml
-action: present_lesson
-path: p_2026_05_09_173_42
-payload:
-  atom:
-    id: la.5.4.7
-    name: "Singular values from A*A eigenvalues"
-    description: "σᵢ² are the non-zero eigenvalues of A* A."
-    lesson: """...stored body..."""
-  reason: relearn_requested
-  history:
-    repetitions: 3                        # past `lesson_presented` events for this atom
-    last_presented_at: 2026-05-08T14:23:11Z
-    time_since_last: PT24H17M             # ISO 8601 duration; convenience for the agent
-  next_step: "mt next"
-```
-
 ### `present_quiz`
 
 A quiz card is due. The agent shows the stored question to the user,
-grades the user's free-text reply against the reference answer + rubric,
-and reports the FSRS grade with `mt answer`.
+grades the reply against the reference answer + rubric, and reports the
+FSRS grade with `mt answer`.
 
 ```yaml
 action: present_quiz
@@ -219,87 +238,98 @@ payload:
   history:
     repetitions: 5                        # past `quiz_presented` events for this quiz
     last_presented_at: 2026-05-08T14:23:11Z
-    time_since_last: PT24H17M             # ISO 8601 duration
     correct_count: 3                      # ratings in {good, easy}
     total_count: 5
-    correct_pct: 60                       # integer percentage, convenience
+    correct_pct: 60
     recent_ratings: [easy, good, hard, again, good]   # most recent first
   next_step: "mt answer la.5.4.7.q2 --rating {again|hard|good|easy}"
 ```
 
-### `done` / `idle`
+### `done`
 
-Two terminal states with different agent UX:
-
-- `done` — every target atom of the path has been taught and has at
-  least one quiz answered with `good` or `easy`. The path goal is
-  considered reached (modulo ongoing retention reviews).
-- `idle` — nothing is due right now and there are no pending content slots
-  to author, but future reviews exist. The agent should suggest the user
-  return later.
+Every target atom of the path has been taught and has at least one
+quiz answered with `good` or `easy` for each difficulty slot. The
+path goal is reached (modulo ongoing retention reviews).
 
 ```yaml
-action: done # or: idle
+action: done
 path: p_2026_05_09_173_42
 payload:
-  next_due_at: 2026-05-12T09:00:00Z # null if no future cards
-  message: "Path complete." # or: "Nothing due right now."
+  message: "Path complete."
 ```
 
 ### Errors
 
 Failures are written to stderr; stdout stays a single valid AYML record
-or is empty. Exit codes follow the global convention (`1` for scheduler
-failure, `2` for config / IO).
+or is empty. Exit codes: `0` ok; `1` scheduler / state-read failure;
+`2` config / IO / validation.
 
 ## Storage
 
-V1 uses a single tier — the canonical curriculum graph itself.
+The curriculum graph is compiled into the binary at build time via
+`include_dir!`. A shipped `mt` runs from any cwd; no checked-out repo
+required. For development against a working tree, `--graph DIR` or the
+`MT_GRAPH` env var override the embedded copy.
 
 ```
-curriculum/graph/
+curriculum/graph/                # source for the embedded copy
   manifest.ayml
-  areas/<NN>-<slug>.ayml      # canonical concept tree; lessons + quizzes added here
+  areas/<NN>-<slug>.ayml
 
-~/.mathtutor/                 # exact location TBD; per-user
+~/.mathtutor/                    # per-user state (overridable via $MATHTUTOR_HOME)
   paths/<path-id>/
-    path.ayml                 # goal, target atoms, FSRS card state
-    log.ayml                  # append-only event log
+    path.ayml                    # immutable intent: id, goal, created_at, target_atoms
+    log.ayml                     # append-only event stream
+    overlay.ayml                 # authored content (lessons, quizzes, amendments, removals)
 ```
 
-V1 limitation: `mt amend …` writes directly into the canonical graph.
-Single-user only until V2 introduces a per-user overlay.
+Three roles, three files, all distinct:
 
-## Lesson & quiz persistence schema
+| File           | Role                          | Mutability                                    |
+| -------------- | ----------------------------- | --------------------------------------------- |
+| (embedded)     | shipped curriculum            | recompile only                                |
+| `path.ayml`    | per-path intent               | written once at `mt new`; never updated       |
+| `log.ayml`     | per-path history              | append-only                                   |
+| `overlay.ayml` | per-path authored content     | mutated by `mt store / amend / remove`        |
 
-Authored content extends each atom in place:
+## Per-path overlay
+
+User-authored lessons and quizzes live in the path's overlay, not the
+shipped curriculum:
 
 ```yaml
-- id: la.5.4.7
-  name: "Singular values from A*A eigenvalues"
-  description: "σᵢ² are the non-zero eigenvalues of A* A."
-  prerequisites: [la.5.4.2, la.4.1.1]
-
-  # filled in by `mt store lesson`
-  lesson: """
-    ...1–2 paragraph Markdown body...
-    """
-
-  # one entry per question, filled in by `mt store quiz`.
-  # IDs are stable: <atom-id>.q<n>, never reused.
-  quizzes:
-    - id: la.5.4.7.q1
-      difficulty: easy            # easy | medium | hard
-      type: free_text             # free_text (default) | multiple_choice
-      question: """..."""
-      answer:   """..."""         # reference answer
-      rubric:   """..."""         # optional grading guidance
+schema_version: 1
+atoms:
+  la.5.4.7:
+    lesson: """
+      ...authored lesson body, if shipped graph had none...
+      """
+    quizzes:                          # added or amended
+      - id: la.5.4.7.q4
+        difficulty: medium
+        question: """..."""
+        answer: """..."""
+    removed:                          # tombstoned quiz ids; merge skips these
+      - la.5.4.7.q2
 ```
 
-Free-text questions are strongly preferred. Multiple-choice is allowed
-only as a deliberate exception (e.g. distinguishing a definition from a
-common confusable). Question wording must depend only on knowledge from
-the current lesson and previously-taught lessons; no lookahead.
+Merge semantics (`Graph::load_for_path`):
+
+- **Lesson** — if shipped has one, use it; otherwise use the overlay
+  lesson if present. `mt amend lesson` is not yet implemented; the
+  shipped lesson can't be overridden without an explicit amend path.
+- **Quizzes** — start with shipped, replace any with the same id from
+  the overlay (this is how amends work), then append overlay quizzes
+  whose ids don't match shipped (added quizzes), then filter out
+  anything whose id appears in `removed`.
+- **Prerequisites / cluster structure** — not overridable. The shape
+  of the curriculum is fixed by the shipped graph; the overlay only
+  carries content.
+
+Blast-radius is per-path on purpose: an unaudited lesson authored under
+path A doesn't leak into path B that targets the same atom. `mt overlay
+dump --path P` prints a path's overlay for review and eventual merge
+back into the canonical curriculum.
 
 ## Event log
 
@@ -309,74 +339,106 @@ not optional — so the log can be re-played and `time_since_last` /
 `repetitions` derived without additional state. Each entry:
 
 ```yaml
-- ts: 2026-05-09T18:42:01Z # required, RFC 3339 UTC
+- ts: 2026-05-09T18:42:01Z   # required, RFC 3339 UTC
   type: quiz_answered
   path: <path-id>
   atom: la.5.4.7
   quiz: la.5.4.7.q1
   payload:
     rating: good
+    user_answer: """..."""
 ```
 
-Event types (initial set; expect to grow):
+Implemented event kinds:
 
-`path_created`, `path_updated`,
-`lesson_authored`, `lesson_taught`, `lesson_amended`, `lesson_relearn_requested`,
-`quiz_authored`, `quiz_presented`, `quiz_answered`, `quiz_skipped`, `quiz_amended`,
-`hint_requested`, `atom_amended`.
+- `path_created`
+- `lesson_authored` (on `mt store lesson`)
+- `lesson_taught` (auto-logged on `mt next → present_lesson`, and on
+  `mt store lesson` since authoring implies presenting per AGENTS.md)
+- `quiz_authored` (on `mt store quiz`)
+- `quiz_presented` (auto-logged on `mt next → present_quiz`)
+- `quiz_answered` (on `mt answer`; payload carries rating and user_answer)
+- `quiz_amended` (on `mt amend quiz`)
+- `quiz_removed` (on `mt remove quiz`)
 
 The log is the source of truth for what the user has seen and how they
-performed; FSRS state in `path.ayml` is a derived index that can be
-recomputed from the log.
+performed. FSRS state is derived from `quiz_answered` events on demand
+(`crate::cards`) — not persisted as a separate cache.
 
 ## Spaced repetition (FSRS)
 
 - **One FSRS card per quiz question.** Not per atom, not per difficulty
   slot — per individual question. Memorizing an easy question shouldn't
   pull a hard one out of rotation.
-- Card state stored in `path.ayml`, keyed by quiz ID.
-- `mt next` algorithm:
-  1. Earliest-due quiz card whose atom has a stored lesson → `present_quiz`.
+- **No persistent card state.** The card state for any quiz is
+  reconstructed by replaying its `quiz_answered` events through the
+  FSRS algorithm in order. This is intentionally a pure function of the
+  log — keeps the invariant "log is source of truth" sharp, and at our
+  scale (≤ ~10k events per path) the replay cost stays under ~50ms.
+  A persistent `cards.ayml` cache becomes interesting beyond that scale.
+- **`mt next` algorithm:**
+  1. Earliest-due quiz card whose atom is in the merged view → `present_quiz`.
   2. Else, walk targets (and their prereqs) in topo order. For each
-     uncomplete atom, return the first applicable:
-     a. no lesson → `create_lesson`
-     b. missing easy/medium/hard slot → `create_quiz`
-     c. quiz never answered with `good`/`easy` → `present_quiz`
+     incomplete atom, return the first applicable action:
+     a. no lesson in the merged view → `create_lesson`
+     b. lesson exists but the path hasn't taught it yet → `present_lesson`
+     c. missing easy/medium/hard slot → `create_quiz`
+     d. quiz never answered with `good`/`easy` → `present_quiz`
   3. Else → `done`.
 
-  An atom is "complete" only once its lesson is stored and all three
-  difficulty quizzes have at least one correct answer in the event log.
-  The walker doesn't move past an incomplete atom, so a freshly-taught
-  atom always gets all three quizzes authored and answered before the
-  next target's lesson is requested.
-
-The `fsrs` crate is the current default; not 100% confirmed — needs to be
-proved out during the PoC. If FSRS doesn't fit cleanly we'll either swap
-implementations or implement the scheduler ourselves.
+  An atom is "complete" only once its lesson is in the merged view and
+  all three difficulty quizzes have at least one correct answer in the
+  event log. The walker doesn't move past an incomplete atom, so a
+  freshly-taught atom always gets all three quizzes authored and
+  answered before the next target's lesson is requested.
 
 ## Tool I/O
 
-- Structured output: AYML on stdout.
+- Structured output: AYML on stdout (one record per call).
 - Progress / human-readable logs: stderr.
-- Exit codes: `0` ok; `1` validation or scheduling failure; `2` config error.
-- Multi-paragraph content (lesson bodies, quiz questions/answers/rubrics)
-  is passed as `TEXT` arguments — literal strings on the command line.
+- Exit codes: `0` ok; `1` scheduler / state-read failure; `2` config /
+  IO / validation.
+- Multi-paragraph content (lesson bodies, quiz questions/answers/
+  rubrics) is passed as `TEXT` arguments — literal strings on the
+  command line. Agents typically pass them via heredoc to preserve
+  newlines.
+
+## Errors
+
+A single crate-wide `Error` enum covers every failure mode. Every
+fallible function returns `crate::Result<T>`. There is no per-module
+error hierarchy.
 
 ## Crates
 
 - `argh` — CLI parsing
-- `ayml` + `serde` — data serialization
-- `fsrs` — spaced-repetition scheduling (tentative; see above)
-- `tracing` — debug logging
-- `thiserror` — error types
+- `ayml` + `serde` — data serialization (per-path files only;
+  curriculum is compiled-in bytes)
+- `chrono` — timestamps
+- `fsrs` — spaced-repetition scheduling
+- `include_dir` — compile-time curriculum embedding
+- `thiserror` — error type derive
+- `tracing` — debug logging (unused for output; reserved for future
+  observability)
 
 ## Out of scope for V1
 
-- **Per-user overlay** of authored content. V1 amends the canonical graph
-  in place; multi-user sharing comes later.
-- **Goal → atom-set mapping.** `mt new <goal>` relies on the agent to
-  translate the free-text goal into a target set of atom IDs; `mt`
-  stores the resulting list and orders it by prerequisite topology.
-- **Adding new atoms or editing prerequisites** via the CLI. Curriculum
-  topology changes are still hand-edited + `mt graph check`'d.
+- **Lesson amend / remove.** Symmetric to quiz amend/remove and easy
+  to add when needed; not currently exposed via CLI.
+- **`mt relearn` and `mt hint`.** Designed but not wired.
+- **`idle` action.** `mt next` only ever returns `done` or a real
+  action today; `idle` (returns when nothing is due but future
+  reviews exist) is reserved for when FSRS scheduling produces gaps
+  worth signaling.
+- **Goal → atom-set mapping.** `mt new <goal>` relies on the agent
+  to translate the free-text goal into a target set of atom IDs;
+  `mt` stores the resulting list and orders it by prerequisite
+  topology.
+- **Adding new atoms or editing prerequisites via the CLI.** Curriculum
+  topology changes are still hand-edited and `mt graph check`'d.
 - **Multi-modal content** (diagrams, images, code execution).
+- **Multi-user hosting.** Storage is single-user single-tenant; multi-
+  user requires identity, per-user storage scoping, and an MCP/HTTP
+  server layer — none of which is built. A personal hosted setup
+  (one-user Fly VM with MCP) is reachable from this codebase with a
+  modest server wrapper; multi-tenant SaaS is a separate project.

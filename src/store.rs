@@ -13,8 +13,9 @@
 
 use std::path::Path;
 
+use crate::answer::atom_from_quiz_id;
 use crate::event_log;
-use crate::graph::{self, Graph};
+use crate::graph::{self, Graph, QuizRaw};
 use crate::overlay;
 use crate::path;
 use crate::types::{Difficulty, QuizType};
@@ -94,6 +95,81 @@ pub fn cmd_store_quiz(
         new_id.clone(),
     ))?;
     Ok(new_id)
+}
+
+/// Apply field-level edits to an existing quiz, writing the result into
+/// the active path's overlay. The quiz may live in the shipped
+/// curriculum or in the overlay; either way the post-amend state
+/// shadows or replaces it during the next `Graph::load_for_path`.
+///
+/// FSRS history is preserved: the quiz id doesn't change, so the
+/// scheduler keeps treating it as the same card. If you want a fresh
+/// schedule, use `mt remove quiz` followed by `mt store quiz`.
+#[allow(clippy::too_many_arguments)]
+pub fn cmd_amend_quiz(
+    quiz_id: &str,
+    question: Option<String>,
+    answer: Option<String>,
+    rubric: Option<String>,
+    difficulty: Option<Difficulty>,
+    quiz_type: Option<QuizType>,
+    path_id: Option<&str>,
+    graph_dir: Option<&Path>,
+) -> Result<()> {
+    let atom_id =
+        atom_from_quiz_id(quiz_id).ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
+    let id = path::resolve_id(path_id)?;
+    let g = Graph::load_for_path(&id, graph_dir)?;
+    let c = g
+        .by_id
+        .get(&atom_id)
+        .ok_or_else(|| Error::AtomNotFound(atom_id.clone()))?;
+    let base = c
+        .quizzes
+        .iter()
+        .find(|q| q.id == quiz_id)
+        .ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
+    let base_raw = QuizRaw {
+        id: base.id.clone(),
+        difficulty: base.difficulty,
+        kind: base.kind,
+        question: base.question.clone(),
+        answer: base.answer.clone(),
+        rubric: base.rubric.clone(),
+    };
+    overlay::amend_quiz(
+        &id, &atom_id, &base_raw, difficulty, question, answer, rubric, quiz_type,
+    )?;
+    event_log::append(event_log::quiz_amended(id, atom_id, quiz_id.to_string()))?;
+    Ok(())
+}
+
+/// Tombstone a quiz so it no longer appears in the merged view for
+/// this path. Past `QuizAnswered` events stay in the log for audit;
+/// the scheduler simply stops surfacing it.
+pub fn cmd_remove_quiz(
+    quiz_id: &str,
+    path_id: Option<&str>,
+    graph_dir: Option<&Path>,
+) -> Result<()> {
+    let atom_id =
+        atom_from_quiz_id(quiz_id).ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
+    let id = path::resolve_id(path_id)?;
+
+    // Confirm the quiz exists in the merged view; refuse to tombstone
+    // a name that never resolved to anything (likely a typo).
+    let g = Graph::load_for_path(&id, graph_dir)?;
+    let c = g
+        .by_id
+        .get(&atom_id)
+        .ok_or_else(|| Error::AtomNotFound(atom_id.clone()))?;
+    if !c.quizzes.iter().any(|q| q.id == quiz_id) {
+        return Err(Error::UnknownId(quiz_id.to_string()));
+    }
+
+    overlay::remove_quiz(&id, &atom_id, quiz_id)?;
+    event_log::append(event_log::quiz_removed(id, atom_id, quiz_id.to_string()))?;
+    Ok(())
 }
 
 /// Returns `<atom>.q<n>` where `n` is one greater than the highest

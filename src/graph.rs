@@ -403,7 +403,22 @@ impl Graph {
             if c.lesson.is_none() && entry.lesson.is_some() {
                 c.lesson.clone_from(&entry.lesson);
             }
-            c.quizzes.extend(entry.quizzes_flat());
+
+            // Quizzes: overlay entries replace shipped entries with the
+            // same id (amend), and are appended otherwise (added).
+            for overlay_quiz in entry.quizzes_flat() {
+                match c.quizzes.iter_mut().find(|q| q.id == overlay_quiz.id) {
+                    Some(existing) => *existing = overlay_quiz,
+                    None => c.quizzes.push(overlay_quiz),
+                }
+            }
+            // Tombstones: drop any quiz (shipped or just-added overlay)
+            // whose id is in `removed`. Their QuizAnswered events stay
+            // in the log for audit; the scheduler just won't surface
+            // them anymore.
+            if !entry.removed.is_empty() {
+                c.quizzes.retain(|q| !entry.removed.contains(&q.id));
+            }
         }
     }
 }

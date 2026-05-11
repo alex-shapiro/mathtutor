@@ -231,6 +231,41 @@ Path goal reached. Tell the user, suggest a new path or pause.
 - Write reference answers that are concise but complete.
 - Write a grading rubric only when there is no single right answer.
 
+## Fixing broken content
+
+If the user objects to a question (confusing wording, wrong answer, off-topic), you have two repair commands.
+
+### Amend an existing quiz
+
+Use when the question is *mostly right* and just needs an edit. The
+quiz id stays the same, so the FSRS schedule continues uninterrupted —
+prior `again`/`good`/`easy` ratings still inform the next review.
+
+    mt amend quiz <quiz-id> \
+        [--question TEXT] [--answer TEXT] [--rubric TEXT] \
+        [--difficulty easy|medium|hard] [--type free_text|multiple_choice]
+
+Only the fields you pass change; everything else is preserved.
+
+Author the new content carefully; like the original, it must depend
+only on the atom's lesson and previously-taught prerequisites.
+
+### Remove a quiz
+
+Use when the question is *fundamentally broken* and shouldn't exist.
+
+    mt remove quiz <quiz-id>
+
+This tombstones the quiz for this path. The `quiz_answered` events
+stay in the log for audit, but the scheduler stops surfacing it. On
+the next `mt next`, if the atom now has a missing difficulty slot,
+the scheduler will return `create_quiz` so you can author a fresh
+replacement.
+
+**When in doubt, prefer amend.** Removal forfeits the spaced-repetition
+state — useful when the question was misleading, wasteful when it just
+needed a wording fix.
+
 ## Inspecting progress
 
 `mt state` (covered above as the session-start step) is also useful mid-session to summarize how far the user has gotten. Run it whenever the user asks "where am I?" or before suggesting a long stretch of work.

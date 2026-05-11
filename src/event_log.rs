@@ -23,6 +23,8 @@ pub enum EventKind {
     QuizAuthored,
     QuizPresented,
     QuizAnswered,
+    QuizAmended,
+    QuizRemoved,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
@@ -105,6 +107,28 @@ pub fn quiz_presented(path: String, atom: String, quiz: String) -> Event {
     Event {
         ts: Utc::now(),
         kind: EventKind::QuizPresented,
+        path,
+        atom: Some(atom),
+        quiz: Some(quiz),
+        payload: EventPayload::default(),
+    }
+}
+
+pub fn quiz_amended(path: String, atom: String, quiz: String) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::QuizAmended,
+        path,
+        atom: Some(atom),
+        quiz: Some(quiz),
+        payload: EventPayload::default(),
+    }
+}
+
+pub fn quiz_removed(path: String, atom: String, quiz: String) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::QuizRemoved,
         path,
         atom: Some(atom),
         quiz: Some(quiz),
