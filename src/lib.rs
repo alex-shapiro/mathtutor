@@ -11,7 +11,10 @@
 pub mod answer;
 pub mod cards;
 pub mod cli;
+pub mod error;
 pub mod overlay;
+
+pub use error::{Error, Result};
 pub mod discover;
 pub mod event_log;
 pub mod graph;

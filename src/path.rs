@@ -9,29 +9,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::event_log;
-use crate::graph::{self, Graph};
-
-#[derive(Debug, thiserror::Error)]
-pub enum PathError {
-    #[error("io: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("ayml serialize: {0}")]
-    Serialize(String),
-    #[error("ayml parse: {path} {msg}")]
-    Parse { path: String, msg: String },
-    #[error("graph: {0}")]
-    Graph(#[from] graph::LoadError),
-    #[error("unknown id: {0}")]
-    UnknownId(String),
-    #[error("cluster '{0}' has no atomic descendants")]
-    EmptyCluster(String),
-    #[error("cycle in target atoms")]
-    Cycle,
-    #[error("no learning path found (run `mt new` first)")]
-    NoPath,
-    #[error("HOME not set; set MATHTUTOR_HOME or HOME")]
-    NoHome,
-}
+use crate::graph::Graph;
+use crate::{Error, Result};
 
 /// Immutable record of the learner's goal for a path. Written once at
 /// `mt new`; never updated. All mutable per-path state (quiz answers,
@@ -48,46 +27,59 @@ pub struct PathFile {
 
 // ── Storage layout ──────────────────────────────────────────────────
 
-pub fn mt_home() -> Result<PathBuf, PathError> {
+pub fn mt_home() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("MATHTUTOR_HOME") {
         return Ok(PathBuf::from(p));
     }
-    let home = std::env::var("HOME").map_err(|_| PathError::NoHome)?;
+    let home = std::env::var("HOME").map_err(|_| Error::NoHome)?;
     Ok(PathBuf::from(home).join(".mathtutor"))
 }
 
-pub fn paths_root() -> Result<PathBuf, PathError> {
+pub fn paths_root() -> Result<PathBuf> {
     Ok(mt_home()?.join("paths"))
 }
 
-pub fn path_dir(id: &str) -> Result<PathBuf, PathError> {
+pub fn path_dir(id: &str) -> Result<PathBuf> {
     Ok(paths_root()?.join(id))
 }
 
-pub fn save_path(p: &PathFile) -> Result<(), PathError> {
+pub fn save_path(p: &PathFile) -> Result<()> {
     let dir = path_dir(&p.id)?;
-    fs::create_dir_all(&dir)?;
-    let text = ayml::to_string(p).map_err(|e| PathError::Serialize(e.to_string()))?;
-    fs::write(dir.join("path.ayml"), text)?;
-    Ok(())
-}
-
-pub fn load_path(id: &str) -> Result<PathFile, PathError> {
-    let path = path_dir(id)?.join("path.ayml");
-    let file = File::open(&path)?;
-    ayml::from_reader(BufReader::new(file)).map_err(|e| PathError::Parse {
-        path: path.to_string_lossy().into(),
-        msg: e.to_string(),
+    fs::create_dir_all(&dir).map_err(|e| Error::Io {
+        path: dir.clone(),
+        source: e,
+    })?;
+    let text = ayml::to_string(p).map_err(|e| Error::AymlSerialize(e.to_string()))?;
+    let file_path = dir.join("path.ayml");
+    fs::write(&file_path, text).map_err(|e| Error::Io {
+        path: file_path,
+        source: e,
     })
 }
 
-pub fn most_recent_id() -> Result<Option<String>, PathError> {
+pub fn load_path(id: &str) -> Result<PathFile> {
+    let file_path = path_dir(id)?.join("path.ayml");
+    let file = File::open(&file_path).map_err(|e| Error::Io {
+        path: file_path.clone(),
+        source: e,
+    })?;
+    ayml::from_reader(BufReader::new(file)).map_err(|e| Error::AymlParse {
+        path: file_path,
+        message: e.to_string(),
+    })
+}
+
+pub fn most_recent_id() -> Result<Option<String>> {
     let root = paths_root()?;
     if !root.exists() {
         return Ok(None);
     }
-    let mut entries: Vec<_> = fs::read_dir(&root)?
-        .filter_map(Result::ok)
+    let mut entries: Vec<_> = fs::read_dir(&root)
+        .map_err(|e| Error::Io {
+            path: root.clone(),
+            source: e,
+        })?
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().is_dir())
         .collect();
     entries.sort_by_key(|e| std::cmp::Reverse(e.metadata().and_then(|m| m.modified()).ok()));
@@ -97,11 +89,11 @@ pub fn most_recent_id() -> Result<Option<String>, PathError> {
         .and_then(|e| e.file_name().to_str().map(String::from)))
 }
 
-pub fn resolve_id(explicit: Option<&str>) -> Result<String, PathError> {
+pub fn resolve_id(explicit: Option<&str>) -> Result<String> {
     if let Some(id) = explicit {
         return Ok(id.to_string());
     }
-    most_recent_id()?.ok_or(PathError::NoPath)
+    most_recent_id()?.ok_or(Error::NoPath)
 }
 
 pub fn generate_path_id(now: DateTime<Utc>) -> String {
@@ -110,7 +102,7 @@ pub fn generate_path_id(now: DateTime<Utc>) -> String {
 
 // ── Commands ────────────────────────────────────────────────────────
 
-pub fn cmd_new(goal: &str, ids: &[String], graph_dir: Option<&Path>) -> Result<String, PathError> {
+pub fn cmd_new(goal: &str, ids: &[String], graph_dir: Option<&Path>) -> Result<String> {
     let g = Graph::load_default(graph_dir)?;
     let expanded = expand_to_atoms(&g, ids)?;
     let sorted = topo_sort(&g, &expanded)?;
@@ -140,7 +132,7 @@ pub fn cmd_new(goal: &str, ids: &[String], graph_dir: Option<&Path>) -> Result<S
 /// - A bare area prefix (e.g. `tx`) — not itself a node, since the
 ///   graph's roots are topic-level (e.g. `tx.1`) — is expanded to all
 ///   atoms whose ID starts with `<prefix>.`.
-fn expand_to_atoms(g: &Graph, ids: &[String]) -> Result<Vec<String>, PathError> {
+fn expand_to_atoms(g: &Graph, ids: &[String]) -> Result<Vec<String>> {
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
 
@@ -155,16 +147,16 @@ fn expand_to_atoms(g: &Graph, ids: &[String]) -> Result<Vec<String>, PathError> 
             Some(_) => {
                 collect_atomic_descendants(g, id, &mut seen, &mut out);
                 if out.len() == before {
-                    return Err(PathError::EmptyCluster(id.clone()));
+                    return Err(Error::EmptyCluster(id.clone()));
                 }
             }
             None if !id.contains('.') => {
                 collect_atoms_by_prefix(g, id, &mut seen, &mut out);
                 if out.len() == before {
-                    return Err(PathError::UnknownId(id.clone()));
+                    return Err(Error::UnknownId(id.clone()));
                 }
             }
-            None => return Err(PathError::UnknownId(id.clone())),
+            None => return Err(Error::UnknownId(id.clone())),
         }
     }
     Ok(out)
@@ -211,7 +203,7 @@ fn collect_atoms_by_prefix(
 
 // ── Topological sort over the user-supplied target atoms ───────────
 
-fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>, PathError> {
+fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>> {
     let atom_set: HashSet<&str> = atoms.iter().map(String::as_str).collect();
     let mut indegree: HashMap<&str, usize> = atoms.iter().map(|a| (a.as_str(), 0)).collect();
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -253,7 +245,7 @@ fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>, PathError> {
     }
 
     if result.len() != atoms.len() {
-        return Err(PathError::Cycle);
+        return Err(Error::Cycle);
     }
     Ok(result)
 }

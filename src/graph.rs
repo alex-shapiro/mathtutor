@@ -7,29 +7,15 @@ use std::path::{Path, PathBuf};
 
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
 use crate::types::{Difficulty, QuizType};
+use crate::{Error, Result};
 
 /// Curriculum bytes baked into the binary at compile time. Lets `mt`
 /// ship as a single artifact — no checked-out repo required at runtime.
 /// The `--graph DIR` CLI flag and `MT_GRAPH` env var both override this
 /// for development against a working tree.
 static EMBEDDED_GRAPH: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/curriculum/graph");
-
-// ── Errors ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Error)]
-pub enum LoadError {
-    #[error("io: {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("parse: {path}: {message}")]
-    Parse { path: PathBuf, message: String },
-}
 
 // ── Manifest ────────────────────────────────────────────────────────
 
@@ -246,24 +232,24 @@ fn node_to_concept(n: NodeRaw) -> Concept {
 
 // ── Loaders ─────────────────────────────────────────────────────────
 
-fn load_manifest(path: &Path) -> Result<Manifest, LoadError> {
+fn load_manifest(path: &Path) -> Result<Manifest> {
     let reader = open_reader(path)?;
-    ayml::from_reader(reader).map_err(|e| LoadError::Parse {
+    ayml::from_reader(reader).map_err(|e| Error::AymlParse {
         path: path.to_path_buf(),
         message: e.to_string(),
     })
 }
 
-fn load_area(path: &Path) -> Result<AreaFileRaw, LoadError> {
+fn load_area(path: &Path) -> Result<AreaFileRaw> {
     let reader = open_reader(path)?;
-    ayml::from_reader(reader).map_err(|e| LoadError::Parse {
+    ayml::from_reader(reader).map_err(|e| Error::AymlParse {
         path: path.to_path_buf(),
         message: e.to_string(),
     })
 }
 
-fn open_reader(path: &Path) -> Result<BufReader<File>, LoadError> {
-    let file = File::open(path).map_err(|e| LoadError::Io {
+fn open_reader(path: &Path) -> Result<BufReader<File>> {
+    let file = File::open(path).map_err(|e| Error::Io {
         path: path.to_path_buf(),
         source: e,
     })?;
@@ -272,38 +258,38 @@ fn open_reader(path: &Path) -> Result<BufReader<File>, LoadError> {
 
 // ── Embedded loaders ────────────────────────────────────────────────
 
-/// Display-only sentinel path used in `LoadError` when parsing the
-/// compiled-in curriculum. Lets the error pinpoint the offending file
-/// without lying about its location on disk.
+/// Display-only sentinel path used in `Error::AymlParse` when reading
+/// the compiled-in curriculum. Lets the error pinpoint the offending
+/// file without lying about its location on disk.
 fn embedded_path(name: &str) -> PathBuf {
     PathBuf::from(format!("<embedded>/{name}"))
 }
 
-fn embedded_file_str(name: &str) -> Result<&'static str, LoadError> {
-    let file = EMBEDDED_GRAPH.get_file(name).ok_or_else(|| LoadError::Io {
+fn embedded_file_str(name: &str) -> Result<&'static str> {
+    let file = EMBEDDED_GRAPH.get_file(name).ok_or_else(|| Error::Io {
         path: embedded_path(name),
         source: std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "file not found in embedded curriculum",
         ),
     })?;
-    file.contents_utf8().ok_or_else(|| LoadError::Parse {
+    file.contents_utf8().ok_or_else(|| Error::AymlParse {
         path: embedded_path(name),
         message: "embedded file is not valid UTF-8".into(),
     })
 }
 
-fn load_manifest_embedded() -> Result<Manifest, LoadError> {
+fn load_manifest_embedded() -> Result<Manifest> {
     let s = embedded_file_str("manifest.ayml")?;
-    ayml::from_str(s).map_err(|e| LoadError::Parse {
+    ayml::from_str(s).map_err(|e| Error::AymlParse {
         path: embedded_path("manifest.ayml"),
         message: e.to_string(),
     })
 }
 
-fn load_area_embedded(filename: &str) -> Result<AreaFileRaw, LoadError> {
+fn load_area_embedded(filename: &str) -> Result<AreaFileRaw> {
     let s = embedded_file_str(filename)?;
-    ayml::from_str(s).map_err(|e| LoadError::Parse {
+    ayml::from_str(s).map_err(|e| Error::AymlParse {
         path: embedded_path(filename),
         message: e.to_string(),
     })
@@ -312,7 +298,7 @@ fn load_area_embedded(filename: &str) -> Result<AreaFileRaw, LoadError> {
 /// Resolve where to load curriculum from, honoring (in order) the
 /// explicit `--graph DIR` flag, the `MT_GRAPH` env var, and otherwise
 /// the embedded copy.
-pub fn load_manifest_default(explicit: Option<&Path>) -> Result<Manifest, LoadError> {
+pub fn load_manifest_default(explicit: Option<&Path>) -> Result<Manifest> {
     if let Some(p) = explicit {
         return load_manifest(&p.join("manifest.ayml"));
     }
@@ -322,7 +308,7 @@ pub fn load_manifest_default(explicit: Option<&Path>) -> Result<Manifest, LoadEr
     load_manifest_embedded()
 }
 
-fn load_area_default(explicit: Option<&Path>, filename: &str) -> Result<AreaFileRaw, LoadError> {
+fn load_area_default(explicit: Option<&Path>, filename: &str) -> Result<AreaFileRaw> {
     if let Some(p) = explicit {
         return load_area(&p.join(filename));
     }
@@ -331,7 +317,6 @@ fn load_area_default(explicit: Option<&Path>, filename: &str) -> Result<AreaFile
     }
     load_area_embedded(filename)
 }
-
 
 // ── Flat graph (for scheduler / `mt new`) ──────────────────────────
 
@@ -354,7 +339,7 @@ pub struct FlatConcept {
 }
 
 impl Graph {
-    pub fn load(graph_dir: &Path) -> Result<Self, LoadError> {
+    pub fn load(graph_dir: &Path) -> Result<Self> {
         let manifest = load_manifest(&graph_dir.join("manifest.ayml"))?;
         let mut by_id = HashMap::new();
         for entry in &manifest.areas {
@@ -367,7 +352,7 @@ impl Graph {
     }
 
     /// Load curriculum from compiled-in bytes — no filesystem access.
-    pub fn load_embedded() -> Result<Self, LoadError> {
+    pub fn load_embedded() -> Result<Self> {
         let manifest = load_manifest_embedded()?;
         let mut by_id = HashMap::new();
         for entry in &manifest.areas {
@@ -383,7 +368,7 @@ impl Graph {
     /// embedded copy. The embedded variant is the default for shipped
     /// binaries; the others exist for development against a working
     /// tree.
-    pub fn load_default(explicit: Option<&Path>) -> Result<Self, LoadError> {
+    pub fn load_default(explicit: Option<&Path>) -> Result<Self> {
         if let Some(p) = explicit {
             return Self::load(p);
         }
@@ -396,12 +381,9 @@ impl Graph {
     /// Effective graph "as the given path sees it" — shipped curriculum
     /// with the path's overlay applied. The single entry point for
     /// scheduler / tree / state queries; consumers stay overlay-unaware.
-    pub fn load_for_path(path_id: &str, graph_dir: Option<&Path>) -> Result<Self, LoadError> {
+    pub fn load_for_path(path_id: &str, graph_dir: Option<&Path>) -> Result<Self> {
         let mut g = Self::load_default(graph_dir)?;
-        let overlay = crate::overlay::load(path_id).map_err(|e| LoadError::Parse {
-            path: PathBuf::from(format!("<overlay>/{path_id}")),
-            message: e.to_string(),
-        })?;
+        let overlay = crate::overlay::load(path_id)?;
         g.apply_overlay(&overlay);
         Ok(g)
     }
@@ -467,7 +449,7 @@ pub struct CheckReport {
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport, LoadError> {
+pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport> {
     let manifest = load_manifest_default(graph_dir)?;
 
     let mut report = CheckReport {

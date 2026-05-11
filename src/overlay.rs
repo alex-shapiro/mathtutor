@@ -20,24 +20,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::graph::{Quiz, QuizRaw};
-use crate::path::{PathError, path_dir, resolve_id};
+use crate::path::{path_dir, resolve_id};
 use crate::types::{Difficulty, QuizType};
-
-#[derive(Debug, thiserror::Error)]
-pub enum OverlayError {
-    #[error(transparent)]
-    Path(#[from] PathError),
-    #[error("io: {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("ayml serialize: {0}")]
-    Serialize(String),
-    #[error("ayml parse: {path}: {message}")]
-    Parse { path: PathBuf, message: String },
-}
+use crate::{Error, Result};
 
 /// On-disk shape of `overlay.ayml`. Flat: atoms keyed by ID, each
 /// carrying the lesson and/or quizzes this path has authored. No
@@ -70,11 +55,11 @@ impl OverlayAtom {
 
 // ── Storage layout ──────────────────────────────────────────────────
 
-pub fn overlay_path(path_id: &str) -> Result<PathBuf, PathError> {
+pub fn overlay_path(path_id: &str) -> Result<PathBuf> {
     Ok(path_dir(path_id)?.join("overlay.ayml"))
 }
 
-pub fn load(path_id: &str) -> Result<Overlay, OverlayError> {
+pub fn load(path_id: &str) -> Result<Overlay> {
     let file_path = overlay_path(path_id)?;
     if !file_path.exists() {
         return Ok(Overlay {
@@ -82,61 +67,51 @@ pub fn load(path_id: &str) -> Result<Overlay, OverlayError> {
             atoms: BTreeMap::new(),
         });
     }
-    let file = File::open(&file_path).map_err(|e| OverlayError::Io {
+    let file = File::open(&file_path).map_err(|e| Error::Io {
         path: file_path.clone(),
         source: e,
     })?;
-    if file
-        .metadata()
-        .map_err(|e| OverlayError::Io {
-            path: file_path.clone(),
-            source: e,
-        })?
-        .len()
-        == 0
-    {
+    let metadata = file.metadata().map_err(|e| Error::Io {
+        path: file_path.clone(),
+        source: e,
+    })?;
+    if metadata.len() == 0 {
         return Ok(Overlay {
             schema_version: 1,
             atoms: BTreeMap::new(),
         });
     }
-    ayml::from_reader(BufReader::new(file)).map_err(|e| OverlayError::Parse {
+    ayml::from_reader(BufReader::new(file)).map_err(|e| Error::AymlParse {
         path: file_path,
         message: e.to_string(),
     })
 }
 
-pub fn save(path_id: &str, overlay: &Overlay) -> Result<(), OverlayError> {
+pub fn save(path_id: &str, overlay: &Overlay) -> Result<()> {
     let file_path = overlay_path(path_id)?;
     if let Some(parent) = file_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| OverlayError::Io {
+        fs::create_dir_all(parent).map_err(|e| Error::Io {
             path: parent.to_path_buf(),
             source: e,
         })?;
     }
-    let text = ayml::to_string(overlay).map_err(|e| OverlayError::Serialize(e.to_string()))?;
-    fs::write(&file_path, text).map_err(|e| OverlayError::Io {
+    let text = ayml::to_string(overlay).map_err(|e| Error::AymlSerialize(e.to_string()))?;
+    fs::write(&file_path, text).map_err(|e| Error::Io {
         path: file_path,
         source: e,
-    })?;
-    Ok(())
+    })
 }
 
-// ── Mutators used by `mt store …` (task #9) ────────────────────────
+// ── Mutators used by `mt store …` ──────────────────────────────────
 
-/// Set the lesson body for `atom_id` in this path's overlay. Returns an
-/// error if the overlay already has a lesson for this atom — callers
-/// should pre-check shipped-graph lesson presence too.
-pub fn add_lesson(path_id: &str, atom_id: &str, body: String) -> Result<(), OverlayError> {
+/// Set the lesson body for `atom_id` in this path's overlay. Returns
+/// `Error::LessonAlreadyExists` if the overlay already has one;
+/// callers should pre-check shipped-graph lesson presence too.
+pub fn add_lesson(path_id: &str, atom_id: &str, body: String) -> Result<()> {
     let mut overlay = load(path_id)?;
-    let entry = overlay
-        .atoms
-        .entry(atom_id.to_string())
-        .or_insert_with(OverlayAtom::default);
+    let entry = overlay.atoms.entry(atom_id.to_string()).or_default();
     if entry.lesson.is_some() {
-        return Err(OverlayError::Serialize(format!(
-            "overlay already has a lesson for atom '{atom_id}'"
-        )));
+        return Err(Error::LessonAlreadyExists(atom_id.to_string()));
     }
     entry.lesson = Some(body);
     save(path_id, &overlay)
@@ -155,12 +130,9 @@ pub fn add_quiz(
     answer: String,
     rubric: Option<String>,
     quiz_type: QuizType,
-) -> Result<(), OverlayError> {
+) -> Result<()> {
     let mut overlay = load(path_id)?;
-    let entry = overlay
-        .atoms
-        .entry(atom_id.to_string())
-        .or_insert_with(OverlayAtom::default);
+    let entry = overlay.atoms.entry(atom_id.to_string()).or_default();
     let kind = (quiz_type != QuizType::FreeText).then_some(quiz_type);
     entry.quizzes.push(QuizRaw {
         id: quiz_id,
@@ -175,10 +147,10 @@ pub fn add_quiz(
 
 // ── `mt overlay dump` ──────────────────────────────────────────────
 
-pub fn cmd_dump(path_id: Option<&str>) -> Result<(), OverlayError> {
+pub fn cmd_dump(path_id: Option<&str>) -> Result<()> {
     let id = resolve_id(path_id)?;
     let overlay = load(&id)?;
-    let text = ayml::to_string(&overlay).map_err(|e| OverlayError::Serialize(e.to_string()))?;
+    let text = ayml::to_string(&overlay).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
 }

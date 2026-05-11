@@ -15,14 +15,9 @@ use serde::Serialize;
 
 use crate::event_log::{Event, EventKind};
 use crate::types::Rating;
+use crate::{Error, Result};
 
 const DESIRED_RETENTION: f32 = 0.9;
-
-#[derive(Debug, thiserror::Error)]
-pub enum CardError {
-    #[error("fsrs: {0}")]
-    Fsrs(String),
-}
 
 /// Derived FSRS state for a single quiz card. Not persisted — computed
 /// on demand from the event log.
@@ -41,7 +36,7 @@ pub struct CardState {
 
 /// Replay one quiz's answered events to produce its current FSRS card
 /// state. Returns `None` if the quiz has never been answered.
-pub fn card_state(events: &[Event], quiz_id: &str) -> Result<Option<CardState>, CardError> {
+pub fn card_state(events: &[Event], quiz_id: &str) -> Result<Option<CardState>> {
     let mut state: Option<CardState> = None;
     for e in events {
         if !matches!(e.kind, EventKind::QuizAnswered) {
@@ -61,7 +56,7 @@ pub fn card_state(events: &[Event], quiz_id: &str) -> Result<Option<CardState>, 
 /// Replay every answered quiz in the log and return current state per
 /// quiz. Used by the scheduler to find the earliest-due card without
 /// repeatedly scanning the log.
-pub fn all_card_states(events: &[Event]) -> Result<HashMap<String, CardState>, CardError> {
+pub fn all_card_states(events: &[Event]) -> Result<HashMap<String, CardState>> {
     // Group answered events by quiz_id, preserving chronological order
     // (the log itself is already in order, so a single pass suffices).
     let mut by_quiz: HashMap<String, Vec<(DateTime<Utc>, Rating)>> = HashMap::new();
@@ -106,7 +101,7 @@ pub fn apply_answer(
     prev: Option<&CardState>,
     rating: Rating,
     ts: DateTime<Utc>,
-) -> Result<CardState, CardError> {
+) -> Result<CardState> {
     let days_elapsed = match prev.and_then(|c| c.last_review) {
         Some(lr) => (ts - lr).num_days().max(0) as u32,
         None => 0,
@@ -119,10 +114,10 @@ pub fn apply_answer(
         _ => None,
     });
 
-    let fsrs = FSRS::new(Some(&[])).map_err(|e| CardError::Fsrs(format!("{e:?}")))?;
+    let fsrs = FSRS::new(Some(&[])).map_err(|e| Error::Fsrs(format!("{e:?}")))?;
     let next_states = fsrs
         .next_states(memory, DESIRED_RETENTION, days_elapsed)
-        .map_err(|e| CardError::Fsrs(format!("{e:?}")))?;
+        .map_err(|e| Error::Fsrs(format!("{e:?}")))?;
     let next = match rating {
         Rating::Again => next_states.again,
         Rating::Hard => next_states.hard,

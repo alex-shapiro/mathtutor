@@ -3,22 +3,17 @@
 //! FSRS card state is derived from the event log on demand (see
 //! `crate::cards`), so this command's job is just to log the answer.
 
+use crate::Result;
 use crate::event_log;
-use crate::path::{self, PathError};
+use crate::path;
 use crate::types::Rating;
-
-#[derive(Debug, thiserror::Error)]
-pub enum AnswerError {
-    #[error(transparent)]
-    Path(#[from] PathError),
-}
 
 pub fn cmd_answer(
     quiz_id: &str,
     rating: Rating,
     user_answer: Option<String>,
     path_id: Option<&str>,
-) -> Result<(), AnswerError> {
+) -> Result<()> {
     let id = path::resolve_id(path_id)?;
     event_log::append(event_log::quiz_answered(
         id,
@@ -26,8 +21,7 @@ pub fn cmd_answer(
         quiz_id.to_string(),
         rating,
         user_answer,
-    ))?;
-    Ok(())
+    ))
 }
 
 /// Recover the atom ID from a quiz ID like `fnd.1.1.1.q3`.

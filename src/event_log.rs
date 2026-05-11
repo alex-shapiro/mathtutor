@@ -10,8 +10,9 @@ use std::io::BufReader;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::path::{PathError, path_dir};
+use crate::path::path_dir;
 use crate::types::Rating;
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -134,35 +135,47 @@ pub fn quiz_answered(
 
 // ── Append + load ─────────────────────────────────────────────────
 
-pub fn append(event: Event) -> Result<(), PathError> {
+pub fn append(event: Event) -> Result<()> {
     let dir = path_dir(&event.path)?;
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(&dir).map_err(|e| Error::Io {
+        path: dir.clone(),
+        source: e,
+    })?;
     let log_file = dir.join("log.ayml");
 
     let mut events = read_events(&log_file)?;
     events.push(event);
 
-    let text = ayml::to_string(&events).map_err(|e| PathError::Serialize(e.to_string()))?;
-    fs::write(log_file, text)?;
-    Ok(())
+    let text = ayml::to_string(&events).map_err(|e| Error::AymlSerialize(e.to_string()))?;
+    fs::write(&log_file, text).map_err(|e| Error::Io {
+        path: log_file,
+        source: e,
+    })
 }
 
 /// Read all events for a path, in chronological order. Empty if the log
 /// doesn't exist yet.
-pub fn load(path_id: &str) -> Result<Vec<Event>, PathError> {
+pub fn load(path_id: &str) -> Result<Vec<Event>> {
     read_events(&path_dir(path_id)?.join("log.ayml"))
 }
 
-fn read_events(log_file: &std::path::Path) -> Result<Vec<Event>, PathError> {
+fn read_events(log_file: &std::path::Path) -> Result<Vec<Event>> {
     if !log_file.exists() {
         return Ok(Vec::new());
     }
-    let file = File::open(log_file)?;
-    if file.metadata()?.len() == 0 {
+    let file = File::open(log_file).map_err(|e| Error::Io {
+        path: log_file.to_path_buf(),
+        source: e,
+    })?;
+    let metadata = file.metadata().map_err(|e| Error::Io {
+        path: log_file.to_path_buf(),
+        source: e,
+    })?;
+    if metadata.len() == 0 {
         return Ok(Vec::new());
     }
-    ayml::from_reader(BufReader::new(file)).map_err(|e| PathError::Parse {
-        path: log_file.to_string_lossy().into(),
-        msg: e.to_string(),
+    ayml::from_reader(BufReader::new(file)).map_err(|e| Error::AymlParse {
+        path: log_file.to_path_buf(),
+        message: e.to_string(),
     })
 }

@@ -6,20 +6,11 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::graph::{self, FlatConcept, Graph, Manifest, ManifestArea};
-
-#[derive(Debug, thiserror::Error)]
-pub enum DiscoverError {
-    #[error(transparent)]
-    Graph(#[from] graph::LoadError),
-    #[error("ayml serialize: {0}")]
-    Serialize(String),
-    #[error("unknown id: {0}")]
-    UnknownId(String),
-}
+use crate::{Error, Result};
 
 // ── Commands ───────────────────────────────────────────────────────
 
-pub fn cmd_show(id: &str, graph_dir: Option<&Path>) -> Result<(), DiscoverError> {
+pub fn cmd_show(id: &str, graph_dir: Option<&Path>) -> Result<()> {
     let manifest = graph::load_manifest_default(graph_dir)?;
     let g = Graph::load_default(graph_dir)?;
 
@@ -29,10 +20,10 @@ pub fn cmd_show(id: &str, graph_dir: Option<&Path>) -> Result<(), DiscoverError>
     if let Some(area) = manifest.areas.iter().find(|a| a.prefix == id) {
         return emit(&area_cluster_view(&g, area));
     }
-    Err(DiscoverError::UnknownId(id.to_string()))
+    Err(Error::UnknownId(id.to_string()))
 }
 
-pub fn cmd_list(id: Option<&str>, graph_dir: Option<&Path>) -> Result<(), DiscoverError> {
+pub fn cmd_list(id: Option<&str>, graph_dir: Option<&Path>) -> Result<()> {
     let manifest = graph::load_manifest_default(graph_dir)?;
     let g = Graph::load_default(graph_dir)?;
 
@@ -46,7 +37,7 @@ pub fn cmd_list(id: Option<&str>, graph_dir: Option<&Path>) -> Result<(), Discov
     if let Some(area) = manifest.areas.iter().find(|a| a.prefix == id) {
         return emit(&area_list_view(&g, area));
     }
-    Err(DiscoverError::UnknownId(id.to_string()))
+    Err(Error::UnknownId(id.to_string()))
 }
 
 // ── Views (AYML wire shapes) ──────────────────────────────────────
@@ -238,8 +229,8 @@ fn count_atomic_descendants(g: &Graph, id: &str) -> usize {
     }
 }
 
-fn emit<T: Serialize>(view: &T) -> Result<(), DiscoverError> {
-    let text = ayml::to_string(view).map_err(|e| DiscoverError::Serialize(e.to_string()))?;
+fn emit<T: Serialize>(view: &T) -> Result<()> {
+    let text = ayml::to_string(view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
 }

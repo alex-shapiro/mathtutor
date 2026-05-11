@@ -9,23 +9,14 @@ use serde::Serialize;
 use crate::answer::atom_from_quiz_id;
 use crate::cards;
 use crate::event_log::{self, Event, EventKind};
-use crate::graph::{self, FlatConcept, Graph};
-use crate::path::{self, PathError, PathFile};
+use crate::graph::{FlatConcept, Graph};
+use crate::path::{self, PathFile};
 use crate::types::{Difficulty, QuizType, Rating};
+use crate::{Error, Result};
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
-#[derive(Debug, thiserror::Error)]
-pub enum SchedulerError {
-    #[error(transparent)]
-    Path(#[from] PathError),
-    #[error(transparent)]
-    Graph(#[from] graph::LoadError),
-    #[error("ayml serialize: {0}")]
-    Serialize(String),
-}
-
-pub fn cmd_next(path_id: Option<&str>, graph_dir: Option<&Path>) -> Result<(), SchedulerError> {
+pub fn cmd_next(path_id: Option<&str>, graph_dir: Option<&Path>) -> Result<()> {
     let id = path::resolve_id(path_id)?;
     let g = Graph::load_for_path(&id, graph_dir)?;
     let p = path::load_path(&id)?;
@@ -51,7 +42,7 @@ pub fn cmd_next(path_id: Option<&str>, graph_dir: Option<&Path>) -> Result<(), S
         _ => {}
     }
 
-    let text = ayml::to_string(&envelope).map_err(|e| SchedulerError::Serialize(e.to_string()))?;
+    let text = ayml::to_string(&envelope).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
 
     Ok(())

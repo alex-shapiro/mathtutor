@@ -9,13 +9,14 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use crate::Result;
 use crate::event_log::{self, Event};
 use crate::graph::{self, FlatConcept, Graph};
-use crate::path::{PathError, load_path, resolve_id};
+use crate::path::{load_path, resolve_id};
 use crate::scheduler;
 use crate::types::Difficulty;
 
-pub fn cmd_tree(explicit_id: Option<&str>, graph_dir: Option<&Path>) -> Result<(), PathError> {
+pub fn cmd_tree(explicit_id: Option<&str>, graph_dir: Option<&Path>) -> Result<()> {
     let id = resolve_id(explicit_id)?;
     let p = load_path(&id)?;
     let g = Graph::load_for_path(&id, graph_dir)?;

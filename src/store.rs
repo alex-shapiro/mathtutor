@@ -16,26 +16,9 @@ use std::path::Path;
 use crate::event_log;
 use crate::graph::{self, Graph};
 use crate::overlay;
-use crate::path::{self, PathError};
+use crate::path;
 use crate::types::{Difficulty, QuizType};
-
-#[derive(Debug, thiserror::Error)]
-pub enum PersistError {
-    #[error("graph: {0}")]
-    Graph(#[from] graph::LoadError),
-    #[error(transparent)]
-    Path(#[from] PathError),
-    #[error("overlay: {0}")]
-    Overlay(#[from] overlay::OverlayError),
-    #[error("atom '{0}' not found in graph")]
-    AtomNotFound(String),
-    #[error("'{0}' is a cluster, not an atom")]
-    NotAtom(String),
-    #[error("atom '{0}' already has a stored lesson")]
-    LessonAlreadyExists(String),
-    #[error("atom '{0}' has no stored lesson; teach it before authoring quizzes")]
-    NoLesson(String),
-}
+use crate::{Error, Result};
 
 /// Persist a lesson body for `atom_id` into the active path's overlay,
 /// then log `lesson_authored` + `lesson_taught`. Per AGENTS.md the
@@ -46,18 +29,18 @@ pub fn cmd_store_lesson(
     body: String,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
-) -> Result<(), PersistError> {
+) -> Result<()> {
     let id = path::resolve_id(path_id)?;
     let g = Graph::load_for_path(&id, graph_dir)?;
     let c = g
         .by_id
         .get(atom_id)
-        .ok_or_else(|| PersistError::AtomNotFound(atom_id.to_string()))?;
+        .ok_or_else(|| Error::AtomNotFound(atom_id.to_string()))?;
     if !c.children_ids.is_empty() {
-        return Err(PersistError::NotAtom(atom_id.to_string()));
+        return Err(Error::NotAtom(atom_id.to_string()));
     }
     if c.lesson.is_some() {
-        return Err(PersistError::LessonAlreadyExists(atom_id.to_string()));
+        return Err(Error::LessonAlreadyExists(atom_id.to_string()));
     }
 
     overlay::add_lesson(&id, atom_id, body)?;
@@ -80,18 +63,18 @@ pub fn cmd_store_quiz(
     quiz_type: QuizType,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
-) -> Result<String, PersistError> {
+) -> Result<String> {
     let id = path::resolve_id(path_id)?;
     let g = Graph::load_for_path(&id, graph_dir)?;
     let c = g
         .by_id
         .get(atom_id)
-        .ok_or_else(|| PersistError::AtomNotFound(atom_id.to_string()))?;
+        .ok_or_else(|| Error::AtomNotFound(atom_id.to_string()))?;
     if !c.children_ids.is_empty() {
-        return Err(PersistError::NotAtom(atom_id.to_string()));
+        return Err(Error::NotAtom(atom_id.to_string()));
     }
     if c.lesson.is_none() {
-        return Err(PersistError::NoLesson(atom_id.to_string()));
+        return Err(Error::NoLesson(atom_id.to_string()));
     }
 
     let new_id = next_quiz_id(atom_id, &c.quizzes);
