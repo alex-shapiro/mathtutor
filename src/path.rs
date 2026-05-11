@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::event_log;
 use crate::graph::{self, Graph};
-use crate::types::Rating;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathError {
@@ -18,8 +17,8 @@ pub enum PathError {
     Io(#[from] std::io::Error),
     #[error("ayml serialize: {0}")]
     Serialize(String),
-    #[error("ayml parse: {0}")]
-    Parse(String),
+    #[error("ayml parse: {path} {msg}")]
+    Parse { path: String, msg: String },
     #[error("graph: {0}")]
     Graph(#[from] graph::LoadError),
     #[error("unknown id: {0}")]
@@ -34,6 +33,10 @@ pub enum PathError {
     NoHome,
 }
 
+/// Immutable record of the learner's goal for a path. Written once at
+/// `mt new`; never updated. All mutable per-path state (quiz answers,
+/// FSRS card state, lessons taught) lives in the event log; FSRS state
+/// is derived from the log on demand via `crate::cards`.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PathFile {
     pub schema_version: u32,
@@ -41,23 +44,6 @@ pub struct PathFile {
     pub goal: String,
     pub created_at: DateTime<Utc>,
     pub target_atoms: Vec<String>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub cards: HashMap<String, CardState>,
-}
-
-/// FSRS-backed card state per quiz, stored in `path.ayml` keyed by quiz
-/// ID. Created on the first answer for that quiz.
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CardState {
-    pub due: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_review: Option<DateTime<Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stability: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub difficulty: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_rating: Option<Rating>,
 }
 
 // ── Storage layout ──────────────────────────────────────────────────
@@ -87,8 +73,12 @@ pub fn save_path(p: &PathFile) -> Result<(), PathError> {
 }
 
 pub fn load_path(id: &str) -> Result<PathFile, PathError> {
-    let file = File::open(path_dir(id)?.join("path.ayml"))?;
-    ayml::from_reader(BufReader::new(file)).map_err(|e| PathError::Parse(e.to_string()))
+    let path = path_dir(id)?.join("path.ayml");
+    let file = File::open(&path)?;
+    ayml::from_reader(BufReader::new(file)).map_err(|e| PathError::Parse {
+        path: path.to_string_lossy().into(),
+        msg: e.to_string(),
+    })
 }
 
 pub fn most_recent_id() -> Result<Option<String>, PathError> {
@@ -134,7 +124,6 @@ pub fn cmd_new(goal: &str, ids: &[String], graph_dir: &Path) -> Result<String, P
         goal: goal.to_string(),
         created_at: now,
         target_atoms: sorted,
-        cards: HashMap::new(),
     };
 
     save_path(&p)?;

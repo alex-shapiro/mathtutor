@@ -9,6 +9,7 @@
 #![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
 pub mod answer;
+pub mod cards;
 pub mod cli;
 pub mod discover;
 pub mod event_log;

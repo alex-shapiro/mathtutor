@@ -5,12 +5,15 @@ dependencies:
   ash/base-macos: ^0
   ash/claude-code: ^0
   ash/gemini-cli: ^0
-  ash/git: ^0
+  ash/github: ^0
   ash/rust-dev: ^0
 files:
   rules:
   - path: ./**
   - path: ~/.mathtutor/**
+  - path: ~/Applications/Claude Code URL Handler.app
+    operations:
+    - read
 network:
   rules: []
 exec:

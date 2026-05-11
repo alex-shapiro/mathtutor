@@ -7,9 +7,10 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use crate::answer::atom_from_quiz_id;
+use crate::cards;
 use crate::event_log::{self, Event, EventKind};
 use crate::graph::{self, FlatConcept, Graph};
-use crate::path::{self, CardState, PathError, PathFile};
+use crate::path::{self, PathError, PathFile};
 use crate::types::{Difficulty, QuizType, Rating};
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
@@ -101,7 +102,7 @@ impl Action {
 /// at least one `quiz_answered` event with rating `good` or `easy`.
 pub fn next_action(g: &Graph, p: &PathFile, events: &[Event]) -> Action {
     let now = Utc::now();
-    if let Some((quiz_id, atom_id)) = first_due_card(g, p, now) {
+    if let Some((quiz_id, atom_id)) = first_due_card(g, events, now) {
         return Action::PresentQuiz { quiz_id, atom_id };
     }
 
@@ -178,15 +179,18 @@ fn next_atom_action(
     None
 }
 
-fn first_due_card(g: &Graph, p: &PathFile, now: DateTime<Utc>) -> Option<(String, String)> {
-    let mut due_cards: Vec<(&String, &CardState)> =
-        p.cards.iter().filter(|(_, c)| c.due <= now).collect();
-    due_cards.sort_by_key(|(_, c)| c.due);
-    for (quiz_id, _) in due_cards {
-        let atom_id = atom_from_quiz_id(quiz_id)?;
+fn first_due_card(g: &Graph, events: &[Event], now: DateTime<Utc>) -> Option<(String, String)> {
+    let cards = cards::all_card_states(events).ok()?;
+    let mut due: Vec<(String, DateTime<Utc>)> = cards
+        .into_iter()
+        .filter_map(|(quiz_id, c)| (c.due <= now).then_some((quiz_id, c.due)))
+        .collect();
+    due.sort_by_key(|(_, t)| *t);
+    for (quiz_id, _) in due {
+        let atom_id = atom_from_quiz_id(&quiz_id)?;
         let atom = g.by_id.get(&atom_id)?;
-        if atom.quizzes.iter().any(|q| q.id == *quiz_id) {
-            return Some((quiz_id.clone(), atom_id));
+        if atom.quizzes.iter().any(|q| q.id == quiz_id) {
+            return Some((quiz_id, atom_id));
         }
         // Quiz no longer in graph (rare); skip.
     }
@@ -212,10 +216,8 @@ pub fn quiz_answered_correctly(events: &[Event], quiz_id: &str) -> bool {
 /// `create_lesson` playbook).
 pub fn lesson_taught_in_path(events: &[Event], atom_id: &str) -> bool {
     events.iter().any(|e| {
-        matches!(
-            e.kind,
-            EventKind::LessonTaught | EventKind::LessonAuthored
-        ) && e.atom.as_deref() == Some(atom_id)
+        matches!(e.kind, EventKind::LessonTaught | EventKind::LessonAuthored)
+            && e.atom.as_deref() == Some(atom_id)
     })
 }
 

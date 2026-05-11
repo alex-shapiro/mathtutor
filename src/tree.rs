@@ -35,7 +35,11 @@ pub fn cmd_tree(explicit_id: Option<&str>, graph_dir: &Path) -> Result<(), PathE
         .iter()
         .filter(|a| scheduler::is_atom_complete(&g, &events, a))
         .count();
-    let pct = if total > 0 { target_learned * 100 / total } else { 0 };
+    let pct = if total > 0 {
+        target_learned * 100 / total
+    } else {
+        0
+    };
     let reach_total = reachable.len();
     let reach_taught = reachable
         .iter()
@@ -156,7 +160,9 @@ fn top_level_in_area<'a>(g: &'a Graph, prefix: &str) -> Vec<&'a FlatConcept> {
 }
 
 fn natural_id_key(id: &str) -> Vec<u32> {
-    id.split('.').filter_map(|s| s.parse::<u32>().ok()).collect()
+    id.split('.')
+        .filter_map(|s| s.parse::<u32>().ok())
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -181,10 +187,7 @@ fn render_node(
         } else {
             ""
         };
-        println!(
-            "{prefix}{connector}{badge} {} {}{star}{mark}",
-            c.id, c.name
-        );
+        println!("{prefix}{connector}{badge} {} {}{star}{mark}", c.id, c.name);
         return;
     }
 

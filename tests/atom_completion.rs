@@ -56,7 +56,6 @@ fn path_with(targets: &[&str]) -> PathFile {
         goal: "test".into(),
         created_at: Utc::now(),
         target_atoms: targets.iter().map(|s| (*s).to_string()).collect(),
-        cards: HashMap::new(),
     }
 }
 

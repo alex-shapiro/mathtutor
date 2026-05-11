@@ -161,5 +161,8 @@ fn read_events(log_file: &std::path::Path) -> Result<Vec<Event>, PathError> {
     if file.metadata()?.len() == 0 {
         return Ok(Vec::new());
     }
-    ayml::from_reader(BufReader::new(file)).map_err(|e| PathError::Parse(e.to_string()))
+    ayml::from_reader(BufReader::new(file)).map_err(|e| PathError::Parse {
+        path: log_file.to_string_lossy().into(),
+        msg: e.to_string(),
+    })
 }
