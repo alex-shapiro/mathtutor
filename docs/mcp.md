@@ -22,9 +22,13 @@ All CLI tools are ported to MCP tools. The server handles the mapping from JSON-
 
 #### General Conventions
 
-- **`path_id`**: Optional in all tools. If omitted, the server defaults to the most recently created/accessed path for the provided `MT_API_KEY`. The "most recent" state is global per server instance.
+- **`path_id`**: **Mandatory** for all path-specific tools:
+  - State-modifying: `AnswerQuiz`, `UpsertLesson`, `CreateQuiz`, `UpdateQuiz`, `DeleteQuiz`.
+  - Progress-related: `GetNext`, `GetState`, `GetTree`.
+- **Curriculum Exploration**: `path_id` is **Optional** for `GetItem` and `GetChildren`. If omitted, these tools return static curriculum data only (no per-atom status or progress).
 - **`graph`**: Removed from all tool schemas. The server uses its own configured curriculum (embedded or via `MT_GRAPH`).
 - **Return Values**: All tools return structured JSON. Resource creation tools (`NewPath`, `CreateQuiz`) return the ID of the new resource in a JSON field.
+- **Validation**: The server validates all `atom_id` and `quiz_id` inputs against the merged graph (Base + Overlay) before processing.
 
 #### Tool Definitions
 
@@ -40,17 +44,19 @@ struct NewPath {
 
 /// Get the next action (lesson or quiz) in the path
 struct GetNext {
-    path_id: Option<String>
+    path_id: String
 }
 
 /// Returns a summary of progress, including completed vs. remaining atoms.
 struct GetState {
-    path_id: Option<String>
+    path_id: String
 }
 
 /// Returns the full prerequisite tree with per-atom status.
 struct GetTree {
-    path_id: Option<String>
+    path_id: String,
+    /// Max levels to traverse. Omit for full tree.
+    depth: Option<u32>,
 }
 
 /// Show a detailed view of a curriculum node (atom, cluster, or area).
@@ -63,13 +69,15 @@ struct GetItem {
 struct GetChildren {
     id: Option<String>,
     path_id: Option<String>,
+    /// If true, recursively list all descendants.
+    recursive: Option<bool>,
 }
 
 /// Create or update an agent-authored lesson for an atom.
 struct UpsertLesson {
     atom: String,
     body: String,
-    path_id: Option<String>
+    path_id: String
 }
 
 /// Create an agent-authored quiz.
@@ -80,7 +88,7 @@ struct CreateQuiz {
     rubric: Option<String>,
     difficulty: Difficulty,
     kind: QuizType,
-    path_id: Option<String>,
+    path_id: String,
 }
 
 /// Update fields of an existing quiz while preserving ID and history.
@@ -91,13 +99,14 @@ struct UpdateQuiz {
     rubric: Option<String>,
     difficulty: Option<Difficulty>,
     kind: Option<QuizType>,
-    path_id: Option<String>,
+    path_id: String,
 }
 
 /// Tombstone a quiz so it no longer appears in the curriculum.
+/// Quizzes are never hard-deleted to preserve event log integrity.
 struct DeleteQuiz {
     quiz_id: String,
-    path_id: Option<String>,
+    path_id: String,
 }
 
 enum Difficulty {
@@ -123,7 +132,7 @@ struct AnswerQuiz {
     quiz_id: String,
     answer: Option<String>,
     rating: Rating,
-    path_id: Option<String>,
+    path_id: String,
 }
 ```
 
@@ -156,7 +165,6 @@ The server currently implements a single-user model. Authentication is performed
 
 - **Multi-user Support:** While the architecture allows for multiple paths, the server assumes a single owner for all paths hosted by that instance.
 - **Database Scope:** A single SQLite database represents the entire state for a user (or server instance). The authentication key provides access to the server's management of all paths and data within this database.
-- **Path Resolution:** If no `path_id` is provided, the server uses the most recently modified path associated with the server instance.
 
 #### Authentication Fallback Logic
 
@@ -285,7 +293,7 @@ CREATE TABLE overlay_removed_quizzes (
 3.  **PR 3: Global Overlay & Store SQL Migration.**
     - Refactor `src/overlay.rs` and `src/store.rs` to use SQL.
     - **Scope Shift:** Ensure overlays (lessons/quizzes) are stored globally in the user database, not partitioned by `path_id`.
-    - Update `Graph::load_for_path` to merge the static base graph with the global SQL-resident overlay.
+    - **Validation:** Update `Graph::load_for_path` to merge the static base graph with the global SQL-resident overlay and implement fast-fail validation for IDs.
 4.  **PR 4: AYML to SQLite Migration Tool.**
     - Implement `mt migrate-from-ayml` CLI command to port existing local paths and overlays into the new schema.
     - **Idempotency:** Use `INSERT OR IGNORE` to allow safe repeated runs.
@@ -294,6 +302,7 @@ CREATE TABLE overlay_removed_quizzes (
     - Port all tools to return **machine-readable JSON**.
     - Implement the `GetPaths` tool.
     - Setup `axum` server with SSE routes, heartbeats (15s), and API Key authentication.
+    - **Graceful Shutdown:** Implement signal handlers to ensure final `db.sync()` before exit.
 6.  **PR 6: Deployment & Infrastructure.**
     - Create `Dockerfile` and Fly.io/Railway configuration.
     - Setup CI/CD for automated deployments.
