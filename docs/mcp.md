@@ -192,23 +192,31 @@ We take a hybrid approach to data storage.
 CREATE TABLE paths (
     id TEXT PRIMARY KEY,
     goal TEXT NOT NULL,
-    created_at DATETIME NOT NULL,
-    target_atoms TEXT NOT NULL CHECK (json_valid(target_atoms))
+    created_at DATETIME NOT NULL
+);
+
+-- Join table for referential integrity and efficient querying of goals
+CREATE TABLE path_targets (
+    path_id TEXT NOT NULL REFERENCES paths(id),
+    atom_id TEXT NOT NULL,
+    PRIMARY KEY (path_id, atom_id)
 );
 
 CREATE TABLE events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts DATETIME NOT NULL,
-    kind TEXT NOT NULL,
+    kind TEXT NOT NULL, -- e.g., 'LessonRead', 'QuizAnswered'
     path_id TEXT NOT NULL REFERENCES paths(id),
     atom_id TEXT,
     quiz_id TEXT,
+    rating INTEGER, -- Pulled out of payload for easy FSRS querying
     payload TEXT CHECK (payload IS NULL OR json_valid(payload))
 );
 
 -- Indexes for performance
 CREATE INDEX idx_events_path ON events(path_id);
 CREATE INDEX idx_events_atom ON events(atom_id);
+CREATE INDEX idx_events_quiz ON events(quiz_id);
 
 CREATE TABLE overlay_lessons (
     path_id TEXT NOT NULL REFERENCES paths(id),
@@ -221,7 +229,7 @@ CREATE TABLE overlay_quizzes (
     path_id TEXT NOT NULL REFERENCES paths(id),
     atom_id TEXT NOT NULL,
     quiz_id TEXT NOT NULL,
-    difficulty TEXT NOT NULL,
+    difficulty TEXT NOT NULL, -- easy, medium, hard
     kind TEXT, -- NULL for free_text
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
