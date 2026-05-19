@@ -201,6 +201,13 @@ CREATE TABLE overlay_removed_quizzes (
 
 ## Remote Access & Security
 
+### Authentication Source of Truth
+
+The server currently implements a single-user model. Authentication is performed against a single static API key defined on the server (e.g., via a `MT_API_KEY` environment variable).
+
+- **Multi-user Support:** While the architecture allows for multiple paths, the server assumes a single owner for all paths hosted by that instance.
+- **Database Scope:** Each SQLite database represents an independent learning path. The authentication key provides access to the server's management of these paths.
+
 ### Authentication Fallback Logic
 
 To support both modern MCP clients and legacy `EventSource` (SSE) browsers, the server implements a sequential authentication check:
