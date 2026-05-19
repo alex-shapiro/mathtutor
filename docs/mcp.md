@@ -276,19 +276,23 @@ CREATE TABLE overlay_removed_quizzes (
 
 1.  **PR 1: Database Foundation.**
     - Update `Cargo.toml` dependencies (`libsql`, `tokio`, `serde_json`).
-    - Create `src/db.rs`: setup `libsql` connection pooling, `json_valid` checks, and initial schema migrations.
+    - Create `src/db.rs`: setup `libsql` connection pooling, initial schema migrations (paths, events, cards, overlays).
     - Implement the "Local vs. Synced" initialization logic.
-2.  **PR 2: Event Log SQL Migration.**
+2.  **PR 2: Event Log & FSRS Cache Migration.**
     - Refactor `src/event_log.rs` to use SQL for appending and loading events.
-    - Ensure it correctly handles the "Hybrid" model where base events (if any) are separate from path-specific events.
-3.  **PR 3: Overlay & Store SQL Migration.**
+    - **Write-through Cache:** Implement logic to update the `cards` table whenever a `QuizAnswered` event is recorded.
+    - Create `src/cards.rs` (or update) to support reading from the `cards` table for O(1) scheduling lookups.
+3.  **PR 3: Global Overlay & Store SQL Migration.**
     - Refactor `src/overlay.rs` and `src/store.rs` to use SQL.
-    - Update `Graph::load_for_path` to merge the static base graph with the SQL-resident overlay.
+    - **Scope Shift:** Ensure overlays (lessons/quizzes) are stored globally in the user database, not partitioned by `path_id`.
+    - Update `Graph::load_for_path` to merge the static base graph with the global SQL-resident overlay.
 4.  **PR 4: AYML to SQLite Migration Tool.**
-    - Implement `mt migrate-from-ayml` CLI command.
-    - **Idempotency:** Use `INSERT OR IGNORE` and unique constraints to allow repeated runs.
-5.  **PR 5: MCP Server (SSE) + Authentication.**
+    - Implement `mt migrate-from-ayml` CLI command to port existing local paths and overlays into the new schema.
+    - **Idempotency:** Use `INSERT OR IGNORE` to allow safe repeated runs.
+5.  **PR 5: MCP Server (SSE) + Tool Implementation.**
     - Implement `src/mcp.rs` using `rmcp`.
+    - Port all tools to return **machine-readable JSON**.
+    - Implement the `GetPaths` tool.
     - Setup `axum` server with SSE routes, heartbeats (15s), and API Key authentication.
 6.  **PR 6: Deployment & Infrastructure.**
     - Create `Dockerfile` and Fly.io/Railway configuration.
