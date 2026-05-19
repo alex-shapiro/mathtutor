@@ -14,17 +14,121 @@ The MCP server is integrated into the existing `mt` tool.
 - **Transport:** SSE over HTTP for remote access
 - **Protocol:** MCP JSON-RPC 2.0 via `rmcp`
 
-## Tool Mapping
+## Tool Schemas
 
-All CLI tools are ported to MCP tools; no changes needeed.
+All CLI tools are ported to MCP tools. The server handles the mapping from JSON-RPC parameters to internal command structures.
+
+### General Conventions
+
+- **`path_id`**: Optional in all tools. If omitted, the server defaults to the most recently created/accessed path for the authenticated session.
+- **`graph`**: Removed from all tool schemas. The server uses its own configured curriculum (embedded or via `MT_GRAPH`).
+
+### Tool Definitions
+
+```rust
+/// Start a new learning path with a goal and target atoms
+struct NewPath {
+    goal: String,
+    atoms: Vec<String>,
+}
+
+/// Get the next action (lesson or quiz) in the path
+struct GetNext {
+    path_id: Option<String>
+}
+
+/// Returns a summary of progress, including completed vs. remaining atoms.
+struct GetState {
+    path_id: Option<String>
+}
+
+/// Returns the full prerequisite tree with per-atom status.
+struct GetTree {
+    path_id: Option<String>
+}
+
+/// Show a detailed view of a curriculum node (atom, cluster, or area).
+struct GetItem {
+    id: String,
+    path_id: Option<String>,
+}
+
+/// Lists children of a curriculum node. Omit `id` for root areass
+struct GetChildren {
+    id: Option<String>,
+    path_id: Option<String>,
+}
+
+/// Create or update an agent-authored lesson for an atom.
+struct UpsertLesson {
+    atom: String,
+    body: String,
+    path_id: Option<String>
+}
+
+/// Create an agent-authored quiz.
+struct CreateQuiz {
+    atom: String,
+    question: String,
+    answer: String,
+    difficulty: QuizDifficulty,
+    type: QuizType,
+    path_id: Option<String>,
+}
+
+/// Update fields of an existing quiz while preserving ID and history.
+struct UpdateQuiz {
+    quiz_id: String,
+    question: Option<String>,
+    answer: Option<String>,
+    difficulty: Option<QuizDifficulty>,
+    type: Option<QuizType>,
+    path_id: Option<String>,
+}
+
+/// Tombstone a quiz so it no longer appears in the curriculum.
+struct DeleteQuiz {
+    quiz_id: String,
+    path_id: Option<String>,
+}
+
+enum QuizDifficulty {
+    Easy,
+    Medium,
+    Hard,
+}
+
+enum QuizType {
+    FreeChoice,
+    MultipleChoice,
+}
+
+/// Record a user's quiz answer and FSRS rating.
+struct AnswerQuiz {
+    id: String,
+    answer: Option<String>,
+    rating: QuizRating,
+    path_id: Option<String>,
+}
+```
+
+### Prompt Definitions
+
+A MCP prompt instructs the LLM how to use the MCP server effectively. The MathTutor MCP server includes a `mathtutor-playbook` prompt that returns master instructions for the tutor agent. This prompt mirrors the `mt instruct` MD file used in the CLI, with MCP tool-calling conventions replacing CLI-calling conventions.
 
 ## Data Persistence & Backup: SQLite + Turso
 
 The server will be hosted remotely and accessed from multiple devices and so we must migrate the storage layer from local AYML files to SQLite. The server will use Turso for sync/backup.
 
-- **Storage:** Migrate from AYML files to a local SQLite database that syncs with a remote Turso instance
-- **Sync:** Turso's `libsql` driver handles background synchronization automatically
+- **Storage:** We take a hybrid approach to data storage.
+  - The base curriculum remains a static set of AYML files embedded in the binary
+  - Each learning path migrates to an independent SQLite database containing:
+    - The learning path goals and target atoms
+    - The curriculum overlay
+    - The event log of user interactions
+- **Sync:** Turso's `libsql` driver syncs in an asynchronous background thread after each update.
 - **Implementation:**
+  - Add a
   - Rewrite `src/store.rs`, `src/event_log.rs`, and `src/overlay.rs` to use SQL queries.
   - The server runs a local SQLite file for low-latency reads and the driver pushes updates to Turso
 
@@ -78,6 +182,23 @@ CREATE TABLE overlay_removed_quizzes (
 );
 ```
 
+## Data Persistence: SQLite + Turso
+
+### libSQL Sync Strategy
+
+- **Mode:** `libsql::Builder::new_synced_database` (Embedded Replica with Offline Writes).
+- **Initialization:**
+  - If `TURSO_URL` and `TURSO_AUTH_TOKEN` are set: Enable remote sync.
+  - Otherwise: Fallback to a standard local SQLite database.
+- **Sync Trigger:**
+  - Server Mode: A background tokio task syncs every 5 minutes (or on startup/shutdown).
+  - CLI Mode: `db.sync()` is called at the end of every command that modifies state (store, answer, etc.).
+    - 3 second timeout if a sync has occurred in the last 5 minutes
+    - 10 second timeout if a sync has occurred in the last hour
+    - 30 second timeout otherwise
+    - If a db has not synced in the last 5 minutes, issue a warning to stderr
+    - If a db takes >3 seconds to sync, issue a warning to stderr
+
 ## Remote Access & Security
 
 ### Authentication Fallback Logic
@@ -91,21 +212,9 @@ To support both modern MCP clients and legacy `EventSource` (SSE) browsers, the 
 
 _Security Note:_ While query parameters are less secure due to potential logging, this fallback is required for standard SSE client compatibility. Users are encouraged to use HTTPS and rotate keys regularly.
 
-## Data Persistence: SQLite + Turso
-
-### libSQL Sync Strategy
-
-- **Mode:** `libsql::Builder::new_synced_database` (Embedded Replica with Offline Writes).
-- **Initialization:**
-  - If `TURSO_URL` and `TURSO_AUTH_TOKEN` are set: Enable remote sync.
-  - Otherwise: Fallback to a standard local SQLite database.
-- **Sync Trigger:**
-  - **Server Mode:** A background tokio task will call `db.sync()` every 5 minutes (or on startup/shutdown).
-  - **CLI Mode:** `db.sync()` is called at the end of every command that modifies state (store, answer, etc.) to ensure the remote is updated immediately.
-
 ## Implementation Plan (PR-Sized Tasks)
 
-1.  **PR 1: Database Foundation.** 
+1.  **PR 1: Database Foundation.**
     - Update `Cargo.toml` dependencies (`libsql`, `tokio`, `serde_json`).
     - Create `src/db.rs`: setup `libsql` connection pooling, `json_valid` checks, and initial schema migrations.
     - Implement the "Local vs. Synced" initialization logic.
