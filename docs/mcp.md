@@ -186,9 +186,11 @@ We take a hybrid approach to data storage.
 - **Base Curriculum:** Remains a static set of AYML files embedded in the binary. This preserves the developer experience for curriculum authoring.
 - **User Database**: A single SQLite database represents the entire state for a user (or server instance). It contains:
   - All learning paths, goals, and target atoms.
-  - The user's shared curriculum overlay (agent-authored lessons and quizzes). Lessons and quizzes are global to the user and shared across all paths.
+  - The user's shared curriculum overlay (agent-authored lessons and quizzes).
   - The event log of user interactions, partitioned by `path_id`.
-- **FSRS State**: Following the existing design, FSRS card state (stability, difficulty, etc.) is recomputed on-demand by replaying the `QuizAnswered` events for a given quiz ID within a specific path.
+  - FSRS card states: a materialized view of the latest FSRS parameters (stability, difficulty, due date) for every quiz/path combination, updated on every answer.
+
+FSRS Recomputation: The event log remains the source of truth for all learning path state. The `cards` table is a write-through cache. If the cache is missing or suspected to be corrupt, it can be recomputed by replaying the `events` table.
 
 ### Sync Strategy (libSQL)
 
@@ -233,6 +235,20 @@ CREATE TABLE events (
 CREATE INDEX idx_events_path ON events(path_id);
 CREATE INDEX idx_events_atom ON events(atom_id);
 CREATE INDEX idx_events_quiz ON events(quiz_id);
+
+-- FSRS Card State: Materialized view of the event log for fast scheduling.
+CREATE TABLE cards (
+    path_id TEXT NOT NULL REFERENCES paths(id),
+    quiz_id TEXT NOT NULL,
+    stability REAL NOT NULL,
+    difficulty REAL NOT NULL,
+    due_at DATETIME NOT NULL,
+    last_reviewed_at DATETIME NOT NULL,
+    reps INTEGER NOT NULL,
+    lapses INTEGER NOT NULL,
+    PRIMARY KEY (path_id, quiz_id)
+);
+CREATE INDEX idx_cards_due ON cards(path_id, due_at);
 
 -- Overlays are global to the user/database, not path-scoped.
 CREATE TABLE overlay_lessons (
