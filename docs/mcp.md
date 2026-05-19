@@ -6,42 +6,27 @@ This document outlines the transition of `mathtutor` from a standalone CLI tool 
 
 The current `mathtutor` is a CLI tool (`mt`) that manages a math curriculum DAG and tracks user progress via local AYML files. To make it more accessible to LLM agents (like Claude Desktop), we will wrap the core logic in an MCP server.
 
-## Architecture
+## Architecture: Unified Binary (`mt mcp`)
 
-- **Core Library:** The existing logic in `src/` (scheduler, graph, FSRS, etc.) will be moved or exposed as a library crate.
-- **MCP Server:** A new binary (or a mode in the existing binary) that implements the MCP JSON-RPC protocol.
-- **Transport:** To support remote access from mobile and desktop apps, we will use **SSE (Server-Sent Events)** over HTTP.
-- **SDK:** We will use the `rmcp` Rust SDK.
+The MCP server is integrated into the existing `mt` tool.
+
+- **Feature Flag:** `mcp` ff in `Cargo.toml` gates `axum`, `rmcp`, `tokio` and enables the `mt mcp` command
+- **Transport:** SSE over HTTP for remote access
+- **Protocol:** MCP JSON-RPC 2.0 via `rmcp`
 
 ## Tool Mapping
 
-(No changes to tool mapping)
+All CLI tools are ported to MCP tools; no changes needeed.
 
-## Data Persistence & Backup: SQLite + Turso (Recommended)
+## Data Persistence & Backup: SQLite + Turso
 
-Since the server will be hosted remotely and accessed from multiple devices, **SQLite with Turso** is the recommended storage solution.
+The server will be hosted remotely and accessed from multiple devices and so we must migrate the storage layer from local AYML files to SQLite. The server will use Turso for sync/backup.
 
-- **Storage:** Migrate from AYML files to a local SQLite database that syncs with a remote Turso instance.
-- **Sync:** Turso's `libsql` driver handles background synchronization automatically.
+- **Storage:** Migrate from AYML files to a local SQLite database that syncs with a remote Turso instance
+- **Sync:** Turso's `libsql` driver handles background synchronization automatically
 - **Implementation:**
   - Rewrite `src/store.rs`, `src/event_log.rs`, and `src/overlay.rs` to use SQL queries.
-  - The server will run with a local SQLite file for low-latency reads, while the driver pushes updates to Turso.
-- **Pros:**
-  - Robust, atomic transactions.
-  - Seamless multi-device synchronization (all devices point to the same hosted MCP server, which points to Turso).
-  - No need to manage Git state or persistent volumes on the hosting provider.
-
-## Remote Access & Security
-
-To safely expose the MCP server as a remote API:
-
-- **Authentication:** Use a simple **API Key** (passed in an `Authorization` header or as a query parameter) to restrict access to the owner.
-- **HTTPS:** Ensure the server is served over HTTPS (typically handled by the hosting provider's load balancer).
-- **Hosting:** Deploy as a containerised app on a platform like **Fly.io** or **Railway**.
-
-## Data Persistence: SQLite + Turso
-
-The storage layer will be migrated from AYML files to SQLite.
+  - The server runs a local SQLite file for low-latency reads and the driver pushes updates to Turso
 
 ### SQL Schema
 
@@ -89,9 +74,19 @@ CREATE TABLE overlay_removed_quizzes (
 );
 ```
 
-## Implementation Plan (PR-Sized Tasks)
+## Remote Access & Security
 
-1.  **PR 1: Database Foundation.** 
+Expose the MCP server as a remote API:
+
+- **Authentication:** Use a simple API Key (passed in an `Authorization` header or as a query parameter) to restrict access to the owner
+- **HTTPS:** Serve over HTTPS (handled by hosting provider)
+- **Hosting:** Deploy as a containerised app on a platform like **Fly.io** or **Railway**.
+
+## Implementation Plan
+
+Each item is a PR-sized task.
+
+1.  **PR 1: Database Foundation.**
     - Update `Cargo.toml` dependencies.
     - Create `src/db.rs`: setup `libsql` connection pooling and initial schema migrations.
 2.  **PR 2: Event Log SQL Migration.**
@@ -108,4 +103,3 @@ CREATE TABLE overlay_removed_quizzes (
 6.  **PR 6: Deployment & Infrastructure.**
     - Create `Dockerfile` and Fly.io configuration.
     - Setup CI/CD for automated deployments.
-
