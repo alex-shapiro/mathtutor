@@ -195,10 +195,10 @@ We take a hybrid approach to data storage.
   - If `TURSO_URL` and `TURSO_AUTH_TOKEN` are set: Enable remote sync.
   - Otherwise: Fallback to a standard local SQLite database.
 - **Sync Behavior:**
-  - **Server Mode (MCP):** A background tokio task performs a full sync every 5 minutes. Tool calls trigger a non-blocking background sync if they modify state.
-  - **CLI Mode:** `db.sync()` is called at the end of every command that modifies state (store, answer, new, etc.).
-  - **Timeout:** A fixed **10-second timeout** is used for all foreground sync operations.
-  - **Error Handling:** If a sync fails or times out, a warning is issued to stderr, but the local operation is considered successful (relying on libSQL's eventual consistency/offline-write capability).
+  - MCP: Sync in a background tokio task every 5 minutes. State-modifying tool calls trigger a non-blocking background sync.
+  - CLI: Sync at the end of every command that modifies state.
+  - Timeout: Use a 10-second timeout for all foreground sync operations.
+  - Error Handling: If a sync fails or times out, issue a warning to stderr but consider the operation successful. libSQL can sync after a future command.
 
 ### SQL Schema
 
