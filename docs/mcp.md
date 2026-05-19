@@ -22,13 +22,15 @@ All CLI tools are ported to MCP tools. The server handles the mapping from JSON-
 
 #### General Conventions
 
-- **`path_id`**: Optional in all tools. If omitted, the server defaults to the most recently created/accessed path for the authenticated session.
+- **`path_id`**: Optional in all tools. If omitted, the server defaults to the most recently created/accessed path for the provided `MT_API_KEY`. The "most recent" state is global per server instance.
 - **`graph`**: Removed from all tool schemas. The server uses its own configured curriculum (embedded or via `MT_GRAPH`).
+- **Return Values**: Tools that create resources (`NewPath`, `CreateQuiz`) return the ID of the new resource in their text output.
 
 #### Tool Definitions
 
 ```rust
-/// Start a new learning path with a goal and target atoms
+/// Start a new learning path with a goal and target atoms.
+/// `atoms` can be specific leaf atoms or area/cluster IDs (which expand to all leaf atoms).
 struct NewPath {
     goal: String,
     atoms: Vec<String>,
@@ -55,7 +57,7 @@ struct GetItem {
     path_id: Option<String>,
 }
 
-/// Lists children of a curriculum node. Omit `id` for root areass
+/// Lists children of a curriculum node. Omit `id` for root areas.
 struct GetChildren {
     id: Option<String>,
     path_id: Option<String>,
@@ -73,8 +75,9 @@ struct CreateQuiz {
     atom: String,
     question: String,
     answer: String,
-    difficulty: QuizDifficulty,
-    type: QuizType,
+    rubric: Option<String>,
+    difficulty: Difficulty,
+    kind: QuizType,
     path_id: Option<String>,
 }
 
@@ -83,8 +86,9 @@ struct UpdateQuiz {
     quiz_id: String,
     question: Option<String>,
     answer: Option<String>,
-    difficulty: Option<QuizDifficulty>,
-    type: Option<QuizType>,
+    rubric: Option<String>,
+    difficulty: Option<Difficulty>,
+    kind: Option<QuizType>,
     path_id: Option<String>,
 }
 
@@ -94,22 +98,29 @@ struct DeleteQuiz {
     path_id: Option<String>,
 }
 
-enum QuizDifficulty {
+enum Difficulty {
     Easy,
     Medium,
     Hard,
 }
 
 enum QuizType {
-    FreeChoice,
+    FreeText,
     MultipleChoice,
+}
+
+enum Rating {
+    Again,
+    Hard,
+    Good,
+    Easy,
 }
 
 /// Record a user's quiz answer and FSRS rating.
 struct AnswerQuiz {
-    id: String,
+    quiz_id: String,
     answer: Option<String>,
-    rating: QuizRating,
+    rating: Rating,
     path_id: Option<String>,
 }
 ```
@@ -139,6 +150,7 @@ The server currently implements a single-user model. Authentication is performed
 
 - **Multi-user Support:** While the architecture allows for multiple paths, the server assumes a single owner for all paths hosted by that instance.
 - **Database Scope:** Each SQLite database represents an independent learning path. The authentication key provides access to the server's management of these paths.
+- **Path Resolution:** If no `path_id` is provided, the server uses the most recently modified path associated with the server instance.
 
 #### Authentication Fallback Logic
 
@@ -166,12 +178,14 @@ The server will be hosted remotely and accessed from multiple devices and so we 
 We take a hybrid approach to data storage.
 
 - **Base Curriculum:** Remains a static set of AYML files embedded in the binary. This preserves the developer experience for curriculum authoring.
-- **User Data:** Each learning path migrates to an independent SQLite database containing:
+- **User Data**: Each learning path migrates to an independent SQLite database containing:
   - Learning paths, each with its own goals and target atoms.
   - The user's curriculum overlay (agent-authored lessons and quizzes).
   - The event log of user interactions.
+- **FSRS State**: Following the existing design, FSRS card state (stability, difficulty, etc.) is **not persisted** in the database. It is recomputed on-demand by replaying the `QuizAnswered` events from the `events` table for a given quiz ID.
 
 ### Sync Strategy (libSQL)
+
 
 - **Mode:** `libsql::Builder::new_synced_database` (Embedded Replica with Offline Writes).
 - **Initialization:**
