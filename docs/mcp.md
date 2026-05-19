@@ -35,7 +35,7 @@ CREATE TABLE paths (
     id TEXT PRIMARY KEY,
     goal TEXT NOT NULL,
     created_at DATETIME NOT NULL,
-    target_atoms TEXT NOT NULL -- JSON array of strings
+    target_atoms TEXT NOT NULL CHECK (json_valid(target_atoms))
 );
 
 CREATE TABLE events (
@@ -45,8 +45,12 @@ CREATE TABLE events (
     path_id TEXT NOT NULL REFERENCES paths(id),
     atom_id TEXT,
     quiz_id TEXT,
-    payload TEXT -- JSON object
+    payload TEXT CHECK (payload IS NULL OR json_valid(payload))
 );
+
+-- Indexes for performance
+CREATE INDEX idx_events_path ON events(path_id);
+CREATE INDEX idx_events_atom ON events(atom_id);
 
 CREATE TABLE overlay_lessons (
     path_id TEXT NOT NULL REFERENCES paths(id),
@@ -76,19 +80,35 @@ CREATE TABLE overlay_removed_quizzes (
 
 ## Remote Access & Security
 
-Expose the MCP server as a remote API:
+### Authentication Fallback Logic
 
-- **Authentication:** Use a simple API Key (passed in an `Authorization` header or as a query parameter) to restrict access to the owner
-- **HTTPS:** Serve over HTTPS (handled by hosting provider)
-- **Hosting:** Deploy as a containerised app on a platform like **Fly.io** or **Railway**.
+To support both modern MCP clients and legacy `EventSource` (SSE) browsers, the server implements a sequential authentication check:
 
-## Implementation Plan
+1.  **Authorization Header:** First, try to extract a `Bearer` token from the `Authorization` header.
+2.  **Query Parameter Fallback:** If no header is present, look for a `token` query parameter
+3.  **Precedence:** If both are provided, the `Authorization` header takes precedence
+4.  **Error Handling:** If no valid token is found, the server returns a `401 Unauthorized`.
 
-Each item is a PR-sized task.
+_Security Note:_ While query parameters are less secure due to potential logging, this fallback is required for standard SSE client compatibility. Users are encouraged to use HTTPS and rotate keys regularly.
 
-1.  **PR 1: Database Foundation.**
-    - Update `Cargo.toml` dependencies.
-    - Create `src/db.rs`: setup `libsql` connection pooling and initial schema migrations.
+## Data Persistence: SQLite + Turso
+
+### libSQL Sync Strategy
+
+- **Mode:** `libsql::Builder::new_synced_database` (Embedded Replica with Offline Writes).
+- **Initialization:**
+  - If `TURSO_URL` and `TURSO_AUTH_TOKEN` are set: Enable remote sync.
+  - Otherwise: Fallback to a standard local SQLite database.
+- **Sync Trigger:**
+  - **Server Mode:** A background tokio task will call `db.sync()` every 5 minutes (or on startup/shutdown).
+  - **CLI Mode:** `db.sync()` is called at the end of every command that modifies state (store, answer, etc.) to ensure the remote is updated immediately.
+
+## Implementation Plan (PR-Sized Tasks)
+
+1.  **PR 1: Database Foundation.** 
+    - Update `Cargo.toml` dependencies (`libsql`, `tokio`, `serde_json`).
+    - Create `src/db.rs`: setup `libsql` connection pooling, `json_valid` checks, and initial schema migrations.
+    - Implement the "Local vs. Synced" initialization logic.
 2.  **PR 2: Event Log SQL Migration.**
     - Refactor `src/event_log.rs` to use SQL for appending and loading events.
     - Update `src/scheduler.rs` and `src/cards.rs` if they need direct DB access.
@@ -96,10 +116,11 @@ Each item is a PR-sized task.
     - Refactor `src/overlay.rs` and `src/store.rs` to use SQL.
     - Update `Graph::load_for_path` to fetch the overlay from the database.
 4.  **PR 4: AYML to SQLite Migration Tool.**
-    - Implement a CLI command/utility to import existing `~/.mathtutor/` data into the new SQLite database.
+    - Implement `mt migrate-from-ayml` CLI command.
+    - **Idempotency:** Use `INSERT OR IGNORE` and unique constraints to allow repeated runs.
 5.  **PR 5: MCP Server (SSE) + Authentication.**
     - Implement `src/mcp.rs` using `rmcp`.
-    - Setup `axum` server with SSE routes and API Key authentication.
+    - Setup `axum` server with SSE routes and API Key authentication (Header + Query Fallback).
 6.  **PR 6: Deployment & Infrastructure.**
-    - Create `Dockerfile` and Fly.io configuration.
+    - Create `Dockerfile` and Fly.io/Railway configuration.
     - Setup CI/CD for automated deployments.
