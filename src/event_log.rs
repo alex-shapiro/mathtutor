@@ -235,7 +235,7 @@ pub async fn append(conn: &Connection, event: &Event) -> Result<()> {
         "INSERT INTO events(ts, kind, path_id, atom_id, quiz_id, rating, payload) \
          VALUES (?, ?, ?, ?, ?, ?, ?)",
         params![
-            event.ts.to_rfc3339(),
+            db::format_ts(event.ts),
             event.kind.to_string(),
             event.path.clone(),
             event.atom.clone(),

@@ -51,7 +51,14 @@ async fn main() -> ExitCode {
         return run_simple(discover::cmd_list(c.id.as_deref(), c.graph.as_deref()), 2);
     }
 
-    let db = match db::open_default().await {
+    let cfg = match db::DbConfig::from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let db = match db::open(&cfg).await {
         Ok(db) => db,
         Err(e) => {
             eprintln!("error: {e}");
@@ -66,7 +73,14 @@ async fn main() -> ExitCode {
         }
     };
 
+    let modifies_state = mutating(&cli.cmd);
     let (result, err_code) = dispatch(&conn, cli.cmd).await;
+    // Push to the Turso replica after a successful state change, per
+    // the design's "CLI: sync at the end of every command that modifies
+    // state" rule. Failure is non-fatal; libSQL catches up later.
+    if modifies_state && result.is_ok() {
+        db::maybe_sync(&db, &cfg).await;
+    }
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -74,6 +88,21 @@ async fn main() -> ExitCode {
             ExitCode::from(err_code)
         }
     }
+}
+
+/// Commands that write to the database. Read-only commands (`state`,
+/// `tree`, `overlay dump`) don't trigger a foreground sync; pure
+/// curriculum lookups (`show`, `list`) don't even open the database.
+fn mutating(cmd: &Cmd) -> bool {
+    matches!(
+        cmd,
+        Cmd::New(_)
+            | Cmd::Next(_)
+            | Cmd::Answer(_)
+            | Cmd::Store(_)
+            | Cmd::Amend(_)
+            | Cmd::Remove(_)
+    )
 }
 
 fn run_simple(result: Result<()>, err_code: u8) -> ExitCode {
@@ -154,11 +183,18 @@ async fn dispatch(conn: &Connection, cmd: Cmd) -> (Result<()>, u8) {
         Cmd::Answer(c) => {
             let quiz = c.quiz.clone();
             let rating = c.rating;
-            let r = answer::cmd_answer(conn, &c.quiz, c.rating, c.user_answer, c.path.as_deref())
-                .await
-                .map(|()| {
-                    eprintln!("recorded {rating} for {quiz}");
-                });
+            let r = answer::cmd_answer(
+                conn,
+                &c.quiz,
+                c.rating,
+                c.user_answer,
+                c.path.as_deref(),
+                c.graph.as_deref(),
+            )
+            .await
+            .map(|()| {
+                eprintln!("recorded {rating} for {quiz}");
+            });
             (r, 2)
         }
         Cmd::Overlay(o) => match o.op {

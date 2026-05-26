@@ -123,7 +123,7 @@ pub async fn due_quizzes(
         .query(
             "SELECT quiz_id, due_at FROM cards \
              WHERE path_id = ? AND due_at <= ? ORDER BY due_at ASC",
-            params![path_id.to_string(), now.to_rfc3339()],
+            params![path_id.to_string(), db::format_ts(now)],
         )
         .await?;
     let mut out = Vec::new();
@@ -184,8 +184,8 @@ async fn upsert_card_row(conn: &Connection, row: &CardRow) -> Result<()> {
             row.quiz_id.as_str(),
             f64::from(row.state.stability),
             f64::from(row.state.difficulty),
-            row.state.due.to_rfc3339(),
-            row.state.last_review.to_rfc3339(),
+            db::format_ts(row.state.due),
+            db::format_ts(row.state.last_review),
             i64::from(row.reps),
             i64::from(row.lapses),
         ],

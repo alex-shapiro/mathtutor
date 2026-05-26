@@ -55,7 +55,7 @@ pub fn generate_path_id(now: DateTime<Utc>) -> String {
 pub async fn save_path(conn: &Connection, p: &PathFile) -> Result<()> {
     conn.execute(
         "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
-        params![p.id.clone(), p.goal.clone(), p.created_at.to_rfc3339()],
+        params![p.id.clone(), p.goal.clone(), db::format_ts(p.created_at),],
     )
     .await?;
     for (i, atom) in p.target_atoms.iter().enumerate() {

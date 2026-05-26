@@ -267,8 +267,8 @@ async fn due_quizzes_returns_only_past_due_in_order() {
             params![
                 PATH_ID,
                 quiz_id,
-                due.to_rfc3339(),
-                (due - Duration::seconds(1)).to_rfc3339(),
+                mathtutor::db::format_ts(due),
+                mathtutor::db::format_ts(due - Duration::seconds(1)),
             ],
         )
         .await
