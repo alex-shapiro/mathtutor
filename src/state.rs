@@ -10,7 +10,7 @@ use crate::Result;
 use crate::cards;
 use crate::event_log;
 use crate::graph::Graph;
-use crate::path::{load_path, path_dir, resolve_id};
+use crate::path::{load_path, resolve_id};
 use crate::scheduler;
 
 pub async fn cmd_state(
@@ -21,7 +21,6 @@ pub async fn cmd_state(
     let id = resolve_id(conn, explicit_id).await?;
     let p = load_path(conn, &id).await?;
     let g = Graph::load_for_path(&id, graph_dir)?;
-    let location = path_dir(&id)?;
     let events = event_log::load(conn, &id).await?;
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 
@@ -53,7 +52,6 @@ pub async fn cmd_state(
         .map(str::to_string);
 
     println!("{:13}{}", "path:", p.id);
-    println!("{:13}{}", "location:", location.display());
     println!("{:13}{}", "goal:", p.goal);
     println!(
         "{:13}{}",

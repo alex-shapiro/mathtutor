@@ -177,9 +177,9 @@ async fn quiz_answered_creates_cards_row() {
         .expect("cache row exists");
     assert_eq!(card.reps, 1);
     assert_eq!(card.lapses, 0);
-    assert!(card.due_at > before, "due_at should be in the future");
-    assert!(card.stability > 0.0);
-    assert!(card.difficulty > 0.0);
+    assert!(card.state.due > before, "due should be in the future");
+    assert!(card.state.stability > 0.0);
+    assert!(card.state.difficulty > 0.0);
 }
 
 #[tokio::test]
@@ -323,14 +323,14 @@ async fn recompute_rebuilds_cache_identically_to_live_append() {
         .expect("rebuilt cache row");
 
     assert!(
-        (before.stability - after.stability).abs() < 1e-6,
+        (before.state.stability - after.state.stability).abs() < 1e-6,
         "stability {} vs {}",
-        before.stability,
-        after.stability
+        before.state.stability,
+        after.state.stability
     );
-    assert!((before.difficulty - after.difficulty).abs() < 1e-6);
-    assert_eq!(before.due_at, after.due_at);
-    assert_eq!(before.last_reviewed_at, after.last_reviewed_at);
+    assert!((before.state.difficulty - after.state.difficulty).abs() < 1e-6);
+    assert_eq!(before.state.due, after.state.due);
+    assert_eq!(before.state.last_review, after.state.last_review);
     assert_eq!(before.reps, after.reps);
     assert_eq!(before.lapses, after.lapses);
 }

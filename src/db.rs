@@ -8,10 +8,20 @@
 
 use std::path::{Path, PathBuf};
 
+use chrono::{DateTime, Utc};
 use libsql::{Builder, Connection, Database, params};
 
 use crate::path::mt_home;
 use crate::{Error, Result};
+
+/// Parse an RFC 3339 timestamp string read out of a `DATETIME` column.
+/// Centralised so every SQL reader handles the same wire format the
+/// SQL writers emit via `chrono::DateTime::to_rfc3339`.
+pub fn parse_ts(s: &str) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| Error::BadTimestamp(format!("{s}: {e}")))
+}
 
 /// Numbered schema migration. Versions are strictly increasing,
 /// starting at 1. Each migration file is immutable once shipped.

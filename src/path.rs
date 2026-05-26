@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use libsql::{Connection, params};
 
+use crate::db;
 use crate::event_log;
 use crate::graph::Graph;
 use crate::{Error, Result};
@@ -78,7 +79,7 @@ pub async fn load_path(conn: &Connection, id: &str) -> Result<PathFile> {
     let row = rows.next().await?.ok_or(Error::NoPath)?;
     let goal: String = row.get(0)?;
     let created_str: String = row.get(1)?;
-    let created_at = parse_ts(&created_str)?;
+    let created_at = db::parse_ts(&created_str)?;
 
     let mut rows = conn
         .query(
@@ -130,12 +131,6 @@ pub async fn resolve_id(conn: &Connection, explicit: Option<&str>) -> Result<Str
         return Ok(id.to_string());
     }
     most_recent_id(conn).await?.ok_or(Error::NoPath)
-}
-
-fn parse_ts(s: &str) -> Result<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| Error::BadTimestamp(format!("{s}: {e}")))
 }
 
 // ── Commands ────────────────────────────────────────────────────────

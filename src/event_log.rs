@@ -10,11 +10,11 @@ use libsql::{Connection, Row, params};
 use serde::{Deserialize, Serialize};
 
 use crate::cards;
+use crate::db;
 use crate::types::Rating;
 use crate::{Error, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventKind {
     PathCreated,
     LessonAuthored,
@@ -58,16 +58,14 @@ impl std::str::FromStr for EventKind {
     }
 }
 
-/// JSON-encoded slice of an event beyond what the SQL columns already
-/// carry. `rating` lives in its own column (and is omitted here) so
-/// FSRS queries can filter by rating without parsing JSON.
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+/// Optional fields beyond what the SQL columns already carry. `rating`
+/// lives in its own column on disk; the JSON `payload` column only
+/// stores `reason` / `user_answer`, so FSRS queries can filter by
+/// rating without parsing JSON.
+#[derive(Debug, Default, Clone)]
 pub struct EventPayload {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rating: Option<Rating>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_answer: Option<String>,
 }
 
@@ -283,9 +281,7 @@ fn row_to_event(row: &Row) -> Result<Event> {
     let payload_str: Option<String> = row.get(6)?;
 
     let kind: EventKind = kind_str.parse()?;
-    let ts = DateTime::parse_from_rfc3339(&ts_str)
-        .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| Error::BadTimestamp(format!("{ts_str}: {e}")))?;
+    let ts = db::parse_ts(&ts_str)?;
     let rating = rating_int.map(Rating::try_from).transpose()?;
     let mut payload = EventPayload {
         rating,
