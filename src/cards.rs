@@ -197,13 +197,14 @@ async fn upsert_card_row(conn: &Connection, row: &CardRow) -> Result<()> {
 /// Drop every cached row for `path_id` and rebuild from the event log.
 /// Use after a suspected cache corruption or a schema-altering migration.
 ///
-/// The replay is wrapped in one transaction so a mid-rebuild failure
-/// leaves the existing cache in place rather than half-erased.
+/// The replay is wrapped in one transaction — including the event-log
+/// read — so concurrent `QuizAnswered` appends can't slip in between
+/// the snapshot we fold and the rows we write back, and a mid-rebuild
+/// failure leaves the existing cache in place rather than half-erased.
 pub async fn recompute(conn: &Connection, path_id: &str) -> Result<()> {
-    let events = event_log::load(conn, path_id).await?;
-    let rebuilt = fold_history(path_id, &events)?;
-
     let tx = conn.transaction().await?;
+    let events = event_log::load(&tx, path_id).await?;
+    let rebuilt = fold_history(path_id, &events)?;
     tx.execute(
         "DELETE FROM cards WHERE path_id = ?",
         params![path_id.to_string()],
