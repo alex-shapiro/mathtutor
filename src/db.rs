@@ -49,18 +49,24 @@ pub struct SyncConfig {
 }
 
 impl SyncConfig {
-    /// Read `TURSO_URL` and `TURSO_AUTH_TOKEN` from the process
-    /// environment. Returns `None` if either is missing or empty.
-    pub fn from_env() -> Option<Self> {
-        Self::from_lookup(|k| std::env::var(k).ok())
+    /// Construct from explicit values. Returns `None` if either field
+    /// is empty — empty strings are treated the same as unset, so a
+    /// `TURSO_URL=` line in a shell rc doesn't accidentally enable
+    /// sync against a bogus endpoint.
+    pub fn new(url: String, auth_token: String) -> Option<Self> {
+        if url.is_empty() || auth_token.is_empty() {
+            return None;
+        }
+        Some(Self { url, auth_token })
     }
 
-    /// Build from an arbitrary lookup. Factored out so tests can drive
-    /// the same logic from a `HashMap` without touching process env.
-    fn from_lookup<F: Fn(&str) -> Option<String>>(get: F) -> Option<Self> {
-        let url = get("TURSO_URL").filter(|s| !s.is_empty())?;
-        let auth_token = get("TURSO_AUTH_TOKEN").filter(|s| !s.is_empty())?;
-        Some(Self { url, auth_token })
+    /// Read `TURSO_URL` and `TURSO_AUTH_TOKEN` from the process
+    /// environment. Returns `None` if either is unset or empty.
+    pub fn from_env() -> Option<Self> {
+        Self::new(
+            std::env::var("TURSO_URL").ok()?,
+            std::env::var("TURSO_AUTH_TOKEN").ok()?,
+        )
     }
 }
 
@@ -187,50 +193,17 @@ pub async fn open_local(path: &Path) -> Result<Database> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
-    fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
-        let map: HashMap<String, String> = pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-            .collect();
-        move |k: &str| map.get(k).cloned()
-    }
 
     #[test]
-    fn sync_config_both_set() {
-        let cfg = SyncConfig::from_lookup(lookup(&[
-            ("TURSO_URL", "libsql://example.turso.io"),
-            ("TURSO_AUTH_TOKEN", "secret"),
-        ]))
-        .expect("sync config should be present");
+    fn sync_config_requires_both_fields_non_empty() {
+        let cfg =
+            SyncConfig::new("libsql://example.turso.io".into(), "secret".into()).expect("both set");
         assert_eq!(cfg.url, "libsql://example.turso.io");
         assert_eq!(cfg.auth_token, "secret");
-    }
 
-    #[test]
-    fn sync_config_missing_token() {
-        assert!(
-            SyncConfig::from_lookup(lookup(&[("TURSO_URL", "libsql://example.turso.io")]))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn sync_config_missing_url() {
-        assert!(SyncConfig::from_lookup(lookup(&[("TURSO_AUTH_TOKEN", "secret")])).is_none());
-    }
-
-    #[test]
-    fn sync_config_empty_strings_treated_as_unset() {
-        assert!(
-            SyncConfig::from_lookup(lookup(&[("TURSO_URL", ""), ("TURSO_AUTH_TOKEN", "x")]))
-                .is_none()
-        );
-        assert!(
-            SyncConfig::from_lookup(lookup(&[("TURSO_URL", "x"), ("TURSO_AUTH_TOKEN", "")]))
-                .is_none()
-        );
+        assert!(SyncConfig::new(String::new(), "secret".into()).is_none());
+        assert!(SyncConfig::new("libsql://x".into(), String::new()).is_none());
+        assert!(SyncConfig::new(String::new(), String::new()).is_none());
     }
 
     #[test]
