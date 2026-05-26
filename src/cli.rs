@@ -36,6 +36,18 @@ pub enum Cmd {
     Instruct(InstructCmd),
     Amend(AmendCmd),
     Remove(RemoveCmd),
+    MigrateFromAyml(MigrateFromAymlCmd),
+}
+
+/// Port legacy AYML state under `$MATHTUTOR_HOME/paths/` into the
+/// libSQL database. Idempotent: re-running skips paths and overlay
+/// rows that are already present.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "migrate-from-ayml")]
+pub struct MigrateFromAymlCmd {
+    /// override the AYML root (default: `$MATHTUTOR_HOME` / `~/.mathtutor`)
+    #[argh(option)]
+    pub from: Option<PathBuf>,
 }
 
 /// Print the agent operator playbook embedded in the binary.

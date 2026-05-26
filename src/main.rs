@@ -3,7 +3,8 @@ use std::process::ExitCode;
 use libsql::Connection;
 use mathtutor::cli::{AmendOp, Cmd, GraphOp, Mt, OverlayOp, RemoveOp, StoreOp};
 use mathtutor::{
-    Result, answer, db, discover, graph, instruct, overlay, path, scheduler, state, store, tree,
+    Result, answer, db, discover, graph, instruct, migrate, overlay, path, scheduler, state, store,
+    tree,
 };
 
 #[tokio::main(flavor = "current_thread")]
@@ -101,6 +102,7 @@ fn mutating(cmd: &Cmd) -> bool {
             | Cmd::Store(_)
             | Cmd::Amend(_)
             | Cmd::Remove(_)
+            | Cmd::MigrateFromAyml(_)
     )
 }
 
@@ -232,5 +234,6 @@ async fn dispatch(conn: &Connection, cmd: Cmd) -> (Result<()>, u8) {
                 (r, 2)
             }
         },
+        Cmd::MigrateFromAyml(c) => (migrate::cmd_migrate(conn, c.from.as_deref()).await, 2),
     }
 }

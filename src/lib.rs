@@ -20,6 +20,7 @@ pub use error::{Error, Result};
 pub mod discover;
 pub mod event_log;
 pub mod graph;
+pub mod migrate;
 pub mod path;
 pub mod scheduler;
 pub mod state;
