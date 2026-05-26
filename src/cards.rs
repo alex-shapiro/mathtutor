@@ -1,21 +1,14 @@
 //! FSRS card state.
 //!
-//! Two views live here:
+//! Card state is stored twice:
 //!
-//! 1. A pure, in-memory step (`apply_answer`) that takes a previous
-//!    `CardState` plus the new rating/timestamp and produces the next
-//!    state. The scheduler's correctness is pinned to this function; it
-//!    has no I/O.
-//! 2. SQL helpers that read and write the `cards` table — a
-//!    write-through cache of the latest FSRS state per `(path, quiz)`.
-//!    The event log remains the source of truth: `recompute` can rebuild
-//!    the cache from scratch by replaying every `QuizAnswered` event for
-//!    a path.
+//! 1. An in-memory step, [apply_answer], takes current [CardState]
+//!    plus a new rating/timestamp and produces the next state.
 //!
-//! Per DESIGN.md: "FSRS state … is a derived index that can be
-//! recomputed from the log." The cache exists so the scheduler can pick
-//! the earliest-due quiz with a single indexed query instead of folding
-//! the whole event log on every `mt next`.
+//! 2. SQL helpers that read and write the cards table. This table is a
+//!    cache of the latest FSRS state per `(path, quiz)` that allows for
+//!    more efficient "next item" queries in the scheduler. The event log
+//!    remains the source of truth and can rebuild the cache via `recompute`.
 
 use std::collections::HashMap;
 
@@ -44,10 +37,8 @@ pub struct CardState {
     pub last_rating: Option<Rating>,
 }
 
-/// Row shape stored in the `cards` table. `stability` / `difficulty` /
-/// `last_reviewed_at` are NOT NULL there: a row only exists once a quiz
-/// has been answered at least once, and that very first answer fills
-/// every column in via `apply_answer`.
+/// Row stored in the `cards` table.
+/// A card exists if a quiz has been answered at least once.
 #[derive(Debug, Clone)]
 pub struct CardRow {
     pub path_id: String,
@@ -262,8 +253,7 @@ pub async fn apply_answer_to_cache(
 
 async fn upsert_card_row(conn: &Connection, row: &CardRow) -> Result<()> {
     conn.execute(
-        "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, \
-                           last_reviewed_at, reps, lapses) \
+        "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(path_id, quiz_id) DO UPDATE SET \
             stability = excluded.stability, \
@@ -273,8 +263,8 @@ async fn upsert_card_row(conn: &Connection, row: &CardRow) -> Result<()> {
             reps = excluded.reps, \
             lapses = excluded.lapses",
         params![
-            row.path_id.clone(),
-            row.quiz_id.clone(),
+            row.path_id.as_str(),
+            row.quiz_id.as_str(),
             f64::from(row.stability),
             f64::from(row.difficulty),
             row.due_at.to_rfc3339(),
@@ -300,8 +290,7 @@ pub async fn recompute(conn: &Connection, path_id: &str) -> Result<()> {
     let mut rows = conn
         .query(
             "SELECT quiz_id, rating, ts FROM events \
-             WHERE path_id = ? AND kind = 'quiz_answered' AND quiz_id IS NOT NULL \
-               AND rating IS NOT NULL \
+             WHERE path_id = ? AND kind = 'quiz_answered' AND quiz_id IS NOT NULL AND rating IS NOT NULL \
              ORDER BY id ASC",
             params![path_id.to_string()],
         )
@@ -338,9 +327,9 @@ fn row_to_card(row: &libsql::Row) -> Result<CardRow> {
         due_at: parse_ts(&due_str)?,
         last_reviewed_at: parse_ts(&last_reviewed_str)?,
         reps: u32::try_from(reps)
-            .map_err(|_| Error::CardsCorrupt(format!("negative reps {reps}")))?,
+            .map_err(|_| Error::CardsCorrupt(format!("invalid reps {reps}")))?,
         lapses: u32::try_from(lapses)
-            .map_err(|_| Error::CardsCorrupt(format!("negative lapses {lapses}")))?,
+            .map_err(|_| Error::CardsCorrupt(format!("invalid lapses {lapses}")))?,
     })
 }
 

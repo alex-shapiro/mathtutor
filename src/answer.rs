@@ -1,8 +1,4 @@
-//! `mt answer`: record a quiz answer as a `quiz_answered` event.
-//!
-//! FSRS card state is updated as a write-through side effect of
-//! `event_log::append` (see `crate::cards::apply_answer_to_cache`), so
-//! this command's job is just to log the answer.
+//! `mt answer`: record a quiz answer.
 
 use libsql::Connection;
 
