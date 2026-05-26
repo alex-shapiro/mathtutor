@@ -1,5 +1,3 @@
 .claude/worktrees
-.mathtutor
-.mathtutor-state
-/target
-tmp-curriculum
+target
+.DS_Store
