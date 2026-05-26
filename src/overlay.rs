@@ -1,16 +1,11 @@
-//! Global overlay: lessons and quizzes a user has authored on top of
+//! Curriculum overlay: lessons and quizzes a user has authored on top of
 //! the shipped curriculum.
 //!
 //! Stored in the SQL tables `overlay_lessons`, `overlay_quizzes`, and
-//! `overlay_removed_quizzes`. The shipped curriculum is read-only
-//! (compiled into the binary); user-authored content lives in these
+//! `overlay_removed_quizzes`. The shipped curriculum is read-only,
+//! compiled into the binary. User-authored content lives in these
 //! tables and is merged on top of the canonical graph by
 //! `Graph::load_for_path`.
-//!
-//! The overlay is global to the user / database — not partitioned by
-//! `path_id`. A lesson authored under one path is immediately visible
-//! to every other path that touches the same atom; `path_id` is still
-//! captured on the event log so authoring history stays attributable.
 
 use std::collections::{BTreeMap, BTreeSet};
 
