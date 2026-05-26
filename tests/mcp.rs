@@ -315,11 +315,13 @@ async fn get_paths_returns_empty_list_on_fresh_db() {
         Some(true),
         "tool should succeed"
     );
-    // Structured content is `[]` — no paths in a fresh database.
+    // MCP `structuredContent` must be a JSON object — Claude Desktop
+    // rejects bare arrays. The empty path list is wrapped as
+    // `{"paths": []}`.
     assert_eq!(
         result["structuredContent"],
-        json!([]),
-        "structured content should be the empty list of paths"
+        json!({ "paths": [] }),
+        "structured content should be an object wrapping the path list"
     );
     server.stop().await;
 }

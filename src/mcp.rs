@@ -213,7 +213,11 @@ impl MathTutorServer {
     #[tool(description = "List all learning paths for this user.")]
     async fn get_paths(&self) -> std::result::Result<CallToolResult, McpError> {
         let conn = self.conn().await?;
-        encode(list_paths(&conn).await)
+        encode(
+            list_paths(&conn)
+                .await
+                .map(|paths| json!({ "paths": paths })),
+        )
     }
 
     #[tool(description = "Start a new learning path with a goal and target atoms.")]
@@ -762,12 +766,23 @@ fn map_protocol_error(e: &Error) -> McpError {
 /// errors (atom not found, unknown id, invalid rating, etc.) become
 /// `isError: true` with a structured JSON error body. Encoding-only
 /// failures become protocol-level `McpError`.
+///
+/// MCP requires `structuredContent` to be a JSON object; bare arrays and
+/// primitives get rejected by strict clients (Claude Desktop). Tools that
+/// hold non-object data should wrap it (`{ "paths": [...] }`); this
+/// helper still wraps anything that slips through as `{ "value": ... }`
+/// so the failure mode is a self-describing payload, not a 500.
 fn encode<T: Serialize>(result: CrateResult<T>) -> std::result::Result<CallToolResult, McpError> {
     match result {
         Ok(value) => {
             let json = serde_json::to_value(value)
                 .map_err(|e| McpError::internal_error(format!("encode: {e}"), None))?;
-            Ok(CallToolResult::structured(json))
+            let object = if json.is_object() {
+                json
+            } else {
+                json!({ "value": json })
+            };
+            Ok(CallToolResult::structured(object))
         }
         Err(e) => {
             let body = json!({ "error": format!("{e}"), "kind": error_kind(&e) });
