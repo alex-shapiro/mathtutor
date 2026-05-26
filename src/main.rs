@@ -75,9 +75,8 @@ async fn main() -> ExitCode {
 
     let modifies_state = mutating(&cli.cmd);
     let (result, err_code) = dispatch(&conn, cli.cmd).await;
-    // Push to the Turso replica after a successful state change, per
-    // the design's "CLI: sync at the end of every command that modifies
-    // state" rule. Failure is non-fatal; libSQL catches up later.
+    // Push to the Turso replica after a successful state change.
+    // Failure is non-fatal; libSQL catches up later.
     if modifies_state && result.is_ok() {
         db::maybe_sync(&db, &cfg).await;
     }
