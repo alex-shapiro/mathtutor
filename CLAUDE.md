@@ -26,5 +26,5 @@ Overall design doc: docs/design.md
   Avoid summaries of obvious code or changelogs.
 - The best code is concise and the best comments are 1 line.
   Beyond that, the reader tends to tune out and mainenance becomes more difficult.
-- Commit messages must be human readable and concise. They describe what was done and why;
-  they do not rehash specific implementation details or symbols except when it is necessary to do so.
+- Commit messages and PR descriptions must be human readable and concise. They describe the essence of the change
+  and its motivation. They do not rehash implementation details or specific symbols from the diff.
