@@ -160,8 +160,10 @@ pub async fn cmd_new(
         target_atoms: sorted,
     };
 
-    save_path(conn, &p).await?;
-    event_log::append(conn, &event_log::path_created(id.clone())).await?;
+    let tx = conn.transaction().await?;
+    save_path(&tx, &p).await?;
+    event_log::append(&tx, &event_log::path_created(id.clone())).await?;
+    tx.commit().await?;
 
     Ok(id)
 }

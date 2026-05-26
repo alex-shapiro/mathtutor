@@ -18,9 +18,10 @@ pub async fn cmd_answer(
     user_answer: Option<String>,
     path_id: Option<&str>,
 ) -> Result<()> {
-    let id = path::resolve_id(conn, path_id).await?;
+    let tx = conn.transaction().await?;
+    let id = path::resolve_id(&tx, path_id).await?;
     event_log::append(
-        conn,
+        &tx,
         &event_log::quiz_answered(
             id,
             atom_from_quiz_id(quiz_id),
@@ -29,7 +30,9 @@ pub async fn cmd_answer(
             user_answer,
         ),
     )
-    .await
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Recover the atom ID from a quiz ID like `fnd.1.1.1.q3`.

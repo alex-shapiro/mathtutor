@@ -22,11 +22,12 @@ pub async fn cmd_next(
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let id = path::resolve_id(conn, path_id).await?;
+    let tx = conn.transaction().await?;
+    let id = path::resolve_id(&tx, path_id).await?;
     let g = Graph::load_for_path(&id, graph_dir)?;
-    let p = path::load_path(conn, &id).await?;
-    let events = event_log::load(conn, &id).await?;
-    let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
+    let p = path::load_path(&tx, &id).await?;
+    let events = event_log::load(&tx, &id).await?;
+    let due = cards::due_quizzes(&tx, &id, Utc::now()).await?;
 
     let action = next_action(&g, &p, &events, &due);
     // Build the envelope first — it reads the log to compute `history`,
@@ -36,21 +37,22 @@ pub async fn cmd_next(
 
     match &action {
         Action::PresentQuiz { quiz_id, atom_id } => {
-            let _ = event_log::append(
-                conn,
+            event_log::append(
+                &tx,
                 &event_log::quiz_presented(p.id.clone(), atom_id.clone(), quiz_id.clone()),
             )
-            .await;
+            .await?;
         }
         Action::PresentLesson { atom_id } => {
-            let _ = event_log::append(
-                conn,
+            event_log::append(
+                &tx,
                 &event_log::lesson_taught(p.id.clone(), atom_id.clone()),
             )
-            .await;
+            .await?;
         }
         _ => {}
     }
+    tx.commit().await?;
 
     let text = ayml::to_string(&envelope).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");

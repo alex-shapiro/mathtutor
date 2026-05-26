@@ -48,12 +48,14 @@ pub async fn cmd_store_lesson(
     }
 
     overlay::add_lesson(&id, atom_id, body)?;
+    let tx = conn.transaction().await?;
     event_log::append(
-        conn,
+        &tx,
         &event_log::lesson_authored(id.clone(), atom_id.to_string()),
     )
     .await?;
-    event_log::append(conn, &event_log::lesson_taught(id, atom_id.to_string())).await?;
+    event_log::append(&tx, &event_log::lesson_taught(id, atom_id.to_string())).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -97,11 +99,13 @@ pub async fn cmd_store_quiz(
         rubric,
         quiz_type,
     )?;
+    let tx = conn.transaction().await?;
     event_log::append(
-        conn,
+        &tx,
         &event_log::quiz_authored(id, atom_id.to_string(), new_id.clone()),
     )
     .await?;
+    tx.commit().await?;
     Ok(new_id)
 }
 
@@ -149,11 +153,13 @@ pub async fn cmd_amend_quiz(
     overlay::amend_quiz(
         &id, &atom_id, &base_raw, difficulty, question, answer, rubric, quiz_type,
     )?;
+    let tx = conn.transaction().await?;
     event_log::append(
-        conn,
+        &tx,
         &event_log::quiz_amended(id, atom_id, quiz_id.to_string()),
     )
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -182,11 +188,13 @@ pub async fn cmd_remove_quiz(
     }
 
     overlay::remove_quiz(&id, &atom_id, quiz_id)?;
+    let tx = conn.transaction().await?;
     event_log::append(
-        conn,
+        &tx,
         &event_log::quiz_removed(id, atom_id, quiz_id.to_string()),
     )
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 

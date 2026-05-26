@@ -336,6 +336,37 @@ async fn recompute_rebuilds_cache_identically_to_live_append() {
 }
 
 #[tokio::test]
+async fn dropped_transaction_rolls_back_event_and_cards() {
+    // The event-insert + cards write-through must commit-or-fail
+    // together. We exercise that by opening a transaction, appending
+    // a `QuizAnswered`, and dropping the transaction without commit —
+    // both tables must remain empty for the path afterwards.
+    let tmp = TempDir::new().unwrap();
+    let conn = fresh_db(&tmp).await;
+    {
+        let tx = conn.transaction().await.unwrap();
+        event_log::append(
+            &tx,
+            &event_log::quiz_answered(
+                PATH_ID.into(),
+                Some("atom.x".into()),
+                "atom.x.q1".into(),
+                Rating::Good,
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+        // tx dropped without commit → automatic rollback.
+    }
+
+    let events = event_log::load(&conn, PATH_ID).await.unwrap();
+    assert!(events.is_empty(), "events row must roll back with the tx");
+    let card = cards::read_card(&conn, PATH_ID, "atom.x.q1").await.unwrap();
+    assert!(card.is_none(), "cards row must roll back with the tx");
+}
+
+#[tokio::test]
 async fn recompute_only_touches_target_path() {
     // Recompute must scope its delete to the named path. A second
     // path's cache should survive untouched.

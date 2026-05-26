@@ -55,7 +55,7 @@ impl EventKind {
             "quiz_answered" => Ok(EventKind::QuizAnswered),
             "quiz_amended" => Ok(EventKind::QuizAmended),
             "quiz_removed" => Ok(EventKind::QuizRemoved),
-            other => Err(Error::CardsCorrupt(format!("unknown event kind: {other}"))),
+            other => Err(Error::UnknownEventKind(other.to_string())),
         }
     }
 }
@@ -219,10 +219,10 @@ pub fn quiz_answered(
 /// rating into the `cards` write-through cache so the scheduler sees
 /// the new due date on its next pass.
 ///
-/// The two writes are not wrapped in a single transaction by design:
-/// the event log is the source of truth and the cache can always be
-/// rebuilt via [`crate::cards::recompute`]. If the cache update fails
-/// the event still persists, and a future `recompute` heals the row.
+/// Atomicity is the caller's responsibility: pass `&tx` (deref-coerced
+/// from a `libsql::Transaction`) when both writes — and any surrounding
+/// command work — must succeed or fail together. Every mutating cmd in
+/// this crate already wraps its writes in `conn.transaction()`.
 pub async fn append(conn: &Connection, event: &Event) -> Result<()> {
     let stored = StoredPayload {
         reason: event.payload.reason.as_deref(),
@@ -233,7 +233,7 @@ pub async fn append(conn: &Connection, event: &Event) -> Result<()> {
     } else {
         Some(serde_json::to_string(&stored)?)
     };
-    let rating_int = event.payload.rating.map(Rating::as_int);
+    let rating_int = event.payload.rating.map(i64::from);
 
     conn.execute(
         "INSERT INTO events(ts, kind, path_id, atom_id, quiz_id, rating, payload) \
@@ -288,13 +288,7 @@ fn row_to_event(row: &Row) -> Result<Event> {
     let ts = DateTime::parse_from_rfc3339(&ts_str)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| Error::BadTimestamp(format!("{ts_str}: {e}")))?;
-    let rating = match rating_int {
-        Some(v) => Some(
-            Rating::from_int(v)
-                .ok_or_else(|| Error::CardsCorrupt(format!("bad rating {v} in events")))?,
-        ),
-        None => None,
-    };
+    let rating = rating_int.map(Rating::try_from).transpose()?;
     let mut payload = EventPayload {
         rating,
         ..Default::default()

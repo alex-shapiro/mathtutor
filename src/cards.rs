@@ -311,8 +311,7 @@ pub async fn recompute(conn: &Connection, path_id: &str) -> Result<()> {
         let quiz_id: String = row.get(0)?;
         let rating_int: i64 = row.get(1)?;
         let ts_str: String = row.get(2)?;
-        let rating = Rating::from_int(rating_int)
-            .ok_or_else(|| Error::CardsCorrupt(format!("bad rating {rating_int} in events")))?;
+        let rating = Rating::try_from(rating_int)?;
         let ts = parse_ts(&ts_str)?;
         apply_answer_to_cache(conn, path_id, &quiz_id, rating, ts).await?;
     }
