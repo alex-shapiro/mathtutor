@@ -6,6 +6,7 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use include_dir::{Dir, include_dir};
+use libsql::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{Difficulty, QuizType};
@@ -73,7 +74,7 @@ struct LeafRaw {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lesson: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    quizzes: Option<Vec<QuizRaw>>,
+    quizzes: Option<Vec<Quiz>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     relevant_for: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -97,7 +98,7 @@ struct NodeRaw {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lesson: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    quizzes: Option<Vec<QuizRaw>>,
+    quizzes: Option<Vec<Quiz>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     relevant_for: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -106,18 +107,6 @@ struct NodeRaw {
     status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     difficulty: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct QuizRaw {
-    pub id: String,
-    pub difficulty: Difficulty,
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<QuizType>,
-    pub question: String,
-    pub answer: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rubric: Option<String>,
 }
 
 // ── Unified concept tree ────────────────────────────────────────────
@@ -134,27 +123,19 @@ struct Concept {
     quizzes: Vec<Quiz>,
 }
 
-#[derive(Debug, Clone)]
+/// A single quiz card. Serializable for AYML round-trip (shipped
+/// curriculum, `mt overlay dump`) and as the in-memory shape used by
+/// the scheduler and merge logic.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Quiz {
     pub id: String,
     pub difficulty: Difficulty,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<QuizType>,
     pub question: String,
     pub answer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rubric: Option<String>,
-}
-
-impl From<QuizRaw> for Quiz {
-    fn from(q: QuizRaw) -> Self {
-        Quiz {
-            id: q.id,
-            difficulty: q.difficulty,
-            kind: q.kind,
-            question: q.question,
-            answer: q.answer,
-            rubric: q.rubric,
-        }
-    }
 }
 
 impl Concept {
@@ -185,12 +166,7 @@ impl AreaFileRaw {
                             prerequisites: l.prerequisites,
                             children: Vec::new(),
                             lesson: l.lesson,
-                            quizzes: l
-                                .quizzes
-                                .unwrap_or_default()
-                                .into_iter()
-                                .map(Quiz::from)
-                                .collect(),
+                            quizzes: l.quizzes.unwrap_or_default(),
                         })
                         .collect(),
                     lesson: None,
@@ -221,12 +197,7 @@ fn node_to_concept(n: NodeRaw) -> Concept {
             .map(node_to_concept)
             .collect(),
         lesson: n.lesson,
-        quizzes: n
-            .quizzes
-            .unwrap_or_default()
-            .into_iter()
-            .map(Quiz::from)
-            .collect(),
+        quizzes: n.quizzes.unwrap_or_default(),
     }
 }
 
@@ -378,44 +349,77 @@ impl Graph {
         Self::load_embedded()
     }
 
-    /// Effective graph "as the given path sees it" — shipped curriculum
-    /// with the path's overlay applied. The single entry point for
-    /// scheduler / tree / state queries; consumers stay overlay-unaware.
-    pub fn load_for_path(path_id: &str, graph_dir: Option<&Path>) -> Result<Self> {
+    /// Effective graph "as the user sees it" — shipped curriculum with
+    /// the user overlay applied. The single entry point for scheduler /
+    /// tree / state queries; consumers stay overlay-unaware.
+    ///
+    /// Conflict resolution rule: an overlay lesson, quiz, or tombstone
+    /// always overrides a built-in item with the same ID. Tombstones
+    /// override everything.
+    pub async fn load_for_path(conn: &Connection, graph_dir: Option<&Path>) -> Result<Self> {
         let mut g = Self::load_default(graph_dir)?;
-        let overlay = crate::overlay::load(path_id)?;
-        g.apply_overlay(&overlay);
+        let overlay = crate::overlay::load(conn).await?;
+        g.apply_overlay(overlay);
         Ok(g)
     }
 
-    /// Apply a per-path overlay to this graph in place. Additive: an
-    /// overlay lesson fills in an atom's missing lesson (but never
-    /// shadows a shipped one); overlay quizzes are appended.
-    fn apply_overlay(&mut self, overlay: &crate::overlay::Overlay) {
-        for (atom_id, entry) in &overlay.atoms {
-            let Some(c) = self.by_id.get_mut(atom_id) else {
+    /// Validate `id` resolves to an atom (leaf concept) in the merged
+    /// graph. Returns `AtomNotFound` if missing, `NotAtom` if it points
+    /// at a cluster.
+    pub fn atom(&self, id: &str) -> Result<&FlatConcept> {
+        let c = self
+            .by_id
+            .get(id)
+            .ok_or_else(|| Error::AtomNotFound(id.to_string()))?;
+        if !c.children_ids.is_empty() {
+            return Err(Error::NotAtom(id.to_string()));
+        }
+        Ok(c)
+    }
+
+    /// Return the parent atom and `Quiz` for a given quiz ID.
+    /// Validates that the quiz & atom exist.
+    pub fn quiz(&self, quiz_id: &str) -> Result<(&FlatConcept, &Quiz)> {
+        let atom_id = crate::answer::atom_from_quiz_id(quiz_id)
+            .ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
+        let atom = self
+            .by_id
+            .get(&atom_id)
+            .ok_or_else(|| Error::AtomNotFound(atom_id))?;
+        let q = atom
+            .quizzes
+            .iter()
+            .find(|q| q.id == quiz_id)
+            .ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
+        Ok((atom, q))
+    }
+
+    /// Apply the user overlay to this graph in place. See
+    /// [`Graph::load_for_path`] for the conflict-resolution contract.
+    fn apply_overlay(&mut self, overlay: crate::overlay::Overlay) {
+        for (atom_id, entry) in overlay.atoms {
+            let Some(c) = self.by_id.get_mut(&atom_id) else {
                 // Atom isn't in the shipped graph — skip silently. A
                 // future graph version may add it, at which point the
                 // overlay starts taking effect; or the user is welcome
                 // to clean up the overlay manually.
                 continue;
             };
-            if c.lesson.is_none() && entry.lesson.is_some() {
-                c.lesson.clone_from(&entry.lesson);
+            if entry.lesson.is_some() {
+                c.lesson = entry.lesson;
             }
 
             // Quizzes: overlay entries replace shipped entries with the
             // same id (amend), and are appended otherwise (added).
-            for overlay_quiz in entry.quizzes_flat() {
+            for overlay_quiz in entry.quizzes {
                 match c.quizzes.iter_mut().find(|q| q.id == overlay_quiz.id) {
                     Some(existing) => *existing = overlay_quiz,
                     None => c.quizzes.push(overlay_quiz),
                 }
             }
-            // Tombstones: drop any quiz (shipped or just-added overlay)
-            // whose id is in `removed`. Their QuizAnswered events stay
-            // in the log for audit; the scheduler just won't surface
-            // them anymore.
+            // Tombstones beat both shipped and overlay-authored quizzes:
+            // an answered quiz's `QuizAnswered` events stay in the log
+            // for audit, but the merged view drops it.
             if !entry.removed.is_empty() {
                 c.quizzes.retain(|q| !entry.removed.contains(&q.id));
             }
@@ -812,5 +816,102 @@ impl CheckReport {
             println!();
             println!("graph check FAILED.");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FlatConcept, Graph, Quiz};
+    use crate::Error;
+    use crate::types::Difficulty;
+    use std::collections::HashMap;
+
+    fn graph_with_quiz(atom_id: &str, quiz_id: &str) -> Graph {
+        let mut by_id = HashMap::new();
+        by_id.insert(
+            atom_id.to_string(),
+            FlatConcept {
+                id: atom_id.into(),
+                name: atom_id.into(),
+                description: None,
+                prerequisites: Vec::new(),
+                children_ids: Vec::new(),
+                lesson: Some("body".into()),
+                quizzes: vec![Quiz {
+                    id: quiz_id.into(),
+                    difficulty: Difficulty::Easy,
+                    kind: None,
+                    question: "q".into(),
+                    answer: "a".into(),
+                    rubric: None,
+                }],
+            },
+        );
+        Graph { by_id }
+    }
+
+    fn graph_with_cluster(cluster_id: &str) -> Graph {
+        let mut by_id = HashMap::new();
+        by_id.insert(
+            cluster_id.to_string(),
+            FlatConcept {
+                id: cluster_id.into(),
+                name: cluster_id.into(),
+                description: None,
+                prerequisites: Vec::new(),
+                children_ids: vec![format!("{cluster_id}.1")],
+                lesson: None,
+                quizzes: Vec::new(),
+            },
+        );
+        Graph { by_id }
+    }
+
+    #[test]
+    fn quiz_returns_atom_and_quiz_for_valid_id() {
+        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
+        let (atom, quiz) = g.quiz("fnd.1.1.1.q1").expect("valid");
+        assert_eq!(atom.id, "fnd.1.1.1");
+        assert_eq!(quiz.id, "fnd.1.1.1.q1");
+    }
+
+    #[test]
+    fn quiz_rejects_malformed_id() {
+        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
+        // Missing `.qN` suffix → can't derive an atom id.
+        assert!(matches!(g.quiz("fnd.1.1.1"), Err(Error::UnknownId(_))));
+    }
+
+    #[test]
+    fn quiz_rejects_unknown_atom() {
+        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
+        assert!(matches!(g.quiz("nope.1.q1"), Err(Error::AtomNotFound(_))));
+    }
+
+    #[test]
+    fn quiz_rejects_unknown_quiz_on_known_atom() {
+        // Atom is real but doesn't own a `.q9` quiz — the most likely
+        // typo path (right atom, wrong index).
+        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
+        assert!(matches!(g.quiz("fnd.1.1.1.q9"), Err(Error::UnknownId(_))));
+    }
+
+    #[test]
+    fn atom_accepts_leaf_concept() {
+        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
+        let a = g.atom("fnd.1.1.1").expect("valid");
+        assert_eq!(a.id, "fnd.1.1.1");
+    }
+
+    #[test]
+    fn atom_rejects_cluster() {
+        let g = graph_with_cluster("fnd.1");
+        assert!(matches!(g.atom("fnd.1"), Err(Error::NotAtom(_))));
+    }
+
+    #[test]
+    fn atom_rejects_unknown_id() {
+        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
+        assert!(matches!(g.atom("nope"), Err(Error::AtomNotFound(_))));
     }
 }

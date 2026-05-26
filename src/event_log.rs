@@ -18,6 +18,7 @@ use crate::{Error, Result};
 pub enum EventKind {
     PathCreated,
     LessonAuthored,
+    LessonAmended,
     LessonTaught,
     QuizAuthored,
     QuizPresented,
@@ -26,18 +27,25 @@ pub enum EventKind {
     QuizRemoved,
 }
 
-impl std::fmt::Display for EventKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl EventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
             EventKind::PathCreated => "path_created",
             EventKind::LessonAuthored => "lesson_authored",
+            EventKind::LessonAmended => "lesson_amended",
             EventKind::LessonTaught => "lesson_taught",
             EventKind::QuizAuthored => "quiz_authored",
             EventKind::QuizPresented => "quiz_presented",
             EventKind::QuizAnswered => "quiz_answered",
             EventKind::QuizAmended => "quiz_amended",
             EventKind::QuizRemoved => "quiz_removed",
-        })
+        }
+    }
+}
+
+impl std::fmt::Display for EventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -47,6 +55,7 @@ impl std::str::FromStr for EventKind {
         match s {
             "path_created" => Ok(EventKind::PathCreated),
             "lesson_authored" => Ok(EventKind::LessonAuthored),
+            "lesson_amended" => Ok(EventKind::LessonAmended),
             "lesson_taught" => Ok(EventKind::LessonTaught),
             "quiz_authored" => Ok(EventKind::QuizAuthored),
             "quiz_presented" => Ok(EventKind::QuizPresented),
@@ -126,6 +135,17 @@ pub fn lesson_authored(path: String, atom: String) -> Event {
     Event {
         ts: Utc::now(),
         kind: EventKind::LessonAuthored,
+        path,
+        atom: Some(atom),
+        quiz: None,
+        payload: EventPayload::default(),
+    }
+}
+
+pub fn lesson_amended(path: String, atom: String) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::LessonAmended,
         path,
         atom: Some(atom),
         quiz: None,
@@ -236,10 +256,10 @@ pub async fn append(conn: &Connection, event: &Event) -> Result<()> {
          VALUES (?, ?, ?, ?, ?, ?, ?)",
         params![
             db::format_ts(event.ts),
-            event.kind.to_string(),
-            event.path.clone(),
-            event.atom.clone(),
-            event.quiz.clone(),
+            event.kind.as_str(),
+            event.path.as_str(),
+            event.atom.as_deref(),
+            event.quiz.as_deref(),
             rating_int,
             payload_json,
         ],
@@ -261,7 +281,7 @@ pub async fn load(conn: &Connection, path_id: &str) -> Result<Vec<Event>> {
         .query(
             "SELECT ts, kind, path_id, atom_id, quiz_id, rating, payload \
              FROM events WHERE path_id = ? ORDER BY id ASC",
-            params![path_id.to_string()],
+            params![path_id],
         )
         .await?;
     let mut out = Vec::new();

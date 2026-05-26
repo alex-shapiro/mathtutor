@@ -23,10 +23,11 @@ tail of fringe features.
 `mt next` decides _what_ should be presented; the agent decides _how_ it
 is presented. When a lesson or quiz is presented for the first time on
 a given path, the agent authors it and persists via `mt store …`; every
-subsequent presentation on that path is deterministic. If the user
-objects to a question's wording, the agent calls `mt amend quiz` or
-`mt remove quiz`; both write to the path's overlay, never to the shipped
-curriculum.
+subsequent presentation is deterministic. `mt store lesson` is an upsert
+— a second call replaces the prior body, so revising a lesson and
+revising a quiz both go through the same verb (`store` for lessons,
+`amend` for quizzes by ID). All authoring writes to the user overlay,
+never to the shipped curriculum.
 
 Each atom is one concept. Lessons are short (1–2 paragraphs, ≤ 2 minutes
 reading, ≤ 1 theorem / rule / definition). Quizzes are short, free-text
@@ -50,8 +51,8 @@ mt list [<ID>]                 # areas, or children of a cluster
 mt show <ID>                   # full detail on atom / cluster / area
 mt graph check                 # validate the shipped curriculum
 
-# Authoring (writes to the active path's overlay, not to shipped data)
-mt store  lesson <ATOM>     --body TEXT
+# Authoring (writes to the user overlay, not to shipped data)
+mt store  lesson <ATOM>     --body TEXT                       # upsert by atom id
 mt store  quiz   <ATOM>     --difficulty D \
                             --question TEXT --answer TEXT [--rubric TEXT] \
                             [--type {free_text,multiple_choice}]
@@ -63,7 +64,7 @@ mt remove quiz   <QUIZ_ID>
 mt answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT]
 
 # Overlay
-mt overlay dump [--path P]     # print the active path's overlay AYML
+mt overlay dump                # print the user overlay AYML
 
 # Agent operator playbook
 mt instruct                    # print AGENTS playbook embedded in binary
@@ -119,7 +120,7 @@ exists, only the easy quiz exists) for arbitrarily long.
 schema_version: 1
 action: create_lesson | present_lesson | create_quiz | present_quiz | done
 path: <path-id>
-payload: ...   # action-specific (see below)
+payload: ... # action-specific (see below)
 ```
 
 Conventions for every payload:
@@ -285,12 +286,12 @@ curriculum/graph/                # source for the embedded copy
 
 Three roles, three files, all distinct:
 
-| File           | Role                          | Mutability                                    |
-| -------------- | ----------------------------- | --------------------------------------------- |
-| (embedded)     | shipped curriculum            | recompile only                                |
-| `path.ayml`    | per-path intent               | written once at `mt new`; never updated       |
-| `log.ayml`     | per-path history              | append-only                                   |
-| `overlay.ayml` | per-path authored content     | mutated by `mt store / amend / remove`        |
+| File           | Role                      | Mutability                              |
+| -------------- | ------------------------- | --------------------------------------- |
+| (embedded)     | shipped curriculum        | recompile only                          |
+| `path.ayml`    | per-path intent           | written once at `mt new`; never updated |
+| `log.ayml`     | per-path history          | append-only                             |
+| `overlay.ayml` | per-path authored content | mutated by `mt store / amend / remove`  |
 
 ## Per-path overlay
 
@@ -313,15 +314,17 @@ atoms:
       - la.5.4.7.q2
 ```
 
-Merge semantics (`Graph::load_for_path`):
+Merge semantics (`Graph::load_for_path`): an overlay lesson, quiz, or
+tombstone always overrides a shipped item with the same ID. Tombstones
+override everything. Concretely:
 
-- **Lesson** — if shipped has one, use it; otherwise use the overlay
-  lesson if present. `mt amend lesson` is not yet implemented; the
-  shipped lesson can't be overridden without an explicit amend path.
+- **Lesson** — if the overlay has one, use it; otherwise use the
+  shipped lesson if present. `mt store lesson` is an upsert; a second
+  call replaces the body.
 - **Quizzes** — start with shipped, replace any with the same id from
-  the overlay (this is how amends work), then append overlay quizzes
-  whose ids don't match shipped (added quizzes), then filter out
-  anything whose id appears in `removed`.
+  the overlay (this is how `mt amend quiz` works), then append overlay
+  quizzes whose ids don't match shipped (added by `mt store quiz`),
+  then filter out anything whose id appears in `overlay_removed_quizzes`.
 - **Prerequisites / cluster structure** — not overridable. The shape
   of the curriculum is fixed by the shipped graph; the overlay only
   carries content.
@@ -352,9 +355,12 @@ not optional — so the log can be re-played and `time_since_last` /
 Implemented event kinds:
 
 - `path_created`
-- `lesson_authored` (on `mt store lesson`)
+- `lesson_authored` (on `mt store lesson` when no prior lesson existed
+  in the merged view)
+- `lesson_amended` (on `mt store lesson` when a lesson — shipped or
+  overlay — was already in the merged view)
 - `lesson_taught` (auto-logged on `mt next → present_lesson`, and on
-  `mt store lesson` since authoring implies presenting per AGENTS.md)
+  every `mt store lesson` since authoring implies presenting)
 - `quiz_authored` (on `mt store quiz`)
 - `quiz_presented` (auto-logged on `mt next → present_quiz`)
 - `quiz_answered` (on `mt answer`; payload carries rating and user_answer)
@@ -429,8 +435,9 @@ error hierarchy.
 
 ## Out of scope for V1
 
-- **Lesson amend / remove.** Symmetric to quiz amend/remove and easy
-  to add when needed; not currently exposed via CLI.
+- **Lesson remove.** Quiz tombstoning exists; lesson tombstoning would
+  need an `overlay_removed_lessons` table and a corresponding event
+  kind. Not yet motivated by a use case.
 - **`mt relearn` and `mt hint`.** Designed but not wired.
 - **`idle` action.** `mt next` only ever returns `done` or a real
   action today; `idle` (returns when nothing is due but future

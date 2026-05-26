@@ -20,7 +20,7 @@ pub async fn cmd_state(
 ) -> Result<()> {
     let id = resolve_id(conn, explicit_id).await?;
     let p = load_path(conn, &id).await?;
-    let g = Graph::load_for_path(&id, graph_dir)?;
+    let g = Graph::load_for_path(conn, graph_dir).await?;
     let events = event_log::load(conn, &id).await?;
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 

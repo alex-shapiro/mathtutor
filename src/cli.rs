@@ -331,7 +331,7 @@ pub struct AnswerCmd {
     pub graph: Option<PathBuf>,
 }
 
-/// Operate on a learning path's user-authored overlay.
+/// Operate on the user-authored overlay (shared across every path).
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "overlay")]
 pub struct OverlayCmd {
@@ -345,11 +345,7 @@ pub enum OverlayOp {
     Dump(OverlayDumpCmd),
 }
 
-/// Print the active path's overlay to stdout, for review or upstreaming.
+/// Print the user overlay to stdout, for review or upstreaming.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "dump")]
-pub struct OverlayDumpCmd {
-    /// path id (defaults to most recent)
-    #[argh(option, short = 'p')]
-    pub path: Option<String>,
-}
+pub struct OverlayDumpCmd {}

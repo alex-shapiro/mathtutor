@@ -33,17 +33,6 @@ pub fn mt_home() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".mathtutor"))
 }
 
-pub fn paths_root() -> Result<PathBuf> {
-    Ok(mt_home()?.join("paths"))
-}
-
-/// Per-path filesystem directory. Still used by the overlay layer
-/// (`~/.mathtutor/paths/<id>/overlay.ayml`); event-log and path metadata
-/// no longer live on disk.
-pub fn path_dir(id: &str) -> Result<PathBuf> {
-    Ok(paths_root()?.join(id))
-}
-
 pub fn generate_path_id(now: DateTime<Utc>) -> String {
     format!("p_{}", now.format("%Y_%m_%d_%H%M%S"))
 }
@@ -55,14 +44,14 @@ pub fn generate_path_id(now: DateTime<Utc>) -> String {
 pub async fn save_path(conn: &Connection, p: &PathFile) -> Result<()> {
     conn.execute(
         "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
-        params![p.id.clone(), p.goal.clone(), db::format_ts(p.created_at),],
+        params![p.id.as_str(), p.goal.as_str(), db::format_ts(p.created_at)],
     )
     .await?;
     for (i, atom) in p.target_atoms.iter().enumerate() {
         let position = i64::try_from(i).expect("position fits in i64");
         conn.execute(
             "INSERT INTO path_targets(path_id, atom_id, position) VALUES (?, ?, ?)",
-            params![p.id.clone(), atom.clone(), position],
+            params![p.id.as_str(), atom.as_str(), position],
         )
         .await?;
     }
@@ -73,7 +62,7 @@ pub async fn load_path(conn: &Connection, id: &str) -> Result<PathFile> {
     let mut rows = conn
         .query(
             "SELECT goal, created_at FROM paths WHERE id = ?",
-            params![id.to_string()],
+            params![id],
         )
         .await?;
     let row = rows.next().await?.ok_or(Error::NoPath)?;
@@ -84,7 +73,7 @@ pub async fn load_path(conn: &Connection, id: &str) -> Result<PathFile> {
     let mut rows = conn
         .query(
             "SELECT atom_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
-            params![id.to_string()],
+            params![id],
         )
         .await?;
     let mut targets = Vec::new();

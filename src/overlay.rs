@@ -1,216 +1,227 @@
-//! Per-path overlay: lessons and quizzes a user has authored on top of
-//! the shipped curriculum. Lives at `~/.mathtutor/paths/<id>/overlay.ayml`.
+//! Curriculum overlay: lessons and quizzes a user has authored on top of
+//! the shipped curriculum.
 //!
-//! The shipped curriculum is read-only (compiled into the binary). When
-//! a user authors a new lesson or quiz, it goes into the active path's
-//! overlay instead of mutating the canonical graph. `Graph::load_for_path`
-//! merges the overlay onto the shipped data to produce the effective
-//! graph for that path's scheduler / tree / state queries.
-//!
-//! Blast radius is per-path on purpose: an unaudited lesson authored
-//! under path A doesn't pollute path B that touches the same atom.
-//! `mt overlay dump` prints a path's overlay for review and eventual
-//! merge into the canonical curriculum.
+//! Stored in the SQL tables `overlay_lessons`, `overlay_quizzes`, and
+//! `overlay_removed_quizzes`. The shipped curriculum is read-only,
+//! compiled into the binary. User-authored content lives in these
+//! tables and is merged on top of the canonical graph by
+//! `Graph::load_for_path`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
-use std::io::BufReader;
-use std::path::PathBuf;
 
-use libsql::Connection;
-use serde::{Deserialize, Serialize};
+use libsql::{Connection, Row, params};
+use serde::Serialize;
 
-use crate::graph::{Quiz, QuizRaw};
-use crate::path::{path_dir, resolve_id};
+use crate::graph::Quiz;
 use crate::types::{Difficulty, QuizType};
 use crate::{Error, Result};
 
-/// On-disk shape of `overlay.ayml`. Flat: atoms keyed by ID, each
-/// carrying the lesson and/or quizzes this path has authored. No
-/// cluster structure — overlays only carry content, not topology.
-#[derive(Debug, Default, Serialize, Deserialize)]
+/// In-memory snapshot of the curriculum overlay
+#[derive(Debug, Default, Serialize)]
 pub struct Overlay {
-    pub schema_version: u32,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub atoms: BTreeMap<String, OverlayAtom>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct OverlayAtom {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lesson: Option<String>,
-    /// Authored quizzes for this atom. An entry whose id matches a
-    /// shipped quiz id overrides the shipped version during merge;
-    /// otherwise it's a new quiz appended after the shipped ones.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub quizzes: Vec<QuizRaw>,
-    /// Quiz ids that should not appear in the merged view, whether
-    /// they originated in the shipped curriculum or the overlay's own
-    /// `quizzes`. The `QuizAnswered` events for these ids remain in the
-    /// log for audit; the scheduler simply stops surfacing them.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub quizzes: Vec<Quiz>,
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub removed: BTreeSet<String>,
 }
 
-impl OverlayAtom {
-    pub fn is_empty(&self) -> bool {
-        self.lesson.is_none() && self.quizzes.is_empty() && self.removed.is_empty()
+// ── SQL load ────────────────────────────────────────────────────────
+
+/// Read the user overlay into an in-memory `Overlay`, keyed by atom.
+/// Returns an empty overlay if no rows are present.
+pub async fn load(conn: &Connection) -> Result<Overlay> {
+    let mut atoms: BTreeMap<String, OverlayAtom> = BTreeMap::new();
+
+    let mut rows = conn
+        .query("SELECT atom_id, body FROM overlay_lessons", params![])
+        .await?;
+    while let Some(row) = rows.next().await? {
+        let atom_id: String = row.get(0)?;
+        let body: String = row.get(1)?;
+        atoms.entry(atom_id).or_default().lesson = Some(body);
     }
 
-    /// Quizzes in `FlatConcept` form, for merge into the shipped graph.
-    pub fn quizzes_flat(&self) -> Vec<Quiz> {
-        self.quizzes.iter().cloned().map(Quiz::from).collect()
+    let mut rows = conn
+        .query(
+            "SELECT atom_id, quiz_id, difficulty, kind, question, answer, rubric \
+             FROM overlay_quizzes ORDER BY atom_id, quiz_id",
+            params![],
+        )
+        .await?;
+    while let Some(row) = rows.next().await? {
+        let (atom_id, quiz) = row_to_overlay_quiz(&row)?;
+        atoms.entry(atom_id).or_default().quizzes.push(quiz);
     }
+
+    // Tombstones may target a quiz that hasn't been merged yet (e.g.,
+    // an authored quiz the user later removed) — re-derive the atom
+    // from the quiz id so the tombstone always lands on the right atom.
+    let mut rows = conn
+        .query(
+            "SELECT q.atom_id, r.quiz_id \
+             FROM overlay_removed_quizzes r \
+             LEFT JOIN overlay_quizzes q ON q.quiz_id = r.quiz_id",
+            params![],
+        )
+        .await?;
+    while let Some(row) = rows.next().await? {
+        let atom_from_overlay: Option<String> = row.get(0)?;
+        let quiz_id: String = row.get(1)?;
+        let atom_id = atom_from_overlay
+            .or_else(|| crate::answer::atom_from_quiz_id(&quiz_id))
+            .unwrap_or_else(|| quiz_id.clone());
+        atoms.entry(atom_id).or_default().removed.insert(quiz_id);
+    }
+
+    Ok(Overlay { atoms })
 }
 
-// ── Storage layout ──────────────────────────────────────────────────
+fn row_to_overlay_quiz(row: &Row) -> Result<(String, Quiz)> {
+    let atom_id: String = row.get(0)?;
+    let quiz_id: String = row.get(1)?;
+    let difficulty_str: String = row.get(2)?;
+    let kind_str: Option<String> = row.get(3)?;
+    let question: String = row.get(4)?;
+    let answer: String = row.get(5)?;
+    let rubric: Option<String> = row.get(6)?;
 
-pub fn overlay_path(path_id: &str) -> Result<PathBuf> {
-    Ok(path_dir(path_id)?.join("overlay.ayml"))
+    let difficulty = difficulty_str.parse()?;
+    let kind = kind_str.as_deref().map(str::parse).transpose()?;
+    Ok((
+        atom_id,
+        Quiz {
+            id: quiz_id,
+            difficulty,
+            kind,
+            question,
+            answer,
+            rubric,
+        },
+    ))
 }
 
-pub fn load(path_id: &str) -> Result<Overlay> {
-    let file_path = overlay_path(path_id)?;
-    if !file_path.exists() {
-        return Ok(Overlay {
-            schema_version: 1,
-            atoms: BTreeMap::new(),
-        });
-    }
-    let file = File::open(&file_path).map_err(|e| Error::Io {
-        path: file_path.clone(),
-        source: e,
-    })?;
-    let metadata = file.metadata().map_err(|e| Error::Io {
-        path: file_path.clone(),
-        source: e,
-    })?;
-    if metadata.len() == 0 {
-        return Ok(Overlay {
-            schema_version: 1,
-            atoms: BTreeMap::new(),
-        });
-    }
-    ayml::from_reader(BufReader::new(file)).map_err(|e| Error::AymlParse {
-        path: file_path,
-        message: e.to_string(),
-    })
+// ── SQL mutators ────────────────────────────────────────────────────
+
+/// Upsert the lesson body for `atom_id`. Overlay lessons win over
+/// shipped lessons in the merged view, so this is the entry point for
+/// both first-time authoring and subsequent edits.
+pub async fn upsert_lesson(conn: &Connection, atom_id: &str, body: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO overlay_lessons(atom_id, body) VALUES (?, ?) \
+         ON CONFLICT(atom_id) DO UPDATE SET body = excluded.body",
+        params![atom_id, body],
+    )
+    .await?;
+    Ok(())
 }
 
-pub fn save(path_id: &str, overlay: &Overlay) -> Result<()> {
-    let file_path = overlay_path(path_id)?;
-    if let Some(parent) = file_path.parent() {
-        fs::create_dir_all(parent).map_err(|e| Error::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-    let text = ayml::to_string(overlay).map_err(|e| Error::AymlSerialize(e.to_string()))?;
-    fs::write(&file_path, text).map_err(|e| Error::Io {
-        path: file_path,
-        source: e,
-    })
-}
-
-// ── Mutators used by `mt store …` ──────────────────────────────────
-
-/// Set the lesson body for `atom_id` in this path's overlay. Returns
-/// `Error::LessonAlreadyExists` if the overlay already has one;
-/// callers should pre-check shipped-graph lesson presence too.
-pub fn add_lesson(path_id: &str, atom_id: &str, body: String) -> Result<()> {
-    let mut overlay = load(path_id)?;
-    let entry = overlay.atoms.entry(atom_id.to_string()).or_default();
-    if entry.lesson.is_some() {
-        return Err(Error::LessonAlreadyExists(atom_id.to_string()));
-    }
-    entry.lesson = Some(body);
-    save(path_id, &overlay)
-}
-
-/// Append a new quiz to `atom_id` in this path's overlay. The caller
-/// supplies a unique quiz id (typically derived from the highest
-/// existing quiz id across shipped + overlay).
+/// Insert a new quiz row. Caller supplies a fresh, globally-unique
+/// quiz id (typically derived from the highest existing id in the
+/// merged view via `next_quiz_id`).
 #[allow(clippy::too_many_arguments)]
-pub fn add_quiz(
-    path_id: &str,
+pub async fn add_quiz(
+    conn: &Connection,
     atom_id: &str,
-    quiz_id: String,
+    quiz_id: &str,
     difficulty: Difficulty,
-    question: String,
-    answer: String,
-    rubric: Option<String>,
-    quiz_type: QuizType,
+    kind: Option<QuizType>,
+    question: &str,
+    answer: &str,
+    rubric: Option<&str>,
 ) -> Result<()> {
-    let mut overlay = load(path_id)?;
-    let entry = overlay.atoms.entry(atom_id.to_string()).or_default();
-    let kind = (quiz_type != QuizType::FreeText).then_some(quiz_type);
-    entry.quizzes.push(QuizRaw {
-        id: quiz_id,
-        difficulty,
-        kind,
-        question,
-        answer,
-        rubric,
-    });
-    save(path_id, &overlay)
+    conn.execute(
+        "INSERT INTO overlay_quizzes(atom_id, quiz_id, difficulty, kind, question, answer, rubric) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        params![
+            atom_id,
+            quiz_id,
+            difficulty.as_str(),
+            kind.map(QuizType::as_str),
+            question,
+            answer,
+            rubric,
+        ],
+    )
+    .await?;
+    Ok(())
 }
 
-/// Apply field changes to an existing quiz in this path's overlay.
-/// If the quiz currently lives in the shipped curriculum (no overlay
-/// entry yet), the overlay gains a new entry that shadows it; if the
-/// quiz is already overlay-authored, that entry is mutated in place.
-///
-/// `base` is the quiz's current state in the *merged* view, supplied
-/// by the caller (typically `store::cmd_amend_quiz` looked it up via
-/// `Graph::load_for_path`). Only fields supplied here change.
+/// Upsert an amended quiz into the overlay. `base` is the quiz's
+/// current state in the merged view (shipped + overlay); only fields
+/// supplied as `Some` change. Un-tombstones the quiz if it was
+/// previously removed.
 #[allow(clippy::too_many_arguments)]
-pub fn amend_quiz(
-    path_id: &str,
+pub async fn amend_quiz(
+    conn: &Connection,
     atom_id: &str,
-    base: &QuizRaw,
+    base: &Quiz,
     new_difficulty: Option<Difficulty>,
-    new_question: Option<String>,
-    new_answer: Option<String>,
-    new_rubric: Option<String>,
+    new_question: Option<&str>,
+    new_answer: Option<&str>,
+    new_rubric: Option<&str>,
     new_type: Option<QuizType>,
 ) -> Result<()> {
-    let updated = QuizRaw {
-        id: base.id.clone(),
-        difficulty: new_difficulty.unwrap_or(base.difficulty),
-        kind: match new_type {
-            Some(t) => (t != QuizType::FreeText).then_some(t),
-            None => base.kind,
-        },
-        question: new_question.unwrap_or_else(|| base.question.clone()),
-        answer: new_answer.unwrap_or_else(|| base.answer.clone()),
-        rubric: new_rubric.or_else(|| base.rubric.clone()),
+    let difficulty = new_difficulty.unwrap_or(base.difficulty);
+    let kind = match new_type {
+        Some(t) => (t != QuizType::FreeText).then_some(t),
+        None => base.kind,
     };
+    let question = new_question.unwrap_or(&base.question);
+    let answer = new_answer.unwrap_or(&base.answer);
+    let rubric = new_rubric.or(base.rubric.as_deref());
 
-    let mut overlay = load(path_id)?;
-    let entry = overlay.atoms.entry(atom_id.to_string()).or_default();
-    match entry.quizzes.iter_mut().find(|q| q.id == updated.id) {
-        Some(existing) => *existing = updated,
-        None => entry.quizzes.push(updated),
-    }
-    // Amending un-tombstones, in case the quiz had been removed.
-    entry.removed.remove(&base.id);
-    save(path_id, &overlay)
+    conn.execute(
+        "INSERT INTO overlay_quizzes(atom_id, quiz_id, difficulty, kind, question, answer, rubric) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(quiz_id) DO UPDATE SET \
+            atom_id    = excluded.atom_id, \
+            difficulty = excluded.difficulty, \
+            kind       = excluded.kind, \
+            question   = excluded.question, \
+            answer     = excluded.answer, \
+            rubric     = excluded.rubric",
+        params![
+            atom_id,
+            base.id.as_str(),
+            difficulty.as_str(),
+            kind.map(QuizType::as_str),
+            question,
+            answer,
+            rubric,
+        ],
+    )
+    .await?;
+    conn.execute(
+        "DELETE FROM overlay_removed_quizzes WHERE quiz_id = ?",
+        params![base.id.as_str()],
+    )
+    .await?;
+    Ok(())
 }
 
-/// Tombstone a quiz id in this path's overlay so it stops appearing in
-/// the merged view. Idempotent.
-pub fn remove_quiz(path_id: &str, atom_id: &str, quiz_id: &str) -> Result<()> {
-    let mut overlay = load(path_id)?;
-    let entry = overlay.atoms.entry(atom_id.to_string()).or_default();
-    entry.removed.insert(quiz_id.to_string());
-    save(path_id, &overlay)
+/// Tombstone `quiz_id` so it stops appearing in the merged view.
+/// Idempotent.
+pub async fn remove_quiz(conn: &Connection, quiz_id: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO overlay_removed_quizzes(quiz_id) VALUES (?)",
+        params![quiz_id],
+    )
+    .await?;
+    Ok(())
 }
 
 // ── `mt overlay dump` ──────────────────────────────────────────────
 
-pub async fn cmd_dump(conn: &Connection, path_id: Option<&str>) -> Result<()> {
-    let id = resolve_id(conn, path_id).await?;
-    let overlay = load(&id)?;
+pub async fn cmd_dump(conn: &Connection) -> Result<()> {
+    let overlay = load(conn).await?;
     let text = ayml::to_string(&overlay).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())

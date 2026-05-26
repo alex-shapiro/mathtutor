@@ -105,6 +105,11 @@ You:
    BODY
    )"
 
+   `mt store lesson` is an upsert: calling it again for the same atom
+   replaces the body. Use that when the user asks for a different
+   explanation of an already-taught lesson (see **Amend an existing
+   lesson** below).
+
 3. Present the lesson to the user in conversation.
 4. Stop. Let the user read, ask questions, request examples, or ask for clarification. Do not call `mt next` until the user explicitly signals they are ready to continue.
 
@@ -233,11 +238,28 @@ Path goal reached. Tell the user, suggest a new path or pause.
 
 ## Fixing broken content
 
-If the user objects to a question (confusing wording, wrong answer, off-topic), you have two repair commands.
+If the user objects to a lesson or question (confusing wording, wrong
+answer, off-topic), use one of these repair commands.
+
+### Amend an existing lesson
+
+Use when the user asks for a different explanation, a correction, or a
+re-phrasing of an already-taught lesson. `mt store lesson` is an upsert,
+so the same command both authors a new lesson and replaces an existing
+one:
+
+    mt store lesson <atom-id> --body "$(cat <<'BODY'
+    …revised lesson…
+    BODY
+    )"
+
+The atom's overlay row is replaced and an audit event is logged.
+Present the new body to the user immediately — storing implies
+teaching. There is no separate `mt amend lesson` command.
 
 ### Amend an existing quiz
 
-Use when the question is *mostly right* and just needs an edit. The
+Use when the question is _mostly right_ and just needs an edit. The
 quiz id stays the same, so the FSRS schedule continues uninterrupted —
 prior `again`/`good`/`easy` ratings still inform the next review.
 
@@ -252,7 +274,7 @@ only on the atom's lesson and previously-taught prerequisites.
 
 ### Remove a quiz
 
-Use when the question is *fundamentally broken* and shouldn't exist.
+Use when the question is _fundamentally broken_ and shouldn't exist.
 
     mt remove quiz <quiz-id>
 
@@ -273,17 +295,20 @@ needed a wording fix.
 ## Where authored content lives
 
 `mt` ships with a copy of the curriculum baked into the binary. When you
-call `mt store lesson` or `mt store quiz`, the new content is written to
-the **active path's overlay** at `~/.mathtutor/paths/<id>/overlay.ayml`,
-not back into the shipped curriculum. The shipped graph is read-only;
-the overlay is the per-path "what this user authored on top of it."
+call `mt store lesson`, `mt store quiz`, `mt amend quiz`, or
+`mt remove quiz`, the new content is written to the **user overlay** in
+the user's database, not back into the shipped curriculum. The shipped
+graph is read-only; the overlay is "what this user authored on top of
+it" and is shared across every learning path on the same database.
 
 This is transparent to you for normal authoring: `mt next` returns the
 overlay-merged view, so subsequent reads see whatever you've stored.
+Overlay entries always override the shipped curriculum for items with
+the same id.
 
-Operator-only: `mt overlay dump [--path P]` prints the overlay as AYML
-suitable for review and eventual merge into the canonical curriculum
-repo. Don't run it during a session unless asked.
+Operator-only: `mt overlay dump` prints the overlay as AYML suitable for
+review and eventual merge into the canonical curriculum repo. Don't run
+it during a session unless asked.
 
 ## Errors
 

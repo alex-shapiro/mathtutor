@@ -87,25 +87,32 @@ pub enum Difficulty {
     Hard,
 }
 
-impl std::fmt::Display for Difficulty {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl Difficulty {
+    pub fn as_str(self) -> &'static str {
+        match self {
             Difficulty::Easy => "easy",
             Difficulty::Medium => "medium",
             Difficulty::Hard => "hard",
-        })
+        }
     }
 }
 
-impl argh::FromArgValue for Difficulty {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value {
+impl std::fmt::Display for Difficulty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// argh::FromArgValue picks this up via a blanket impl for `T: FromStr
+// where T::Err: Display` — no separate CLI parser needed.
+impl std::str::FromStr for Difficulty {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
             "easy" => Ok(Difficulty::Easy),
             "medium" => Ok(Difficulty::Medium),
             "hard" => Ok(Difficulty::Hard),
-            other => Err(format!(
-                "invalid difficulty '{other}' (expected easy | medium | hard)"
-            )),
+            other => Err(Error::InvalidDifficulty(other.to_string())),
         }
     }
 }
@@ -121,14 +128,22 @@ pub enum QuizType {
     MultipleChoice,
 }
 
-impl argh::FromArgValue for QuizType {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value {
+impl QuizType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QuizType::FreeText => "free_text",
+            QuizType::MultipleChoice => "multiple_choice",
+        }
+    }
+}
+
+impl std::str::FromStr for QuizType {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
             "free_text" => Ok(QuizType::FreeText),
             "multiple_choice" => Ok(QuizType::MultipleChoice),
-            other => Err(format!(
-                "invalid quiz type '{other}' (expected free_text | multiple_choice)"
-            )),
+            other => Err(Error::InvalidQuizKind(other.to_string())),
         }
     }
 }

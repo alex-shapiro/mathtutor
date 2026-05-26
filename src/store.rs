@@ -1,32 +1,29 @@
-//! Persist agent-authored content to the active path's overlay.
+//! Persist agent-authored content to the user overlay.
 //!
-//! Both `mt store lesson` and `mt store quiz` write to
-//! `~/.mathtutor/paths/<id>/overlay.ayml` — never to the shipped
-//! curriculum. The shipped graph is read-only in V2; user-authored
-//! content lives per-path so an unaudited lesson doesn't bleed into
-//! sibling paths that target the same atom.
+//! `mt store lesson`, `mt store quiz`, `mt amend quiz`, and `mt remove
+//! quiz` write to the SQL overlay tables — never to the shipped
+//! curriculum. The shipped graph is read-only; user-authored content
+//! lives globally on the user database and is shared across every path.
 //!
-//! Both commands consult the *merged* (shipped + overlay) graph for
-//! pre-condition checks: a lesson is "missing" only if neither shipped
-//! nor overlay has one; quiz IDs continue past the highest ID across
-//! both sources.
+//! Pre-condition checks consult the merged (shipped + overlay) graph:
+//! a lesson is "missing" only if neither shipped nor overlay has one;
+//! quiz IDs continue past the highest ID across both sources.
 
 use std::path::Path;
 
 use libsql::Connection;
 
-use crate::answer::atom_from_quiz_id;
 use crate::event_log;
-use crate::graph::{self, Graph, QuizRaw};
+use crate::graph::{self, Graph};
 use crate::overlay;
 use crate::path;
 use crate::types::{Difficulty, QuizType};
 use crate::{Error, Result};
 
-/// Persist a lesson body for `atom_id` into the active path's overlay,
-/// then log `lesson_authored` + `lesson_taught`. Per AGENTS.md the
-/// agent presents the body to the user immediately after authoring,
-/// so storing implies teaching.
+/// Upsert a lesson body for `atom_id` into the user overlay. Emits
+/// `lesson_amended` if a lesson already existed in the merged view
+/// (shipped or overlay), else `lesson_authored`. Always emits
+/// `lesson_taught`: per the agent playbook, storing implies presenting.
 pub async fn cmd_store_lesson(
     conn: &Connection,
     atom_id: &str,
@@ -34,35 +31,27 @@ pub async fn cmd_store_lesson(
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let id = path::resolve_id(conn, path_id).await?;
-    let g = Graph::load_for_path(&id, graph_dir)?;
-    let c = g
-        .by_id
-        .get(atom_id)
-        .ok_or_else(|| Error::AtomNotFound(atom_id.to_string()))?;
-    if !c.children_ids.is_empty() {
-        return Err(Error::NotAtom(atom_id.to_string()));
-    }
-    if c.lesson.is_some() {
-        return Err(Error::LessonAlreadyExists(atom_id.to_string()));
-    }
-
-    overlay::add_lesson(&id, atom_id, body)?;
     let tx = conn.transaction().await?;
-    event_log::append(
-        &tx,
-        &event_log::lesson_authored(id.clone(), atom_id.to_string()),
-    )
-    .await?;
+    let id = path::resolve_id(&tx, path_id).await?;
+    let g = Graph::load_for_path(&tx, graph_dir).await?;
+    let amended = g.atom(atom_id)?.lesson.is_some();
+
+    overlay::upsert_lesson(&tx, atom_id, &body).await?;
+    let change = if amended {
+        event_log::lesson_amended(id.clone(), atom_id.to_string())
+    } else {
+        event_log::lesson_authored(id.clone(), atom_id.to_string())
+    };
+    event_log::append(&tx, &change).await?;
     event_log::append(&tx, &event_log::lesson_taught(id, atom_id.to_string())).await?;
     tx.commit().await?;
     Ok(())
 }
 
-/// Persist a quiz on `atom_id` into the active path's overlay and log
-/// `quiz_authored`. The new quiz ID continues the `<atom>.qN` sequence
-/// past the highest existing N across shipped + overlay so IDs are
-/// globally unique within the path's effective graph.
+/// Persist a quiz on `atom_id` into the user overlay and log
+/// `quiz_authored` against the active path. The new quiz ID continues
+/// the `<atom>.qN` sequence past the highest existing N across shipped
+/// + overlay so IDs are globally unique within the merged graph.
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_store_quiz(
     conn: &Connection,
@@ -75,31 +64,27 @@ pub async fn cmd_store_quiz(
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<String> {
-    let id = path::resolve_id(conn, path_id).await?;
-    let g = Graph::load_for_path(&id, graph_dir)?;
-    let c = g
-        .by_id
-        .get(atom_id)
-        .ok_or_else(|| Error::AtomNotFound(atom_id.to_string()))?;
-    if !c.children_ids.is_empty() {
-        return Err(Error::NotAtom(atom_id.to_string()));
-    }
+    let tx = conn.transaction().await?;
+    let id = path::resolve_id(&tx, path_id).await?;
+    let g = Graph::load_for_path(&tx, graph_dir).await?;
+    let c = g.atom(atom_id)?;
     if c.lesson.is_none() {
         return Err(Error::NoLesson(atom_id.to_string()));
     }
 
     let new_id = next_quiz_id(atom_id, &c.quizzes);
+    let kind = (quiz_type != QuizType::FreeText).then_some(quiz_type);
     overlay::add_quiz(
-        &id,
+        &tx,
         atom_id,
-        new_id.clone(),
+        &new_id,
         difficulty,
-        question,
-        answer,
-        rubric,
-        quiz_type,
-    )?;
-    let tx = conn.transaction().await?;
+        kind,
+        &question,
+        &answer,
+        rubric.as_deref(),
+    )
+    .await?;
     event_log::append(
         &tx,
         &event_log::quiz_authored(id, atom_id.to_string(), new_id.clone()),
@@ -109,10 +94,10 @@ pub async fn cmd_store_quiz(
     Ok(new_id)
 }
 
-/// Apply field-level edits to an existing quiz, writing the result into
-/// the active path's overlay. The quiz may live in the shipped
-/// curriculum or in the overlay; either way the post-amend state
-/// shadows or replaces it during the next `Graph::load_for_path`.
+/// Apply field-level edits to an existing quiz, writing the result
+/// into the user overlay. The quiz may live in the shipped curriculum
+/// or in the overlay; either way the post-amend state shadows or
+/// replaces it during the next `Graph::load_for_path`.
 ///
 /// FSRS history is preserved: the quiz id doesn't change, so the
 /// scheduler keeps treating it as the same card. If you want a fresh
@@ -129,69 +114,50 @@ pub async fn cmd_amend_quiz(
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let atom_id =
-        atom_from_quiz_id(quiz_id).ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
-    let id = path::resolve_id(conn, path_id).await?;
-    let g = Graph::load_for_path(&id, graph_dir)?;
-    let c = g
-        .by_id
-        .get(&atom_id)
-        .ok_or_else(|| Error::AtomNotFound(atom_id.clone()))?;
-    let base = c
-        .quizzes
-        .iter()
-        .find(|q| q.id == quiz_id)
-        .ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
-    let base_raw = QuizRaw {
-        id: base.id.clone(),
-        difficulty: base.difficulty,
-        kind: base.kind,
-        question: base.question.clone(),
-        answer: base.answer.clone(),
-        rubric: base.rubric.clone(),
-    };
-    overlay::amend_quiz(
-        &id, &atom_id, &base_raw, difficulty, question, answer, rubric, quiz_type,
-    )?;
     let tx = conn.transaction().await?;
+    let id = path::resolve_id(&tx, path_id).await?;
+    let g = Graph::load_for_path(&tx, graph_dir).await?;
+    let (atom, quiz) = g.quiz(quiz_id)?;
+    overlay::amend_quiz(
+        &tx,
+        &atom.id,
+        quiz,
+        difficulty,
+        question.as_deref(),
+        answer.as_deref(),
+        rubric.as_deref(),
+        quiz_type,
+    )
+    .await?;
     event_log::append(
         &tx,
-        &event_log::quiz_amended(id, atom_id, quiz_id.to_string()),
+        &event_log::quiz_amended(id, atom.id.clone(), quiz_id.to_string()),
     )
     .await?;
     tx.commit().await?;
     Ok(())
 }
 
-/// Tombstone a quiz so it no longer appears in the merged view for
-/// this path. Past `QuizAnswered` events stay in the log for audit;
-/// the scheduler simply stops surfacing it.
+/// Tombstone a quiz so it no longer appears in the merged view. Past
+/// `QuizAnswered` events stay in the log for audit; the scheduler
+/// simply stops surfacing it. Idempotent.
 pub async fn cmd_remove_quiz(
     conn: &Connection,
     quiz_id: &str,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let atom_id =
-        atom_from_quiz_id(quiz_id).ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
-    let id = path::resolve_id(conn, path_id).await?;
-
     // Confirm the quiz exists in the merged view; refuse to tombstone
     // a name that never resolved to anything (likely a typo).
-    let g = Graph::load_for_path(&id, graph_dir)?;
-    let c = g
-        .by_id
-        .get(&atom_id)
-        .ok_or_else(|| Error::AtomNotFound(atom_id.clone()))?;
-    if !c.quizzes.iter().any(|q| q.id == quiz_id) {
-        return Err(Error::UnknownId(quiz_id.to_string()));
-    }
-
-    overlay::remove_quiz(&id, &atom_id, quiz_id)?;
     let tx = conn.transaction().await?;
+    let id = path::resolve_id(&tx, path_id).await?;
+    let g = Graph::load_for_path(&tx, graph_dir).await?;
+    let (atom, _) = g.quiz(quiz_id)?;
+
+    overlay::remove_quiz(&tx, quiz_id).await?;
     event_log::append(
         &tx,
-        &event_log::quiz_removed(id, atom_id, quiz_id.to_string()),
+        &event_log::quiz_removed(id, atom.id.clone(), quiz_id.to_string()),
     )
     .await?;
     tx.commit().await?;

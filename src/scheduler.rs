@@ -24,7 +24,7 @@ pub async fn cmd_next(
 ) -> Result<()> {
     let tx = conn.transaction().await?;
     let id = path::resolve_id(&tx, path_id).await?;
-    let g = Graph::load_for_path(&id, graph_dir)?;
+    let g = Graph::load_for_path(&tx, graph_dir).await?;
     let p = path::load_path(&tx, &id).await?;
     let events = event_log::load(&tx, &id).await?;
     let due = cards::due_quizzes(&tx, &id, Utc::now()).await?;

@@ -197,7 +197,7 @@ async fn dispatch(conn: &Connection, cmd: Cmd) -> (Result<()>, u8) {
             (r, 2)
         }
         Cmd::Overlay(o) => match o.op {
-            OverlayOp::Dump(c) => (overlay::cmd_dump(conn, c.path.as_deref()).await, 1),
+            OverlayOp::Dump(_) => (overlay::cmd_dump(conn).await, 1),
         },
         Cmd::Amend(a) => match a.op {
             AmendOp::Quiz(c) => {
