@@ -12,7 +12,7 @@
 
 use libsql::{Connection, params};
 use mathtutor::db::{self, DbConfig};
-use mathtutor::graph::{Graph, QuizRaw};
+use mathtutor::graph::{Graph, Quiz};
 use mathtutor::overlay;
 use mathtutor::types::{Difficulty, QuizType};
 use tempfile::TempDir;
@@ -79,17 +79,18 @@ async fn add_quiz_writes_row_and_round_trips() {
     let tmp = TempDir::new().unwrap();
     let conn = fresh_db(&tmp).await;
 
-    let quiz = QuizRaw {
-        id: "fnd.1.1.2.q1".into(),
-        difficulty: Difficulty::Medium,
-        kind: Some(QuizType::MultipleChoice),
-        question: "Pick the negation".into(),
-        answer: "¬P".into(),
-        rubric: Some("Look for the ¬ glyph".into()),
-    };
-    overlay::add_quiz(&conn, NO_LESSON_ATOM, &quiz)
-        .await
-        .expect("add_quiz");
+    overlay::add_quiz(
+        &conn,
+        NO_LESSON_ATOM,
+        "fnd.1.1.2.q1",
+        Difficulty::Medium,
+        Some(QuizType::MultipleChoice),
+        "Pick the negation",
+        "¬P",
+        Some("Look for the ¬ glyph"),
+    )
+    .await
+    .expect("add_quiz");
 
     let ov = overlay::load(&conn).await.expect("load");
     let entry = ov.atoms.get(NO_LESSON_ATOM).expect("atom present");
@@ -111,7 +112,7 @@ async fn amend_quiz_upserts_and_untombstones() {
     // Tombstone the shipped quiz, then amend it. The amend must
     // un-tombstone so the quiz comes back into the merged view.
     overlay::remove_quiz(&conn, SHIPPED_QUIZ_ID).await.unwrap();
-    let base = QuizRaw {
+    let base = Quiz {
         id: SHIPPED_QUIZ_ID.into(),
         difficulty: Difficulty::Easy,
         kind: None,
@@ -124,8 +125,8 @@ async fn amend_quiz_upserts_and_untombstones() {
         WITH_LESSON_ATOM,
         &base,
         Some(Difficulty::Hard),
-        Some("new question".into()),
-        Some("new answer".into()),
+        Some("new question"),
+        Some("new answer"),
         None,
         None,
     )
@@ -204,14 +205,12 @@ async fn merged_graph_appends_overlay_quizzes() {
     overlay::add_quiz(
         &conn,
         WITH_LESSON_ATOM,
-        &QuizRaw {
-            id: "fnd.1.1.1.q2".into(),
-            difficulty: Difficulty::Hard,
-            kind: None,
-            question: "Restate the law of excluded middle.".into(),
-            answer: "P ∨ ¬P".into(),
-            rubric: None,
-        },
+        "fnd.1.1.1.q2",
+        Difficulty::Hard,
+        None,
+        "Restate the law of excluded middle.",
+        "P ∨ ¬P",
+        None,
     )
     .await
     .unwrap();
@@ -227,7 +226,7 @@ async fn merged_graph_amendment_replaces_shipped_quiz() {
     let tmp = TempDir::new().unwrap();
     let conn = fresh_db(&tmp).await;
 
-    let base = QuizRaw {
+    let base = Quiz {
         id: SHIPPED_QUIZ_ID.into(),
         difficulty: Difficulty::Easy,
         kind: None,
@@ -240,8 +239,8 @@ async fn merged_graph_amendment_replaces_shipped_quiz() {
         WITH_LESSON_ATOM,
         &base,
         None,
-        Some("Define proposition.".into()),
-        Some("Truth-valued declarative.".into()),
+        Some("Define proposition."),
+        Some("Truth-valued declarative."),
         None,
         None,
     )
@@ -344,14 +343,12 @@ async fn graph_quiz_helper_resolves_overlay_authored_ids() {
     overlay::add_quiz(
         &conn,
         WITH_LESSON_ATOM,
-        &QuizRaw {
-            id: "fnd.1.1.1.q9".into(),
-            difficulty: Difficulty::Hard,
-            kind: None,
-            question: "new".into(),
-            answer: "new".into(),
-            rubric: None,
-        },
+        "fnd.1.1.1.q9",
+        Difficulty::Hard,
+        None,
+        "new",
+        "new",
+        None,
     )
     .await
     .unwrap();

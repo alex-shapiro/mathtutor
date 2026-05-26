@@ -26,9 +26,9 @@ pub enum EventKind {
     QuizRemoved,
 }
 
-impl std::fmt::Display for EventKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl EventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
             EventKind::PathCreated => "path_created",
             EventKind::LessonAuthored => "lesson_authored",
             EventKind::LessonTaught => "lesson_taught",
@@ -37,7 +37,13 @@ impl std::fmt::Display for EventKind {
             EventKind::QuizAnswered => "quiz_answered",
             EventKind::QuizAmended => "quiz_amended",
             EventKind::QuizRemoved => "quiz_removed",
-        })
+        }
+    }
+}
+
+impl std::fmt::Display for EventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -236,10 +242,10 @@ pub async fn append(conn: &Connection, event: &Event) -> Result<()> {
          VALUES (?, ?, ?, ?, ?, ?, ?)",
         params![
             db::format_ts(event.ts),
-            event.kind.to_string(),
-            event.path.clone(),
-            event.atom.clone(),
-            event.quiz.clone(),
+            event.kind.as_str(),
+            event.path.as_str(),
+            event.atom.as_deref(),
+            event.quiz.as_deref(),
             rating_int,
             payload_json,
         ],
@@ -261,7 +267,7 @@ pub async fn load(conn: &Connection, path_id: &str) -> Result<Vec<Event>> {
         .query(
             "SELECT ts, kind, path_id, atom_id, quiz_id, rating, payload \
              FROM events WHERE path_id = ? ORDER BY id ASC",
-            params![path_id.to_string()],
+            params![path_id],
         )
         .await?;
     let mut out = Vec::new();

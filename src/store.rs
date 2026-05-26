@@ -14,7 +14,7 @@ use std::path::Path;
 use libsql::Connection;
 
 use crate::event_log;
-use crate::graph::{self, Graph, QuizRaw};
+use crate::graph::{self, Graph};
 use crate::overlay;
 use crate::path;
 use crate::types::{Difficulty, QuizType};
@@ -76,15 +76,17 @@ pub async fn cmd_store_quiz(
 
     let new_id = next_quiz_id(atom_id, &c.quizzes);
     let kind = (quiz_type != QuizType::FreeText).then_some(quiz_type);
-    let quiz = QuizRaw {
-        id: new_id.clone(),
+    overlay::add_quiz(
+        &tx,
+        atom_id,
+        &new_id,
         difficulty,
         kind,
-        question,
-        answer,
-        rubric,
-    };
-    overlay::add_quiz(&tx, atom_id, &quiz).await?;
+        &question,
+        &answer,
+        rubric.as_deref(),
+    )
+    .await?;
     event_log::append(
         &tx,
         &event_log::quiz_authored(id, atom_id.to_string(), new_id.clone()),
@@ -118,22 +120,20 @@ pub async fn cmd_amend_quiz(
     let id = path::resolve_id(&tx, path_id).await?;
     let g = Graph::load_for_path(&tx, graph_dir).await?;
     let (atom, quiz) = g.quiz(quiz_id)?;
-    let atom_id = atom.id.clone();
-    let base_raw = QuizRaw {
-        id: quiz.id.clone(),
-        difficulty: quiz.difficulty,
-        kind: quiz.kind,
-        question: quiz.question.clone(),
-        answer: quiz.answer.clone(),
-        rubric: quiz.rubric.clone(),
-    };
     overlay::amend_quiz(
-        &tx, &atom_id, &base_raw, difficulty, question, answer, rubric, quiz_type,
+        &tx,
+        &atom.id,
+        quiz,
+        difficulty,
+        question.as_deref(),
+        answer.as_deref(),
+        rubric.as_deref(),
+        quiz_type,
     )
     .await?;
     event_log::append(
         &tx,
-        &event_log::quiz_amended(id, atom_id, quiz_id.to_string()),
+        &event_log::quiz_amended(id, atom.id.clone(), quiz_id.to_string()),
     )
     .await?;
     tx.commit().await?;
@@ -155,12 +155,11 @@ pub async fn cmd_remove_quiz(
     let id = path::resolve_id(&tx, path_id).await?;
     let g = Graph::load_for_path(&tx, graph_dir).await?;
     let (atom, _) = g.quiz(quiz_id)?;
-    let atom_id = atom.id.clone();
 
     overlay::remove_quiz(&tx, quiz_id).await?;
     event_log::append(
         &tx,
-        &event_log::quiz_removed(id, atom_id, quiz_id.to_string()),
+        &event_log::quiz_removed(id, atom.id.clone(), quiz_id.to_string()),
     )
     .await?;
     tx.commit().await?;

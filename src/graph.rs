@@ -74,7 +74,7 @@ struct LeafRaw {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lesson: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    quizzes: Option<Vec<QuizRaw>>,
+    quizzes: Option<Vec<Quiz>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     relevant_for: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -98,7 +98,7 @@ struct NodeRaw {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     lesson: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    quizzes: Option<Vec<QuizRaw>>,
+    quizzes: Option<Vec<Quiz>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     relevant_for: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -107,18 +107,6 @@ struct NodeRaw {
     status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     difficulty: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct QuizRaw {
-    pub id: String,
-    pub difficulty: Difficulty,
-    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub kind: Option<QuizType>,
-    pub question: String,
-    pub answer: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rubric: Option<String>,
 }
 
 // ── Unified concept tree ────────────────────────────────────────────
@@ -135,27 +123,19 @@ struct Concept {
     quizzes: Vec<Quiz>,
 }
 
-#[derive(Debug, Clone)]
+/// A single quiz card. Serializable for AYML round-trip (shipped
+/// curriculum, `mt overlay dump`) and as the in-memory shape used by
+/// the scheduler and merge logic.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Quiz {
     pub id: String,
     pub difficulty: Difficulty,
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<QuizType>,
     pub question: String,
     pub answer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rubric: Option<String>,
-}
-
-impl From<QuizRaw> for Quiz {
-    fn from(q: QuizRaw) -> Self {
-        Quiz {
-            id: q.id,
-            difficulty: q.difficulty,
-            kind: q.kind,
-            question: q.question,
-            answer: q.answer,
-            rubric: q.rubric,
-        }
-    }
 }
 
 impl Concept {
@@ -186,12 +166,7 @@ impl AreaFileRaw {
                             prerequisites: l.prerequisites,
                             children: Vec::new(),
                             lesson: l.lesson,
-                            quizzes: l
-                                .quizzes
-                                .unwrap_or_default()
-                                .into_iter()
-                                .map(Quiz::from)
-                                .collect(),
+                            quizzes: l.quizzes.unwrap_or_default(),
                         })
                         .collect(),
                     lesson: None,
@@ -222,12 +197,7 @@ fn node_to_concept(n: NodeRaw) -> Concept {
             .map(node_to_concept)
             .collect(),
         lesson: n.lesson,
-        quizzes: n
-            .quizzes
-            .unwrap_or_default()
-            .into_iter()
-            .map(Quiz::from)
-            .collect(),
+        quizzes: n.quizzes.unwrap_or_default(),
     }
 }
 
@@ -392,7 +362,7 @@ impl Graph {
     pub async fn load_for_path(conn: &Connection, graph_dir: Option<&Path>) -> Result<Self> {
         let mut g = Self::load_default(graph_dir)?;
         let overlay = crate::overlay::load(conn).await?;
-        g.apply_overlay(&overlay);
+        g.apply_overlay(overlay);
         Ok(g)
     }
 
@@ -430,9 +400,9 @@ impl Graph {
     /// Apply the global overlay to this graph in place. Additive: an
     /// overlay lesson fills in an atom's missing lesson (but never
     /// shadows a shipped one); overlay quizzes are appended.
-    fn apply_overlay(&mut self, overlay: &crate::overlay::Overlay) {
-        for (atom_id, entry) in &overlay.atoms {
-            let Some(c) = self.by_id.get_mut(atom_id) else {
+    fn apply_overlay(&mut self, overlay: crate::overlay::Overlay) {
+        for (atom_id, entry) in overlay.atoms {
+            let Some(c) = self.by_id.get_mut(&atom_id) else {
                 // Atom isn't in the shipped graph — skip silently. A
                 // future graph version may add it, at which point the
                 // overlay starts taking effect; or the user is welcome
@@ -440,12 +410,12 @@ impl Graph {
                 continue;
             };
             if c.lesson.is_none() && entry.lesson.is_some() {
-                c.lesson.clone_from(&entry.lesson);
+                c.lesson = entry.lesson;
             }
 
             // Quizzes: overlay entries replace shipped entries with the
             // same id (amend), and are appended otherwise (added).
-            for overlay_quiz in entry.quizzes_flat() {
+            for overlay_quiz in entry.quizzes {
                 match c.quizzes.iter_mut().find(|q| q.id == overlay_quiz.id) {
                     Some(existing) => *existing = overlay_quiz,
                     None => c.quizzes.push(overlay_quiz),

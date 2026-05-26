@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use libsql::{Connection, Row, params};
 use serde::Serialize;
 
-use crate::graph::{Quiz, QuizRaw};
+use crate::graph::Quiz;
 use crate::types::{Difficulty, QuizType};
 use crate::{Error, Result};
 
@@ -28,15 +28,9 @@ pub struct OverlayAtom {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lesson: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub quizzes: Vec<QuizRaw>,
+    pub quizzes: Vec<Quiz>,
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub removed: BTreeSet<String>,
-}
-
-impl OverlayAtom {
-    pub fn quizzes_flat(&self) -> Vec<Quiz> {
-        self.quizzes.iter().cloned().map(Quiz::from).collect()
-    }
 }
 
 // ── SQL load ────────────────────────────────────────────────────────
@@ -90,7 +84,7 @@ pub async fn load(conn: &Connection) -> Result<Overlay> {
     Ok(Overlay { atoms })
 }
 
-fn row_to_overlay_quiz(row: &Row) -> Result<(String, QuizRaw)> {
+fn row_to_overlay_quiz(row: &Row) -> Result<(String, Quiz)> {
     let atom_id: String = row.get(0)?;
     let quiz_id: String = row.get(1)?;
     let difficulty_str: String = row.get(2)?;
@@ -103,7 +97,7 @@ fn row_to_overlay_quiz(row: &Row) -> Result<(String, QuizRaw)> {
     let kind = kind_str.as_deref().map(parse_kind).transpose()?;
     Ok((
         atom_id,
-        QuizRaw {
+        Quiz {
             id: quiz_id,
             difficulty,
             kind,
@@ -146,7 +140,7 @@ pub async fn add_lesson(conn: &Connection, atom_id: &str, body: &str) -> Result<
     let res = conn
         .execute(
             "INSERT INTO overlay_lessons(atom_id, body) VALUES (?, ?)",
-            params![atom_id.to_string(), body.to_string()],
+            params![atom_id, body],
         )
         .await;
     match res {
@@ -159,18 +153,28 @@ pub async fn add_lesson(conn: &Connection, atom_id: &str, body: &str) -> Result<
 /// Insert a new quiz row. Caller supplies a fresh, globally-unique
 /// quiz id (typically derived from the highest existing id in the
 /// merged view via `next_quiz_id`).
-pub async fn add_quiz(conn: &Connection, atom_id: &str, quiz: &QuizRaw) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+pub async fn add_quiz(
+    conn: &Connection,
+    atom_id: &str,
+    quiz_id: &str,
+    difficulty: Difficulty,
+    kind: Option<QuizType>,
+    question: &str,
+    answer: &str,
+    rubric: Option<&str>,
+) -> Result<()> {
     conn.execute(
         "INSERT INTO overlay_quizzes(atom_id, quiz_id, difficulty, kind, question, answer, rubric) \
          VALUES (?, ?, ?, ?, ?, ?, ?)",
         params![
             atom_id,
-            quiz.id.as_str(),
-            quiz.difficulty.as_str(),
-            quiz.kind.map(QuizType::as_str),
-            quiz.question.as_str(),
-            quiz.answer.as_str(),
-            quiz.rubric.as_deref(),
+            quiz_id,
+            difficulty.as_str(),
+            kind.map(QuizType::as_str),
+            question,
+            answer,
+            rubric,
         ],
     )
     .await?;
@@ -185,24 +189,21 @@ pub async fn add_quiz(conn: &Connection, atom_id: &str, quiz: &QuizRaw) -> Resul
 pub async fn amend_quiz(
     conn: &Connection,
     atom_id: &str,
-    base: &QuizRaw,
+    base: &Quiz,
     new_difficulty: Option<Difficulty>,
-    new_question: Option<String>,
-    new_answer: Option<String>,
-    new_rubric: Option<String>,
+    new_question: Option<&str>,
+    new_answer: Option<&str>,
+    new_rubric: Option<&str>,
     new_type: Option<QuizType>,
 ) -> Result<()> {
-    let updated = QuizRaw {
-        id: base.id.clone(),
-        difficulty: new_difficulty.unwrap_or(base.difficulty),
-        kind: match new_type {
-            Some(t) => (t != QuizType::FreeText).then_some(t),
-            None => base.kind,
-        },
-        question: new_question.unwrap_or_else(|| base.question.clone()),
-        answer: new_answer.unwrap_or_else(|| base.answer.clone()),
-        rubric: new_rubric.or_else(|| base.rubric.clone()),
+    let difficulty = new_difficulty.unwrap_or(base.difficulty);
+    let kind = match new_type {
+        Some(t) => (t != QuizType::FreeText).then_some(t),
+        None => base.kind,
     };
+    let question = new_question.unwrap_or(&base.question);
+    let answer = new_answer.unwrap_or(&base.answer);
+    let rubric = new_rubric.or(base.rubric.as_deref());
 
     conn.execute(
         "INSERT INTO overlay_quizzes(atom_id, quiz_id, difficulty, kind, question, answer, rubric) \
@@ -216,18 +217,18 @@ pub async fn amend_quiz(
             rubric     = excluded.rubric",
         params![
             atom_id,
-            updated.id.as_str(),
-            updated.difficulty.as_str(),
-            updated.kind.map(QuizType::as_str),
-            updated.question.as_str(),
-            updated.answer.as_str(),
-            updated.rubric.as_deref(),
+            base.id.as_str(),
+            difficulty.as_str(),
+            kind.map(QuizType::as_str),
+            question,
+            answer,
+            rubric,
         ],
     )
     .await?;
     conn.execute(
         "DELETE FROM overlay_removed_quizzes WHERE quiz_id = ?",
-        params![updated.id.as_str()],
+        params![base.id.as_str()],
     )
     .await?;
     Ok(())

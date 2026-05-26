@@ -102,7 +102,7 @@ pub async fn read_card(conn: &Connection, path_id: &str, quiz_id: &str) -> Resul
         .query(
             "SELECT path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses \
              FROM cards WHERE path_id = ? AND quiz_id = ?",
-            params![path_id.to_string(), quiz_id.to_string()],
+            params![path_id, quiz_id],
         )
         .await?;
     let Some(row) = rows.next().await? else {
@@ -123,7 +123,7 @@ pub async fn due_quizzes(
         .query(
             "SELECT quiz_id, due_at FROM cards \
              WHERE path_id = ? AND due_at <= ? ORDER BY due_at ASC",
-            params![path_id.to_string(), db::format_ts(now)],
+            params![path_id, db::format_ts(now)],
         )
         .await?;
     let mut out = Vec::new();
@@ -155,20 +155,17 @@ pub async fn apply_answer_to_cache(
     let reps = prev.as_ref().map_or(0, |r| r.reps) + 1;
     let lapses = prev.as_ref().map_or(0, |r| r.lapses) + u32::from(rating == Rating::Again);
 
-    upsert_card_row(
-        conn,
-        &CardRow {
-            path_id: path_id.to_string(),
-            quiz_id: quiz_id.to_string(),
-            state: next,
-            reps,
-            lapses,
-        },
-    )
-    .await
+    upsert_card_row(conn, path_id, quiz_id, &next, reps, lapses).await
 }
 
-async fn upsert_card_row(conn: &Connection, row: &CardRow) -> Result<()> {
+async fn upsert_card_row(
+    conn: &Connection,
+    path_id: &str,
+    quiz_id: &str,
+    state: &CardState,
+    reps: u32,
+    lapses: u32,
+) -> Result<()> {
     conn.execute(
         "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
@@ -180,14 +177,14 @@ async fn upsert_card_row(conn: &Connection, row: &CardRow) -> Result<()> {
             reps = excluded.reps, \
             lapses = excluded.lapses",
         params![
-            row.path_id.as_str(),
-            row.quiz_id.as_str(),
-            f64::from(row.state.stability),
-            f64::from(row.state.difficulty),
-            db::format_ts(row.state.due),
-            db::format_ts(row.state.last_review),
-            i64::from(row.reps),
-            i64::from(row.lapses),
+            path_id,
+            quiz_id,
+            f64::from(state.stability),
+            f64::from(state.difficulty),
+            db::format_ts(state.due),
+            db::format_ts(state.last_review),
+            i64::from(reps),
+            i64::from(lapses),
         ],
     )
     .await?;
@@ -205,13 +202,18 @@ pub async fn recompute(conn: &Connection, path_id: &str) -> Result<()> {
     let tx = conn.transaction().await?;
     let events = event_log::load(&tx, path_id).await?;
     let rebuilt = fold_history(path_id, &events)?;
-    tx.execute(
-        "DELETE FROM cards WHERE path_id = ?",
-        params![path_id.to_string()],
-    )
-    .await?;
+    tx.execute("DELETE FROM cards WHERE path_id = ?", params![path_id])
+        .await?;
     for row in &rebuilt {
-        upsert_card_row(&tx, row).await?;
+        upsert_card_row(
+            &tx,
+            &row.path_id,
+            &row.quiz_id,
+            &row.state,
+            row.reps,
+            row.lapses,
+        )
+        .await?;
     }
     tx.commit().await?;
     Ok(())
