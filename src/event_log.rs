@@ -4,7 +4,7 @@
 //! functions in this module — call sites build events by name (e.g.
 //! `event_log::lesson_authored(path, atom)`) rather than by hand.
 //!
-//! `append` is also the write-through path for the FSRS `cards` cache:
+//! [append] is also the write-through path for the FSRS `cards` cache:
 //! when a `QuizAnswered` event lands, the cache row for `(path, quiz)`
 //! is folded forward via [`crate::cards::apply_answer_to_cache`]. The
 //! event row is the source of truth and the cache is rebuildable via
@@ -31,9 +31,9 @@ pub enum EventKind {
     QuizRemoved,
 }
 
-impl EventKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
+impl std::fmt::Display for EventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
             EventKind::PathCreated => "path_created",
             EventKind::LessonAuthored => "lesson_authored",
             EventKind::LessonTaught => "lesson_taught",
@@ -42,10 +42,13 @@ impl EventKind {
             EventKind::QuizAnswered => "quiz_answered",
             EventKind::QuizAmended => "quiz_amended",
             EventKind::QuizRemoved => "quiz_removed",
-        }
+        })
     }
+}
 
-    pub fn parse(s: &str) -> Result<Self> {
+impl std::str::FromStr for EventKind {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self> {
         match s {
             "path_created" => Ok(EventKind::PathCreated),
             "lesson_authored" => Ok(EventKind::LessonAuthored),
@@ -240,7 +243,7 @@ pub async fn append(conn: &Connection, event: &Event) -> Result<()> {
          VALUES (?, ?, ?, ?, ?, ?, ?)",
         params![
             event.ts.to_rfc3339(),
-            event.kind.as_str(),
+            event.kind.to_string(),
             event.path.clone(),
             event.atom.clone(),
             event.quiz.clone(),
@@ -284,7 +287,7 @@ fn row_to_event(row: &Row) -> Result<Event> {
     let rating_int: Option<i64> = row.get(5)?;
     let payload_str: Option<String> = row.get(6)?;
 
-    let kind = EventKind::parse(&kind_str)?;
+    let kind: EventKind = kind_str.parse()?;
     let ts = DateTime::parse_from_rfc3339(&ts_str)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| Error::BadTimestamp(format!("{ts_str}: {e}")))?;

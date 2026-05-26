@@ -2,7 +2,7 @@
 //!
 //! Card state is stored twice:
 //!
-//! 1. An in-memory step, [apply_answer], takes current [CardState]
+//! 1. An in-memory step, [`apply_answer`], takes current [`CardState`]
 //!    plus a new rating/timestamp and produces the next state.
 //!
 //! 2. SQL helpers that read and write the cards table. This table is a
@@ -70,7 +70,7 @@ impl CardRow {
 ///
 /// Kept primarily for the `recompute` rebuild path and for unit tests;
 /// the runtime scheduler now reads pre-computed state from the `cards`
-/// table via [`due_cards`].
+/// table via `due_cards`.
 pub fn card_state(events: &[Event], quiz_id: &str) -> Result<Option<CardState>> {
     let mut state: Option<CardState> = None;
     for e in events {
