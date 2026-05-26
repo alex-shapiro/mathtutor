@@ -10,12 +10,36 @@
 
 use std::path::{Path, PathBuf};
 
-use libsql::{Builder, Connection, Database};
+use libsql::{Builder, Connection, Database, params};
 
 use crate::path::mt_home;
 use crate::{Error, Result};
 
-const SCHEMA: &str = include_str!("schema.sql");
+/// One numbered schema change. Versions are strictly increasing,
+/// starting at 1, and migration files are immutable once shipped —
+/// edit a *new* file rather than `001_init.sql`.
+struct Migration {
+    version: u32,
+    name: &'static str,
+    sql: &'static str,
+}
+
+const MIGRATIONS: &[Migration] = &[Migration {
+    version: 1,
+    name: "init",
+    sql: include_str!("migrations/001_init.sql"),
+}];
+
+/// The schema-migrations bookkeeping table itself. Always created
+/// `IF NOT EXISTS` so it can be added to a database that predates
+/// the migration framework.
+const META_SCHEMA: &str = "
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+        version    INTEGER PRIMARY KEY,
+        name       TEXT NOT NULL,
+        applied_at DATETIME NOT NULL
+    );
+";
 
 /// libsql credentials for syncing a local replica to server
 #[derive(Debug, Clone)]
@@ -71,9 +95,9 @@ pub fn default_db_path() -> Result<PathBuf> {
     Ok(mt_home()?.join("mt.db"))
 }
 
-/// Open the user database, applying the schema migration. Creates the
-/// parent directory if missing. Idempotent: safe to call on a fresh
-/// directory or against an already-initialized file.
+/// Open the user database, applying any pending schema migrations.
+/// Creates the parent directory if missing. Idempotent: safe to call
+/// on a fresh directory or against an already-initialized file.
 pub async fn open(cfg: &DbConfig) -> Result<Database> {
     if let Some(parent) = cfg.local_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| Error::Io {
@@ -91,15 +115,61 @@ pub async fn open(cfg: &DbConfig) -> Result<Database> {
         None => Builder::new_local(&cfg.local_path).build().await?,
     };
 
-    let conn = db.connect()?;
+    let conn = connect(&db).await?;
     migrate(&conn).await?;
     Ok(db)
 }
 
-/// Apply the schema migration on `conn`. All statements use
-/// `IF NOT EXISTS`, so a second call is a no-op.
+/// Open a new connection to `db` with FK enforcement enabled.
+/// libsql currently defaults `foreign_keys` to ON, but the PRAGMA is
+/// connection-scoped and we'd rather not depend on that staying true;
+/// callers should route through here instead of `db.connect()`.
+pub async fn connect(db: &Database) -> Result<Connection> {
+    let conn = db.connect()?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;").await?;
+    Ok(conn)
+}
+
+/// Apply every migration whose version exceeds the current
+/// `schema_migrations` high-water mark, each in its own transaction.
+/// A failed migration rolls back cleanly and leaves the version
+/// counter unchanged, so the next run re-attempts the same step.
 pub async fn migrate(conn: &Connection) -> Result<()> {
-    conn.execute_batch(SCHEMA).await?;
+    conn.execute_batch(META_SCHEMA).await?;
+    let current = current_version(conn).await?;
+    for m in MIGRATIONS {
+        if m.version <= current {
+            continue;
+        }
+        apply(conn, m).await?;
+    }
+    Ok(())
+}
+
+async fn current_version(conn: &Connection) -> Result<u32> {
+    let mut rows = conn
+        .query(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            params![],
+        )
+        .await?;
+    // SQLite aggregates without GROUP BY always return exactly one row,
+    // and the version PK is bounded by the migration count we ship.
+    let row = rows.next().await?.expect("aggregate returns one row");
+    let v: i64 = row.get(0)?;
+    Ok(u32::try_from(v).expect("schema version fits in u32"))
+}
+
+async fn apply(conn: &Connection, m: &Migration) -> Result<()> {
+    let tx = conn.transaction().await?;
+    tx.execute_batch(m.sql).await?;
+    tx.execute(
+        "INSERT INTO schema_migrations(version, name, applied_at) \
+         VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        params![m.version, m.name],
+    )
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 

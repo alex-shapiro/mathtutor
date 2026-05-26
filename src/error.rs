@@ -58,12 +58,6 @@ pub enum Error {
     Fsrs(String),
 
     // SQL / libsql.
-    #[error("db: {0}")]
-    Db(String),
-}
-
-impl From<libsql::Error> for Error {
-    fn from(e: libsql::Error) -> Self {
-        Error::Db(e.to_string())
-    }
+    #[error(transparent)]
+    Db(#[from] libsql::Error),
 }
