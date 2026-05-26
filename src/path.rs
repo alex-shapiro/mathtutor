@@ -33,17 +33,6 @@ pub fn mt_home() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".mathtutor"))
 }
 
-pub fn paths_root() -> Result<PathBuf> {
-    Ok(mt_home()?.join("paths"))
-}
-
-/// Per-path filesystem directory. Still used by the overlay layer
-/// (`~/.mathtutor/paths/<id>/overlay.ayml`); event-log and path metadata
-/// no longer live on disk.
-pub fn path_dir(id: &str) -> Result<PathBuf> {
-    Ok(paths_root()?.join(id))
-}
-
 pub fn generate_path_id(now: DateTime<Utc>) -> String {
     format!("p_{}", now.format("%Y_%m_%d_%H%M%S"))
 }
