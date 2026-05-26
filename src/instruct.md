@@ -259,7 +259,7 @@ teaching. There is no separate `mt amend lesson` command.
 
 ### Amend an existing quiz
 
-Use when the question is *mostly right* and just needs an edit. The
+Use when the question is _mostly right_ and just needs an edit. The
 quiz id stays the same, so the FSRS schedule continues uninterrupted —
 prior `again`/`good`/`easy` ratings still inform the next review.
 
@@ -274,7 +274,7 @@ only on the atom's lesson and previously-taught prerequisites.
 
 ### Remove a quiz
 
-Use when the question is *fundamentally broken* and shouldn't exist.
+Use when the question is _fundamentally broken_ and shouldn't exist.
 
     mt remove quiz <quiz-id>
 
@@ -296,7 +296,7 @@ needed a wording fix.
 
 `mt` ships with a copy of the curriculum baked into the binary. When you
 call `mt store lesson`, `mt store quiz`, `mt amend quiz`, or
-`mt remove quiz`, the new content is written to the **global overlay** in
+`mt remove quiz`, the new content is written to the **user overlay** in
 the user's database, not back into the shipped curriculum. The shipped
 graph is read-only; the overlay is "what this user authored on top of
 it" and is shared across every learning path on the same database.

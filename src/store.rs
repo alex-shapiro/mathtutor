@@ -1,4 +1,4 @@
-//! Persist agent-authored content to the global overlay.
+//! Persist agent-authored content to the user overlay.
 //!
 //! `mt store lesson`, `mt store quiz`, `mt amend quiz`, and `mt remove
 //! quiz` write to the SQL overlay tables — never to the shipped
@@ -20,7 +20,7 @@ use crate::path;
 use crate::types::{Difficulty, QuizType};
 use crate::{Error, Result};
 
-/// Upsert a lesson body for `atom_id` into the global overlay. Emits
+/// Upsert a lesson body for `atom_id` into the user overlay. Emits
 /// `lesson_amended` if a lesson already existed in the merged view
 /// (shipped or overlay), else `lesson_authored`. Always emits
 /// `lesson_taught`: per the agent playbook, storing implies presenting.
@@ -48,7 +48,7 @@ pub async fn cmd_store_lesson(
     Ok(())
 }
 
-/// Persist a quiz on `atom_id` into the global overlay and log
+/// Persist a quiz on `atom_id` into the user overlay and log
 /// `quiz_authored` against the active path. The new quiz ID continues
 /// the `<atom>.qN` sequence past the highest existing N across shipped
 /// + overlay so IDs are globally unique within the merged graph.
@@ -95,7 +95,7 @@ pub async fn cmd_store_quiz(
 }
 
 /// Apply field-level edits to an existing quiz, writing the result
-/// into the global overlay. The quiz may live in the shipped curriculum
+/// into the user overlay. The quiz may live in the shipped curriculum
 /// or in the overlay; either way the post-amend state shadows or
 /// replaces it during the next `Graph::load_for_path`.
 ///

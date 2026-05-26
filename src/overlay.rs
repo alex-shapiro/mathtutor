@@ -35,7 +35,7 @@ pub struct OverlayAtom {
 
 // ── SQL load ────────────────────────────────────────────────────────
 
-/// Read the global overlay into an in-memory `Overlay`, keyed by atom.
+/// Read the user overlay into an in-memory `Overlay`, keyed by atom.
 /// Returns an empty overlay if no rows are present.
 pub async fn load(conn: &Connection) -> Result<Overlay> {
     let mut atoms: BTreeMap<String, OverlayAtom> = BTreeMap::new();

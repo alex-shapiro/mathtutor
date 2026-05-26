@@ -26,7 +26,7 @@ a given path, the agent authors it and persists via `mt store …`; every
 subsequent presentation is deterministic. `mt store lesson` is an upsert
 — a second call replaces the prior body, so revising a lesson and
 revising a quiz both go through the same verb (`store` for lessons,
-`amend` for quizzes by ID). All authoring writes to the global overlay,
+`amend` for quizzes by ID). All authoring writes to the user overlay,
 never to the shipped curriculum.
 
 Each atom is one concept. Lessons are short (1–2 paragraphs, ≤ 2 minutes
@@ -51,7 +51,7 @@ mt list [<ID>]                 # areas, or children of a cluster
 mt show <ID>                   # full detail on atom / cluster / area
 mt graph check                 # validate the shipped curriculum
 
-# Authoring (writes to the global overlay, not to shipped data)
+# Authoring (writes to the user overlay, not to shipped data)
 mt store  lesson <ATOM>     --body TEXT                       # upsert by atom id
 mt store  quiz   <ATOM>     --difficulty D \
                             --question TEXT --answer TEXT [--rubric TEXT] \
@@ -64,7 +64,7 @@ mt remove quiz   <QUIZ_ID>
 mt answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT]
 
 # Overlay
-mt overlay dump                # print the global overlay AYML
+mt overlay dump                # print the user overlay AYML
 
 # Agent operator playbook
 mt instruct                    # print AGENTS playbook embedded in binary
@@ -120,7 +120,7 @@ exists, only the easy quiz exists) for arbitrarily long.
 schema_version: 1
 action: create_lesson | present_lesson | create_quiz | present_quiz | done
 path: <path-id>
-payload: ...   # action-specific (see below)
+payload: ... # action-specific (see below)
 ```
 
 Conventions for every payload:
@@ -286,12 +286,12 @@ curriculum/graph/                # source for the embedded copy
 
 Three roles, three files, all distinct:
 
-| File           | Role                          | Mutability                                    |
-| -------------- | ----------------------------- | --------------------------------------------- |
-| (embedded)     | shipped curriculum            | recompile only                                |
-| `path.ayml`    | per-path intent               | written once at `mt new`; never updated       |
-| `log.ayml`     | per-path history              | append-only                                   |
-| `overlay.ayml` | per-path authored content     | mutated by `mt store / amend / remove`        |
+| File           | Role                      | Mutability                              |
+| -------------- | ------------------------- | --------------------------------------- |
+| (embedded)     | shipped curriculum        | recompile only                          |
+| `path.ayml`    | per-path intent           | written once at `mt new`; never updated |
+| `log.ayml`     | per-path history          | append-only                             |
+| `overlay.ayml` | per-path authored content | mutated by `mt store / amend / remove`  |
 
 ## Per-path overlay
 

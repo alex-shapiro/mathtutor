@@ -290,7 +290,7 @@ CREATE TABLE overlay_removed_quizzes (
     - Refactor `src/event_log.rs` to use SQL for appending and loading events.
     - **Write-through Cache:** Implement logic to update the `cards` table whenever a `QuizAnswered` event is recorded.
     - Create `src/cards.rs` (or update) to support reading from the `cards` table for O(1) scheduling lookups.
-3.  **PR 3: Global Overlay & Store SQL Migration.**
+3.  **PR 3: User Overlay & Store SQL Migration.**
     - Refactor `src/overlay.rs` and `src/store.rs` to use SQL.
     - **Scope Shift:** Ensure overlays (lessons/quizzes) are stored globally in the user database, not partitioned by `path_id`.
     - **Upsert Lessons:** `mt store lesson` becomes an upsert (matches the MCP `UpsertLesson` tool); a second call replaces the body and emits `lesson_amended` instead of `lesson_authored`.

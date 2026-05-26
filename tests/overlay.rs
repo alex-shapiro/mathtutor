@@ -1,11 +1,11 @@
-//! Integration tests for the SQL-backed global overlay.
+//! Integration tests for the SQL-backed user overlay.
 //!
 //! Each test opens a fresh local libSQL database in a `tempdir` and
 //! drives `overlay::*` plus `Graph::load_for_path` to verify three
 //! contracts:
 //!
 //! 1. CRUD operations write the expected rows to the overlay tables.
-//! 2. `Graph::load_for_path` merges the global overlay on top of the
+//! 2. `Graph::load_for_path` merges the user overlay on top of the
 //!    shipped curriculum (lessons, amendments, tombstones, new quizzes).
 //! 3. Overlays are global — a write made under one path is visible to
 //!    every other path on the same database.

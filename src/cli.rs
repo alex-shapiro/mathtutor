@@ -345,7 +345,7 @@ pub enum OverlayOp {
     Dump(OverlayDumpCmd),
 }
 
-/// Print the global overlay to stdout, for review or upstreaming.
+/// Print the user overlay to stdout, for review or upstreaming.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "dump")]
 pub struct OverlayDumpCmd {}

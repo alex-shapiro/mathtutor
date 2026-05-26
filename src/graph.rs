@@ -350,7 +350,7 @@ impl Graph {
     }
 
     /// Effective graph "as the user sees it" — shipped curriculum with
-    /// the global overlay applied. The single entry point for scheduler /
+    /// the user overlay applied. The single entry point for scheduler /
     /// tree / state queries; consumers stay overlay-unaware.
     ///
     /// Conflict resolution rule: an overlay lesson, quiz, or tombstone
@@ -377,8 +377,8 @@ impl Graph {
         Ok(c)
     }
 
-    /// Validate `quiz_id` resolves to a quiz on a known atom in the
-    /// merged graph. Returns the parent atom plus the matching `Quiz`.
+    /// Return the parent atom and `Quiz` for a given quiz ID.
+    /// Validates that the quiz & atom exist.
     pub fn quiz(&self, quiz_id: &str) -> Result<(&FlatConcept, &Quiz)> {
         let atom_id = crate::answer::atom_from_quiz_id(quiz_id)
             .ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
@@ -394,7 +394,7 @@ impl Graph {
         Ok((atom, q))
     }
 
-    /// Apply the global overlay to this graph in place. See
+    /// Apply the user overlay to this graph in place. See
     /// [`Graph::load_for_path`] for the conflict-resolution contract.
     fn apply_overlay(&mut self, overlay: crate::overlay::Overlay) {
         for (atom_id, entry) in overlay.atoms {
