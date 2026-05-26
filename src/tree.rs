@@ -9,24 +9,33 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use chrono::Utc;
+use libsql::Connection;
+
 use crate::Result;
+use crate::cards;
 use crate::event_log::{self, Event};
 use crate::graph::{self, FlatConcept, Graph};
 use crate::path::{load_path, resolve_id};
 use crate::scheduler;
 use crate::types::Difficulty;
 
-pub fn cmd_tree(explicit_id: Option<&str>, graph_dir: Option<&Path>) -> Result<()> {
-    let id = resolve_id(explicit_id)?;
-    let p = load_path(&id)?;
+pub async fn cmd_tree(
+    conn: &Connection,
+    explicit_id: Option<&str>,
+    graph_dir: Option<&Path>,
+) -> Result<()> {
+    let id = resolve_id(conn, explicit_id).await?;
+    let p = load_path(conn, &id).await?;
     let g = Graph::load_for_path(&id, graph_dir)?;
     let manifest = graph::load_manifest_default(graph_dir)?;
-    let events = event_log::load(&id)?;
+    let events = event_log::load(conn, &id).await?;
+    let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 
     let targets: HashSet<String> = p.target_atoms.iter().cloned().collect();
     let reachable = reachable_atoms(&g, &p.target_atoms);
     let spine = build_spine(&g, &reachable);
-    let next_atom = scheduler::next_action(&g, &p, &events)
+    let next_atom = scheduler::next_action(&g, &p, &events, &due)
         .atom_id()
         .map(String::from);
 

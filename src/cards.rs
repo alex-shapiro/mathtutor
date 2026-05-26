@@ -1,16 +1,27 @@
-//! FSRS card state, derived purely from the event log.
+//! FSRS card state.
 //!
-//! No card state is persisted on disk in V1 — every `QuizAnswered` event
-//! contains the timestamp and rating, which is everything FSRS needs to
-//! reproduce its scheduling decision. Replaying the events for a quiz in
-//! order yields the same `CardState` that used to live in `path.ayml`.
+//! Two views live here:
+//!
+//! 1. A pure, in-memory step (`apply_answer`) that takes a previous
+//!    `CardState` plus the new rating/timestamp and produces the next
+//!    state. The scheduler's correctness is pinned to this function; it
+//!    has no I/O.
+//! 2. SQL helpers that read and write the `cards` table — a
+//!    write-through cache of the latest FSRS state per `(path, quiz)`.
+//!    The event log remains the source of truth: `recompute` can rebuild
+//!    the cache from scratch by replaying every `QuizAnswered` event for
+//!    a path.
+//!
 //! Per DESIGN.md: "FSRS state … is a derived index that can be
-//! recomputed from the log."
+//! recomputed from the log." The cache exists so the scheduler can pick
+//! the earliest-due quiz with a single indexed query instead of folding
+//! the whole event log on every `mt next`.
 
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
+use libsql::{Connection, params};
 use serde::Serialize;
 
 use crate::event_log::{Event, EventKind};
@@ -19,8 +30,7 @@ use crate::{Error, Result};
 
 const DESIRED_RETENTION: f32 = 0.9;
 
-/// Derived FSRS state for a single quiz card. Not persisted — computed
-/// on demand from the event log.
+/// Derived FSRS state for a single quiz card.
 #[derive(Debug, Clone, Serialize)]
 pub struct CardState {
     pub due: DateTime<Utc>,
@@ -34,8 +44,42 @@ pub struct CardState {
     pub last_rating: Option<Rating>,
 }
 
+/// Row shape stored in the `cards` table. `stability` / `difficulty` /
+/// `last_reviewed_at` are NOT NULL there: a row only exists once a quiz
+/// has been answered at least once, and that very first answer fills
+/// every column in via `apply_answer`.
+#[derive(Debug, Clone)]
+pub struct CardRow {
+    pub path_id: String,
+    pub quiz_id: String,
+    pub stability: f32,
+    pub difficulty: f32,
+    pub due_at: DateTime<Utc>,
+    pub last_reviewed_at: DateTime<Utc>,
+    pub reps: u32,
+    pub lapses: u32,
+}
+
+impl CardRow {
+    pub fn card_state(&self) -> CardState {
+        CardState {
+            due: self.due_at,
+            last_review: Some(self.last_reviewed_at),
+            stability: Some(self.stability),
+            difficulty: Some(self.difficulty),
+            last_rating: None,
+        }
+    }
+}
+
+// ── Pure FSRS step (no I/O) ────────────────────────────────────────
+
 /// Replay one quiz's answered events to produce its current FSRS card
 /// state. Returns `None` if the quiz has never been answered.
+///
+/// Kept primarily for the `recompute` rebuild path and for unit tests;
+/// the runtime scheduler now reads pre-computed state from the `cards`
+/// table via [`due_cards`].
 pub fn card_state(events: &[Event], quiz_id: &str) -> Result<Option<CardState>> {
     let mut state: Option<CardState> = None;
     for e in events {
@@ -54,8 +98,7 @@ pub fn card_state(events: &[Event], quiz_id: &str) -> Result<Option<CardState>> 
 }
 
 /// Replay every answered quiz in the log and return current state per
-/// quiz. Used by the scheduler to find the earliest-due card without
-/// repeatedly scanning the log.
+/// quiz. Used during cache rebuild (`recompute`) and in tests.
 pub fn all_card_states(events: &[Event]) -> Result<HashMap<String, CardState>> {
     // Group answered events by quiz_id, preserving chronological order
     // (the log itself is already in order, so a single pass suffices).
@@ -133,6 +176,179 @@ pub fn apply_answer(
         difficulty: Some(next.memory.difficulty),
         last_rating: Some(rating),
     })
+}
+
+// ── SQL: read ──────────────────────────────────────────────────────
+
+/// Load the cached row for one `(path, quiz)` pair, if present.
+pub async fn read_card(conn: &Connection, path_id: &str, quiz_id: &str) -> Result<Option<CardRow>> {
+    let mut rows = conn
+        .query(
+            "SELECT path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses \
+             FROM cards WHERE path_id = ? AND quiz_id = ?",
+            params![path_id.to_string(), quiz_id.to_string()],
+        )
+        .await?;
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+    Ok(Some(row_to_card(&row)?))
+}
+
+/// Return every `(quiz_id, due_at)` pair whose `due_at <= now` for the
+/// given path, sorted oldest-due first. The scheduler uses this to pick
+/// the earliest-due quiz without folding the event log.
+pub async fn due_quizzes(
+    conn: &Connection,
+    path_id: &str,
+    now: DateTime<Utc>,
+) -> Result<Vec<(String, DateTime<Utc>)>> {
+    let mut rows = conn
+        .query(
+            "SELECT quiz_id, due_at FROM cards \
+             WHERE path_id = ? AND due_at <= ? ORDER BY due_at ASC",
+            params![path_id.to_string(), now.to_rfc3339()],
+        )
+        .await?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let quiz_id: String = row.get(0)?;
+        let due_str: String = row.get(1)?;
+        out.push((quiz_id, parse_ts(&due_str)?));
+    }
+    Ok(out)
+}
+
+// ── SQL: write-through cache update ────────────────────────────────
+
+/// Apply one `QuizAnswered` event to the cards cache. Reads the previous
+/// row (if any), folds the new rating through `apply_answer`, and upserts
+/// the result with `reps` and `lapses` incremented accordingly.
+///
+/// Called from `event_log::append` when a `QuizAnswered` event lands.
+///
+/// # Panics
+/// Panics if `apply_answer` returns a state without stability, difficulty,
+/// or last-review — every code path inside `apply_answer` sets all three.
+pub async fn apply_answer_to_cache(
+    conn: &Connection,
+    path_id: &str,
+    quiz_id: &str,
+    rating: Rating,
+    ts: DateTime<Utc>,
+) -> Result<()> {
+    let prev = read_card(conn, path_id, quiz_id).await?;
+    let prev_state = prev.as_ref().map(CardRow::card_state);
+    let next = apply_answer(prev_state.as_ref(), rating, ts)?;
+
+    let reps = prev.as_ref().map_or(0, |r| r.reps) + 1;
+    let lapses = prev.as_ref().map_or(0, |r| r.lapses) + u32::from(rating == Rating::Again);
+
+    upsert_card_row(
+        conn,
+        &CardRow {
+            path_id: path_id.to_string(),
+            quiz_id: quiz_id.to_string(),
+            stability: next.stability.expect("apply_answer sets stability"),
+            difficulty: next.difficulty.expect("apply_answer sets difficulty"),
+            due_at: next.due,
+            last_reviewed_at: next.last_review.expect("apply_answer sets last_review"),
+            reps,
+            lapses,
+        },
+    )
+    .await
+}
+
+async fn upsert_card_row(conn: &Connection, row: &CardRow) -> Result<()> {
+    conn.execute(
+        "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, \
+                           last_reviewed_at, reps, lapses) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(path_id, quiz_id) DO UPDATE SET \
+            stability = excluded.stability, \
+            difficulty = excluded.difficulty, \
+            due_at = excluded.due_at, \
+            last_reviewed_at = excluded.last_reviewed_at, \
+            reps = excluded.reps, \
+            lapses = excluded.lapses",
+        params![
+            row.path_id.clone(),
+            row.quiz_id.clone(),
+            f64::from(row.stability),
+            f64::from(row.difficulty),
+            row.due_at.to_rfc3339(),
+            row.last_reviewed_at.to_rfc3339(),
+            i64::from(row.reps),
+            i64::from(row.lapses),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Drop every cached row for `path_id` and rebuild from the event log.
+/// Use after a suspected cache corruption or a schema-altering migration.
+pub async fn recompute(conn: &Connection, path_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM cards WHERE path_id = ?",
+        params![path_id.to_string()],
+    )
+    .await?;
+
+    // Stream `(quiz_id, rating, ts)` triples in chronological order.
+    let mut rows = conn
+        .query(
+            "SELECT quiz_id, rating, ts FROM events \
+             WHERE path_id = ? AND kind = 'quiz_answered' AND quiz_id IS NOT NULL \
+               AND rating IS NOT NULL \
+             ORDER BY id ASC",
+            params![path_id.to_string()],
+        )
+        .await?;
+
+    while let Some(row) = rows.next().await? {
+        let quiz_id: String = row.get(0)?;
+        let rating_int: i64 = row.get(1)?;
+        let ts_str: String = row.get(2)?;
+        let rating = Rating::from_int(rating_int)
+            .ok_or_else(|| Error::CardsCorrupt(format!("bad rating {rating_int} in events")))?;
+        let ts = parse_ts(&ts_str)?;
+        apply_answer_to_cache(conn, path_id, &quiz_id, rating, ts).await?;
+    }
+    Ok(())
+}
+
+// ── helpers ────────────────────────────────────────────────────────
+
+#[allow(clippy::cast_possible_truncation)]
+fn row_to_card(row: &libsql::Row) -> Result<CardRow> {
+    let path_id: String = row.get(0)?;
+    let quiz_id: String = row.get(1)?;
+    let stability_f: f64 = row.get(2)?;
+    let difficulty_f: f64 = row.get(3)?;
+    let due_str: String = row.get(4)?;
+    let last_reviewed_str: String = row.get(5)?;
+    let reps: i64 = row.get(6)?;
+    let lapses: i64 = row.get(7)?;
+    Ok(CardRow {
+        path_id,
+        quiz_id,
+        stability: stability_f as f32,
+        difficulty: difficulty_f as f32,
+        due_at: parse_ts(&due_str)?,
+        last_reviewed_at: parse_ts(&last_reviewed_str)?,
+        reps: u32::try_from(reps)
+            .map_err(|_| Error::CardsCorrupt(format!("negative reps {reps}")))?,
+        lapses: u32::try_from(lapses)
+            .map_err(|_| Error::CardsCorrupt(format!("negative lapses {lapses}")))?,
+    })
+}
+
+fn parse_ts(s: &str) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| Error::BadTimestamp(format!("{s}: {e}")))
 }
 
 #[cfg(test)]

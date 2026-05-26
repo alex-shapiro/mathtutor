@@ -60,4 +60,16 @@ pub enum Error {
     // SQL / libsql.
     #[error(transparent)]
     Db(#[from] libsql::Error),
+
+    // JSON payload for the `events.payload` column.
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
+
+    // Bad timestamp coming back out of the database.
+    #[error("bad timestamp: {0}")]
+    BadTimestamp(String),
+
+    // Cards cache row missing its expected columns.
+    #[error("cards cache corrupt: {0}")]
+    CardsCorrupt(String),
 }

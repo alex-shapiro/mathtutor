@@ -51,13 +51,16 @@ fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
 
 fn path_with(targets: &[&str]) -> PathFile {
     PathFile {
-        schema_version: 1,
         id: PATH_ID.into(),
         goal: "test".into(),
         created_at: Utc::now(),
         target_atoms: targets.iter().map(|s| (*s).to_string()).collect(),
     }
 }
+
+/// Default empty due-quiz list for tests that don't exercise the FSRS
+/// scheduling path. `next_action` only inspects this slice for due cards.
+const NO_DUE: &[(String, chrono::DateTime<Utc>)] = &[];
 
 fn answered(quiz_id: &str, rating: Rating, ts: DateTime<Utc>) -> Event {
     Event {
@@ -127,7 +130,7 @@ fn assert_present_lesson(action: &Action, expected_atom: &str) {
 fn create_lesson_when_atom_has_none() {
     let g = graph_of(vec![atom("a", &[], None, vec![])]);
     let p = path_with(&["a"]);
-    assert_create_lesson(&scheduler::next_action(&g, &p, &[]), "a");
+    assert_create_lesson(&scheduler::next_action(&g, &p, &[], NO_DUE), "a");
 }
 
 #[test]
@@ -137,7 +140,7 @@ fn present_lesson_when_stored_but_not_taught_in_path() {
     // the stored body before any quiz work.
     let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
     let p = path_with(&["a"]);
-    assert_present_lesson(&scheduler::next_action(&g, &p, &[]), "a");
+    assert_present_lesson(&scheduler::next_action(&g, &p, &[], NO_DUE), "a");
 }
 
 #[test]
@@ -157,7 +160,7 @@ fn lesson_authored_event_satisfies_taught_check() {
         payload: EventPayload::default(),
     }];
     assert_create_quiz(
-        &scheduler::next_action(&g, &p, &events),
+        &scheduler::next_action(&g, &p, &events, NO_DUE),
         "a",
         Difficulty::Easy,
     );
@@ -169,7 +172,7 @@ fn create_easy_quiz_when_lesson_stored_and_taught() {
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
     assert_create_quiz(
-        &scheduler::next_action(&g, &p, &events),
+        &scheduler::next_action(&g, &p, &events, NO_DUE),
         "a",
         Difficulty::Easy,
     );
@@ -185,7 +188,11 @@ fn present_easy_quiz_when_authored_but_unanswered() {
     )]);
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
-    assert_present_quiz(&scheduler::next_action(&g, &p, &events), "a", "a.q1");
+    assert_present_quiz(
+        &scheduler::next_action(&g, &p, &events, NO_DUE),
+        "a",
+        "a.q1",
+    );
 }
 
 #[test]
@@ -198,7 +205,11 @@ fn keep_presenting_easy_after_again_rating() {
     )]);
     let p = path_with(&["a"]);
     let events = vec![taught("a"), answered("a.q1", Rating::Again, Utc::now())];
-    assert_present_quiz(&scheduler::next_action(&g, &p, &events), "a", "a.q1");
+    assert_present_quiz(
+        &scheduler::next_action(&g, &p, &events, NO_DUE),
+        "a",
+        "a.q1",
+    );
 }
 
 #[test]
@@ -216,7 +227,7 @@ fn advance_to_medium_after_hard_rating() {
     let p = path_with(&["a"]);
     let events = vec![taught("a"), answered("a.q1", Rating::Hard, Utc::now())];
     assert_create_quiz(
-        &scheduler::next_action(&g, &p, &events),
+        &scheduler::next_action(&g, &p, &events, NO_DUE),
         "a",
         Difficulty::Medium,
     );
@@ -233,7 +244,7 @@ fn advance_to_medium_after_easy_correct() {
     let p = path_with(&["a"]);
     let events = vec![taught("a"), answered("a.q1", Rating::Good, Utc::now())];
     assert_create_quiz(
-        &scheduler::next_action(&g, &p, &events),
+        &scheduler::next_action(&g, &p, &events, NO_DUE),
         "a",
         Difficulty::Medium,
     );
@@ -257,7 +268,7 @@ fn advance_to_hard_after_easy_and_medium_correct() {
         answered("a.q2", Rating::Good, Utc::now()),
     ];
     assert_create_quiz(
-        &scheduler::next_action(&g, &p, &events),
+        &scheduler::next_action(&g, &p, &events, NO_DUE),
         "a",
         Difficulty::Hard,
     );
@@ -283,7 +294,7 @@ fn done_after_all_three_correct_on_only_target() {
         answered("a.q3", Rating::Easy, Utc::now()),
     ];
     assert!(matches!(
-        scheduler::next_action(&g, &p, &events),
+        scheduler::next_action(&g, &p, &events, NO_DUE),
         Action::Done
     ));
 }
@@ -310,7 +321,7 @@ fn advance_to_next_target_lesson_after_first_complete() {
         answered("a.q2", Rating::Good, Utc::now()),
         answered("a.q3", Rating::Good, Utc::now()),
     ];
-    assert_create_lesson(&scheduler::next_action(&g, &p, &events), "b");
+    assert_create_lesson(&scheduler::next_action(&g, &p, &events, NO_DUE), "b");
 }
 
 #[test]
@@ -324,7 +335,7 @@ fn does_not_advance_after_only_lesson_stored() {
         atom("b", &[], None, vec![]),
     ]);
     let p = path_with(&["a", "b"]);
-    assert_present_lesson(&scheduler::next_action(&g, &p, &[]), "a");
+    assert_present_lesson(&scheduler::next_action(&g, &p, &[], NO_DUE), "a");
 }
 
 #[test]
@@ -334,7 +345,7 @@ fn descends_into_prereq_before_target() {
         atom("target", &["pre"], Some("body"), vec![]),
     ]);
     let p = path_with(&["target"]);
-    assert_create_lesson(&scheduler::next_action(&g, &p, &[]), "pre");
+    assert_create_lesson(&scheduler::next_action(&g, &p, &[], NO_DUE), "pre");
 }
 
 #[test]
@@ -350,7 +361,11 @@ fn finishes_prereq_quizzes_before_target_lesson() {
     ]);
     let p = path_with(&["target"]);
     let events = vec![taught("pre")];
-    assert_present_quiz(&scheduler::next_action(&g, &p, &events), "pre", "pre.q1");
+    assert_present_quiz(
+        &scheduler::next_action(&g, &p, &events, NO_DUE),
+        "pre",
+        "pre.q1",
+    );
 }
 
 // ── is_atom_complete / atom_completed_at ───────────────────────────

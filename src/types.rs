@@ -27,6 +27,28 @@ impl Rating {
     pub fn is_correct(self) -> bool {
         !matches!(self, Rating::Again)
     }
+
+    /// Stable integer encoding for the `events.rating` SQL column.
+    /// Matches the FSRS convention (Again=1, Hard=2, Good=3, Easy=4).
+    pub fn as_int(self) -> i64 {
+        match self {
+            Rating::Again => 1,
+            Rating::Hard => 2,
+            Rating::Good => 3,
+            Rating::Easy => 4,
+        }
+    }
+
+    /// Inverse of `as_int`; returns `None` for any out-of-range value.
+    pub fn from_int(v: i64) -> Option<Self> {
+        match v {
+            1 => Some(Rating::Again),
+            2 => Some(Rating::Hard),
+            3 => Some(Rating::Good),
+            4 => Some(Rating::Easy),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for Rating {

@@ -127,7 +127,7 @@ async fn migration_is_idempotent() {
 }
 
 #[tokio::test]
-async fn open_records_applied_migration() {
+async fn open_records_applied_migrations() {
     let tmp = TempDir::new().unwrap();
     let db = db::open(&cfg_in(&tmp)).await.unwrap();
     let conn = db::connect(&db).await.unwrap();
@@ -139,10 +139,13 @@ async fn open_records_applied_migration() {
         )
         .await
         .unwrap();
-    let row = rows.next().await.unwrap().expect("v1 row");
-    assert_eq!(row.get::<i64>(0).unwrap(), 1);
-    assert_eq!(row.get::<String>(1).unwrap(), "init");
-    assert!(rows.next().await.unwrap().is_none(), "exactly one row");
+    let v1 = rows.next().await.unwrap().expect("v1 row");
+    assert_eq!(v1.get::<i64>(0).unwrap(), 1);
+    assert_eq!(v1.get::<String>(1).unwrap(), "init");
+    let v2 = rows.next().await.unwrap().expect("v2 row");
+    assert_eq!(v2.get::<i64>(0).unwrap(), 2);
+    assert_eq!(v2.get::<String>(1).unwrap(), "path_target_order");
+    assert!(rows.next().await.unwrap().is_none(), "exactly two rows");
 }
 
 #[tokio::test]
@@ -161,8 +164,8 @@ async fn second_open_does_not_re_apply_migrations() {
     let row = rows.next().await.unwrap().unwrap();
     assert_eq!(
         row.get::<i64>(0).unwrap(),
-        1,
-        "init migration should be recorded exactly once"
+        2,
+        "two migrations should each be recorded exactly once"
     );
 }
 

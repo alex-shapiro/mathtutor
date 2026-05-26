@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
+use libsql::Connection;
 use serde::Serialize;
 
 use crate::answer::atom_from_quiz_id;
@@ -16,28 +17,37 @@ use crate::{Error, Result};
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
-pub fn cmd_next(path_id: Option<&str>, graph_dir: Option<&Path>) -> Result<()> {
-    let id = path::resolve_id(path_id)?;
+pub async fn cmd_next(
+    conn: &Connection,
+    path_id: Option<&str>,
+    graph_dir: Option<&Path>,
+) -> Result<()> {
+    let id = path::resolve_id(conn, path_id).await?;
     let g = Graph::load_for_path(&id, graph_dir)?;
-    let p = path::load_path(&id)?;
-    let events = event_log::load(&id)?;
+    let p = path::load_path(conn, &id).await?;
+    let events = event_log::load(conn, &id).await?;
+    let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 
-    let action = next_action(&g, &p, &events);
+    let action = next_action(&g, &p, &events, &due);
     // Build the envelope first — it reads the log to compute `history`,
     // and we want `history.repetitions` to count past presentations only,
     // not the one we are about to log below.
-    let envelope = Envelope::build(&g, &p, action.clone());
+    let envelope = Envelope::build(&g, &p, &events, action.clone());
 
     match &action {
         Action::PresentQuiz { quiz_id, atom_id } => {
-            let _ = event_log::append(event_log::quiz_presented(
-                p.id.clone(),
-                atom_id.clone(),
-                quiz_id.clone(),
-            ));
+            let _ = event_log::append(
+                conn,
+                &event_log::quiz_presented(p.id.clone(), atom_id.clone(), quiz_id.clone()),
+            )
+            .await;
         }
         Action::PresentLesson { atom_id } => {
-            let _ = event_log::append(event_log::lesson_taught(p.id.clone(), atom_id.clone()));
+            let _ = event_log::append(
+                conn,
+                &event_log::lesson_taught(p.id.clone(), atom_id.clone()),
+            )
+            .await;
         }
         _ => {}
     }
@@ -87,13 +97,22 @@ impl Action {
 ///      c. quiz never answered correctly → `present_quiz`
 ///   3. otherwise → `done`
 ///
+/// `due_quizzes` is an ordered list of `(quiz_id, due_at)` pairs the
+/// caller already filtered to those past their `due_at` — the cards
+/// table makes this an O(1) lookup per `mt next` instead of a full
+/// event-log replay.
+///
 /// (2) walks per-atom: an atom isn't considered complete — and the
 /// walker doesn't advance to the next atom — until its lesson is
 /// stored, all three difficulty slots are filled, and each quiz has
 /// at least one `quiz_answered` event with rating `good` or `easy`.
-pub fn next_action(g: &Graph, p: &PathFile, events: &[Event]) -> Action {
-    let now = Utc::now();
-    if let Some((quiz_id, atom_id)) = first_due_card(g, events, now) {
+pub fn next_action(
+    g: &Graph,
+    p: &PathFile,
+    events: &[Event],
+    due_quizzes: &[(String, DateTime<Utc>)],
+) -> Action {
+    if let Some((quiz_id, atom_id)) = first_due_card(g, due_quizzes) {
         return Action::PresentQuiz { quiz_id, atom_id };
     }
 
@@ -170,20 +189,16 @@ fn next_atom_action(
     None
 }
 
-fn first_due_card(g: &Graph, events: &[Event], now: DateTime<Utc>) -> Option<(String, String)> {
-    let cards = cards::all_card_states(events).ok()?;
-    let mut due: Vec<(String, DateTime<Utc>)> = cards
-        .into_iter()
-        .filter_map(|(quiz_id, c)| (c.due <= now).then_some((quiz_id, c.due)))
-        .collect();
-    due.sort_by_key(|(_, t)| *t);
-    for (quiz_id, _) in due {
-        let atom_id = atom_from_quiz_id(&quiz_id)?;
+/// First quiz that's both due and still present in the merged graph.
+/// Tombstoned or graph-pruned quizzes silently skip; the rest are
+/// already in due-order from the SQL caller.
+fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<(String, String)> {
+    for (quiz_id, _) in due_quizzes {
+        let atom_id = atom_from_quiz_id(quiz_id)?;
         let atom = g.by_id.get(&atom_id)?;
-        if atom.quizzes.iter().any(|q| q.id == quiz_id) {
-            return Some((quiz_id, atom_id));
+        if atom.quizzes.iter().any(|q| &q.id == quiz_id) {
+            return Some((quiz_id.clone(), atom_id));
         }
-        // Quiz no longer in graph (rare); skip.
     }
     None
 }
@@ -270,13 +285,9 @@ struct QuizHistory {
     clippy::cast_sign_loss,
     clippy::cast_precision_loss
 )]
-fn compute_quiz_history(p: &PathFile, quiz_id: &str) -> QuizHistory {
-    let Ok(events) = event_log::load(&p.id) else {
-        return QuizHistory::default();
-    };
-
+fn compute_quiz_history(events: &[Event], quiz_id: &str) -> QuizHistory {
     let mut h = QuizHistory::default();
-    for e in &events {
+    for e in events {
         if e.quiz.as_deref() != Some(quiz_id) {
             continue;
         }
@@ -306,13 +317,9 @@ fn compute_quiz_history(p: &PathFile, quiz_id: &str) -> QuizHistory {
     h
 }
 
-fn compute_lesson_history(p: &PathFile, atom_id: &str) -> LessonHistory {
-    let Ok(events) = event_log::load(&p.id) else {
-        return LessonHistory::default();
-    };
-
+fn compute_lesson_history(events: &[Event], atom_id: &str) -> LessonHistory {
     let mut h = LessonHistory::default();
-    for e in &events {
+    for e in events {
         if e.atom.as_deref() != Some(atom_id) {
             continue;
         }
@@ -429,7 +436,7 @@ struct DonePayload {
 
 impl Envelope {
     #[allow(clippy::too_many_lines)]
-    fn build(g: &Graph, p: &PathFile, action: Action) -> Self {
+    fn build(g: &Graph, p: &PathFile, events: &[Event], action: Action) -> Self {
         match action {
             Action::PresentLesson { atom_id } => {
                 let c = g.by_id.get(&atom_id).expect("atom exists in graph");
@@ -439,7 +446,7 @@ impl Envelope {
                     description: c.description.clone(),
                     lesson: c.lesson.clone(),
                 };
-                let history = compute_lesson_history(p, &atom_id);
+                let history = compute_lesson_history(events, &atom_id);
                 Envelope {
                     schema_version: 1,
                     action: "present_lesson".to_string(),
@@ -473,7 +480,7 @@ impl Envelope {
                     answer: q.answer.clone(),
                     rubric: q.rubric.clone(),
                 };
-                let history = compute_quiz_history(p, &quiz_id);
+                let history = compute_quiz_history(events, &quiz_id);
                 Envelope {
                     schema_version: 1,
                     action: "present_quiz".to_string(),
