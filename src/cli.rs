@@ -37,6 +37,35 @@ pub enum Cmd {
     Amend(AmendCmd),
     Remove(RemoveCmd),
     MigrateFromAyml(MigrateFromAymlCmd),
+    #[cfg(feature = "mcp")]
+    Mcp(McpCmd),
+}
+
+/// Run the MCP server (SSE over HTTP).
+///
+/// Authentication: requests must carry the API key either as
+/// `Authorization: Bearer <token>` (preferred) or `?token=<token>`.
+/// The expected key is read from `--api-key` or `$MT_API_KEY`.
+#[cfg(feature = "mcp")]
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "mcp")]
+pub struct McpCmd {
+    /// bind address (default: 127.0.0.1:8080)
+    #[argh(option, default = "default_mcp_addr()")]
+    pub addr: String,
+
+    /// shared API key for client auth (overrides `$MT_API_KEY`)
+    #[argh(option)]
+    pub api_key: Option<String>,
+
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
+}
+
+#[cfg(feature = "mcp")]
+fn default_mcp_addr() -> String {
+    "127.0.0.1:8080".into()
 }
 
 /// Port legacy AYML state under `$MATHTUTOR_HOME/paths/` into the

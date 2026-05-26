@@ -13,6 +13,7 @@ use crate::Error;
 /// convention (Again=1, Hard=2, Good=3, Easy=4) and are the stable
 /// encoding written to the `events.rating` SQL column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 #[repr(i64)]
 pub enum Rating {
@@ -80,6 +81,7 @@ impl argh::FromArgValue for Rating {
 
 /// Quiz difficulty slot — every atom has at most one quiz per difficulty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum Difficulty {
     Easy,
@@ -121,6 +123,7 @@ impl std::str::FromStr for Difficulty {
 /// reserved for the rare case where a definition is best taught as a
 /// distinguish-this-from-look-alikes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum QuizType {
     #[default]

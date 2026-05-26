@@ -20,6 +20,8 @@ pub use error::{Error, Result};
 pub mod discover;
 pub mod event_log;
 pub mod graph;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod migrate;
 pub mod path;
 pub mod scheduler;

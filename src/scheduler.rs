@@ -22,6 +22,21 @@ pub async fn cmd_next(
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
+    let envelope = compute_next(conn, path_id, graph_dir).await?;
+    let text = ayml::to_string(&envelope).map_err(|e| Error::AymlSerialize(e.to_string()))?;
+    print!("{text}");
+    Ok(())
+}
+
+/// Resolve the path, fold the event log, pick the next action, and
+/// auto-log the corresponding `quiz_presented` / `lesson_taught` event.
+/// Returns the structured envelope so both the CLI (AYML) and the MCP
+/// server (JSON) share one source of truth.
+pub async fn compute_next(
+    conn: &Connection,
+    path_id: Option<&str>,
+    graph_dir: Option<&Path>,
+) -> Result<Envelope> {
     let tx = conn.transaction().await?;
     let id = path::resolve_id(&tx, path_id).await?;
     let g = Graph::load_for_path(&tx, graph_dir).await?;
@@ -54,10 +69,7 @@ pub async fn cmd_next(
     }
     tx.commit().await?;
 
-    let text = ayml::to_string(&envelope).map_err(|e| Error::AymlSerialize(e.to_string()))?;
-    print!("{text}");
-
-    Ok(())
+    Ok(envelope)
 }
 
 #[derive(Debug, Clone)]
@@ -336,7 +348,7 @@ fn compute_lesson_history(events: &[Event], atom_id: &str) -> LessonHistory {
 // ── AYML output shape ──────────────────────────────────────────────
 
 #[derive(Serialize)]
-struct Envelope {
+pub struct Envelope {
     schema_version: u32,
     action: String,
     path: String,
