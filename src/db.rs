@@ -1,12 +1,10 @@
 //! libSQL database setup and schema migration.
 //!
-//! The `mt` server keeps all per-user state in a single `SQLite` database
-//! at `$MATHTUTOR_HOME/mt.db` (default `~/.mathtutor/mt.db`). When the
-//! `TURSO_URL` and `TURSO_AUTH_TOKEN` environment variables are both set,
-//! the database is opened as a libSQL embedded replica with offline
-//! writes; otherwise it falls back to a plain local `SQLite` file. The
-//! same `Database` handle covers both modes — callers don't need to
-//! branch on transport.
+//! All per-user state is stored in one libSQL database at
+//! `$MATHTUTOR_HOME/mt.db` (default `~/.mathtutor/mt.db`). The db
+//! opens as a synced replica if  `TURSO_URL` and `TURSO_AUTH_TOKEN`
+//! env variables are both set. If eitehr is unset, it falls back to a
+//! local-only file.
 
 use std::path::{Path, PathBuf};
 
