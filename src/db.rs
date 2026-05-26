@@ -30,9 +30,7 @@ const MIGRATIONS: &[Migration] = &[Migration {
     sql: include_str!("migrations/001_init.sql"),
 }];
 
-/// The schema-migrations bookkeeping table itself. Always created
-/// `IF NOT EXISTS` so it can be added to a database that predates
-/// the migration framework.
+/// The schema-migrations bookkeeping table itself
 const META_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS schema_migrations (
         version    INTEGER PRIMARY KEY,
@@ -161,8 +159,8 @@ async fn current_version(conn: &Connection) -> Result<u32> {
     // SQLite aggregates without GROUP BY always return exactly one row,
     // and the version PK is bounded by the migration count we ship.
     let row = rows.next().await?.expect("aggregate returns one row");
-    let v: i64 = row.get(0)?;
-    Ok(u32::try_from(v).expect("schema version fits in u32"))
+    let version: i64 = row.get(0)?;
+    Ok(u32::try_from(version).expect("schema version fits in u32"))
 }
 
 async fn apply(conn: &Connection, m: &Migration) -> Result<()> {
