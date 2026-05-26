@@ -2,13 +2,26 @@ use std::process::ExitCode;
 
 use libsql::Connection;
 use mathtutor::cli::{AmendOp, Cmd, GraphOp, Mt, OverlayOp, RemoveOp, StoreOp};
+#[cfg(feature = "mcp")]
+use mathtutor::mcp;
 use mathtutor::{
     Result, answer, db, discover, graph, instruct, migrate, overlay, path, scheduler, state, store,
     tree,
 };
 
+#[cfg(feature = "mcp")]
+#[tokio::main]
+async fn main() -> ExitCode {
+    real_main().await
+}
+
+#[cfg(not(feature = "mcp"))]
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
+    real_main().await
+}
+
+async fn real_main() -> ExitCode {
     let cli: Mt = argh::from_env();
 
     // `mt graph check` has its own success-vs-issues exit logic and
@@ -50,6 +63,34 @@ async fn main() -> ExitCode {
     }
     if let Cmd::List(c) = &cli.cmd {
         return run_simple(discover::cmd_list(c.id.as_deref(), c.graph.as_deref()), 2);
+    }
+
+    // `mt mcp` owns its own DB lifecycle (long-running, background sync
+    // task, graceful shutdown) so it sits outside the per-command DB
+    // setup the rest of the dispatch block does.
+    #[cfg(feature = "mcp")]
+    if let Cmd::Mcp(c) = cli.cmd {
+        let api_key = match c.api_key.or_else(|| std::env::var("MT_API_KEY").ok()) {
+            Some(k) if !k.is_empty() => k,
+            _ => {
+                eprintln!("error: --api-key or MT_API_KEY must be set");
+                return ExitCode::from(2);
+            }
+        };
+        let cfg = match db::DbConfig::from_env() {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        return match mcp::run(&c.addr, &api_key, cfg, c.graph).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(2)
+            }
+        };
     }
 
     let cfg = match db::DbConfig::from_env() {
@@ -126,6 +167,8 @@ async fn dispatch(conn: &Connection, cmd: Cmd) -> (Result<()>, u8) {
         Cmd::Graph(_) | Cmd::Instruct(_) | Cmd::Show(_) | Cmd::List(_) => {
             unreachable!("handled before dispatch")
         }
+        #[cfg(feature = "mcp")]
+        Cmd::Mcp(_) => unreachable!("handled before dispatch"),
         Cmd::New(c) => {
             let r = path::cmd_new(conn, &c.goal, &c.atom, c.graph.as_deref())
                 .await

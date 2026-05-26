@@ -13,90 +13,118 @@ use crate::{Error, Result};
 pub fn cmd_show(id: &str, graph_dir: Option<&Path>) -> Result<()> {
     let manifest = graph::load_manifest_default(graph_dir)?;
     let g = Graph::load_default(graph_dir)?;
-
-    if let Some(c) = g.by_id.get(id) {
-        return emit(&concept_view(&g, c));
-    }
-    if let Some(area) = manifest.areas.iter().find(|a| a.prefix == id) {
-        return emit(&area_cluster_view(&g, area));
-    }
-    Err(Error::UnknownId(id.to_string()))
+    let view = show_view(&g, &manifest, id)?;
+    emit(&view)
 }
 
 pub fn cmd_list(id: Option<&str>, graph_dir: Option<&Path>) -> Result<()> {
     let manifest = graph::load_manifest_default(graph_dir)?;
     let g = Graph::load_default(graph_dir)?;
+    let view = list_view(&g, &manifest, id)?;
+    emit(&view)
+}
 
-    let Some(id) = id else {
-        return emit(&areas_view(&manifest));
-    };
-
+/// Build the `mt show` view (atom / cluster / area) for `id` against the
+/// provided graph and manifest. Pure data — used by the CLI for AYML
+/// output and by the MCP `GetItem` tool for JSON.
+pub fn show_view(g: &Graph, manifest: &Manifest, id: &str) -> Result<ShowView> {
     if let Some(c) = g.by_id.get(id) {
-        return emit(&children_list_view(&g, c));
+        return Ok(ShowView::Concept(concept_view(g, c)));
     }
     if let Some(area) = manifest.areas.iter().find(|a| a.prefix == id) {
-        return emit(&area_list_view(&g, area));
+        return Ok(ShowView::Concept(area_cluster_view(g, area)));
     }
     Err(Error::UnknownId(id.to_string()))
+}
+
+/// Build the `mt list` view (areas, area, or cluster) for `id` (or `None`
+/// for the top-level area set).
+pub fn list_view(g: &Graph, manifest: &Manifest, id: Option<&str>) -> Result<ListView> {
+    let Some(id) = id else {
+        return Ok(ListView::Areas(areas_view(manifest)));
+    };
+    if let Some(c) = g.by_id.get(id) {
+        return Ok(ListView::Children(children_list_view(g, c)));
+    }
+    if let Some(area) = manifest.areas.iter().find(|a| a.prefix == id) {
+        return Ok(ListView::Children(area_list_view(g, area)));
+    }
+    Err(Error::UnknownId(id.to_string()))
+}
+
+/// Output of [`show_view`]. AYML serialization stays flat (one record per
+/// call) via `#[serde(untagged)]`.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum ShowView {
+    Concept(ConceptView),
+}
+
+/// Output of [`list_view`].
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum ListView {
+    Areas(AreasView),
+    Children(ChildrenListView),
 }
 
 // ── Views (AYML wire shapes) ──────────────────────────────────────
 
 #[derive(Serialize)]
-struct AreasView {
+pub struct AreasView {
     areas: Vec<AreaSummary>,
 }
 
 #[derive(Serialize)]
-struct AreaSummary {
-    prefix: String,
-    slug: String,
-    summary: String,
+pub struct AreaSummary {
+    pub prefix: String,
+    pub slug: String,
+    pub summary: String,
 }
 
 #[derive(Serialize)]
-struct ChildrenListView {
-    id: String,
-    name: String,
-    children: Vec<ChildBrief>,
+pub struct ChildrenListView {
+    pub id: String,
+    pub name: String,
+    pub children: Vec<ChildBrief>,
 }
 
 #[derive(Serialize)]
-struct ChildBrief {
-    id: String,
-    name: String,
-    is_atom: bool,
+pub struct ChildBrief {
+    pub id: String,
+    pub name: String,
+    pub is_atom: bool,
 }
 
 #[derive(Serialize)]
 #[serde(untagged)]
-enum ConceptView {
+pub enum ConceptView {
     Atom(AtomView),
     Cluster(ClusterView),
 }
 
 #[derive(Serialize)]
-struct AtomView {
-    id: String,
-    name: String,
+pub struct AtomView {
+    pub id: String,
+    pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    is_atom: bool,
-    prerequisites: Vec<ChildBrief>,
-    has_lesson: bool,
-    quizzes: usize,
+    pub description: Option<String>,
+    pub is_atom: bool,
+    pub prerequisites: Vec<ChildBrief>,
+    pub has_lesson: bool,
+    pub quizzes: usize,
 }
 
 #[derive(Serialize)]
-struct ClusterView {
-    id: String,
-    name: String,
+pub struct ClusterView {
+    pub id: String,
+    pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    is_atom: bool,
-    prerequisites: Vec<ChildBrief>,
-    children: Vec<ChildBrief>,
-    atomic_descendants: usize,
+    pub description: Option<String>,
+    pub is_atom: bool,
+    pub prerequisites: Vec<ChildBrief>,
+    pub children: Vec<ChildBrief>,
+    pub atomic_descendants: usize,
 }
 
 // ── View builders ─────────────────────────────────────────────────
