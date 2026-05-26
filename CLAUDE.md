@@ -10,7 +10,7 @@ Overall design doc: docs/design.md
 - add integration tests where appropriate
 - run `cargo clippy` and fix all lints. Cargo.toml is already configured to surface pedantic lints.
 - run `cargo fmt` to format idiomatically.
-- when everything is complete, commit and push branch to origin.
+- when everything is complete, commit and push branch to origin
 - open a PR with `gh` and ask for a review
 
 ## Guidelines
@@ -26,5 +26,6 @@ Overall design doc: docs/design.md
   Avoid summaries of obvious code or changelogs.
 - The best code is concise and the best comments are 1 line.
   Beyond that, the reader tends to tune out and mainenance becomes more difficult.
-- Commit messages and PR descriptions must be human readable and concise. They describe the essence of the change
-  and its motivation. They do not rehash implementation details or specific symbols from the diff.
+- Commit messages and PR descriptions must be human readable and concise.
+  They describe the motivation for and essence of a change.
+  They do not rehash implementation details or specific symbols from the diff.
