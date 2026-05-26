@@ -103,13 +103,16 @@ impl std::fmt::Display for Difficulty {
     }
 }
 
-impl argh::FromArgValue for Difficulty {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value {
+// argh::FromArgValue picks this up via a blanket impl for `T: FromStr
+// where T::Err: Display` — no separate CLI parser needed.
+impl std::str::FromStr for Difficulty {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
             "easy" => Ok(Difficulty::Easy),
             "medium" => Ok(Difficulty::Medium),
             "hard" => Ok(Difficulty::Hard),
-            other => Err(format!("invalid difficulty '{other}'")),
+            other => Err(Error::InvalidDifficulty(other.to_string())),
         }
     }
 }
@@ -134,12 +137,13 @@ impl QuizType {
     }
 }
 
-impl argh::FromArgValue for QuizType {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value {
+impl std::str::FromStr for QuizType {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
             "free_text" => Ok(QuizType::FreeText),
             "multiple_choice" => Ok(QuizType::MultipleChoice),
-            other => Err(format!("invalid quiz type '{other}'")),
+            other => Err(Error::InvalidQuizKind(other.to_string())),
         }
     }
 }

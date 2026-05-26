@@ -93,8 +93,8 @@ fn row_to_overlay_quiz(row: &Row) -> Result<(String, Quiz)> {
     let answer: String = row.get(5)?;
     let rubric: Option<String> = row.get(6)?;
 
-    let difficulty = parse_difficulty(&difficulty_str)?;
-    let kind = kind_str.as_deref().map(parse_kind).transpose()?;
+    let difficulty = difficulty_str.parse()?;
+    let kind = kind_str.as_deref().map(str::parse).transpose()?;
     Ok((
         atom_id,
         Quiz {
@@ -106,29 +106,6 @@ fn row_to_overlay_quiz(row: &Row) -> Result<(String, Quiz)> {
             rubric,
         },
     ))
-}
-
-fn parse_difficulty(s: &str) -> Result<Difficulty> {
-    match s {
-        "easy" => Ok(Difficulty::Easy),
-        "medium" => Ok(Difficulty::Medium),
-        "hard" => Ok(Difficulty::Hard),
-        other => Err(Error::AymlParse {
-            path: std::path::PathBuf::from("<overlay_quizzes.difficulty>"),
-            message: format!("unknown difficulty: {other}"),
-        }),
-    }
-}
-
-fn parse_kind(s: &str) -> Result<QuizType> {
-    match s {
-        "free_text" => Ok(QuizType::FreeText),
-        "multiple_choice" => Ok(QuizType::MultipleChoice),
-        other => Err(Error::AymlParse {
-            path: std::path::PathBuf::from("<overlay_quizzes.kind>"),
-            message: format!("unknown quiz kind: {other}"),
-        }),
-    }
 }
 
 // ── SQL mutators ────────────────────────────────────────────────────
@@ -245,12 +222,13 @@ pub async fn remove_quiz(conn: &Connection, quiz_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// libSQL surfaces `SQLite` unique-constraint failures as `SqliteFailure`
-/// with code 2067 (`SQLITE_CONSTRAINT_UNIQUE`) — match on the rendered
-/// message to detect them without depending on a private error variant.
+/// `SQLite` extended error codes for the two constraint kinds that can
+/// reject an `INSERT` on a uniquely-keyed column.
+/// `SQLITE_CONSTRAINT_PRIMARYKEY` (1555) fires for a TEXT/INTEGER PRIMARY
+/// KEY collision; `SQLITE_CONSTRAINT_UNIQUE` (2067) fires for a UNIQUE
+/// constraint. Both apply to the `overlay_lessons.atom_id` PK.
 fn is_unique_violation(e: &libsql::Error) -> bool {
-    let msg = e.to_string();
-    msg.contains("UNIQUE constraint failed") || msg.contains("PRIMARY KEY")
+    matches!(e, libsql::Error::SqliteFailure(1555 | 2067, _))
 }
 
 // ── `mt overlay dump` ──────────────────────────────────────────────

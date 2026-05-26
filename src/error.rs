@@ -74,6 +74,13 @@ pub enum Error {
     #[error("invalid rating value: {0}")]
     InvalidRating(i64),
 
+    // Unrecognized string read out of an overlay table column that
+    // round-trips a `Difficulty` or `QuizType`.
+    #[error("invalid difficulty: {0}")]
+    InvalidDifficulty(String),
+    #[error("invalid quiz kind: {0}")]
+    InvalidQuizKind(String),
+
     // Cards cache row missing its expected columns.
     #[error("cards cache corrupt: {0}")]
     CardsCorrupt(String),

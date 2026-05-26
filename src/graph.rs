@@ -353,12 +353,12 @@ impl Graph {
     /// the global overlay applied. The single entry point for scheduler /
     /// tree / state queries; consumers stay overlay-unaware.
     ///
-    /// Overlays are not partitioned by `path_id` — authored lessons and
-    /// quizzes are shared across every path on this database. The merge
-    /// rules: overlay lessons fill in missing shipped lessons (never
-    /// shadow), overlay quizzes replace shipped quizzes with the same id
-    /// (amend) or append otherwise, and tombstoned quiz ids are dropped
-    /// from the final view.
+    /// Conflict resolution rule: an overlay lesson, quiz, or tombstone
+    /// always overrides the built-in item with the same ID.
+    ///
+    /// - overlay lessons always overrid built-in lessons with the same id
+    /// - overlay quizzes always overrid built-in quizzes with the same id
+    /// - overlay tombstones cause a built-in lesson or quiz to be dropped from the final view
     pub async fn load_for_path(conn: &Connection, graph_dir: Option<&Path>) -> Result<Self> {
         let mut g = Self::load_default(graph_dir)?;
         let overlay = crate::overlay::load(conn).await?;
