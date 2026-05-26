@@ -56,4 +56,8 @@ pub enum Error {
     // FSRS.
     #[error("fsrs: {0}")]
     Fsrs(String),
+
+    // SQL / libsql.
+    #[error(transparent)]
+    Db(#[from] libsql::Error),
 }

@@ -11,6 +11,7 @@
 pub mod answer;
 pub mod cards;
 pub mod cli;
+pub mod db;
 pub mod error;
 pub mod instruct;
 pub mod overlay;
