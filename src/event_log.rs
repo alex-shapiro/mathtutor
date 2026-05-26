@@ -1,14 +1,9 @@
-//! Per-path event log, persisted as rows in the `events` SQL table.
+//! Event log persisted in the `events` SQL table.
 //!
-//! Events have a typed `kind` and are constructed via the typed helper
-//! functions in this module — call sites build events by name (e.g.
-//! `event_log::lesson_authored(path, atom)`) rather than by hand.
+//! Each event has a typed `kind` and is constructed via the typed helper
+//! functions in this module.
 //!
-//! [append] is also the write-through path for the FSRS `cards` cache:
-//! when a `QuizAnswered` event lands, the cache row for `(path, quiz)`
-//! is folded forward via [`crate::cards::apply_answer_to_cache`]. The
-//! event row is the source of truth and the cache is rebuildable via
-//! `cards::recompute`.
+//! A `QuizAnswered` event writes to both the event log and the `cards` cache.
 
 use chrono::{DateTime, Utc};
 use libsql::{Connection, Row, params};
