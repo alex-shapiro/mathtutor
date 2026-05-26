@@ -240,6 +240,6 @@ async fn default_db_path_lives_under_mathtutor_home() {
     // Test the public helper without mutating env: just sanity-check
     // it terminates in `mt.db`. The full path depends on the env at
     // test time and is not stable across machines.
-    let p: PathBuf = db::default_db_path().expect("default path");
+    let p: PathBuf = db::default_path().expect("default path");
     assert_eq!(p.file_name().unwrap(), "mt.db");
 }

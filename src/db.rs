@@ -82,7 +82,7 @@ impl DbConfig {
     /// from `TURSO_URL` / `TURSO_AUTH_TOKEN`.
     pub fn from_env() -> Result<Self> {
         Ok(Self {
-            local_path: default_db_path()?,
+            local_path: default_path()?,
             sync: SyncConfig::from_env(),
         })
     }
@@ -97,7 +97,7 @@ impl DbConfig {
 }
 
 /// Default on-disk location: `$MATHTUTOR_HOME/mt.db`.
-pub fn default_db_path() -> Result<PathBuf> {
+pub fn default_path() -> Result<PathBuf> {
     Ok(mt_home()?.join("mt.db"))
 }
 
