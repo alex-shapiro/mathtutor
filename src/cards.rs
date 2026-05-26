@@ -1,93 +1,56 @@
-//! FSRS card state, derived purely from the event log.
+//! FSRS card state.
 //!
-//! No card state is persisted on disk in V1 — every `QuizAnswered` event
-//! contains the timestamp and rating, which is everything FSRS needs to
-//! reproduce its scheduling decision. Replaying the events for a quiz in
-//! order yields the same `CardState` that used to live in `path.ayml`.
-//! Per DESIGN.md: "FSRS state … is a derived index that can be
-//! recomputed from the log."
+//! Card state lives in two places:
+//!
+//! 1. An in-memory step, [`apply_answer`], takes a previous [`CardState`]
+//!    plus a new rating/timestamp and produces the next state. Pure FSRS
+//!    — no I/O.
+//!
+//! 2. SQL helpers read and write the `cards` table, a write-through cache
+//!    of the latest FSRS state per `(path, quiz)` so the scheduler can
+//!    pick the earliest-due quiz with one indexed query. The event log
+//!    remains the source of truth; [`recompute`] rebuilds the cache by
+//!    replaying every `QuizAnswered` event for a path.
 
 use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
-use serde::Serialize;
+use libsql::{Connection, params};
 
-use crate::event_log::{Event, EventKind};
+use crate::db;
+use crate::event_log::{self, Event, EventKind};
 use crate::types::Rating;
 use crate::{Error, Result};
 
 const DESIRED_RETENTION: f32 = 0.9;
 
-/// Derived FSRS state for a single quiz card. Not persisted — computed
-/// on demand from the event log.
-#[derive(Debug, Clone, Serialize)]
+/// FSRS state for a single quiz card. The fields exist precisely when a
+/// card has been answered at least once — `apply_answer(None, …)` is the
+/// first step that produces a state, so every field is always populated.
+#[derive(Debug, Clone, Copy)]
 pub struct CardState {
     pub due: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_review: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stability: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub difficulty: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_rating: Option<Rating>,
+    pub last_review: DateTime<Utc>,
+    pub stability: f32,
+    pub difficulty: f32,
 }
 
-/// Replay one quiz's answered events to produce its current FSRS card
-/// state. Returns `None` if the quiz has never been answered.
-pub fn card_state(events: &[Event], quiz_id: &str) -> Result<Option<CardState>> {
-    let mut state: Option<CardState> = None;
-    for e in events {
-        if !matches!(e.kind, EventKind::QuizAnswered) {
-            continue;
-        }
-        if e.quiz.as_deref() != Some(quiz_id) {
-            continue;
-        }
-        let Some(rating) = e.payload.rating else {
-            continue;
-        };
-        state = Some(apply_answer(state.as_ref(), rating, e.ts)?);
-    }
-    Ok(state)
+/// Row shape stored in the `cards` table.
+#[derive(Debug, Clone)]
+pub struct CardRow {
+    pub path_id: String,
+    pub quiz_id: String,
+    pub state: CardState,
+    pub reps: u32,
+    pub lapses: u32,
 }
 
-/// Replay every answered quiz in the log and return current state per
-/// quiz. Used by the scheduler to find the earliest-due card without
-/// repeatedly scanning the log.
-pub fn all_card_states(events: &[Event]) -> Result<HashMap<String, CardState>> {
-    // Group answered events by quiz_id, preserving chronological order
-    // (the log itself is already in order, so a single pass suffices).
-    let mut by_quiz: HashMap<String, Vec<(DateTime<Utc>, Rating)>> = HashMap::new();
-    for e in events {
-        if !matches!(e.kind, EventKind::QuizAnswered) {
-            continue;
-        }
-        let (Some(quiz_id), Some(rating)) = (e.quiz.as_deref(), e.payload.rating) else {
-            continue;
-        };
-        by_quiz
-            .entry(quiz_id.to_string())
-            .or_default()
-            .push((e.ts, rating));
-    }
+// ── Pure FSRS step (no I/O) ────────────────────────────────────────
 
-    let mut out = HashMap::with_capacity(by_quiz.len());
-    for (quiz_id, history) in by_quiz {
-        let mut state: Option<CardState> = None;
-        for (ts, rating) in history {
-            state = Some(apply_answer(state.as_ref(), rating, ts)?);
-        }
-        if let Some(s) = state {
-            out.insert(quiz_id, s);
-        }
-    }
-    Ok(out)
-}
-
-/// One FSRS step: given the previous state (or none), apply this rating
-/// at this timestamp and return the resulting `CardState`.
+/// One FSRS step: given the previous state (or none, for the first
+/// answer), apply this rating at this timestamp and return the next
+/// state.
 ///
 /// `interval` is converted from FSRS's fractional days to whole seconds
 /// (with a 60-second floor) so sub-day relearning intervals retain their
@@ -102,16 +65,13 @@ pub fn apply_answer(
     rating: Rating,
     ts: DateTime<Utc>,
 ) -> Result<CardState> {
-    let days_elapsed = match prev.and_then(|c| c.last_review) {
-        Some(lr) => (ts - lr).num_days().max(0) as u32,
+    let days_elapsed = match prev {
+        Some(c) => (ts - c.last_review).num_days().max(0) as u32,
         None => 0,
     };
-    let memory = prev.and_then(|c| match (c.stability, c.difficulty) {
-        (Some(s), Some(d)) => Some(MemoryState {
-            stability: s,
-            difficulty: d,
-        }),
-        _ => None,
+    let memory = prev.map(|c| MemoryState {
+        stability: c.stability,
+        difficulty: c.difficulty,
     });
 
     let fsrs = FSRS::new(Some(&[])).map_err(|e| Error::Fsrs(format!("{e:?}")))?;
@@ -128,10 +88,205 @@ pub fn apply_answer(
     let interval_secs = (next.interval * 86_400.0).round().max(60.0) as i64;
     Ok(CardState {
         due: ts + Duration::seconds(interval_secs),
-        last_review: Some(ts),
-        stability: Some(next.memory.stability),
-        difficulty: Some(next.memory.difficulty),
-        last_rating: Some(rating),
+        last_review: ts,
+        stability: next.memory.stability,
+        difficulty: next.memory.difficulty,
+    })
+}
+
+// ── SQL: read ──────────────────────────────────────────────────────
+
+/// Load the cached row for one `(path, quiz)` pair, if present.
+pub async fn read_card(conn: &Connection, path_id: &str, quiz_id: &str) -> Result<Option<CardRow>> {
+    let mut rows = conn
+        .query(
+            "SELECT path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses \
+             FROM cards WHERE path_id = ? AND quiz_id = ?",
+            params![path_id.to_string(), quiz_id.to_string()],
+        )
+        .await?;
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+    Ok(Some(row_to_card(&row)?))
+}
+
+/// Return every `(quiz_id, due_at)` pair whose `due_at <= now` for the
+/// given path, sorted oldest-due first. The scheduler uses this to pick
+/// the earliest-due quiz without folding the event log.
+pub async fn due_quizzes(
+    conn: &Connection,
+    path_id: &str,
+    now: DateTime<Utc>,
+) -> Result<Vec<(String, DateTime<Utc>)>> {
+    let mut rows = conn
+        .query(
+            "SELECT quiz_id, due_at FROM cards \
+             WHERE path_id = ? AND due_at <= ? ORDER BY due_at ASC",
+            params![path_id.to_string(), db::format_ts(now)],
+        )
+        .await?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let quiz_id: String = row.get(0)?;
+        let due_str: String = row.get(1)?;
+        out.push((quiz_id, db::parse_ts(&due_str)?));
+    }
+    Ok(out)
+}
+
+// ── SQL: write-through cache update ────────────────────────────────
+
+/// Apply one `QuizAnswered` event to the cards cache. Reads the previous
+/// row (if any), folds the new rating through [`apply_answer`], and upserts
+/// the result with `reps` and `lapses` incremented accordingly.
+///
+/// Called from [`event_log::append`] when a `QuizAnswered` event lands.
+pub async fn apply_answer_to_cache(
+    conn: &Connection,
+    path_id: &str,
+    quiz_id: &str,
+    rating: Rating,
+    ts: DateTime<Utc>,
+) -> Result<()> {
+    let prev = read_card(conn, path_id, quiz_id).await?;
+    let next = apply_answer(prev.as_ref().map(|r| &r.state), rating, ts)?;
+
+    let reps = prev.as_ref().map_or(0, |r| r.reps) + 1;
+    let lapses = prev.as_ref().map_or(0, |r| r.lapses) + u32::from(rating == Rating::Again);
+
+    upsert_card_row(
+        conn,
+        &CardRow {
+            path_id: path_id.to_string(),
+            quiz_id: quiz_id.to_string(),
+            state: next,
+            reps,
+            lapses,
+        },
+    )
+    .await
+}
+
+async fn upsert_card_row(conn: &Connection, row: &CardRow) -> Result<()> {
+    conn.execute(
+        "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(path_id, quiz_id) DO UPDATE SET \
+            stability = excluded.stability, \
+            difficulty = excluded.difficulty, \
+            due_at = excluded.due_at, \
+            last_reviewed_at = excluded.last_reviewed_at, \
+            reps = excluded.reps, \
+            lapses = excluded.lapses",
+        params![
+            row.path_id.as_str(),
+            row.quiz_id.as_str(),
+            f64::from(row.state.stability),
+            f64::from(row.state.difficulty),
+            db::format_ts(row.state.due),
+            db::format_ts(row.state.last_review),
+            i64::from(row.reps),
+            i64::from(row.lapses),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Drop every cached row for `path_id` and rebuild from the event log.
+/// Use after a suspected cache corruption or a schema-altering migration.
+///
+/// The replay is wrapped in one transaction — including the event-log
+/// read — so concurrent `QuizAnswered` appends can't slip in between
+/// the snapshot we fold and the rows we write back, and a mid-rebuild
+/// failure leaves the existing cache in place rather than half-erased.
+pub async fn recompute(conn: &Connection, path_id: &str) -> Result<()> {
+    let tx = conn.transaction().await?;
+    let events = event_log::load(&tx, path_id).await?;
+    let rebuilt = fold_history(path_id, &events)?;
+    tx.execute(
+        "DELETE FROM cards WHERE path_id = ?",
+        params![path_id.to_string()],
+    )
+    .await?;
+    for row in &rebuilt {
+        upsert_card_row(&tx, row).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Fold every `QuizAnswered` event for `path_id` into one [`CardRow`] per
+/// quiz. The inverse of `apply_answer_to_cache`: same FSRS step, applied
+/// in chronological order, but in memory and one quiz at a time so a
+/// full rebuild does K upserts instead of N.
+fn fold_history(path_id: &str, events: &[Event]) -> Result<Vec<CardRow>> {
+    // Group answered events per quiz, in event-log order. The log is
+    // already chronological — `ORDER BY id ASC` in `event_log::load` —
+    // so a single pass suffices to bucket the history.
+    let mut history: HashMap<String, Vec<(DateTime<Utc>, Rating)>> = HashMap::new();
+    for e in events {
+        if e.kind != EventKind::QuizAnswered {
+            continue;
+        }
+        let (Some(quiz), Some(rating)) = (e.quiz.as_deref(), e.payload.rating) else {
+            continue;
+        };
+        history
+            .entry(quiz.to_string())
+            .or_default()
+            .push((e.ts, rating));
+    }
+
+    let mut out = Vec::with_capacity(history.len());
+    for (quiz_id, ratings) in history {
+        let mut state: Option<CardState> = None;
+        let mut reps: u32 = 0;
+        let mut lapses: u32 = 0;
+        for (ts, rating) in ratings {
+            state = Some(apply_answer(state.as_ref(), rating, ts)?);
+            reps += 1;
+            if rating == Rating::Again {
+                lapses += 1;
+            }
+        }
+        out.push(CardRow {
+            path_id: path_id.to_string(),
+            quiz_id,
+            state: state.expect("at least one answered event in the group"),
+            reps,
+            lapses,
+        });
+    }
+    Ok(out)
+}
+
+// ── helpers ────────────────────────────────────────────────────────
+
+#[allow(clippy::cast_possible_truncation)]
+fn row_to_card(row: &libsql::Row) -> Result<CardRow> {
+    let path_id: String = row.get(0)?;
+    let quiz_id: String = row.get(1)?;
+    let stability_f: f64 = row.get(2)?;
+    let difficulty_f: f64 = row.get(3)?;
+    let due_str: String = row.get(4)?;
+    let last_reviewed_str: String = row.get(5)?;
+    let reps: i64 = row.get(6)?;
+    let lapses: i64 = row.get(7)?;
+    Ok(CardRow {
+        path_id,
+        quiz_id,
+        state: CardState {
+            stability: stability_f as f32,
+            difficulty: difficulty_f as f32,
+            due: db::parse_ts(&due_str)?,
+            last_review: db::parse_ts(&last_reviewed_str)?,
+        },
+        reps: u32::try_from(reps)
+            .map_err(|_| Error::CardsCorrupt(format!("invalid reps {reps}")))?,
+        lapses: u32::try_from(lapses)
+            .map_err(|_| Error::CardsCorrupt(format!("invalid lapses {lapses}")))?,
     })
 }
 
@@ -139,118 +294,53 @@ pub fn apply_answer(
 mod tests {
     use chrono::TimeZone;
 
-    use crate::event_log::{Event, EventKind, EventPayload};
-
-    use super::{CardState, Rating, apply_answer, card_state};
-
-    fn answered_event(quiz: &str, rating: Rating, ts: chrono::DateTime<chrono::Utc>) -> Event {
-        Event {
-            ts,
-            kind: EventKind::QuizAnswered,
-            path: "p_test".into(),
-            atom: None,
-            quiz: Some(quiz.into()),
-            payload: EventPayload {
-                rating: Some(rating),
-                ..Default::default()
-            },
-        }
-    }
+    use super::{Rating, apply_answer};
 
     #[test]
     fn apply_answer_updates_last_review_each_step() {
-        // The core invariant: a fresh `apply_answer` call must overwrite
-        // `last_review`, otherwise future replays would compute their
-        // `days_elapsed` from the very first answer instead of the most
-        // recent one.
+        // A fresh `apply_answer` call must overwrite `last_review`,
+        // otherwise future replays would compute `days_elapsed` from
+        // the very first answer instead of the most recent one.
         let t1 = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
         let t2 = t1 + chrono::Duration::days(30);
 
         let s1 = apply_answer(None, Rating::Good, t1).unwrap();
-        assert_eq!(s1.last_review, Some(t1));
+        assert_eq!(s1.last_review, t1);
 
         let s2 = apply_answer(Some(&s1), Rating::Good, t2).unwrap();
         assert_eq!(
-            s2.last_review,
-            Some(t2),
+            s2.last_review, t2,
             "last_review must advance to the current answer's ts, not stay on the first"
         );
     }
 
     #[test]
-    fn replay_uses_gap_to_most_recent_answer_not_first() {
-        // Scenario the user asked about: same quiz answered three times.
-        // Each FSRS step must see the gap to its *immediately preceding*
-        // answer, not the gap to the original. We prove this by showing
-        // that a three-step replay (gaps 30, 60) ends in a different
-        // state than a two-step replay that skips the middle answer
-        // (gap 90). If the implementation accidentally used `ts - first`
-        // for `days_elapsed`, the third step of the three-step replay
-        // would behave identically to the second step of the two-step
-        // replay, and these states would collide.
+    fn chained_steps_use_gap_to_most_recent_answer_not_first() {
+        // Same quiz answered three times. Each FSRS step must see the
+        // gap to its *immediately preceding* answer, not to the original.
+        // We prove it by showing that a three-step chain (gaps 30, 60)
+        // ends in a different state than a two-step chain that skips the
+        // middle answer (gap 90). If `apply_answer` ever used `ts - first`
+        // for `days_elapsed`, the third step of the three-step chain
+        // would collapse into the second step of the two-step chain.
         let t1 = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
         let t2 = t1 + chrono::Duration::days(30);
         let t3 = t2 + chrono::Duration::days(60);
 
-        let three_step = card_state(
-            &[
-                answered_event("q.q1", Rating::Good, t1),
-                answered_event("q.q1", Rating::Good, t2),
-                answered_event("q.q1", Rating::Good, t3),
-            ],
-            "q.q1",
-        )
-        .unwrap()
-        .unwrap();
+        let three_step = {
+            let s1 = apply_answer(None, Rating::Good, t1).unwrap();
+            let s2 = apply_answer(Some(&s1), Rating::Good, t2).unwrap();
+            apply_answer(Some(&s2), Rating::Good, t3).unwrap()
+        };
+        let two_step_skipping_middle = {
+            let s1 = apply_answer(None, Rating::Good, t1).unwrap();
+            apply_answer(Some(&s1), Rating::Good, t3).unwrap()
+        };
 
-        let two_step_skipping_middle = card_state(
-            &[
-                answered_event("q.q1", Rating::Good, t1),
-                answered_event("q.q1", Rating::Good, t3),
-            ],
-            "q.q1",
-        )
-        .unwrap()
-        .unwrap();
-
-        assert_ne!(
-            three_step.stability, two_step_skipping_middle.stability,
+        assert!(
+            (three_step.stability - two_step_skipping_middle.stability).abs() > 1e-6,
             "three answers (gaps 30, 60) must differ from two answers (gap 90); \
              otherwise the third step is using gap-to-first instead of gap-to-prev"
         );
-    }
-
-    #[test]
-    fn card_state_replay_matches_step_by_step_apply_answer() {
-        // The replay path (`card_state`) and the direct path
-        // (chained `apply_answer` calls) must produce identical state.
-        // This pins the contract that `card_state` is exactly "fold
-        // apply_answer over the answered events for this quiz."
-        let t1 = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
-        let t2 = t1 + chrono::Duration::days(7);
-        let t3 = t2 + chrono::Duration::days(21);
-
-        let reference: CardState = {
-            let s1 = apply_answer(None, Rating::Good, t1).unwrap();
-            let s2 = apply_answer(Some(&s1), Rating::Hard, t2).unwrap();
-            apply_answer(Some(&s2), Rating::Easy, t3).unwrap()
-        };
-
-        let replayed = card_state(
-            &[
-                answered_event("q.q1", Rating::Good, t1),
-                answered_event("q.q1", Rating::Hard, t2),
-                answered_event("q.q1", Rating::Easy, t3),
-            ],
-            "q.q1",
-        )
-        .unwrap()
-        .unwrap();
-
-        assert_eq!(replayed.due, reference.due);
-        assert_eq!(replayed.last_review, reference.last_review);
-        assert_eq!(replayed.stability, reference.stability);
-        assert_eq!(replayed.difficulty, reference.difficulty);
-        assert_eq!(replayed.last_rating, reference.last_rating);
     }
 }

@@ -1,24 +1,22 @@
 //! Learning-path data, per-path storage, and `mt new`.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use libsql::{Connection, params};
 
+use crate::db;
 use crate::event_log;
 use crate::graph::Graph;
 use crate::{Error, Result};
 
 /// Immutable record of the learner's goal for a path. Written once at
-/// `mt new`; never updated. All mutable per-path state (quiz answers,
-/// FSRS card state, lessons taught) lives in the event log; FSRS state
-/// is derived from the log on demand via `crate::cards`.
-#[derive(Debug, Serialize, Deserialize)]
+/// `mt new`; never updated. All mutable per-path state lives in the
+/// event log; FSRS state is the cards table maintained as a write-through
+/// cache by `event_log::append`.
+#[derive(Debug, Clone)]
 pub struct PathFile {
-    pub schema_version: u32,
     pub id: String,
     pub goal: String,
     pub created_at: DateTime<Utc>,
@@ -39,70 +37,110 @@ pub fn paths_root() -> Result<PathBuf> {
     Ok(mt_home()?.join("paths"))
 }
 
+/// Per-path filesystem directory. Still used by the overlay layer
+/// (`~/.mathtutor/paths/<id>/overlay.ayml`); event-log and path metadata
+/// no longer live on disk.
 pub fn path_dir(id: &str) -> Result<PathBuf> {
     Ok(paths_root()?.join(id))
-}
-
-pub fn save_path(p: &PathFile) -> Result<()> {
-    let dir = path_dir(&p.id)?;
-    fs::create_dir_all(&dir).map_err(|e| Error::Io {
-        path: dir.clone(),
-        source: e,
-    })?;
-    let text = ayml::to_string(p).map_err(|e| Error::AymlSerialize(e.to_string()))?;
-    let file_path = dir.join("path.ayml");
-    fs::write(&file_path, text).map_err(|e| Error::Io {
-        path: file_path,
-        source: e,
-    })
-}
-
-pub fn load_path(id: &str) -> Result<PathFile> {
-    let file_path = path_dir(id)?.join("path.ayml");
-    let file = File::open(&file_path).map_err(|e| Error::Io {
-        path: file_path.clone(),
-        source: e,
-    })?;
-    ayml::from_reader(BufReader::new(file)).map_err(|e| Error::AymlParse {
-        path: file_path,
-        message: e.to_string(),
-    })
-}
-
-pub fn most_recent_id() -> Result<Option<String>> {
-    let root = paths_root()?;
-    if !root.exists() {
-        return Ok(None);
-    }
-    let mut entries: Vec<_> = fs::read_dir(&root)
-        .map_err(|e| Error::Io {
-            path: root.clone(),
-            source: e,
-        })?
-        .filter_map(std::result::Result::ok)
-        .filter(|e| e.path().is_dir())
-        .collect();
-    entries.sort_by_key(|e| std::cmp::Reverse(e.metadata().and_then(|m| m.modified()).ok()));
-    Ok(entries
-        .into_iter()
-        .next()
-        .and_then(|e| e.file_name().to_str().map(String::from)))
-}
-
-pub fn resolve_id(explicit: Option<&str>) -> Result<String> {
-    if let Some(id) = explicit {
-        return Ok(id.to_string());
-    }
-    most_recent_id()?.ok_or(Error::NoPath)
 }
 
 pub fn generate_path_id(now: DateTime<Utc>) -> String {
     format!("p_{}", now.format("%Y_%m_%d_%H%M%S"))
 }
 
+// ── SQL helpers ─────────────────────────────────────────────────────
+
+/// # Panics
+/// Panics if `target_atoms.len()` doesn't fit in `i64` (≈9e18 targets).
+pub async fn save_path(conn: &Connection, p: &PathFile) -> Result<()> {
+    conn.execute(
+        "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
+        params![p.id.clone(), p.goal.clone(), db::format_ts(p.created_at),],
+    )
+    .await?;
+    for (i, atom) in p.target_atoms.iter().enumerate() {
+        let position = i64::try_from(i).expect("position fits in i64");
+        conn.execute(
+            "INSERT INTO path_targets(path_id, atom_id, position) VALUES (?, ?, ?)",
+            params![p.id.clone(), atom.clone(), position],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+pub async fn load_path(conn: &Connection, id: &str) -> Result<PathFile> {
+    let mut rows = conn
+        .query(
+            "SELECT goal, created_at FROM paths WHERE id = ?",
+            params![id.to_string()],
+        )
+        .await?;
+    let row = rows.next().await?.ok_or(Error::NoPath)?;
+    let goal: String = row.get(0)?;
+    let created_str: String = row.get(1)?;
+    let created_at = db::parse_ts(&created_str)?;
+
+    let mut rows = conn
+        .query(
+            "SELECT atom_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
+            params![id.to_string()],
+        )
+        .await?;
+    let mut targets = Vec::new();
+    while let Some(r) = rows.next().await? {
+        targets.push(r.get::<String>(0)?);
+    }
+
+    Ok(PathFile {
+        id: id.to_string(),
+        goal,
+        created_at,
+        target_atoms: targets,
+    })
+}
+
+/// "Most recent" = the path mentioned by the latest event, falling back
+/// to the newest row in `paths` if there are no events yet. Mirrors the
+/// old filesystem mtime semantic: a path the user is actively working in
+/// stays sticky regardless of creation order.
+pub async fn most_recent_id(conn: &Connection) -> Result<Option<String>> {
+    let mut rows = conn
+        .query(
+            "SELECT path_id FROM events ORDER BY id DESC LIMIT 1",
+            params![],
+        )
+        .await?;
+    if let Some(r) = rows.next().await? {
+        return Ok(Some(r.get(0)?));
+    }
+    let mut rows = conn
+        .query(
+            "SELECT id FROM paths ORDER BY created_at DESC LIMIT 1",
+            params![],
+        )
+        .await?;
+    Ok(match rows.next().await? {
+        Some(r) => Some(r.get(0)?),
+        None => None,
+    })
+}
+
+pub async fn resolve_id(conn: &Connection, explicit: Option<&str>) -> Result<String> {
+    if let Some(id) = explicit {
+        return Ok(id.to_string());
+    }
+    most_recent_id(conn).await?.ok_or(Error::NoPath)
+}
+
 // ── Commands ────────────────────────────────────────────────────────
 
-pub fn cmd_new(goal: &str, ids: &[String], graph_dir: Option<&Path>) -> Result<String> {
+pub async fn cmd_new(
+    conn: &Connection,
+    goal: &str,
+    ids: &[String],
+    graph_dir: Option<&Path>,
+) -> Result<String> {
     let g = Graph::load_default(graph_dir)?;
     let expanded = expand_to_atoms(&g, ids)?;
     let sorted = topo_sort(&g, &expanded)?;
@@ -111,16 +149,16 @@ pub fn cmd_new(goal: &str, ids: &[String], graph_dir: Option<&Path>) -> Result<S
     let id = generate_path_id(now);
 
     let p = PathFile {
-        schema_version: 1,
         id: id.clone(),
         goal: goal.to_string(),
         created_at: now,
         target_atoms: sorted,
     };
 
-    save_path(&p)?;
-
-    event_log::append(event_log::path_created(id.clone()))?;
+    let tx = conn.transaction().await?;
+    save_path(&tx, &p).await?;
+    event_log::append(&tx, &event_log::path_created(id.clone())).await?;
+    tx.commit().await?;
 
     Ok(id)
 }

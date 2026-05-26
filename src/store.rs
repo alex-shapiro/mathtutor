@@ -13,6 +13,8 @@
 
 use std::path::Path;
 
+use libsql::Connection;
+
 use crate::answer::atom_from_quiz_id;
 use crate::event_log;
 use crate::graph::{self, Graph, QuizRaw};
@@ -25,13 +27,14 @@ use crate::{Error, Result};
 /// then log `lesson_authored` + `lesson_taught`. Per AGENTS.md the
 /// agent presents the body to the user immediately after authoring,
 /// so storing implies teaching.
-pub fn cmd_store_lesson(
+pub async fn cmd_store_lesson(
+    conn: &Connection,
     atom_id: &str,
     body: String,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let id = path::resolve_id(path_id)?;
+    let id = path::resolve_id(conn, path_id).await?;
     let g = Graph::load_for_path(&id, graph_dir)?;
     let c = g
         .by_id
@@ -45,8 +48,14 @@ pub fn cmd_store_lesson(
     }
 
     overlay::add_lesson(&id, atom_id, body)?;
-    event_log::append(event_log::lesson_authored(id.clone(), atom_id.to_string()))?;
-    event_log::append(event_log::lesson_taught(id, atom_id.to_string()))?;
+    let tx = conn.transaction().await?;
+    event_log::append(
+        &tx,
+        &event_log::lesson_authored(id.clone(), atom_id.to_string()),
+    )
+    .await?;
+    event_log::append(&tx, &event_log::lesson_taught(id, atom_id.to_string())).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -55,7 +64,8 @@ pub fn cmd_store_lesson(
 /// past the highest existing N across shipped + overlay so IDs are
 /// globally unique within the path's effective graph.
 #[allow(clippy::too_many_arguments)]
-pub fn cmd_store_quiz(
+pub async fn cmd_store_quiz(
+    conn: &Connection,
     atom_id: &str,
     difficulty: Difficulty,
     question: String,
@@ -65,7 +75,7 @@ pub fn cmd_store_quiz(
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<String> {
-    let id = path::resolve_id(path_id)?;
+    let id = path::resolve_id(conn, path_id).await?;
     let g = Graph::load_for_path(&id, graph_dir)?;
     let c = g
         .by_id
@@ -89,11 +99,13 @@ pub fn cmd_store_quiz(
         rubric,
         quiz_type,
     )?;
-    event_log::append(event_log::quiz_authored(
-        id,
-        atom_id.to_string(),
-        new_id.clone(),
-    ))?;
+    let tx = conn.transaction().await?;
+    event_log::append(
+        &tx,
+        &event_log::quiz_authored(id, atom_id.to_string(), new_id.clone()),
+    )
+    .await?;
+    tx.commit().await?;
     Ok(new_id)
 }
 
@@ -106,7 +118,8 @@ pub fn cmd_store_quiz(
 /// scheduler keeps treating it as the same card. If you want a fresh
 /// schedule, use `mt remove quiz` followed by `mt store quiz`.
 #[allow(clippy::too_many_arguments)]
-pub fn cmd_amend_quiz(
+pub async fn cmd_amend_quiz(
+    conn: &Connection,
     quiz_id: &str,
     question: Option<String>,
     answer: Option<String>,
@@ -118,7 +131,7 @@ pub fn cmd_amend_quiz(
 ) -> Result<()> {
     let atom_id =
         atom_from_quiz_id(quiz_id).ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
-    let id = path::resolve_id(path_id)?;
+    let id = path::resolve_id(conn, path_id).await?;
     let g = Graph::load_for_path(&id, graph_dir)?;
     let c = g
         .by_id
@@ -140,21 +153,28 @@ pub fn cmd_amend_quiz(
     overlay::amend_quiz(
         &id, &atom_id, &base_raw, difficulty, question, answer, rubric, quiz_type,
     )?;
-    event_log::append(event_log::quiz_amended(id, atom_id, quiz_id.to_string()))?;
+    let tx = conn.transaction().await?;
+    event_log::append(
+        &tx,
+        &event_log::quiz_amended(id, atom_id, quiz_id.to_string()),
+    )
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 
 /// Tombstone a quiz so it no longer appears in the merged view for
 /// this path. Past `QuizAnswered` events stay in the log for audit;
 /// the scheduler simply stops surfacing it.
-pub fn cmd_remove_quiz(
+pub async fn cmd_remove_quiz(
+    conn: &Connection,
     quiz_id: &str,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
     let atom_id =
         atom_from_quiz_id(quiz_id).ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
-    let id = path::resolve_id(path_id)?;
+    let id = path::resolve_id(conn, path_id).await?;
 
     // Confirm the quiz exists in the merged view; refuse to tombstone
     // a name that never resolved to anything (likely a typo).
@@ -168,7 +188,13 @@ pub fn cmd_remove_quiz(
     }
 
     overlay::remove_quiz(&id, &atom_id, quiz_id)?;
-    event_log::append(event_log::quiz_removed(id, atom_id, quiz_id.to_string()))?;
+    let tx = conn.transaction().await?;
+    event_log::append(
+        &tx,
+        &event_log::quiz_removed(id, atom_id, quiz_id.to_string()),
+    )
+    .await?;
+    tx.commit().await?;
     Ok(())
 }
 

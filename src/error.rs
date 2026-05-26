@@ -60,4 +60,25 @@ pub enum Error {
     // SQL / libsql.
     #[error(transparent)]
     Db(#[from] libsql::Error),
+
+    // JSON payload for the `events.payload` column.
+    #[error("json: {0}")]
+    Json(#[from] serde_json::Error),
+
+    // Bad timestamp coming back out of the database.
+    #[error("bad timestamp: {0}")]
+    BadTimestamp(String),
+
+    // Out-of-range integer in `events.rating` or any other column that
+    // round-trips a `Rating`.
+    #[error("invalid rating value: {0}")]
+    InvalidRating(i64),
+
+    // Cards cache row missing its expected columns.
+    #[error("cards cache corrupt: {0}")]
+    CardsCorrupt(String),
+
+    // Unrecognized event kind read out of the `events.kind` column.
+    #[error("unknown event kind: {0}")]
+    UnknownEventKind(String),
 }

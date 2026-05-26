@@ -236,6 +236,19 @@ async fn payload_must_be_valid_json_or_null() {
 }
 
 #[tokio::test]
+async fn maybe_sync_is_noop_on_local_only_db() {
+    // `maybe_sync` must short-circuit when `cfg.sync` is `None` — the
+    // CLI calls it unconditionally after every mutating command, and a
+    // local-only setup (no TURSO_URL) must finish silently rather than
+    // hitting the libsql sync path and erroring on "not a synced db".
+    let tmp = TempDir::new().unwrap();
+    let cfg = cfg_in(&tmp);
+    assert!(cfg.sync.is_none());
+    let db = db::open(&cfg).await.expect("open");
+    db::maybe_sync(&db, &cfg).await;
+}
+
+#[tokio::test]
 async fn default_db_path_lives_under_mathtutor_home() {
     // Test the public helper without mutating env: just sanity-check
     // it terminates in `mt.db`. The full path depends on the env at

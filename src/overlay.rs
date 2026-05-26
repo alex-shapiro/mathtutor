@@ -17,6 +17,7 @@ use std::fs::{self, File};
 use std::io::BufReader;
 use std::path::PathBuf;
 
+use libsql::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::graph::{Quiz, QuizRaw};
@@ -207,8 +208,8 @@ pub fn remove_quiz(path_id: &str, atom_id: &str, quiz_id: &str) -> Result<()> {
 
 // ── `mt overlay dump` ──────────────────────────────────────────────
 
-pub fn cmd_dump(path_id: Option<&str>) -> Result<()> {
-    let id = resolve_id(path_id)?;
+pub async fn cmd_dump(conn: &Connection, path_id: Option<&str>) -> Result<()> {
+    let id = resolve_id(conn, path_id).await?;
     let overlay = load(&id)?;
     let text = ayml::to_string(&overlay).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");

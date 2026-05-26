@@ -7,14 +7,19 @@
 
 use serde::{Deserialize, Serialize};
 
-/// FSRS grade for a quiz answer.
+use crate::Error;
+
+/// FSRS grade for a quiz answer. The discriminants match the FSRS
+/// convention (Again=1, Hard=2, Good=3, Easy=4) and are the stable
+/// encoding written to the `events.rating` SQL column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[repr(i64)]
 pub enum Rating {
-    Again,
-    Hard,
-    Good,
-    Easy,
+    Again = 1,
+    Hard = 2,
+    Good = 3,
+    Easy = 4,
 }
 
 impl Rating {
@@ -26,6 +31,25 @@ impl Rating {
     /// FSRS says wait.
     pub fn is_correct(self) -> bool {
         !matches!(self, Rating::Again)
+    }
+}
+
+impl From<Rating> for i64 {
+    fn from(r: Rating) -> i64 {
+        r as i64
+    }
+}
+
+impl TryFrom<i64> for Rating {
+    type Error = Error;
+    fn try_from(v: i64) -> Result<Self, Error> {
+        match v {
+            1 => Ok(Rating::Again),
+            2 => Ok(Rating::Hard),
+            3 => Ok(Rating::Good),
+            4 => Ok(Rating::Easy),
+            other => Err(Error::InvalidRating(other)),
+        }
     }
 }
 

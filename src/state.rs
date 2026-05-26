@@ -3,18 +3,26 @@
 
 use std::path::Path;
 
+use chrono::Utc;
+use libsql::Connection;
+
 use crate::Result;
+use crate::cards;
 use crate::event_log;
 use crate::graph::Graph;
-use crate::path::{load_path, path_dir, resolve_id};
+use crate::path::{load_path, resolve_id};
 use crate::scheduler;
 
-pub fn cmd_state(explicit_id: Option<&str>, graph_dir: Option<&Path>) -> Result<()> {
-    let id = resolve_id(explicit_id)?;
-    let p = load_path(&id)?;
+pub async fn cmd_state(
+    conn: &Connection,
+    explicit_id: Option<&str>,
+    graph_dir: Option<&Path>,
+) -> Result<()> {
+    let id = resolve_id(conn, explicit_id).await?;
+    let p = load_path(conn, &id).await?;
     let g = Graph::load_for_path(&id, graph_dir)?;
-    let location = path_dir(&id)?;
-    let events = event_log::load(&id)?;
+    let events = event_log::load(conn, &id).await?;
+    let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 
     let total = p.target_atoms.len();
 
@@ -39,12 +47,11 @@ pub fn cmd_state(explicit_id: Option<&str>, graph_dir: Option<&Path>) -> Result<
     let pct = if total > 0 { learned * 100 / total } else { 0 };
 
     let updated = events.last().map_or(p.created_at, |e| e.ts);
-    let next = scheduler::next_action(&g, &p, &events)
+    let next = scheduler::next_action(&g, &p, &events, &due)
         .atom_id()
         .map(str::to_string);
 
     println!("{:13}{}", "path:", p.id);
-    println!("{:13}{}", "location:", location.display());
     println!("{:13}{}", "goal:", p.goal);
     println!(
         "{:13}{}",

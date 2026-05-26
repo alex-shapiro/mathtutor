@@ -325,6 +325,10 @@ pub struct AnswerCmd {
     /// path id (defaults to most recent)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
+
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
 }
 
 /// Operate on a learning path's user-authored overlay.

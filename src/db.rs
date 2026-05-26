@@ -7,11 +7,36 @@
 //! local-only file.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use libsql::{Builder, Connection, Database, params};
 
 use crate::path::mt_home;
 use crate::{Error, Result};
+
+/// Max wall-clock time we'll spend on a foreground sync to the Turso
+/// replica. Beyond this we warn and let libSQL catch up on a later call.
+const SYNC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Canonical timestamp format for every `DATETIME` column we write.
+/// Matches `SQLite`'s own `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` so the
+/// built-in date functions can still operate on these strings, and the
+/// `Z` suffix keeps lexicographic ordering aligned with chronological
+/// ordering (`to_rfc3339`'s `+00:00` would break that the moment a
+/// future migration ever wrote a non-UTC timestamp).
+pub fn format_ts(ts: DateTime<Utc>) -> String {
+    ts.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+/// Parse a timestamp string read out of a `DATETIME` column. Accepts
+/// any RFC 3339 form, which covers both the canonical `format_ts`
+/// output and any legacy `to_rfc3339` strings already in the DB.
+pub fn parse_ts(s: &str) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|e| Error::BadTimestamp(format!("{s}: {e}")))
+}
 
 /// Numbered schema migration. Versions are strictly increasing,
 /// starting at 1. Each migration file is immutable once shipped.
@@ -167,6 +192,24 @@ async fn apply_migration(conn: &Connection, m: &Migration) -> Result<()> {
 /// Convenience for binaries: open with the env-derived config.
 pub async fn open_default() -> Result<Database> {
     open(&DbConfig::from_env()?).await
+}
+
+/// Push local writes to the remote Turso replica if sync is configured.
+/// No-op for local-only databases. On timeout (after `SYNC_TIMEOUT`) or
+/// transport failure we warn to stderr and return — libSQL will retry
+/// on the next sync, so a transient hiccup never fails a CLI command.
+pub async fn maybe_sync(db: &Database, cfg: &DbConfig) {
+    if cfg.sync.is_none() {
+        return;
+    }
+    match tokio::time::timeout(SYNC_TIMEOUT, db.sync()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => eprintln!("warning: turso sync failed: {e}"),
+        Err(_) => eprintln!(
+            "warning: turso sync timed out after {}s",
+            SYNC_TIMEOUT.as_secs()
+        ),
+    }
 }
 
 /// Test-only helper: open a local database at `path` with no sync.
