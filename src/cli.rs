@@ -43,9 +43,12 @@ pub enum Cmd {
 
 /// Run the MCP server (SSE over HTTP).
 ///
-/// Authentication: requests must carry the API key either as
-/// `Authorization: Bearer <token>` (preferred) or `?token=<token>`.
-/// The expected key is read from `--api-key` or `$MT_API_KEY`.
+/// Authentication is layered. Set at least one of:
+///
+/// * `--api-key` / `$MT_API_KEY` — static bearer token (CLI / `mcp-remote` /
+///   test path).
+/// * `--admin-password` / `$MT_ADMIN_PASSWORD` — admin password for the
+///   built-in OAuth authorization server (Claude Desktop / iOS path).
 #[cfg(feature = "mcp")]
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "mcp")]
@@ -54,9 +57,18 @@ pub struct McpCmd {
     #[argh(option, default = "default_mcp_addr()")]
     pub addr: String,
 
-    /// shared API key for client auth (overrides `$MT_API_KEY`)
+    /// shared API key for static-bearer auth (overrides `$MT_API_KEY`)
     #[argh(option)]
     pub api_key: Option<String>,
+
+    /// admin password for the built-in OAuth flow (overrides `$MT_ADMIN_PASSWORD`)
+    #[argh(option)]
+    pub admin_password: Option<String>,
+
+    /// public-facing base URL advertised in OAuth discovery metadata
+    /// (overrides `$MT_PUBLIC_URL`; defaults to `http://<addr>`)
+    #[argh(option)]
+    pub public_url: Option<String>,
 
     /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
     #[argh(option)]

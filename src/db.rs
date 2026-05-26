@@ -46,11 +46,18 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "init",
-    sql: include_str!("migrations/001_init.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "init",
+        sql: include_str!("migrations/001_init.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "oauth",
+        sql: include_str!("migrations/002_oauth.sql"),
+    },
+];
 
 /// Schema migrations bookkeeping table
 const META_SCHEMA: &str = "

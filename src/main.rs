@@ -70,12 +70,13 @@ async fn real_main() -> ExitCode {
     // setup the rest of the dispatch block does.
     #[cfg(feature = "mcp")]
     if let Cmd::Mcp(c) = cli.cmd {
-        let api_key = match c.api_key.or_else(|| std::env::var("MT_API_KEY").ok()) {
-            Some(k) if !k.is_empty() => k,
-            _ => {
-                eprintln!("error: --api-key or MT_API_KEY must be set");
-                return ExitCode::from(2);
-            }
+        let auth = mcp::AuthConfig {
+            api_key: nonempty(c.api_key.or_else(|| std::env::var("MT_API_KEY").ok())),
+            admin_password: nonempty(
+                c.admin_password
+                    .or_else(|| std::env::var("MT_ADMIN_PASSWORD").ok()),
+            ),
+            public_url: nonempty(c.public_url.or_else(|| std::env::var("MT_PUBLIC_URL").ok())),
         };
         let cfg = match db::DbConfig::from_env() {
             Ok(c) => c,
@@ -84,7 +85,7 @@ async fn real_main() -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        return match mcp::run(&c.addr, &api_key, cfg, c.graph).await {
+        return match mcp::run(&c.addr, auth, cfg, c.graph).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -145,6 +146,14 @@ fn mutating(cmd: &Cmd) -> bool {
             | Cmd::Remove(_)
             | Cmd::MigrateFromAyml(_)
     )
+}
+
+/// CLI helper: treat empty strings (e.g. `MT_API_KEY=`) as "not set" so
+/// the env-var fallback doesn't accidentally feed an empty token into
+/// the constant-time bearer compare.
+#[cfg(feature = "mcp")]
+fn nonempty(value: Option<String>) -> Option<String> {
+    value.filter(|s| !s.is_empty())
 }
 
 fn run_simple(result: Result<()>, err_code: u8) -> ExitCode {

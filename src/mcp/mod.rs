@@ -24,7 +24,7 @@ use axum::{
     Router,
     body::Body,
     extract::{Query, State},
-    http::{Request, StatusCode, header::AUTHORIZATION},
+    http::{self, Request, StatusCode, header::AUTHORIZATION},
     middleware::{self, Next},
     response::Response,
 };
@@ -49,6 +49,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
 use crate::Error;
 use crate::db::{self, DbConfig};
@@ -62,7 +63,9 @@ use crate::{answer, discover, graph, path, scheduler, state, store, tree};
 /// it up by accident.
 type CrateResult<T> = std::result::Result<T, Error>;
 
-const PLAYBOOK: &str = include_str!("mcp_playbook.md");
+pub mod oauth;
+
+const PLAYBOOK: &str = include_str!("playbook.md");
 
 /// Background sync cadence for the embedded Turso replica. State-modifying
 /// tools also fire a non-blocking sync immediately after success; this
@@ -816,6 +819,39 @@ fn error_kind(e: &Error) -> &'static str {
 
 // ───────────────────────────── HTTP entry point ───────────────────
 
+/// Resolved auth configuration for `mt mcp`. At least one mode must be
+/// enabled or the server refuses to start.
+#[derive(Clone, Debug, Default)]
+pub struct AuthConfig {
+    /// Static-bearer mode. CLI / `mcp-remote` / test path; matches the
+    /// raw token value. Set from `MT_API_KEY` or `--api-key`.
+    pub api_key: Option<String>,
+    /// OAuth-AS mode. Static password used by `/oauth/authorize`. Set
+    /// from `MT_ADMIN_PASSWORD` or `--admin-password`.
+    pub admin_password: Option<String>,
+    /// Public-facing URL the server advertises in OAuth discovery
+    /// metadata (issuer + `resource`). Must match what an external
+    /// client types into "Add custom connector". Set from
+    /// `MT_PUBLIC_URL` or `--public-url`; defaults to
+    /// `http://<bind-addr>` when omitted.
+    pub public_url: Option<String>,
+}
+
+impl AuthConfig {
+    fn validate(&self) -> CrateResult<()> {
+        if self.api_key.is_none() && self.admin_password.is_none() {
+            return Err(Error::Io {
+                path: PathBuf::from("MT_API_KEY"),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "at least one of MT_API_KEY / --api-key or MT_ADMIN_PASSWORD / --admin-password must be set",
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Run the MCP server until SIGINT/SIGTERM. On shutdown, runs one final
 /// foreground `db.sync()` so locally-acked writes land on Turso before
 /// the process exits.
@@ -823,10 +859,12 @@ fn error_kind(e: &Error) -> &'static str {
 /// `addr` parses the same as `std::net::SocketAddr` (`"127.0.0.1:8080"`).
 pub async fn run(
     addr: &str,
-    api_key: &str,
+    auth: AuthConfig,
     cfg: DbConfig,
     graph_dir: Option<PathBuf>,
 ) -> CrateResult<()> {
+    auth.validate()?;
+
     let db = Arc::new(db::open(&cfg).await?);
     let cfg_arc = Arc::new(cfg);
 
@@ -836,9 +874,9 @@ pub async fn run(
     let mcp_config = StreamableHttpServerConfig::default()
         .with_sse_keep_alive(Some(Duration::from_secs(15)))
         .with_cancellation_token(shutdown.child_token())
-        // Authentication is the security boundary; host validation rejects
-        // every non-localhost client which makes the server useless once
-        // deployed. The `MT_API_KEY` bearer check below stays mandatory.
+        // Auth is the security boundary; host validation would reject every
+        // non-localhost client and make the server useless once deployed.
+        // Bearer / OAuth tokens below are mandatory.
         .disable_allowed_hosts();
 
     let factory = {
@@ -860,22 +898,33 @@ pub async fn run(
         mcp_config,
     );
 
-    let auth_state = AuthState::new(api_key);
-    let app = Router::new()
-        .nest_service("/mcp", mcp_service)
-        .layer(middleware::from_fn_with_state(auth_state, auth_middleware));
-
     let socket: std::net::SocketAddr = addr.parse().map_err(|e| Error::Io {
         path: PathBuf::from(addr),
         source: std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad addr: {e}")),
     })?;
+    let public_url = resolve_public_url(auth.public_url.as_deref(), socket)?;
+
+    let auth_state = AuthState::new(&auth, &public_url, db.clone());
+    // Scope the auth middleware to the MCP transport only. `route_layer`
+    // (rather than `layer`) restricts the middleware to routes present at
+    // call time, so subsequent `.merge()` calls don't drag auth onto the
+    // OAuth and `/.well-known/*` endpoints, which must stay unauthenticated.
+    let mut app = Router::new()
+        .nest_service("/mcp", mcp_service)
+        .route_layer(middleware::from_fn_with_state(auth_state, auth_middleware));
+
+    if let Some(password) = auth.admin_password.as_deref() {
+        let oauth_state = oauth::OAuthState::new(db.clone(), password, public_url.clone());
+        app = app.merge(oauth::router(oauth_state));
+    }
+
     let listener = tokio::net::TcpListener::bind(socket)
         .await
         .map_err(|e| Error::Io {
             path: PathBuf::from(addr),
             source: e,
         })?;
-    eprintln!("mt mcp listening on http://{socket}/mcp");
+    eprintln!("mt mcp listening on http://{socket}/mcp (public={public_url})");
 
     let shutdown_signal = {
         let token = shutdown.clone();
@@ -903,35 +952,79 @@ pub async fn run(
     Ok(())
 }
 
+/// Resolve the public-facing URL for discovery metadata. When the operator
+/// hasn't set one explicitly we fall back to `http://<bind-addr>`; this is
+/// only correct for local dev, but it lets `mt mcp` work zero-config.
+fn resolve_public_url(explicit: Option<&str>, socket: std::net::SocketAddr) -> CrateResult<Url> {
+    let raw = match explicit {
+        Some(s) => s.to_string(),
+        None => format!("http://{socket}"),
+    };
+    Url::parse(&raw).map_err(|e| Error::Io {
+        path: PathBuf::from("MT_PUBLIC_URL"),
+        source: std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad URL: {e}")),
+    })
+}
+
 #[derive(Clone)]
-pub struct AuthState {
-    api_key: Arc<str>,
+struct AuthState {
+    api_key: Option<Arc<str>>,
+    /// Database handle for OAuth access-token lookups. `None` when OAuth
+    /// is disabled.
+    db: Option<Arc<Database>>,
+    /// Pre-formatted `WWW-Authenticate` value pointing at the protected-
+    /// resource metadata, so OAuth-aware clients can discover the AS on
+    /// 401s. Always populated — even bearer-only setups can advertise the
+    /// resource ID, the lack of an authorization server just shows up as
+    /// no `authorization_servers` entry in the metadata if the client
+    /// fetches it (and bearer-only deployments shouldn't ship that route
+    /// in the first place).
+    www_authenticate: Arc<str>,
 }
 
 impl AuthState {
-    pub fn new(api_key: &str) -> Self {
+    /// Construct from the resolved `AuthConfig`. Stores only what the
+    /// per-request middleware needs.
+    fn new(auth: &AuthConfig, public_url: &Url, db: Arc<Database>) -> Self {
+        let api_key = auth
+            .api_key
+            .as_deref()
+            .map(|s| Arc::<str>::from(s.to_string().into_boxed_str()));
+        let db = auth.admin_password.as_deref().map(|_| db);
+        let issuer = public_url.as_str().trim_end_matches('/');
+        let www_authenticate = format!(
+            r#"Bearer realm="mt mcp", resource_metadata="{issuer}/.well-known/oauth-protected-resource""#
+        );
         Self {
-            api_key: Arc::from(api_key.to_string().into_boxed_str()),
+            api_key,
+            db,
+            www_authenticate: Arc::from(www_authenticate.into_boxed_str()),
         }
     }
 }
 
 #[derive(Deserialize)]
-#[doc(hidden)]
-pub struct TokenQuery {
+struct TokenQuery {
     token: Option<String>,
 }
 
-/// Bearer-first, query-fallback auth. Sequence per design doc:
+/// Layered bearer / OAuth auth on `/mcp`. Order:
+///
 /// 1. `Authorization: Bearer <token>` header.
-/// 2. `?token=<token>` query parameter.
-/// 3. Reject with `401 Unauthorized` if neither matches.
-pub async fn auth_middleware(
+/// 2. `?token=<token>` query parameter (legacy `EventSource` fallback,
+///    bearer mode only — Claude clients don't use this path).
+///
+/// The presented value is matched against the static API key first
+/// (when enabled), then looked up as an OAuth access token (when
+/// enabled). On failure we return 401 with a `WWW-Authenticate` header
+/// pointing at protected-resource metadata so OAuth-aware MCP clients
+/// can discover the AS and trigger the connector flow.
+async fn auth_middleware(
     State(state): State<AuthState>,
     Query(q): Query<TokenQuery>,
     req: Request<Body>,
     next: Next,
-) -> std::result::Result<Response, StatusCode> {
+) -> Response {
     let from_header = req
         .headers()
         .get(AUTHORIZATION)
@@ -940,10 +1033,31 @@ pub async fn auth_middleware(
         .map(str::to_string);
     let provided = from_header.or(q.token);
 
-    match provided {
-        Some(token) if token == state.api_key.as_ref() => Ok(next.run(req).await),
-        _ => Err(StatusCode::UNAUTHORIZED),
+    if let Some(token) = provided {
+        if let Some(expected) = state.api_key.as_deref()
+            && constant_time_eq(token.as_bytes(), expected.as_bytes())
+        {
+            return next.run(req).await;
+        }
+        if let Some(db) = state.db.as_deref()
+            && let Ok(Some(_client_id)) = oauth::validate_access_token(db, &token).await
+        {
+            return next.run(req).await;
+        }
     }
+
+    let mut resp = Response::new(Body::empty());
+    *resp.status_mut() = StatusCode::UNAUTHORIZED;
+    if let Ok(value) = http::HeaderValue::from_str(state.www_authenticate.as_ref()) {
+        resp.headers_mut()
+            .insert(http::header::WWW_AUTHENTICATE, value);
+    }
+    resp
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    use subtle::ConstantTimeEq;
+    a.ct_eq(b).into()
 }
 
 /// Wait for SIGINT or SIGTERM, whichever comes first. On non-unix
@@ -969,13 +1083,6 @@ async fn wait_for_shutdown() {
     {
         ctrl_c.await;
     }
-}
-
-/// Test-only re-exports so integration tests can mount the same auth
-/// middleware against an ephemeral-port server.
-#[doc(hidden)]
-pub mod test_support {
-    pub use super::{AuthState, auth_middleware};
 }
 
 fn spawn_background_sync(
