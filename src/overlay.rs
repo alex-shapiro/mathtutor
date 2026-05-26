@@ -16,9 +16,7 @@ use crate::graph::{Quiz, QuizRaw};
 use crate::types::{Difficulty, QuizType};
 use crate::{Error, Result};
 
-/// In-memory snapshot of the global overlay. Produced by [`load`] and
-/// consumed by `Graph::apply_overlay`; also the wire shape printed by
-/// `mt overlay dump`.
+/// In-memory snapshot of the curriculum overlay
 #[derive(Debug, Default, Serialize)]
 pub struct Overlay {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -166,13 +164,13 @@ pub async fn add_quiz(conn: &Connection, atom_id: &str, quiz: &QuizRaw) -> Resul
         "INSERT INTO overlay_quizzes(atom_id, quiz_id, difficulty, kind, question, answer, rubric) \
          VALUES (?, ?, ?, ?, ?, ?, ?)",
         params![
-            atom_id.to_string(),
-            quiz.id.clone(),
-            quiz.difficulty.to_string(),
-            quiz.kind.map(quiz_kind_to_str),
-            quiz.question.clone(),
-            quiz.answer.clone(),
-            quiz.rubric.clone(),
+            atom_id,
+            quiz.id.as_str(),
+            quiz.difficulty.as_str(),
+            quiz.kind.map(QuizType::as_str),
+            quiz.question.as_str(),
+            quiz.answer.as_str(),
+            quiz.rubric.as_deref(),
         ],
     )
     .await?;
@@ -217,19 +215,19 @@ pub async fn amend_quiz(
             answer     = excluded.answer, \
             rubric     = excluded.rubric",
         params![
-            atom_id.to_string(),
-            updated.id.clone(),
-            updated.difficulty.to_string(),
-            updated.kind.map(quiz_kind_to_str),
-            updated.question.clone(),
-            updated.answer.clone(),
-            updated.rubric.clone(),
+            atom_id,
+            updated.id.as_str(),
+            updated.difficulty.as_str(),
+            updated.kind.map(QuizType::as_str),
+            updated.question.as_str(),
+            updated.answer.as_str(),
+            updated.rubric.as_deref(),
         ],
     )
     .await?;
     conn.execute(
         "DELETE FROM overlay_removed_quizzes WHERE quiz_id = ?",
-        params![updated.id.clone()],
+        params![updated.id.as_str()],
     )
     .await?;
     Ok(())
@@ -240,17 +238,10 @@ pub async fn amend_quiz(
 pub async fn remove_quiz(conn: &Connection, quiz_id: &str) -> Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO overlay_removed_quizzes(quiz_id) VALUES (?)",
-        params![quiz_id.to_string()],
+        params![quiz_id],
     )
     .await?;
     Ok(())
-}
-
-fn quiz_kind_to_str(k: QuizType) -> String {
-    match k {
-        QuizType::FreeText => "free_text".to_string(),
-        QuizType::MultipleChoice => "multiple_choice".to_string(),
-    }
 }
 
 /// libSQL surfaces `SQLite` unique-constraint failures as `SqliteFailure`
