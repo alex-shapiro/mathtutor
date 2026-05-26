@@ -46,11 +46,18 @@ struct Migration {
     sql: &'static str,
 }
 
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "init",
-    sql: include_str!("migrations/001_init.sql"),
-}];
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "init",
+        sql: include_str!("migrations/001_init.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "oauth",
+        sql: include_str!("migrations/002_oauth.sql"),
+    },
+];
 
 /// Schema migrations bookkeeping table
 const META_SCHEMA: &str = "
@@ -204,10 +211,10 @@ pub async fn maybe_sync(db: &Database, cfg: &DbConfig) {
     }
     match tokio::time::timeout(SYNC_TIMEOUT, db.sync()).await {
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => eprintln!("warning: turso sync failed: {e}"),
-        Err(_) => eprintln!(
-            "warning: turso sync timed out after {}s",
-            SYNC_TIMEOUT.as_secs()
+        Ok(Err(e)) => tracing::warn!(error = %e, "turso sync failed"),
+        Err(_) => tracing::warn!(
+            timeout_secs = SYNC_TIMEOUT.as_secs(),
+            "turso sync timed out",
         ),
     }
 }

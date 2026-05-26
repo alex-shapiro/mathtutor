@@ -159,21 +159,65 @@ While the primary output is structured JSON, the MCP response may also include a
 
 ### Remote Access & Security
 
-#### Authentication Source of Truth
+The server is single-user, single-tenant: one SQLite database, one human operator. Both supported auth modes resolve to the same authority over every path and overlay row in that database. Multi-user hosting would require per-user storage scoping and identity work that is explicitly out of scope.
 
-The server currently implements a single-user model. Authentication is performed against a single static API key defined on the server (e.g., via a `MT_API_KEY` environment variable).
+#### Authentication Modes
 
-- **Multi-user Support:** While the architecture allows for multiple paths, the server assumes a single owner for all paths hosted by that instance.
-- **Database Scope:** A single SQLite database represents the entire state for a user (or server instance). The authentication key provides access to the server's management of all paths and data within this database.
+Two parallel auth modes coexist on the `/mcp` endpoint. A request is accepted if either mode succeeds:
 
-#### Authentication Fallback Logic
+1.  **Static API key (bearer).** A long-lived secret in `MT_API_KEY`, supplied either as `Authorization: Bearer <token>` or as `?token=<token>`. Intended for CLI tooling, `mcp-remote` bridges, integration tests, and any caller that can't run an OAuth flow. The bearer mode is enabled iff `MT_API_KEY` is set on the server.
+2.  **OAuth 2.1 access token.** Issued by the server's built-in authorization server (see below), supplied as `Authorization: Bearer <token>`. Intended for MCP clients that natively speak OAuth — notably Claude Desktop's "Add custom connector" flow, which then syncs the registered connector to Claude iOS. The OAuth mode is enabled iff `MT_ADMIN_PASSWORD` is set on the server.
 
-To support both modern MCP clients and legacy `EventSource` (SSE) browsers, the server implements a sequential authentication check:
+At least one of `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set or the server refuses to start.
 
-1.  **Authorization Header:** First, try to extract a `Bearer` token from the `Authorization` header.
-2.  **Query Parameter Fallback:** If no header is present, look for a `token` query parameter
-3.  **Precedence:** If both are provided, the `Authorization` header takes precedence
-4.  **Error Handling:** If no valid token is found, the server returns a `401 Unauthorized`.
+When neither token validates, the server returns `401 Unauthorized` with a `WWW-Authenticate: Bearer resource_metadata="<public-url>/.well-known/oauth-protected-resource"` header so OAuth-aware clients can discover the authorization server.
+
+#### Built-in Authorization Server
+
+Claude apps authenticate OAuth on remote connectors. To satisfy this requirement, the server hosts an OAuth 2.1 authorization server alongside the MCP transport. The implementation is the minimum viable single-user AS, where every issued token grants the same authority as the static API key.
+
+##### Endpoints
+
+| Path                                      | Method | Purpose                                                                                                                   |
+| ----------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------- |
+| `/.well-known/oauth-protected-resource`   | GET    | RFC 9728 metadata: lists the issuer URL the MCP server trusts                                                             |
+| `/.well-known/oauth-authorization-server` | GET    | RFC 8414 metadata: advertises endpoints, supported scopes, PKCE methods                                                   |
+| `/oauth/register`                         | POST   | RFC 7591 dynamic client registration. Open (no auth) — see "Open DCR" below                                               |
+| `/oauth/authorize`                        | GET    | Renders the operator login form, carries the OAuth request params in hidden fields                                        |
+| `/oauth/authorize`                        | POST   | Validates `MT_ADMIN_PASSWORD`, issues a single-use authorization code, redirects to `redirect_uri` with `?code=…&state=…` |
+| `/oauth/token`                            | POST   | `authorization_code` grant (with PKCE verifier) and `refresh_token` grant                                                 |
+
+CORS allow-any is enabled on `/.well-known/*`, `/oauth/register`, and `/oauth/token` because Claude opens these endpoints from in-app web views with arbitrary origins.
+
+##### Login UX
+
+The operator authenticates with a static password from the `MT_ADMIN_PASSWORD` environment variable. `/oauth/authorize` GETs render a minimal HTML form; the POST validates the password with a constant-time compare and issues the authorization code. There is no consent prompt — single-user implies the operator and the user are the same person, so client-registration is taken as implicit consent.
+
+The form carries the OAuth parameters (`client_id`, `redirect_uri`, `code_challenge`, `state`, `scope`) plus an HMAC-signed CSRF token derived from a per-process secret so the form can't be cross-submitted.
+
+##### Token Model
+
+- **Opaque random tokens.** 256 bits of entropy, base64url-encoded
+- **Access token TTL:** 1 hour
+- **Refresh token TTL:** 30 days, sliding (refresh issues a fresh refresh token)
+- **Authorization code TTL:** 60 seconds, single-use enforced via a `used_at` timestamp
+- **PKCE S256 mandatory.** required by OAuth 2.1; the `/oauth/token` endpoint rejects `plain` challenges and missing verifiers
+- **No persistent refresh-token rotation list.** Compromised refresh tokens mitigated by short access token TTL + ability to rotate `MT_ADMIN_PASSWORD` (invalidates AS as a whole)
+
+##### Open DCR (RFC 7591)
+
+Dynamic client registration accepts any well-formed request and issues a fresh `client_id` (no `client_secret` — Claude's native flow is a public PKCE client). This is the spec-mandated UX for "paste URL, log in, done" — pre-registration would require the operator to dig client IDs out of UI on every device. The risk is bounded: a registered client can do nothing until someone with the password completes `/oauth/authorize`.
+
+##### Storage
+
+OAuth state lives in four new SQL tables, scoped to the single-user database:
+
+- `oauth_clients` — DCR-registered clients (id, name, redirect URIs).
+- `oauth_authorization_codes` — short-lived codes binding client + redirect URI + PKCE challenge.
+- `oauth_access_tokens` — opaque access tokens with expiries.
+- `oauth_refresh_tokens` — long-lived refresh tokens with expiries.
+
+These never leak between MCP databases / Turso instances because they live in the same SQLite file as `paths`, `events`, etc.
 
 #### Keep-alive & Heartbeats
 
@@ -278,6 +322,43 @@ CREATE TABLE overlay_quizzes (
 CREATE TABLE overlay_removed_quizzes (
     quiz_id TEXT PRIMARY KEY
 );
+
+-- OAuth authorization server state (single-user; every issued token has the
+-- same authority over the database).
+CREATE TABLE oauth_clients (
+    client_id      TEXT PRIMARY KEY,
+    client_name    TEXT,
+    redirect_uris  TEXT NOT NULL,           -- JSON array of strings
+    created_at     DATETIME NOT NULL
+);
+
+CREATE TABLE oauth_authorization_codes (
+    code                  TEXT PRIMARY KEY,
+    client_id             TEXT NOT NULL REFERENCES oauth_clients(client_id),
+    redirect_uri          TEXT NOT NULL,
+    scope                 TEXT,
+    code_challenge        TEXT NOT NULL,
+    code_challenge_method TEXT NOT NULL,    -- always 'S256'
+    resource              TEXT,             -- RFC 8707 resource indicator
+    expires_at            DATETIME NOT NULL,
+    used_at               DATETIME          -- single-use enforcement
+);
+
+CREATE TABLE oauth_access_tokens (
+    token       TEXT PRIMARY KEY,
+    client_id   TEXT NOT NULL REFERENCES oauth_clients(client_id),
+    scope       TEXT,
+    expires_at  DATETIME NOT NULL
+);
+CREATE INDEX idx_oauth_access_tokens_exp ON oauth_access_tokens(expires_at);
+
+CREATE TABLE oauth_refresh_tokens (
+    token       TEXT PRIMARY KEY,
+    client_id   TEXT NOT NULL REFERENCES oauth_clients(client_id),
+    scope       TEXT,
+    expires_at  DATETIME NOT NULL
+);
+CREATE INDEX idx_oauth_refresh_tokens_exp ON oauth_refresh_tokens(expires_at);
 ```
 
 ## Implementation Plan (PR-Sized Tasks)
@@ -304,6 +385,11 @@ CREATE TABLE overlay_removed_quizzes (
     - Implement the `GetPaths` tool.
     - Setup `axum` server with SSE routes, heartbeats (15s), and API Key authentication.
     - **Graceful Shutdown:** Implement signal handlers to ensure final `db.sync()` before exit.
-6.  **PR 6: Deployment & Infrastructure.**
+6.  **PR 6: OAuth Authorization Server.**
+    - Add the four `oauth_*` SQL tables (migration 002).
+    - Implement `/oauth/{register,authorize,token}` plus the two `.well-known` discovery endpoints in `src/mcp/oauth.rs`.
+    - Layer the OAuth bearer check alongside the existing `MT_API_KEY` path; either accepted on `/mcp`.
+    - Single-user login via `MT_ADMIN_PASSWORD`, PKCE S256 mandatory, open DCR.
+7.  **PR 7: Deployment & Infrastructure.**
     - Create `Dockerfile` and Fly.io/Railway configuration.
     - Setup CI/CD for automated deployments.

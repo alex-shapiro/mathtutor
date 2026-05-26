@@ -59,6 +59,10 @@ async fn schema_creates_all_expected_tables() {
     let expected: Vec<String> = [
         "cards",
         "events",
+        "oauth_access_tokens",
+        "oauth_authorization_codes",
+        "oauth_clients",
+        "oauth_refresh_tokens",
         "overlay_lessons",
         "overlay_quizzes",
         "overlay_removed_quizzes",
@@ -92,6 +96,8 @@ async fn schema_creates_expected_indexes() {
         "idx_events_atom",
         "idx_events_path",
         "idx_events_quiz",
+        "idx_oauth_access_tokens_exp",
+        "idx_oauth_refresh_tokens_exp",
     ]
     .iter()
     .map(|s| (*s).to_string())
@@ -142,7 +148,10 @@ async fn open_records_applied_migration() {
     let row = rows.next().await.unwrap().expect("v1 row");
     assert_eq!(row.get::<i64>(0).unwrap(), 1);
     assert_eq!(row.get::<String>(1).unwrap(), "init");
-    assert!(rows.next().await.unwrap().is_none(), "exactly one row");
+    let row = rows.next().await.unwrap().expect("v2 row");
+    assert_eq!(row.get::<i64>(0).unwrap(), 2);
+    assert_eq!(row.get::<String>(1).unwrap(), "oauth");
+    assert!(rows.next().await.unwrap().is_none(), "exactly two rows");
 }
 
 #[tokio::test]
@@ -161,8 +170,8 @@ async fn second_open_does_not_re_apply_migrations() {
     let row = rows.next().await.unwrap().unwrap();
     assert_eq!(
         row.get::<i64>(0).unwrap(),
-        1,
-        "init migration should be recorded exactly once"
+        2,
+        "init + oauth migrations should each be recorded exactly once"
     );
 }
 

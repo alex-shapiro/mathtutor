@@ -8,92 +8,91 @@
 #![cfg(feature = "mcp")]
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 
-use axum::{Router, middleware};
-use mathtutor::db::{self, DbConfig};
-use mathtutor::mcp::{self, MathTutorServer};
+use mathtutor::db::DbConfig;
+use mathtutor::mcp::{self, AuthConfig};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
-use rmcp::transport::streamable_http_server::{
-    StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
-};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
 
 const API_KEY: &str = "test-api-key";
+const ADMIN_PASSWORD: &str = "hunter2";
 
 struct ServerHandle {
     addr: SocketAddr,
     _tmp: TempDir,
-    shutdown: CancellationToken,
     join: JoinHandle<()>,
 }
 
 impl ServerHandle {
     async fn stop(self) {
-        self.shutdown.cancel();
+        self.join.abort();
         let _ = self.join.await;
     }
 
     fn url(&self, path: &str) -> String {
         format!("http://{}{path}", self.addr)
     }
+
+    fn issuer(&self) -> String {
+        format!("http://{}", self.addr)
+    }
 }
 
-/// Build a server bound to an ephemeral port. We construct the router /
-/// service directly (mirroring `mcp::run`) instead of going through
-/// `mcp::run` so the test owns the cancellation token and the bound port.
-async fn spawn_server() -> ServerHandle {
+/// Start `mcp::run` on an ephemeral port with the supplied `AuthConfig`.
+/// Bind first to pick a free port, then close the probe listener so
+/// `mcp::run` can grab the same address — the alternative is teaching
+/// `run` to accept a pre-bound listener, which isn't worth the API
+/// surface for tests.
+async fn spawn_server_with(auth: AuthConfig) -> ServerHandle {
     let tmp = TempDir::new().unwrap();
     let db_path = tmp.path().join("mt.db");
     let cfg = DbConfig::local(db_path);
-    let db = Arc::new(db::open(&cfg).await.expect("open db"));
-    let cfg_arc = Arc::new(cfg);
 
-    let shutdown = CancellationToken::new();
-    let mcp_config = StreamableHttpServerConfig::default()
-        .with_sse_keep_alive(Some(Duration::from_secs(15)))
-        .with_cancellation_token(shutdown.child_token())
-        .disable_allowed_hosts();
+    let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = probe.local_addr().unwrap();
+    drop(probe);
 
-    let factory = {
-        let db = db.clone();
-        let cfg = cfg_arc.clone();
-        move || Ok(MathTutorServer::new(db.clone(), cfg.clone(), None))
-    };
-
-    let service = StreamableHttpService::new(
-        factory,
-        Arc::new(LocalSessionManager::default()),
-        mcp_config,
-    );
-
-    let app = Router::new()
-        .nest_service("/mcp", service)
-        .layer(middleware::from_fn_with_state(
-            mcp::test_support::AuthState::new(API_KEY),
-            mcp::test_support::auth_middleware,
-        ));
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let shutdown_clone = shutdown.clone();
+    let addr_str = addr.to_string();
     let join = tokio::spawn(async move {
-        let _ = axum::serve(listener, app)
-            .with_graceful_shutdown(async move { shutdown_clone.cancelled().await })
-            .await;
+        let _ = mcp::run(&addr_str, auth, cfg, None).await;
     });
+
+    // Spin until the server has actually bound. Race-free enough for tests
+    // because `mcp::run` binds before logging the listening message.
+    for _ in 0..50 {
+        if let Ok(stream) = tokio::net::TcpStream::connect(addr).await {
+            drop(stream);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     ServerHandle {
         addr,
         _tmp: tmp,
-        shutdown,
         join,
     }
+}
+
+async fn spawn_server() -> ServerHandle {
+    spawn_server_with(AuthConfig {
+        api_key: Some(API_KEY.into()),
+        ..AuthConfig::default()
+    })
+    .await
+}
+
+async fn spawn_oauth_server() -> ServerHandle {
+    spawn_server_with(AuthConfig {
+        api_key: Some(API_KEY.into()),
+        admin_password: Some(ADMIN_PASSWORD.into()),
+        ..AuthConfig::default()
+    })
+    .await
 }
 
 fn client() -> reqwest::Client {
@@ -369,6 +368,559 @@ async fn unknown_atom_id_returns_structured_business_error() {
             .contains("no.such.atom.exists")
     );
     server.stop().await;
+}
+
+// ─────────────────────────── OAuth flow ────────────────────────────
+
+#[tokio::test]
+async fn unauthenticated_request_returns_resource_metadata_pointer() {
+    // Even without OAuth enabled the 401 response should carry a
+    // `WWW-Authenticate` header pointing at the protected-resource
+    // metadata. That's what makes OAuth-aware MCP clients trigger the
+    // connector flow on a fresh server.
+    let server = spawn_oauth_server().await;
+    let res = oauth_client()
+        .post(server.url("/mcp"))
+        .header(ACCEPT, "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .body(initialize_body())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+    let www_auth = res
+        .headers()
+        .get("www-authenticate")
+        .expect("WWW-Authenticate header")
+        .to_str()
+        .unwrap();
+    assert!(www_auth.starts_with("Bearer "));
+    assert!(www_auth.contains("resource_metadata="));
+    assert!(www_auth.contains("/.well-known/oauth-protected-resource"));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn protected_resource_metadata_lists_issuer() {
+    let server = spawn_oauth_server().await;
+    let res = oauth_client()
+        .get(server.url("/.well-known/oauth-protected-resource"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["resource"].as_str().unwrap(), server.issuer());
+    assert_eq!(
+        body["authorization_servers"][0].as_str().unwrap(),
+        server.issuer()
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn authorization_server_metadata_advertises_endpoints() {
+    let server = spawn_oauth_server().await;
+    let res = oauth_client()
+        .get(server.url("/.well-known/oauth-authorization-server"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+    let body: Value = res.json().await.unwrap();
+    let issuer = server.issuer();
+    assert_eq!(body["issuer"].as_str().unwrap(), issuer);
+    assert_eq!(
+        body["authorization_endpoint"].as_str().unwrap(),
+        format!("{issuer}/oauth/authorize")
+    );
+    assert_eq!(
+        body["token_endpoint"].as_str().unwrap(),
+        format!("{issuer}/oauth/token")
+    );
+    assert_eq!(
+        body["registration_endpoint"].as_str().unwrap(),
+        format!("{issuer}/oauth/register")
+    );
+    assert_eq!(
+        body["code_challenge_methods_supported"][0]
+            .as_str()
+            .unwrap(),
+        "S256",
+        "PKCE S256 is OAuth 2.1 mandatory"
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn well_known_routes_unreachable_when_oauth_disabled() {
+    // Bearer-only servers must not advertise discovery endpoints — there's
+    // no AS to point at, and ghost metadata would confuse OAuth-aware
+    // clients into trying to register.
+    let server = spawn_server().await;
+    let res = oauth_client()
+        .get(server.url("/.well-known/oauth-authorization-server"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 404);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn register_issues_client_id_and_round_trips_redirect_uris() {
+    let server = spawn_oauth_server().await;
+    let res = register_client(&server, "Test Client").await;
+    assert!(!res.client_id.is_empty());
+    assert_eq!(res.redirect_uris, vec!["http://localhost/cb".to_string()]);
+    assert_eq!(res.token_endpoint_auth_method, "none");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn register_rejects_empty_redirect_uris() {
+    let server = spawn_oauth_server().await;
+    let res = oauth_client()
+        .post(server.url("/oauth/register"))
+        .json(&json!({ "client_name": "no redirects", "redirect_uris": [] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 400);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"].as_str().unwrap(), "invalid_request");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn full_authorization_code_flow_yields_a_working_access_token() {
+    // End-to-end: DCR → /authorize GET (csrf) → /authorize POST (password,
+    // get code) → /token (exchange + PKCE verify) → /mcp call.
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Full Flow").await;
+
+    let pkce = PkcePair::new();
+    let state = "csrf-state-value";
+    let auth_url = authorize_url(
+        &server,
+        &reg.client_id,
+        &pkce.challenge,
+        Some(state),
+        Some("mcp"),
+    );
+    let form_html = oauth_client()
+        .get(&auth_url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let csrf = extract_csrf(&form_html).expect("csrf token");
+
+    let res = oauth_client_no_redirect()
+        .post(server.url("/oauth/authorize"))
+        .form(&[
+            ("response_type", "code"),
+            ("client_id", reg.client_id.as_str()),
+            ("redirect_uri", "http://localhost/cb"),
+            ("code_challenge", pkce.challenge.as_str()),
+            ("code_challenge_method", "S256"),
+            ("state", state),
+            ("scope", "mcp"),
+            ("resource", ""),
+            ("csrf", csrf.as_str()),
+            ("password", ADMIN_PASSWORD),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 303, "/authorize POST redirects on success");
+    let location = res
+        .headers()
+        .get("location")
+        .expect("location")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(location.starts_with("http://localhost/cb"));
+    let (code, returned_state) = parse_redirect_query(&location);
+    assert_eq!(returned_state.as_deref(), Some(state));
+
+    let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+    assert!(!tokens.access_token.is_empty());
+    assert!(!tokens.refresh_token.is_empty());
+    assert_eq!(tokens.token_type, "Bearer");
+
+    // The minted access token must satisfy /mcp without MT_API_KEY.
+    let session = handshake_with_token(&server, &tokens.access_token).await;
+    let res = mcp_post_with_token(
+        &server,
+        &session,
+        &tokens.access_token,
+        &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    )
+    .await;
+    assert_eq!(res.status(), 200);
+
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn wrong_password_re_renders_form_without_issuing_code() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Bad Pwd").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&server, &reg.client_id, &pkce.challenge, None, None);
+    let form_html = oauth_client()
+        .get(&auth_url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let csrf = extract_csrf(&form_html).expect("csrf");
+
+    let res = oauth_client_no_redirect()
+        .post(server.url("/oauth/authorize"))
+        .form(&[
+            ("response_type", "code"),
+            ("client_id", reg.client_id.as_str()),
+            ("redirect_uri", "http://localhost/cb"),
+            ("code_challenge", pkce.challenge.as_str()),
+            ("code_challenge_method", "S256"),
+            ("state", ""),
+            ("scope", ""),
+            ("resource", ""),
+            ("csrf", csrf.as_str()),
+            ("password", "not the password"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+    let body = res.text().await.unwrap();
+    assert!(body.contains("Incorrect password"));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn authorization_code_is_single_use() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Single Use").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+
+    let first = exchange_code_raw(&server, &reg.client_id, &code, &pkce.verifier).await;
+    assert_eq!(first.status(), 200, "first redemption succeeds");
+
+    let second = exchange_code_raw(&server, &reg.client_id, &code, &pkce.verifier).await;
+    assert_eq!(second.status(), 400, "second redemption rejected");
+    let body: Value = second.json().await.unwrap();
+    assert_eq!(body["error"].as_str().unwrap(), "invalid_grant");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn token_endpoint_rejects_bad_pkce_verifier() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Bad PKCE").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+
+    let res = exchange_code_raw(&server, &reg.client_id, &code, "wrong-verifier").await;
+    assert_eq!(res.status(), 400);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"].as_str().unwrap(), "invalid_grant");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn refresh_token_rotates_and_returns_a_fresh_access_token() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Refresh").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let first = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+
+    let refresh_res = oauth_client_no_redirect()
+        .post(server.url("/oauth/token"))
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", first.refresh_token.as_str()),
+            ("client_id", reg.client_id.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refresh_res.status(), 200);
+    let refreshed: TokenResponseDe = refresh_res.json().await.unwrap();
+    assert_ne!(
+        refreshed.access_token, first.access_token,
+        "refresh must mint a fresh access token"
+    );
+    assert_ne!(
+        refreshed.refresh_token, first.refresh_token,
+        "refresh tokens rotate"
+    );
+
+    // The original refresh token must be invalidated after rotation.
+    let replay = oauth_client_no_redirect()
+        .post(server.url("/oauth/token"))
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", first.refresh_token.as_str()),
+            ("client_id", reg.client_id.as_str()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), 400);
+    server.stop().await;
+}
+
+// ──────────────────────── OAuth test helpers ──────────────────────
+
+fn oauth_client() -> reqwest::Client {
+    client()
+}
+
+/// Reqwest client that does NOT follow redirects — we need to inspect the
+/// 303 Location on the `/authorize` POST manually.
+fn oauth_client_no_redirect() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RegisterResponseDe {
+    client_id: String,
+    redirect_uris: Vec<String>,
+    token_endpoint_auth_method: String,
+}
+
+async fn register_client(server: &ServerHandle, name: &str) -> RegisterResponseDe {
+    oauth_client()
+        .post(server.url("/oauth/register"))
+        .json(&json!({
+            "client_name": name,
+            "redirect_uris": ["http://localhost/cb"],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json::<RegisterResponseDe>()
+        .await
+        .unwrap()
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TokenResponseDe {
+    access_token: String,
+    refresh_token: String,
+    token_type: String,
+}
+
+struct PkcePair {
+    verifier: String,
+    challenge: String,
+}
+
+impl PkcePair {
+    fn new() -> Self {
+        use base64::Engine;
+        use sha2::Digest;
+        let verifier: String = (0..43)
+            .map(|i| char::from(b'a' + u8::try_from(i % 26).unwrap()))
+            .collect();
+        let digest = sha2::Sha256::digest(verifier.as_bytes());
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
+        Self {
+            verifier,
+            challenge,
+        }
+    }
+}
+
+fn extract_csrf(html: &str) -> Option<String> {
+    let needle = r#"name="csrf" value=""#;
+    let start = html.find(needle)? + needle.len();
+    let end = start + html[start..].find('"')?;
+    Some(html[start..end].to_string())
+}
+
+fn authorize_url(
+    server: &ServerHandle,
+    client_id: &str,
+    challenge: &str,
+    state: Option<&str>,
+    scope: Option<&str>,
+) -> String {
+    let mut url = url::Url::parse(&server.url("/oauth/authorize")).unwrap();
+    {
+        let mut q = url.query_pairs_mut();
+        q.append_pair("response_type", "code");
+        q.append_pair("client_id", client_id);
+        q.append_pair("redirect_uri", "http://localhost/cb");
+        q.append_pair("code_challenge", challenge);
+        q.append_pair("code_challenge_method", "S256");
+        if let Some(s) = state {
+            q.append_pair("state", s);
+        }
+        if let Some(s) = scope {
+            q.append_pair("scope", s);
+        }
+    }
+    url.to_string()
+}
+
+async fn full_authorize(server: &ServerHandle, client_id: &str, pkce: &PkcePair) -> String {
+    let auth_url = authorize_url(server, client_id, &pkce.challenge, None, None);
+    let form_html = oauth_client()
+        .get(&auth_url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let csrf = extract_csrf(&form_html).expect("csrf");
+    let res = oauth_client_no_redirect()
+        .post(server.url("/oauth/authorize"))
+        .form(&[
+            ("response_type", "code"),
+            ("client_id", client_id),
+            ("redirect_uri", "http://localhost/cb"),
+            ("code_challenge", pkce.challenge.as_str()),
+            ("code_challenge_method", "S256"),
+            ("state", ""),
+            ("scope", ""),
+            ("resource", ""),
+            ("csrf", csrf.as_str()),
+            ("password", ADMIN_PASSWORD),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 303);
+    let location = res
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    parse_redirect_query(&location).0
+}
+
+fn parse_redirect_query(location: &str) -> (String, Option<String>) {
+    let url = url::Url::parse(location).expect("location is a URL");
+    let mut code = None;
+    let mut state = None;
+    for (k, v) in url.query_pairs() {
+        match k.as_ref() {
+            "code" => code = Some(v.into_owned()),
+            "state" => state = Some(v.into_owned()),
+            _ => {}
+        }
+    }
+    (code.expect("code in redirect"), state)
+}
+
+async fn exchange_code_raw(
+    server: &ServerHandle,
+    client_id: &str,
+    code: &str,
+    verifier: &str,
+) -> reqwest::Response {
+    oauth_client_no_redirect()
+        .post(server.url("/oauth/token"))
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", "http://localhost/cb"),
+            ("client_id", client_id),
+            ("code_verifier", verifier),
+        ])
+        .send()
+        .await
+        .unwrap()
+}
+
+async fn exchange_code(
+    server: &ServerHandle,
+    client_id: &str,
+    code: &str,
+    verifier: &str,
+) -> TokenResponseDe {
+    let res = exchange_code_raw(server, client_id, code, verifier).await;
+    assert_eq!(res.status(), 200, "token exchange should succeed");
+    res.json::<TokenResponseDe>().await.unwrap()
+}
+
+async fn handshake_with_token(server: &ServerHandle, token: &str) -> String {
+    let res = client()
+        .post(server.url("/mcp"))
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(ACCEPT, "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .body(initialize_body())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200, "OAuth-bearer initialize must succeed");
+    let session = res
+        .headers()
+        .get("mcp-session-id")
+        .expect("session id")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let _ = res.text().await;
+
+    let res = client()
+        .post(server.url("/mcp"))
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(ACCEPT, "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .header("mcp-session-id", &session)
+        .header("mcp-protocol-version", "2025-06-18")
+        .body(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized"
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success());
+    let _ = res.text().await;
+    session
+}
+
+async fn mcp_post_with_token(
+    server: &ServerHandle,
+    session: &str,
+    token: &str,
+    body: &Value,
+) -> reqwest::Response {
+    client()
+        .post(server.url("/mcp"))
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(ACCEPT, "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .header("mcp-session-id", session)
+        .header("mcp-protocol-version", "2025-06-18")
+        .body(body.to_string())
+        .send()
+        .await
+        .unwrap()
 }
 
 // ─────────────────────────── helpers ───────────────────────────

@@ -12,20 +12,29 @@ default = ["mcp"]
 # `mt mcp` server: SSE-over-HTTP transport, JSON-RPC tools and prompts.
 mcp = [
     "dep:axum",
+    "dep:base64",
+    "dep:hmac",
+    "dep:rand",
     "dep:rmcp",
     "dep:schemars",
+    "dep:sha2",
+    "dep:subtle",
     "dep:tokio-util",
     "dep:tower-http",
+    "dep:url",
 ]
 
 [dependencies]
 argh = "0.1.19"
-axum = { version = "0.8", optional = true }
+axum = { version = "0.8", optional = true, features = ["form"] }
 ayml = "0.1.0"
+base64 = { version = "0.22", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 fsrs = "5.2.0"
+hmac = { version = "0.12", optional = true }
 include_dir = "0.7"
 libsql = { version = "0.9.30", default-features = false, features = ["core", "sync", "tls"] }
+rand = { version = "0.9", optional = true }
 rmcp = { version = "1.7", optional = true, features = [
     "server",
     "macros",
@@ -35,11 +44,15 @@ rmcp = { version = "1.7", optional = true, features = [
 schemars = { version = "1", optional = true }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.140"
+sha2 = { version = "0.10", optional = true }
+subtle = { version = "2.6", optional = true }
 thiserror = "2.0.18"
 tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", optional = true, features = ["rt"] }
-tower-http = { version = "0.6", optional = true, features = ["trace"] }
+tower-http = { version = "0.6", optional = true, features = ["cors", "trace"] }
 tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = { version = "2.5", optional = true }
 
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
