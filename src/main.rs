@@ -24,6 +24,8 @@ async fn main() -> ExitCode {
 async fn real_main() -> ExitCode {
     let cli: Mt = argh::from_env();
 
+    init_tracing(is_mcp(&cli.cmd));
+
     // `mt graph check` has its own success-vs-issues exit logic and
     // prints its report independently — handle outside the unified
     // dispatch.
@@ -154,6 +156,34 @@ fn mutating(cmd: &Cmd) -> bool {
 #[cfg(feature = "mcp")]
 fn nonempty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.is_empty())
+}
+
+#[cfg(feature = "mcp")]
+fn is_mcp(cmd: &Cmd) -> bool {
+    matches!(cmd, Cmd::Mcp(_))
+}
+
+#[cfg(not(feature = "mcp"))]
+fn is_mcp(_cmd: &Cmd) -> bool {
+    false
+}
+
+/// Install the global `tracing` subscriber. CLI commands run quietly
+/// (only `warn`+); `mt mcp` opts into `info`-level logs from our crate,
+/// `rmcp`, and `tower_http` so request-level events from the long-
+/// running server show up by default. `RUST_LOG` overrides either side.
+fn init_tracing(verbose: bool) {
+    let default_filter = if verbose {
+        "mathtutor=info,rmcp=info,tower_http=info,warn"
+    } else {
+        "warn"
+    };
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| default_filter.into());
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .init();
 }
 
 fn run_simple(result: Result<()>, err_code: u8) -> ExitCode {

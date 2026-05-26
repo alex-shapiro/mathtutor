@@ -211,10 +211,10 @@ pub async fn maybe_sync(db: &Database, cfg: &DbConfig) {
     }
     match tokio::time::timeout(SYNC_TIMEOUT, db.sync()).await {
         Ok(Ok(_)) => {}
-        Ok(Err(e)) => eprintln!("warning: turso sync failed: {e}"),
-        Err(_) => eprintln!(
-            "warning: turso sync timed out after {}s",
-            SYNC_TIMEOUT.as_secs()
+        Ok(Err(e)) => tracing::warn!(error = %e, "turso sync failed"),
+        Err(_) => tracing::warn!(
+            timeout_secs = SYNC_TIMEOUT.as_secs(),
+            "turso sync timed out",
         ),
     }
 }

@@ -200,6 +200,11 @@ async fn register(
     )
     .await
     .map_err(|e| OAuthError::from_db(&e))?;
+    tracing::info!(
+        client_id = %client_id,
+        client_name = req.client_name.as_deref().unwrap_or("<unnamed>"),
+        "oauth client registered",
+    );
     Ok(Json(RegisterResponse {
         client_id,
         client_name: req.client_name,
@@ -269,9 +274,11 @@ async fn authorize_post(
     };
     let client = validate_authorize_request(&s, &q).await?;
     if !csrf_verify(&s.csrf_key, &client.client_id, &f.csrf) {
+        tracing::warn!(client_id = %client.client_id, "csrf token rejected on authorize POST");
         return Err(OAuthError::invalid_request("invalid or expired csrf token"));
     }
     if !constant_time_eq(s.admin_password.as_ref(), f.password.as_bytes()) {
+        tracing::warn!(client_id = %client.client_id, "admin password rejected");
         // Re-render the form with an inline error rather than redirecting:
         // the agent's web view follows the redirect_uri only on success.
         let csrf = csrf_mint(&s.csrf_key, &client.client_id);
@@ -300,6 +307,8 @@ async fn authorize_post(
     )
     .await
     .map_err(|e| OAuthError::from_db(&e))?;
+
+    tracing::info!(client_id = %client.client_id, "authorization code issued");
 
     let mut redirect = Url::parse(&q.redirect_uri)
         .map_err(|_| OAuthError::invalid_request("redirect_uri is not a valid URL"))?;
@@ -432,18 +441,27 @@ async fn token_authorization_code(
     drop(rows);
 
     if used_at.is_some() {
+        tracing::warn!(client_id = %client_id, "auth code already used");
         return Err(OAuthError::invalid_grant());
     }
     if stored_client_id != client_id {
+        tracing::warn!(
+            client_id = %client_id,
+            stored_client_id = %stored_client_id,
+            "auth code client_id mismatch",
+        );
         return Err(OAuthError::invalid_grant());
     }
     if stored_redirect != redirect_uri {
+        tracing::warn!(client_id = %client_id, "auth code redirect_uri mismatch");
         return Err(OAuthError::invalid_grant());
     }
     if db::parse_ts(&expires_at).map_err(|e| OAuthError::from_crate(&e))? < Utc::now() {
+        tracing::warn!(client_id = %client_id, "auth code expired");
         return Err(OAuthError::invalid_grant());
     }
     if pkce_s256(verifier) != stored_challenge {
+        tracing::warn!(client_id = %client_id, "PKCE verifier did not match challenge");
         return Err(OAuthError::invalid_grant());
     }
 
@@ -470,6 +488,7 @@ async fn token_authorization_code(
     )
     .await?;
     tx.commit().await.map_err(|e| OAuthError::from_db(&e))?;
+    tracing::info!(%client_id, "access + refresh tokens issued (auth_code)");
 
     Ok(Json(TokenResponse {
         access_token: access,
@@ -514,12 +533,18 @@ async fn token_refresh(
     drop(rows);
 
     if db::parse_ts(&expires_at).map_err(|e| OAuthError::from_crate(&e))? < Utc::now() {
+        tracing::warn!(%client_id, "refresh token expired");
         return Err(OAuthError::invalid_grant());
     }
     // If the caller pinned `client_id` in the refresh request, enforce it.
     if let Some(rc) = req.client_id.as_deref()
         && rc != client_id
     {
+        tracing::warn!(
+            client_id = %rc,
+            stored_client_id = %client_id,
+            "refresh token client_id mismatch",
+        );
         return Err(OAuthError::invalid_grant());
     }
 
@@ -540,6 +565,7 @@ async fn token_refresh(
     insert_access_token(&tx, &access, &client_id, scope.as_deref(), access_exp).await?;
     insert_refresh_token(&tx, &refresh, &client_id, scope.as_deref(), refresh_exp).await?;
     tx.commit().await.map_err(|e| OAuthError::from_db(&e))?;
+    tracing::info!(%client_id, "tokens rotated (refresh_token)");
 
     Ok(Json(TokenResponse {
         access_token: access,

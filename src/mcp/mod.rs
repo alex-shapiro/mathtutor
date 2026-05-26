@@ -49,6 +49,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse};
 use url::Url;
 
 use crate::Error;
@@ -918,13 +919,21 @@ pub async fn run(
         app = app.merge(oauth::router(oauth_state));
     }
 
+    // Request-level access log. Default tower-http span / response levels
+    // are DEBUG; we raise both to INFO so the standard `mt mcp` filter
+    // surfaces them without users having to twiddle `RUST_LOG`.
+    let trace = tower_http::trace::TraceLayer::new_for_http()
+        .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
+        .on_response(DefaultOnResponse::new().level(tracing::Level::INFO));
+    let app = app.layer(trace);
+
     let listener = tokio::net::TcpListener::bind(socket)
         .await
         .map_err(|e| Error::Io {
             path: PathBuf::from(addr),
             source: e,
         })?;
-    eprintln!("mt mcp listening on http://{socket}/mcp (public={public_url})");
+    tracing::info!(%socket, %public_url, oauth = auth.admin_password.is_some(), "mt mcp listening");
 
     let shutdown_signal = {
         let token = shutdown.clone();
@@ -948,7 +957,7 @@ pub async fn run(
     // Final sync — ensure every locally-acked write lands on Turso before
     // the process exits. Best-effort; `maybe_sync` already swallows errors.
     db::maybe_sync(&db, &cfg_arc).await;
-    eprintln!("mt mcp shutdown complete");
+    tracing::info!("mt mcp shutdown complete");
     Ok(())
 }
 
