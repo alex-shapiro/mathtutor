@@ -18,6 +18,7 @@ use crate::{Error, Result};
 pub enum EventKind {
     PathCreated,
     LessonAuthored,
+    LessonAmended,
     LessonTaught,
     QuizAuthored,
     QuizPresented,
@@ -31,6 +32,7 @@ impl EventKind {
         match self {
             EventKind::PathCreated => "path_created",
             EventKind::LessonAuthored => "lesson_authored",
+            EventKind::LessonAmended => "lesson_amended",
             EventKind::LessonTaught => "lesson_taught",
             EventKind::QuizAuthored => "quiz_authored",
             EventKind::QuizPresented => "quiz_presented",
@@ -53,6 +55,7 @@ impl std::str::FromStr for EventKind {
         match s {
             "path_created" => Ok(EventKind::PathCreated),
             "lesson_authored" => Ok(EventKind::LessonAuthored),
+            "lesson_amended" => Ok(EventKind::LessonAmended),
             "lesson_taught" => Ok(EventKind::LessonTaught),
             "quiz_authored" => Ok(EventKind::QuizAuthored),
             "quiz_presented" => Ok(EventKind::QuizPresented),
@@ -132,6 +135,17 @@ pub fn lesson_authored(path: String, atom: String) -> Event {
     Event {
         ts: Utc::now(),
         kind: EventKind::LessonAuthored,
+        path,
+        atom: Some(atom),
+        quiz: None,
+        payload: EventPayload::default(),
+    }
+}
+
+pub fn lesson_amended(path: String, atom: String) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::LessonAmended,
         path,
         atom: Some(atom),
         quiz: None,

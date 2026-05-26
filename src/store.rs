@@ -20,10 +20,10 @@ use crate::path;
 use crate::types::{Difficulty, QuizType};
 use crate::{Error, Result};
 
-/// Persist a lesson body for `atom_id` into the global overlay, then
-/// log `lesson_authored` + `lesson_taught` against the active path.
-/// Per AGENTS.md the agent presents the body to the user immediately
-/// after authoring, so storing implies teaching.
+/// Upsert a lesson body for `atom_id` into the global overlay. Emits
+/// `lesson_amended` if a lesson already existed in the merged view
+/// (shipped or overlay), else `lesson_authored`. Always emits
+/// `lesson_taught`: per the agent playbook, storing implies presenting.
 pub async fn cmd_store_lesson(
     conn: &Connection,
     atom_id: &str,
@@ -34,17 +34,15 @@ pub async fn cmd_store_lesson(
     let tx = conn.transaction().await?;
     let id = path::resolve_id(&tx, path_id).await?;
     let g = Graph::load_for_path(&tx, graph_dir).await?;
-    let c = g.atom(atom_id)?;
-    if c.lesson.is_some() {
-        return Err(Error::LessonAlreadyExists(atom_id.to_string()));
-    }
+    let amended = g.atom(atom_id)?.lesson.is_some();
 
-    overlay::add_lesson(&tx, atom_id, &body).await?;
-    event_log::append(
-        &tx,
-        &event_log::lesson_authored(id.clone(), atom_id.to_string()),
-    )
-    .await?;
+    overlay::upsert_lesson(&tx, atom_id, &body).await?;
+    let change = if amended {
+        event_log::lesson_amended(id.clone(), atom_id.to_string())
+    } else {
+        event_log::lesson_authored(id.clone(), atom_id.to_string())
+    };
+    event_log::append(&tx, &change).await?;
     event_log::append(&tx, &event_log::lesson_taught(id, atom_id.to_string())).await?;
     tx.commit().await?;
     Ok(())

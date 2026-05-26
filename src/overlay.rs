@@ -110,21 +110,17 @@ fn row_to_overlay_quiz(row: &Row) -> Result<(String, Quiz)> {
 
 // ── SQL mutators ────────────────────────────────────────────────────
 
-/// Insert a lesson for `atom_id`. Caller is responsible for ensuring no
-/// shipped/overlay lesson already exists (typically by consulting the
-/// merged graph) — a row collision returns `LessonAlreadyExists`.
-pub async fn add_lesson(conn: &Connection, atom_id: &str, body: &str) -> Result<()> {
-    let res = conn
-        .execute(
-            "INSERT INTO overlay_lessons(atom_id, body) VALUES (?, ?)",
-            params![atom_id, body],
-        )
-        .await;
-    match res {
-        Ok(_) => Ok(()),
-        Err(e) if is_unique_violation(&e) => Err(Error::LessonAlreadyExists(atom_id.to_string())),
-        Err(e) => Err(e.into()),
-    }
+/// Upsert the lesson body for `atom_id`. Overlay lessons win over
+/// shipped lessons in the merged view, so this is the entry point for
+/// both first-time authoring and subsequent edits.
+pub async fn upsert_lesson(conn: &Connection, atom_id: &str, body: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO overlay_lessons(atom_id, body) VALUES (?, ?) \
+         ON CONFLICT(atom_id) DO UPDATE SET body = excluded.body",
+        params![atom_id, body],
+    )
+    .await?;
+    Ok(())
 }
 
 /// Insert a new quiz row. Caller supplies a fresh, globally-unique
@@ -220,15 +216,6 @@ pub async fn remove_quiz(conn: &Connection, quiz_id: &str) -> Result<()> {
     )
     .await?;
     Ok(())
-}
-
-/// `SQLite` extended error codes for the two constraint kinds that can
-/// reject an `INSERT` on a uniquely-keyed column.
-/// `SQLITE_CONSTRAINT_PRIMARYKEY` (1555) fires for a TEXT/INTEGER PRIMARY
-/// KEY collision; `SQLITE_CONSTRAINT_UNIQUE` (2067) fires for a UNIQUE
-/// constraint. Both apply to the `overlay_lessons.atom_id` PK.
-fn is_unique_violation(e: &libsql::Error) -> bool {
-    matches!(e, libsql::Error::SqliteFailure(1555 | 2067, _))
 }
 
 // ── `mt overlay dump` ──────────────────────────────────────────────

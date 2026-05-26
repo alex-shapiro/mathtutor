@@ -48,8 +48,6 @@ pub enum Error {
     NoHome,
 
     // Authoring preconditions.
-    #[error("atom '{0}' already has a stored lesson")]
-    LessonAlreadyExists(String),
     #[error("atom '{0}' has no stored lesson; teach it before authoring quizzes")]
     NoLesson(String),
 

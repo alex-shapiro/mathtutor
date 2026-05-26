@@ -18,7 +18,7 @@ use mathtutor::types::{Difficulty, QuizType};
 use tempfile::TempDir;
 
 /// Atom that ships *without* a lesson in `curriculum/graph` — used to
-/// verify `add_lesson` writes new content rather than collide with the
+/// verify `upsert_lesson` writes new content rather than overwrite the
 /// shipped data.
 const NO_LESSON_ATOM: &str = "fnd.1.1.2";
 /// Atom that ships *with* a lesson and one quiz (`fnd.1.1.1.q1`) —
@@ -41,13 +41,13 @@ async fn load_returns_empty_overlay_on_fresh_db() {
 }
 
 #[tokio::test]
-async fn add_lesson_writes_row_and_round_trips() {
+async fn upsert_lesson_writes_row_and_round_trips() {
     let tmp = TempDir::new().unwrap();
     let conn = fresh_db(&tmp).await;
 
-    overlay::add_lesson(&conn, NO_LESSON_ATOM, "Negation flips truth.")
+    overlay::upsert_lesson(&conn, NO_LESSON_ATOM, "Negation flips truth.")
         .await
-        .expect("add_lesson");
+        .expect("upsert_lesson");
 
     let ov = overlay::load(&conn).await.expect("load");
     let entry = ov.atoms.get(NO_LESSON_ATOM).expect("atom present");
@@ -55,23 +55,23 @@ async fn add_lesson_writes_row_and_round_trips() {
 }
 
 #[tokio::test]
-async fn add_lesson_returns_already_exists_on_collision() {
-    // The SQL primary key on `overlay_lessons.atom_id` is the
-    // backstop: a second insert for the same atom must surface as
-    // `LessonAlreadyExists`, not as a raw libSQL error.
+async fn upsert_lesson_overwrites_existing_overlay_row() {
+    // The PRIMARY KEY conflict path goes through ON CONFLICT DO UPDATE,
+    // so a second upsert for the same atom replaces the body instead of
+    // raising a unique-violation.
     let tmp = TempDir::new().unwrap();
     let conn = fresh_db(&tmp).await;
 
-    overlay::add_lesson(&conn, NO_LESSON_ATOM, "first")
+    overlay::upsert_lesson(&conn, NO_LESSON_ATOM, "first")
         .await
         .unwrap();
-    let err = overlay::add_lesson(&conn, NO_LESSON_ATOM, "second")
+    overlay::upsert_lesson(&conn, NO_LESSON_ATOM, "second")
         .await
-        .expect_err("second insert must fail");
-    assert!(matches!(
-        err,
-        mathtutor::Error::LessonAlreadyExists(ref id) if id == NO_LESSON_ATOM
-    ));
+        .expect("second upsert succeeds");
+
+    let ov = overlay::load(&conn).await.expect("load");
+    let entry = ov.atoms.get(NO_LESSON_ATOM).expect("atom present");
+    assert_eq!(entry.lesson.as_deref(), Some("second"));
 }
 
 #[tokio::test]
@@ -183,7 +183,7 @@ async fn merged_graph_fills_in_missing_lesson() {
         "atom must ship without a lesson"
     );
 
-    overlay::add_lesson(&conn, NO_LESSON_ATOM, "Negation flips truth.")
+    overlay::upsert_lesson(&conn, NO_LESSON_ATOM, "Negation flips truth.")
         .await
         .unwrap();
     let g = Graph::load_for_path(&conn, None).await.unwrap();
@@ -211,7 +211,7 @@ async fn merged_graph_overlay_lesson_overrides_shipped() {
         .clone();
     assert!(shipped.is_some(), "atom must ship with a lesson");
 
-    overlay::add_lesson(&conn, WITH_LESSON_ATOM, "overlay body")
+    overlay::upsert_lesson(&conn, WITH_LESSON_ATOM, "overlay body")
         .await
         .unwrap();
     let g = Graph::load_for_path(&conn, None).await.unwrap();
@@ -324,7 +324,7 @@ async fn overlay_is_global_across_paths() {
         .unwrap();
     }
 
-    overlay::add_lesson(&conn, NO_LESSON_ATOM, "shared lesson")
+    overlay::upsert_lesson(&conn, NO_LESSON_ATOM, "shared lesson")
         .await
         .unwrap();
 
