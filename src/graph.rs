@@ -354,11 +354,8 @@ impl Graph {
     /// tree / state queries; consumers stay overlay-unaware.
     ///
     /// Conflict resolution rule: an overlay lesson, quiz, or tombstone
-    /// always overrides the built-in item with the same ID.
-    ///
-    /// - overlay lessons always overrid built-in lessons with the same id
-    /// - overlay quizzes always overrid built-in quizzes with the same id
-    /// - overlay tombstones cause a built-in lesson or quiz to be dropped from the final view
+    /// always overrides a built-in item with the same ID. Tombstones
+    /// override everything.
     pub async fn load_for_path(conn: &Connection, graph_dir: Option<&Path>) -> Result<Self> {
         let mut g = Self::load_default(graph_dir)?;
         let overlay = crate::overlay::load(conn).await?;
@@ -397,9 +394,8 @@ impl Graph {
         Ok((atom, q))
     }
 
-    /// Apply the global overlay to this graph in place. Additive: an
-    /// overlay lesson fills in an atom's missing lesson (but never
-    /// shadows a shipped one); overlay quizzes are appended.
+    /// Apply the global overlay to this graph in place. See
+    /// [`Graph::load_for_path`] for the conflict-resolution contract.
     fn apply_overlay(&mut self, overlay: crate::overlay::Overlay) {
         for (atom_id, entry) in overlay.atoms {
             let Some(c) = self.by_id.get_mut(&atom_id) else {
@@ -409,7 +405,7 @@ impl Graph {
                 // to clean up the overlay manually.
                 continue;
             };
-            if c.lesson.is_none() && entry.lesson.is_some() {
+            if entry.lesson.is_some() {
                 c.lesson = entry.lesson;
             }
 
@@ -421,10 +417,9 @@ impl Graph {
                     None => c.quizzes.push(overlay_quiz),
                 }
             }
-            // Tombstones: drop any quiz (shipped or just-added overlay)
-            // whose id is in `removed`. Their QuizAnswered events stay
-            // in the log for audit; the scheduler just won't surface
-            // them anymore.
+            // Tombstones beat both shipped and overlay-authored quizzes:
+            // an answered quiz's `QuizAnswered` events stay in the log
+            // for audit, but the merged view drops it.
             if !entry.removed.is_empty() {
                 c.quizzes.retain(|q| !entry.removed.contains(&q.id));
             }

@@ -195,6 +195,34 @@ async fn merged_graph_fills_in_missing_lesson() {
 }
 
 #[tokio::test]
+async fn merged_graph_overlay_lesson_overrides_shipped() {
+    // The conflict-resolution contract on `Graph::load_for_path`: an
+    // overlay lesson with the same atom_id wins over the shipped one.
+    let tmp = TempDir::new().unwrap();
+    let conn = fresh_db(&tmp).await;
+
+    let shipped = Graph::load_for_path(&conn, None)
+        .await
+        .unwrap()
+        .by_id
+        .get(WITH_LESSON_ATOM)
+        .unwrap()
+        .lesson
+        .clone();
+    assert!(shipped.is_some(), "atom must ship with a lesson");
+
+    overlay::add_lesson(&conn, WITH_LESSON_ATOM, "overlay body")
+        .await
+        .unwrap();
+    let g = Graph::load_for_path(&conn, None).await.unwrap();
+    assert_eq!(
+        g.by_id.get(WITH_LESSON_ATOM).unwrap().lesson.as_deref(),
+        Some("overlay body"),
+        "overlay lesson must override the shipped lesson",
+    );
+}
+
+#[tokio::test]
 async fn merged_graph_appends_overlay_quizzes() {
     let tmp = TempDir::new().unwrap();
     let conn = fresh_db(&tmp).await;
