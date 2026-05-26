@@ -112,13 +112,12 @@ pub async fn open(cfg: &DbConfig) -> Result<Database> {
         })?;
     }
 
-    let db = match &cfg.sync {
-        Some(sync) => {
-            Builder::new_synced_database(&cfg.local_path, sync.url.clone(), sync.auth_token.clone())
-                .build()
-                .await?
-        }
-        None => Builder::new_local(&cfg.local_path).build().await?,
+    let db = if let Some(sync) = &cfg.sync {
+        Builder::new_synced_database(&cfg.local_path, sync.url.clone(), sync.auth_token.clone())
+            .build()
+            .await?
+    } else {
+        Builder::new_local(&cfg.local_path).build().await?
     };
 
     let conn = connect(&db).await?;
