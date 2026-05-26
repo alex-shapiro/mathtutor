@@ -2,8 +2,8 @@
 //!
 //! All per-user state is stored in one libSQL database at
 //! `$MATHTUTOR_HOME/mt.db` (default `~/.mathtutor/mt.db`). The db
-//! opens as a synced replica if  `TURSO_URL` and `TURSO_AUTH_TOKEN`
-//! env variables are both set. If eitehr is unset, it falls back to a
+//! opens as a synced local replica if  `TURSO_URL` and `TURSO_AUTH_TOKEN`
+//! env variables are both set. If either is unset, it falls back to a
 //! local-only file.
 
 use std::path::{Path, PathBuf};
@@ -13,9 +13,8 @@ use libsql::{Builder, Connection, Database, params};
 use crate::path::mt_home;
 use crate::{Error, Result};
 
-/// One numbered schema change. Versions are strictly increasing,
-/// starting at 1, and migration files are immutable once shipped —
-/// edit a *new* file rather than `001_init.sql`.
+/// Numbered schema migration. Versions are strictly increasing,
+/// starting at 1. Each migration file is immutable once shipped.
 struct Migration {
     version: u32,
     name: &'static str,
@@ -28,7 +27,7 @@ const MIGRATIONS: &[Migration] = &[Migration {
     sql: include_str!("migrations/001_init.sql"),
 }];
 
-/// The schema-migrations bookkeeping table itself
+/// Schema migrations bookkeeping table
 const META_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS schema_migrations (
         version    INTEGER PRIMARY KEY,
@@ -37,7 +36,7 @@ const META_SCHEMA: &str = "
     );
 ";
 
-/// libsql credentials for syncing a local replica to server
+/// libSQL credentials for syncing a local replica to server
 #[derive(Debug, Clone)]
 pub struct SyncConfig {
     pub url: String,
@@ -45,10 +44,8 @@ pub struct SyncConfig {
 }
 
 impl SyncConfig {
-    /// Construct from explicit values. Returns `None` if either field
-    /// is empty — empty strings are treated the same as unset, so a
-    /// `TURSO_URL=` line in a shell rc doesn't accidentally enable
-    /// sync against a bogus endpoint.
+    /// Constructs a config from explicit values.
+    /// Returns `None` if either field is empty.
     pub fn new(url: String, auth_token: String) -> Option<Self> {
         if url.is_empty() || auth_token.is_empty() {
             return None;
@@ -56,13 +53,12 @@ impl SyncConfig {
         Some(Self { url, auth_token })
     }
 
-    /// Read `TURSO_URL` and `TURSO_AUTH_TOKEN` from the process
-    /// environment. Returns `None` if either is unset or empty.
+    /// Constructs a config from `TURSO_URL` and `TURSO_AUTH_TOKEN` env variables.
+    /// Returns `None` if either is unset or empty.
     pub fn from_env() -> Option<Self> {
-        Self::new(
-            std::env::var("TURSO_URL").ok()?,
-            std::env::var("TURSO_AUTH_TOKEN").ok()?,
-        )
+        let url = std::env::var("TURSO_URL").ok()?;
+        let auth_token = std::env::var("TURSO_AUTH_TOKEN").ok()?;
+        Self::new(url, auth_token)
     }
 }
 
@@ -121,20 +117,14 @@ pub async fn open(cfg: &DbConfig) -> Result<Database> {
     Ok(db)
 }
 
-/// Open a new connection to `db` with FK enforcement enabled.
-/// libsql currently defaults `foreign_keys` to ON, but the PRAGMA is
-/// connection-scoped and we'd rather not depend on that staying true;
-/// callers should route through here instead of `db.connect()`.
+/// Open a new db connection to with FK enforcement enabled.
 pub async fn connect(db: &Database) -> Result<Connection> {
     let conn = db.connect()?;
     conn.execute_batch("PRAGMA foreign_keys = ON;").await?;
     Ok(conn)
 }
 
-/// Apply every migration whose version exceeds the current
-/// `schema_migrations` high-water mark, each in its own transaction.
-/// A failed migration rolls back cleanly and leaves the version
-/// counter unchanged, so the next run re-attempts the same step.
+/// Apply all new migrations
 pub async fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(META_SCHEMA).await?;
     let current = current_version(conn).await?;
@@ -142,7 +132,7 @@ pub async fn migrate(conn: &Connection) -> Result<()> {
         if m.version <= current {
             continue;
         }
-        apply(conn, m).await?;
+        apply_migration(conn, m).await?;
     }
     Ok(())
 }
@@ -161,7 +151,7 @@ async fn current_version(conn: &Connection) -> Result<u32> {
     Ok(u32::try_from(version).expect("schema version fits in u32"))
 }
 
-async fn apply(conn: &Connection, m: &Migration) -> Result<()> {
+async fn apply_migration(conn: &Connection, m: &Migration) -> Result<()> {
     let tx = conn.transaction().await?;
     tx.execute_batch(m.sql).await?;
     tx.execute(
