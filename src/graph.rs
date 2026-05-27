@@ -220,7 +220,7 @@ fn load_area(path: &Path) -> Result<AreaFileRaw> {
 }
 
 fn open_reader(path: &Path) -> Result<BufReader<File>> {
-    let file = File::open(path).map_err(|e| Error::Io {
+    let file = File::open(path).map_err(|e| Error::FileIo {
         path: path.to_path_buf(),
         source: e,
     })?;
@@ -237,7 +237,7 @@ fn embedded_path(name: &str) -> PathBuf {
 }
 
 fn embedded_file_str(name: &str) -> Result<&'static str> {
-    let file = EMBEDDED_GRAPH.get_file(name).ok_or_else(|| Error::Io {
+    let file = EMBEDDED_GRAPH.get_file(name).ok_or_else(|| Error::FileIo {
         path: embedded_path(name),
         source: std::io::Error::new(
             std::io::ErrorKind::NotFound,

@@ -16,7 +16,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     // I/O — `path` identifies the offending file (real or `<embedded>/…`).
     #[error("io: {path}: {source}")]
-    Io {
+    FileIo {
         path: PathBuf,
         #[source]
         source: std::io::Error,
@@ -67,15 +67,15 @@ pub enum Error {
     #[error("bad timestamp: {0}")]
     BadTimestamp(String),
 
-    // Out-of-range integer in `events.rating` or any other column that
-    // round-trips a `Rating`.
+    /// Out-of-range integer for `events.rating`
     #[error("invalid rating value: {0}")]
     InvalidRating(i64),
 
-    // Unrecognized string read out of an overlay table column that
-    // round-trips a `Difficulty` or `QuizType`.
+    /// Unrecognized string for  [`Difficulty`]
     #[error("invalid difficulty: {0}")]
     InvalidDifficulty(String),
+
+    /// Unrecognized sring for [`QuizKind`]
     #[error("invalid quiz kind: {0}")]
     InvalidQuizKind(String),
 
@@ -86,4 +86,29 @@ pub enum Error {
     // Unrecognized event kind read out of the `events.kind` column.
     #[error("unknown event kind: {0}")]
     UnknownEventKind(String),
+
+    // `mt mcp` started with neither MT_API_KEY nor MT_ADMIN_PASSWORD set
+    // (or their CLI flag equivalents). At least one auth mode is required.
+    #[error("missing one of MT_API_KEY or MT_ADMIN_PASSWORD")]
+    MissingAuth,
+
+    // `mt mcp --addr` did not parse as a `SocketAddr`.
+    #[error("invalid bind address '{0}'")]
+    BadBindAddr(String),
+
+    // `MT_PUBLIC_URL` / `--public-url` did not parse as a URL.
+    #[error("invalid public URL '{0}'")]
+    BadPublicUrl(String),
+
+    // `TcpListener::bind` failed on the resolved socket.
+    #[error("bind {addr}: {source}")]
+    Bind {
+        addr: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    // `axum::serve` returned an error from its accept loop.
+    #[error("mcp server: {0}")]
+    Serve(#[source] std::io::Error),
 }

@@ -346,7 +346,7 @@ async fn import_overlay(
 // ── Filesystem helpers ─────────────────────────────────────────────
 
 fn list_path_dirs(paths_root: &Path) -> Result<Vec<PathBuf>> {
-    let entries = fs::read_dir(paths_root).map_err(|e| Error::Io {
+    let entries = fs::read_dir(paths_root).map_err(|e| Error::FileIo {
         path: paths_root.to_path_buf(),
         source: e,
     })?;
@@ -362,7 +362,7 @@ fn list_path_dirs(paths_root: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn read_ayml<T: for<'de> Deserialize<'de>>(file: &Path) -> Result<T> {
-    let f = fs::File::open(file).map_err(|e| Error::Io {
+    let f = fs::File::open(file).map_err(|e| Error::FileIo {
         path: file.to_path_buf(),
         source: e,
     })?;
