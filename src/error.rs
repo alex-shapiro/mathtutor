@@ -98,7 +98,7 @@ pub enum Error {
     #[error("unknown event kind: {0}")]
     UnknownEventKind(String),
 
-    /// MCP started with neither MT_API_KEY nor MT_ADMIN_PASSWORD set
+    /// MCP started with neither `MT_API_KEY` nor `MT_ADMIN_PASSWORD` set
     #[error("missing MT_API_KEY or MT_ADMIN_PASSWORD")]
     MissingAuth,
 
@@ -106,7 +106,7 @@ pub enum Error {
     #[error("invalid bind address '{0}'")]
     BadBindAddr(String),
 
-    /// MT_PUBLIC_URL did not parse as a URL
+    /// `MT_PUBLIC_URL` did not parse as a URL
     #[error("invalid public URL '{0}'")]
     BadPublicUrl(String),
 
