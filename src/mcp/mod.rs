@@ -27,6 +27,7 @@ use axum::{
     http::{self, Request, StatusCode, header::AUTHORIZATION},
     middleware::{self, Next},
     response::Response,
+    routing::get,
 };
 use chrono::{DateTime, Utc};
 use libsql::{Connection, Database};
@@ -907,11 +908,12 @@ pub async fn run(
     let auth_state = AuthState::new(&auth, &public_url, db.clone());
     // Scope the auth middleware to the MCP transport only. `route_layer`
     // (rather than `layer`) restricts the middleware to routes present at
-    // call time, so subsequent `.merge()` calls don't drag auth onto the
-    // OAuth and `/.well-known/*` endpoints, which must stay unauthenticated.
+    // call time, so routes added afterward — `/health` here, the OAuth
+    // and `/.well-known/*` endpoints below — stay unauthenticated.
     let mut app = Router::new()
         .nest_service("/mcp", mcp_service)
-        .route_layer(middleware::from_fn_with_state(auth_state, auth_middleware));
+        .route_layer(middleware::from_fn_with_state(auth_state, auth_middleware))
+        .route("/health", get(health));
 
     if let Some(password) = auth.admin_password.as_deref() {
         let oauth_state = oauth::OAuthState::new(db.clone(), password, public_url.clone());
@@ -1060,6 +1062,15 @@ async fn auth_middleware(
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     use subtle::ConstantTimeEq;
     a.ct_eq(b).into()
+}
+
+/// Liveness probe for Fly (and any other prober that wants a cheap
+/// signal). Deliberately doesn't touch the database — a DB hiccup
+/// shouldn't restart the machine, since restart can't fix a remote
+/// libSQL outage and would just thrash. Tool calls surface DB failures
+/// directly to the caller.
+async fn health() -> &'static str {
+    "ok"
 }
 
 /// Wait for SIGINT or SIGTERM, whichever comes first. On non-unix

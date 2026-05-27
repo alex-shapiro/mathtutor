@@ -370,6 +370,18 @@ async fn unknown_atom_id_returns_structured_business_error() {
     server.stop().await;
 }
 
+#[tokio::test]
+async fn health_returns_200_ok_without_auth() {
+    // Fly's prober won't carry a bearer; `/health` must answer 200 OK
+    // unauthenticated regardless of which auth modes are configured.
+    for server in [spawn_server().await, spawn_oauth_server().await] {
+        let res = client().get(server.url("/health")).send().await.unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(res.text().await.unwrap(), "ok");
+        server.stop().await;
+    }
+}
+
 // ─────────────────────────── OAuth flow ────────────────────────────
 
 #[tokio::test]
