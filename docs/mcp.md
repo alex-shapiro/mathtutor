@@ -391,5 +391,5 @@ CREATE INDEX idx_oauth_refresh_tokens_exp ON oauth_refresh_tokens(expires_at);
     - Layer the OAuth bearer check alongside the existing `MT_API_KEY` path; either accepted on `/mcp`.
     - Single-user login via `MT_ADMIN_PASSWORD`, PKCE S256 mandatory, open DCR.
 7.  **PR 7: Deployment & Infrastructure.**
-    - Create `Dockerfile` and Fly.io/Railway configuration.
-    - Setup CI/CD for automated deployments.
+    - Create Fly.io configuration
+    - Setup CI/CD for automated deployments

@@ -1,0 +1,23 @@
+# fly.toml app configuration file generated for mathtutor
+# See https://fly.io/docs/reference/configuration
+
+app = 'mathtutor'
+primary_region = 'ewr'
+
+[build]
+
+[env]
+PORT = '8080'
+
+[http_service]
+internal_port = 8080
+force_https = true
+auto_stop_machines = 'stop'
+auto_start_machines = true
+min_machines_running = 0
+processes = ['app']
+
+[[vm]]
+cpu_kind = 'shared'
+memory = '256mb'
+cpus = 1
