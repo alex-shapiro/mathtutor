@@ -79,7 +79,7 @@ impl argh::FromArgValue for Rating {
     }
 }
 
-/// Quiz difficulty slot — every atom has at most one quiz per difficulty.
+/// Quiz difficulty. Every atom has at most one quiz per difficulty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
@@ -146,7 +146,7 @@ impl std::str::FromStr for QuizType {
         match s {
             "free_text" => Ok(QuizType::FreeText),
             "multiple_choice" => Ok(QuizType::MultipleChoice),
-            other => Err(Error::InvalidQuizKind(other.to_string())),
+            other => Err(Error::InvalidQuizType(other.to_string())),
         }
     }
 }

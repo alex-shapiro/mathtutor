@@ -806,7 +806,7 @@ fn error_kind(e: &Error) -> &'static str {
         Error::NoLesson(_) => "no_lesson",
         Error::InvalidRating(_) => "invalid_rating",
         Error::InvalidDifficulty(_) => "invalid_difficulty",
-        Error::InvalidQuizKind(_) => "invalid_quiz_kind",
+        Error::InvalidQuizType(_) => "invalid_quiz_type",
         Error::BadTimestamp(_) => "bad_timestamp",
         Error::UnknownEventKind(_) => "unknown_event_kind",
         Error::CardsCorrupt(_) => "cards_corrupt",

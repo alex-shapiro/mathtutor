@@ -82,13 +82,13 @@ pub enum Error {
     #[error("invalid rating value: {0}")]
     InvalidRating(i64),
 
-    /// Unrecognized string for  [`Difficulty`]
+    /// Unrecognized string for  [`crate::types::Difficulty`]
     #[error("invalid difficulty: {0}")]
     InvalidDifficulty(String),
 
-    /// Unrecognized sring for [`QuizKind`]
-    #[error("invalid quiz kind: {0}")]
-    InvalidQuizKind(String),
+    /// Unrecognized string for [`crate::types::QuizType`]
+    #[error("invalid quiz type: {0}")]
+    InvalidQuizType(String),
 
     // Cards cache row missing its expected columns.
     #[error("cards cache corrupt: {0}")]
