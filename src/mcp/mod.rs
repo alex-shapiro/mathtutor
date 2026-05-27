@@ -868,6 +868,12 @@ pub async fn run(
 
     let db = Arc::new(db::open(&cfg).await?);
     let cfg_arc = Arc::new(cfg);
+    // Pull the latest remote state before accepting traffic. Without
+    // this, every read tool served the first ~5 minutes after startup
+    // would return whatever the local replica had cached from the
+    // previous session. Failures are non-fatal; `maybe_sync` logs and
+    // we proceed against local state.
+    db::maybe_sync(&db, &cfg_arc).await;
 
     let shutdown = CancellationToken::new();
     let background = spawn_background_sync(db.clone(), cfg_arc.clone(), shutdown.child_token());
@@ -1105,8 +1111,8 @@ fn spawn_background_sync(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(BACKGROUND_SYNC_INTERVAL);
-        // The first tick fires immediately; skip it so we don't sync on
-        // startup before any writes have landed.
+        // Drop the immediate first tick.
+        // DB runs `maybe_sync` at startup so sync here is redundant.
         tick.tick().await;
         loop {
             tokio::select! {

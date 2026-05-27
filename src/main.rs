@@ -110,6 +110,11 @@ async fn real_main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Pull the latest remote state before running. Read-only commands
+    // would otherwise serve whatever the local replica happened to hold
+    // from the previous session. Failures are non-fatal; `maybe_sync`
+    // logs and lets the command proceed against local state.
+    db::maybe_sync(&db, &cfg).await;
     let conn = match db::connect(&db).await {
         Ok(c) => c,
         Err(e) => {
