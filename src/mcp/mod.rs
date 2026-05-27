@@ -806,15 +806,20 @@ fn error_kind(e: &Error) -> &'static str {
         Error::NoLesson(_) => "no_lesson",
         Error::InvalidRating(_) => "invalid_rating",
         Error::InvalidDifficulty(_) => "invalid_difficulty",
-        Error::InvalidQuizKind(_) => "invalid_quiz_kind",
+        Error::InvalidQuizType(_) => "invalid_quiz_type",
         Error::BadTimestamp(_) => "bad_timestamp",
         Error::UnknownEventKind(_) => "unknown_event_kind",
         Error::CardsCorrupt(_) => "cards_corrupt",
         Error::NoHome => "no_home",
-        Error::Io { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => "io",
+        Error::FileIo { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => "io",
         Error::Db(_) => "database",
         Error::Json(_) => "json",
         Error::Fsrs(_) => "fsrs",
+        Error::MissingAuth
+        | Error::BadBindAddr { .. }
+        | Error::BadPublicUrl { .. }
+        | Error::Bind { .. }
+        | Error::Serve(_) => "server",
     }
 }
 
@@ -841,13 +846,7 @@ pub struct AuthConfig {
 impl AuthConfig {
     fn validate(&self) -> CrateResult<()> {
         if self.api_key.is_none() && self.admin_password.is_none() {
-            return Err(Error::Io {
-                path: PathBuf::from("MT_API_KEY"),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "at least one of MT_API_KEY / --api-key or MT_ADMIN_PASSWORD / --admin-password must be set",
-                ),
-            });
+            return Err(Error::MissingAuth);
         }
         Ok(())
     }
@@ -899,11 +898,11 @@ pub async fn run(
         mcp_config,
     );
 
-    let socket: std::net::SocketAddr = addr.parse().map_err(|e| Error::Io {
-        path: PathBuf::from(addr),
-        source: std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad addr: {e}")),
-    })?;
-    let public_url = resolve_public_url(auth.public_url.as_deref(), socket)?;
+    let Ok(socket_addr) = addr.parse() else {
+        return Err(Error::BadBindAddr(addr.to_owned()));
+    };
+
+    let public_url = resolve_public_url(auth.public_url.as_deref(), socket_addr)?;
 
     let auth_state = AuthState::new(&auth, &public_url, db.clone());
     // Scope the auth middleware to the MCP transport only. `route_layer`
@@ -927,13 +926,13 @@ pub async fn run(
         .on_response(DefaultOnResponse::new().level(tracing::Level::INFO));
     let app = app.layer(trace);
 
-    let listener = tokio::net::TcpListener::bind(socket)
+    let listener = tokio::net::TcpListener::bind(socket_addr)
         .await
-        .map_err(|e| Error::Io {
-            path: PathBuf::from(addr),
+        .map_err(|e| Error::Bind {
+            addr: addr.to_string(),
             source: e,
         })?;
-    tracing::info!(%socket, %public_url, oauth = auth.admin_password.is_some(), "mt mcp listening");
+    tracing::info!(%socket_addr, %public_url, oauth = auth.admin_password.is_some(), "mt mcp listening");
 
     let shutdown_signal = {
         let token = shutdown.clone();
@@ -946,10 +945,7 @@ pub async fn run(
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal)
         .await
-        .map_err(|e| Error::Io {
-            path: PathBuf::from(addr),
-            source: e,
-        })?;
+        .map_err(Error::Serve)?;
 
     // Drain the background sync task before the final sync so we don't
     // race with it on the same `Database` handle.
@@ -969,10 +965,7 @@ fn resolve_public_url(explicit: Option<&str>, socket: std::net::SocketAddr) -> C
         Some(s) => s.to_string(),
         None => format!("http://{socket}"),
     };
-    Url::parse(&raw).map_err(|e| Error::Io {
-        path: PathBuf::from("MT_PUBLIC_URL"),
-        source: std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad URL: {e}")),
-    })
+    Url::parse(&raw).map_err(|_| Error::BadPublicUrl(raw))
 }
 
 #[derive(Clone)]

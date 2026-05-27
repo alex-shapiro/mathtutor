@@ -14,70 +14,81 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    // I/O — `path` identifies the offending file (real or `<embedded>/…`).
+    /// File IO error
     #[error("io: {path}: {source}")]
-    Io {
+    FileIo {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
 
-    // AYML — keep `path` for parser diagnostics; serialization rarely
-    // benefits from one (it's failing on in-memory data).
+    /// AYML parse error
     #[error("ayml parse: {path}: {message}")]
     AymlParse { path: PathBuf, message: String },
+
+    /// AYML serialization error
     #[error("ayml serialize: {0}")]
     AymlSerialize(String),
 
-    // Curriculum graph semantics.
+    /// Unknown ID for a graph node
     #[error("unknown id: {0}")]
     UnknownId(String),
+
+    /// Empty graph node cluster
     #[error("cluster '{0}' has no atomic descendants")]
     EmptyCluster(String),
+
+    /// Graph cycle
     #[error("cycle in target atoms")]
     Cycle,
+
+    /// Received a cluster instead of an atom
     #[error("'{0}' is a cluster, not an atom")]
     NotAtom(String),
+
+    /// Atom not found
     #[error("atom '{0}' not found in graph")]
     AtomNotFound(String),
 
-    // Per-path state lookup.
-    #[error("no learning path found (run `mt new` first)")]
+    /// Learning path not found
+    #[error("learning path not found")]
     NoPath,
+
+    /// Missing a home directory
     #[error("HOME not set; set MATHTUTOR_HOME or HOME")]
     NoHome,
 
-    // Authoring preconditions.
+    /// A lesson does not exist
     #[error("atom '{0}' has no stored lesson; teach it before authoring quizzes")]
     NoLesson(String),
 
-    // FSRS.
+    // FSRS error
     #[error("fsrs: {0}")]
     Fsrs(String),
 
-    // SQL / libsql.
+    /// libsql error
     #[error(transparent)]
     Db(#[from] libsql::Error),
 
-    // JSON payload for the `events.payload` column.
+    /// JSON payload for the `events.payload` column
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
 
-    // Bad timestamp coming back out of the database.
+    /// Bad timestamp coming back out of the database
     #[error("bad timestamp: {0}")]
     BadTimestamp(String),
 
-    // Out-of-range integer in `events.rating` or any other column that
-    // round-trips a `Rating`.
+    /// Out-of-range integer for `events.rating`
     #[error("invalid rating value: {0}")]
     InvalidRating(i64),
 
-    // Unrecognized string read out of an overlay table column that
-    // round-trips a `Difficulty` or `QuizType`.
+    /// Unrecognized string for  [`crate::types::Difficulty`]
     #[error("invalid difficulty: {0}")]
     InvalidDifficulty(String),
-    #[error("invalid quiz kind: {0}")]
-    InvalidQuizKind(String),
+
+    /// Unrecognized string for [`crate::types::QuizType`]
+    #[error("invalid quiz type: {0}")]
+    InvalidQuizType(String),
 
     // Cards cache row missing its expected columns.
     #[error("cards cache corrupt: {0}")]
@@ -86,4 +97,28 @@ pub enum Error {
     // Unrecognized event kind read out of the `events.kind` column.
     #[error("unknown event kind: {0}")]
     UnknownEventKind(String),
+
+    /// MCP started with neither `MT_API_KEY` nor `MT_ADMIN_PASSWORD` set
+    #[error("missing MT_API_KEY or MT_ADMIN_PASSWORD")]
+    MissingAuth,
+
+    /// MCP address did not parse as a socket address
+    #[error("invalid bind address '{0}'")]
+    BadBindAddr(String),
+
+    /// `MT_PUBLIC_URL` did not parse as a URL
+    #[error("invalid public URL '{0}'")]
+    BadPublicUrl(String),
+
+    /// MCP server failed to bind to the resolved socket
+    #[error("bind {addr}: {source}")]
+    Bind {
+        addr: String,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// MCP server returned returned an error when accepting a connection
+    #[error("mcp server: {0}")]
+    Serve(#[source] std::io::Error),
 }

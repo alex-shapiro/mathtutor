@@ -130,7 +130,7 @@ pub fn default_path() -> Result<PathBuf> {
 /// on a fresh directory or against an already-initialized file.
 pub async fn open(cfg: &DbConfig) -> Result<Database> {
     if let Some(parent) = cfg.local_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| Error::Io {
+        std::fs::create_dir_all(parent).map_err(|e| Error::FileIo {
             path: parent.to_path_buf(),
             source: e,
         })?;
