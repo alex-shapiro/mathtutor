@@ -97,9 +97,7 @@ impl OAuthState {
     }
 
     async fn conn(&self) -> Result<Connection, OAuthError> {
-        db::connect(&self.db)
-            .await
-            .map_err(|e| OAuthError::from_crate(&e))
+        Ok(db::connect(&self.db).await?)
     }
 }
 
@@ -184,6 +182,9 @@ async fn register(
             "redirect_uris must include at least one URI",
         ));
     }
+    for uri in &req.redirect_uris {
+        validate_redirect_uri(uri)?;
+    }
     let conn = s.conn().await?;
     let client_id = random_token();
     let redirect_json = serde_json::to_string(&req.redirect_uris)
@@ -198,8 +199,7 @@ async fn register(
             db::format_ts(Utc::now()),
         ],
     )
-    .await
-    .map_err(|e| OAuthError::from_db(&e))?;
+    .await?;
 
     tracing::info!(
         %client_id,
@@ -215,6 +215,36 @@ async fn register(
         response_types: ["code"],
         token_endpoint_auth_method: "none",
     }))
+}
+
+/// Reject obviously dangerous or malformed `redirect_uri` values at
+/// registration time. We allow https URIs, http on loopback (RFC 8252
+/// §7.3), and private-use schemes for native apps (§7.1). Plain http on
+/// a non-loopback host is the case we have to refuse — any code issued
+/// for it would be sent over the wire in the clear.
+fn validate_redirect_uri(uri: &str) -> Result<(), OAuthError> {
+    let parsed = Url::parse(uri).map_err(|_| {
+        OAuthError::invalid_request(format!("redirect_uri '{uri}' is not a valid URL"))
+    })?;
+    if parsed.fragment().is_some() {
+        return Err(OAuthError::invalid_request(format!(
+            "redirect_uri '{uri}' must not contain a fragment"
+        )));
+    }
+    if parsed.scheme() == "http" {
+        let loopback = match parsed.host() {
+            Some(url::Host::Domain(d)) => d == "localhost",
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            None => false,
+        };
+        if !loopback {
+            return Err(OAuthError::invalid_request(format!(
+                "redirect_uri '{uri}' uses plain http on a non-loopback host"
+            )));
+        }
+    }
+    Ok(())
 }
 
 // ─────────────────────────── /oauth/authorize ────────────────────────
@@ -238,8 +268,8 @@ async fn authorize_get(
     State(s): State<OAuthState>,
     Query(q): Query<AuthorizeQuery>,
 ) -> Result<Html<String>, OAuthError> {
-    let client = validate_authorize_request(&s, &q).await?;
-    let csrf = csrf_mint(&s.csrf_key, &client.client_id);
+    validate_authorize_request(&s, &q).await?;
+    let csrf = csrf_mint(&s.csrf_key, &q);
     Ok(Html(render_login_form(&q, &csrf, None)))
 }
 
@@ -275,7 +305,7 @@ async fn authorize_post(
         resource: f.resource,
     };
     let client = validate_authorize_request(&s, &q).await?;
-    if !csrf_verify(&s.csrf_key, &client.client_id, &f.csrf) {
+    if !csrf_verify(&s.csrf_key, &q, &f.csrf) {
         tracing::warn!(client_id = %client.client_id, "csrf token rejected on authorize POST");
         return Err(OAuthError::invalid_request("invalid or expired csrf token"));
     }
@@ -283,7 +313,7 @@ async fn authorize_post(
         tracing::warn!(client_id = %client.client_id, "admin password rejected");
         // Re-render the form with an inline error rather than redirecting:
         // the agent's web view follows the redirect_uri only on success.
-        let csrf = csrf_mint(&s.csrf_key, &client.client_id);
+        let csrf = csrf_mint(&s.csrf_key, &q);
         let html = render_login_form(&q, &csrf, Some("Incorrect password."));
         return Ok((StatusCode::UNAUTHORIZED, Html(html)).into_response());
     }
@@ -307,8 +337,7 @@ async fn authorize_post(
             db::format_ts(now + AUTHORIZATION_CODE_TTL),
         ],
     )
-    .await
-    .map_err(|e| OAuthError::from_db(&e))?;
+    .await?;
 
     tracing::info!(client_id = %client.client_id, "authorization code issued");
 
@@ -415,10 +444,7 @@ async fn token_authorization_code(
         .ok_or_else(|| OAuthError::invalid_request("client_id is required"))?;
 
     let conn = s.conn().await?;
-    let tx = conn
-        .transaction()
-        .await
-        .map_err(|e| OAuthError::from_db(&e))?;
+    let tx = conn.transaction().await?;
 
     let mut rows = tx
         .query(
@@ -426,20 +452,15 @@ async fn token_authorization_code(
              FROM oauth_authorization_codes WHERE code = ?",
             params![code],
         )
-        .await
-        .map_err(|e| OAuthError::from_db(&e))?;
-    let row = rows
-        .next()
-        .await
-        .map_err(|e| OAuthError::from_db(&e))?
-        .ok_or_else(OAuthError::invalid_grant)?;
+        .await?;
+    let row = rows.next().await?.ok_or_else(OAuthError::invalid_grant)?;
 
-    let stored_client_id: String = row.get(0).map_err(|e| OAuthError::from_db(&e))?;
-    let stored_redirect: String = row.get(1).map_err(|e| OAuthError::from_db(&e))?;
-    let stored_scope: Option<String> = row.get(2).map_err(|e| OAuthError::from_db(&e))?;
-    let stored_challenge: String = row.get(3).map_err(|e| OAuthError::from_db(&e))?;
-    let expires_at: String = row.get(4).map_err(|e| OAuthError::from_db(&e))?;
-    let used_at: Option<String> = row.get(5).map_err(|e| OAuthError::from_db(&e))?;
+    let stored_client_id: String = row.get(0)?;
+    let stored_redirect: String = row.get(1)?;
+    let stored_scope: Option<String> = row.get(2)?;
+    let stored_challenge: String = row.get(3)?;
+    let expires_at: String = row.get(4)?;
+    let used_at: Option<String> = row.get(5)?;
     drop(rows);
 
     if used_at.is_some() {
@@ -458,7 +479,7 @@ async fn token_authorization_code(
         tracing::warn!(%client_id, "auth code redirect_uri mismatch");
         return Err(OAuthError::invalid_grant());
     }
-    if db::parse_ts(&expires_at).map_err(|e| OAuthError::from_crate(&e))? < Utc::now() {
+    if db::parse_ts(&expires_at)? < Utc::now() {
         tracing::warn!(%client_id, "auth code expired");
         return Err(OAuthError::invalid_grant());
     }
@@ -473,8 +494,7 @@ async fn token_authorization_code(
         "UPDATE oauth_authorization_codes SET used_at = ? WHERE code = ?",
         params![db::format_ts(Utc::now()), code],
     )
-    .await
-    .map_err(|e| OAuthError::from_db(&e))?;
+    .await?;
 
     let access = random_token();
     let refresh = random_token();
@@ -489,7 +509,7 @@ async fn token_authorization_code(
         refresh_exp,
     )
     .await?;
-    tx.commit().await.map_err(|e| OAuthError::from_db(&e))?;
+    tx.commit().await?;
     tracing::info!(%client_id, "access + refresh tokens issued (auth_code)");
 
     Ok(Json(TokenResponse {
@@ -511,30 +531,22 @@ async fn token_refresh(
         .ok_or_else(|| OAuthError::invalid_request("refresh_token is required"))?;
 
     let conn = s.conn().await?;
-    let tx = conn
-        .transaction()
-        .await
-        .map_err(|e| OAuthError::from_db(&e))?;
+    let tx = conn.transaction().await?;
 
     let mut rows = tx
         .query(
             "SELECT client_id, scope, expires_at FROM oauth_refresh_tokens WHERE token = ?",
             params![provided],
         )
-        .await
-        .map_err(|e| OAuthError::from_db(&e))?;
-    let row = rows
-        .next()
-        .await
-        .map_err(|e| OAuthError::from_db(&e))?
-        .ok_or_else(OAuthError::invalid_grant)?;
+        .await?;
+    let row = rows.next().await?.ok_or_else(OAuthError::invalid_grant)?;
 
-    let client_id: String = row.get(0).map_err(|e| OAuthError::from_db(&e))?;
-    let stored_scope: Option<String> = row.get(1).map_err(|e| OAuthError::from_db(&e))?;
-    let expires_at: String = row.get(2).map_err(|e| OAuthError::from_db(&e))?;
+    let client_id: String = row.get(0)?;
+    let stored_scope: Option<String> = row.get(1)?;
+    let expires_at: String = row.get(2)?;
     drop(rows);
 
-    if db::parse_ts(&expires_at).map_err(|e| OAuthError::from_crate(&e))? < Utc::now() {
+    if db::parse_ts(&expires_at)? < Utc::now() {
         tracing::warn!(%client_id, "refresh token expired");
         return Err(OAuthError::invalid_grant());
     }
@@ -556,8 +568,7 @@ async fn token_refresh(
         "DELETE FROM oauth_refresh_tokens WHERE token = ?",
         params![provided],
     )
-    .await
-    .map_err(|e| OAuthError::from_db(&e))?;
+    .await?;
 
     let access = random_token();
     let refresh = random_token();
@@ -566,7 +577,7 @@ async fn token_refresh(
     let refresh_exp = Utc::now() + REFRESH_TOKEN_TTL;
     insert_access_token(&tx, &access, &client_id, scope.as_deref(), access_exp).await?;
     insert_refresh_token(&tx, &refresh, &client_id, scope.as_deref(), refresh_exp).await?;
-    tx.commit().await.map_err(|e| OAuthError::from_db(&e))?;
+    tx.commit().await?;
     tracing::info!(%client_id, "tokens rotated (refresh_token)");
 
     Ok(Json(TokenResponse {
@@ -590,8 +601,7 @@ async fn insert_access_token(
          VALUES (?, ?, ?, ?)",
         params![token, client_id, scope, db::format_ts(expires_at)],
     )
-    .await
-    .map_err(|e| OAuthError::from_db(&e))?;
+    .await?;
     Ok(())
 }
 
@@ -607,8 +617,7 @@ async fn insert_refresh_token(
          VALUES (?, ?, ?, ?)",
         params![token, client_id, scope, db::format_ts(expires_at)],
     )
-    .await
-    .map_err(|e| OAuthError::from_db(&e))?;
+    .await?;
     Ok(())
 }
 
@@ -616,7 +625,8 @@ async fn insert_refresh_token(
 
 /// Look up an access token and confirm it hasn't expired. Returns `Ok(Some)`
 /// for a valid bearer, `Ok(None)` for unknown/expired (so the caller can
-/// fall through to other auth modes before issuing a 401).
+/// fall through to other auth modes before issuing a 401). Expired rows
+/// are pruned on the read path so the table doesn't grow without bound.
 pub async fn validate_access_token(
     db: &Database,
     token: &str,
@@ -633,7 +643,13 @@ pub async fn validate_access_token(
     };
     let client_id: String = row.get(0)?;
     let expires_at: String = row.get(1)?;
+    drop(rows);
     if db::parse_ts(&expires_at)? < Utc::now() {
+        conn.execute(
+            "DELETE FROM oauth_access_tokens WHERE token = ?",
+            params![token],
+        )
+        .await?;
         return Ok(None);
     }
     Ok(Some(client_id))
@@ -652,15 +668,13 @@ async fn load_client(conn: &Connection, client_id: &str) -> Result<RegisteredCli
             "SELECT client_id, redirect_uris FROM oauth_clients WHERE client_id = ?",
             params![client_id],
         )
-        .await
-        .map_err(|e| OAuthError::from_db(&e))?;
+        .await?;
     let row = rows
         .next()
-        .await
-        .map_err(|e| OAuthError::from_db(&e))?
+        .await?
         .ok_or_else(|| OAuthError::invalid_request("unknown client_id"))?;
-    let id: String = row.get(0).map_err(|e| OAuthError::from_db(&e))?;
-    let uris_json: String = row.get(1).map_err(|e| OAuthError::from_db(&e))?;
+    let id: String = row.get(0)?;
+    let uris_json: String = row.get(1)?;
     let redirect_uris: Vec<String> = serde_json::from_str(&uris_json)
         .map_err(|e| OAuthError::server_error(format!("decode redirect_uris: {e}")))?;
     Ok(RegisteredClient {
@@ -745,19 +759,20 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 // ── CSRF: HMAC-signed `<timestamp>.<mac>` value embedded in the form ──
 //
-// `client_id` is included in the MAC so a token minted for one
-// authorization request can't be replayed against another client. We
-// don't bother encoding `redirect_uri` etc. because the post handler
-// re-validates those against the persisted client record anyway.
+// The MAC binds every security-relevant query field — `client_id`,
+// `redirect_uri`, and `code_challenge` — so an attacker can't swap any
+// of them between mint (GET) and verify (POST) by tampering with the
+// hidden form fields. `scope` / `state` / `resource` are not bound:
+// they carry no integrity requirement that isn't already enforced
+// against the registered client record at validate time.
 
-fn csrf_mint(key: &[u8; 32], client_id: &str) -> String {
+fn csrf_mint(key: &[u8; 32], q: &AuthorizeQuery) -> String {
     let ts = Utc::now().timestamp();
-    let mac_b64 =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(csrf_mac(key, ts, client_id));
+    let mac_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(csrf_mac(key, ts, q));
     format!("{ts}.{mac_b64}")
 }
 
-fn csrf_verify(key: &[u8; 32], client_id: &str, token: &str) -> bool {
+fn csrf_verify(key: &[u8; 32], q: &AuthorizeQuery, token: &str) -> bool {
     let Some((ts_str, mac_b64)) = token.split_once('.') else {
         return false;
     };
@@ -771,91 +786,129 @@ fn csrf_verify(key: &[u8; 32], client_id: &str, token: &str) -> bool {
     let Ok(provided) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(mac_b64) else {
         return false;
     };
-    let expected = csrf_mac(key, ts, client_id);
+    let expected = csrf_mac(key, ts, q);
     provided.ct_eq(&expected).into()
 }
 
-fn csrf_mac(key: &[u8; 32], ts: i64, client_id: &str) -> Vec<u8> {
+/// HMAC-SHA256 over `ts ‖ len(f0) ‖ f0 ‖ len(f1) ‖ f1 ‖ …`. Length-
+/// prefixing each field eliminates the canonicalization ambiguity that
+/// plain concatenation would have for variable-length strings.
+fn csrf_mac(key: &[u8; 32], ts: i64, q: &AuthorizeQuery) -> Vec<u8> {
     type HmacSha256 = Hmac<Sha256>;
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(&ts.to_be_bytes());
-    mac.update(b".");
-    mac.update(client_id.as_bytes());
+    for field in [
+        q.client_id.as_str(),
+        q.redirect_uri.as_str(),
+        q.code_challenge.as_str(),
+    ] {
+        let bytes = field.as_bytes();
+        let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+        mac.update(&len.to_be_bytes());
+        mac.update(bytes);
+    }
     mac.finalize().into_bytes().to_vec()
 }
 
 // ──────────────────────────── errors ─────────────────────────────────
 
-/// OAuth error codes per RFC 6749 §4.1.2.1 / §5.2. Each variant becomes
+/// OAuth error codes per RFC 6749 §4.1.2.1 / §5.2. Each variant maps to
 /// a JSON body `{ "error": "<code>", "error_description": "..." }` plus
-/// an appropriate HTTP status.
-#[derive(Debug)]
-pub struct OAuthError {
-    status: StatusCode,
-    code: &'static str,
-    description: String,
+/// an HTTP status when rendered. `Db` / `Internal` carry the original
+/// error so `Error::source()` chains stay intact; they render as a
+/// generic `server_error` that does not leak internals to the client.
+#[derive(Debug, thiserror::Error)]
+pub enum OAuthError {
+    #[error("invalid_request: {0}")]
+    InvalidRequest(String),
+    #[error("invalid_grant")]
+    InvalidGrant,
+    #[error("unsupported_response_type")]
+    UnsupportedResponseType,
+    #[error("unsupported_grant_type: {0}")]
+    UnsupportedGrantType(String),
+    #[error("server_error: {0}")]
+    ServerError(String),
+    #[error(transparent)]
+    Db(#[from] libsql::Error),
+    #[error(transparent)]
+    Internal(#[from] crate::Error),
 }
 
 impl OAuthError {
     fn invalid_request(msg: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            code: "invalid_request",
-            description: msg.into(),
-        }
+        Self::InvalidRequest(msg.into())
     }
 
     fn invalid_grant() -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            code: "invalid_grant",
-            description: "authorization grant is invalid, expired, revoked, or does not match"
-                .into(),
-        }
+        Self::InvalidGrant
     }
 
     fn unsupported_response_type() -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            code: "unsupported_response_type",
-            description: "only `code` is supported".into(),
-        }
+        Self::UnsupportedResponseType
     }
 
     fn unsupported_grant_type(grant: &str) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            code: "unsupported_grant_type",
-            description: format!("grant_type `{grant}` is not supported"),
-        }
+        Self::UnsupportedGrantType(grant.to_string())
     }
 
-    fn server_error(msg: String) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: "server_error",
-            description: msg,
-        }
-    }
-
-    fn from_db(e: &libsql::Error) -> Self {
-        Self::server_error(format!("database: {e}"))
-    }
-
-    fn from_crate(e: &crate::Error) -> Self {
-        Self::server_error(format!("{e}"))
+    fn server_error(msg: impl Into<String>) -> Self {
+        Self::ServerError(msg.into())
     }
 }
 
 impl IntoResponse for OAuthError {
     fn into_response(self) -> Response {
+        let (status, code, description) = match &self {
+            OAuthError::InvalidRequest(msg) => {
+                (StatusCode::BAD_REQUEST, "invalid_request", msg.clone())
+            }
+            OAuthError::InvalidGrant => (
+                StatusCode::BAD_REQUEST,
+                "invalid_grant",
+                "authorization grant is invalid, expired, revoked, or does not match".to_string(),
+            ),
+            OAuthError::UnsupportedResponseType => (
+                StatusCode::BAD_REQUEST,
+                "unsupported_response_type",
+                "only `code` is supported".to_string(),
+            ),
+            OAuthError::UnsupportedGrantType(g) => (
+                StatusCode::BAD_REQUEST,
+                "unsupported_grant_type",
+                format!("grant_type `{g}` is not supported"),
+            ),
+            OAuthError::ServerError(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "server_error",
+                msg.clone(),
+            ),
+            // Internal failures are logged with full context server-side
+            // and surfaced as an opaque `server_error` to the client.
+            OAuthError::Db(e) => {
+                tracing::error!(error = %e, "oauth: database error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "internal server error".to_string(),
+                )
+            }
+            OAuthError::Internal(e) => {
+                tracing::error!(error = %e, "oauth: internal error");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "server_error",
+                    "internal server error".to_string(),
+                )
+            }
+        };
         let mut headers = HeaderMap::new();
         // OAuth spec: error responses must not be cached.
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         let body = serde_json::json!({
-            "error": self.code,
-            "error_description": self.description,
+            "error": code,
+            "error_description": description,
         });
-        (self.status, headers, Json(body)).into_response()
+        (status, headers, Json(body)).into_response()
     }
 }
