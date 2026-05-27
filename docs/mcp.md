@@ -393,3 +393,27 @@ CREATE INDEX idx_oauth_refresh_tokens_exp ON oauth_refresh_tokens(expires_at);
 7.  **PR 7: Deployment & Infrastructure.**
     - Create Fly.io configuration
     - Setup CI/CD for automated deployments
+
+## Deploying to Fly.io
+
+`Dockerfile` + `fly.toml` deploy `mt mcp` to a single Fly machine. CI in
+`.github/workflows/deploy-mcp.yml` runs on every push to `main`. Before the
+first deploy, set the auth secrets:
+
+```sh
+flyctl secrets set MT_ADMIN_PASSWORD='…'    # enables OAuth login form
+flyctl secrets set MT_API_KEY='…'           # optional static bearer
+flyctl secrets set TURSO_URL='…'            # Turso DB URL
+flyctl secrets set TURSO_AUTH_TOKEN='…'     # Turso auth token
+```
+
+At least one of `MT_ADMIN_PASSWORD` or `MT_API_KEY` must be set — the
+server refuses to start without one. `MT_PUBLIC_URL` is configured in
+`fly.toml` to match the default `https://<app>.fly.dev` URL; edit it
+there if you front the app with a custom domain (it has to match what the
+client uses, or OAuth discovery and `resource` validation will fail).
+
+Persist state across machine restarts with `TURSO_URL` and `TURSO_AUTH_TOKEN`
+to sync the embedded libSQL to a remote replica. Without those, the local SQLite
+under `$HOME/.mathtutor/mt.db` is the only copy of data, and Fly instances wipe
+on restart.
