@@ -200,11 +200,13 @@ async fn register(
     )
     .await
     .map_err(|e| OAuthError::from_db(&e))?;
+
     tracing::info!(
-        client_id = %client_id,
+        %client_id,
         client_name = req.client_name.as_deref().unwrap_or("<unnamed>"),
         "oauth client registered",
     );
+
     Ok(Json(RegisterResponse {
         client_id,
         client_name: req.client_name,
@@ -441,27 +443,27 @@ async fn token_authorization_code(
     drop(rows);
 
     if used_at.is_some() {
-        tracing::warn!(client_id = %client_id, "auth code already used");
+        tracing::warn!(%client_id, "auth code already used");
         return Err(OAuthError::invalid_grant());
     }
     if stored_client_id != client_id {
         tracing::warn!(
-            client_id = %client_id,
+            %client_id,
             stored_client_id = %stored_client_id,
             "auth code client_id mismatch",
         );
         return Err(OAuthError::invalid_grant());
     }
     if stored_redirect != redirect_uri {
-        tracing::warn!(client_id = %client_id, "auth code redirect_uri mismatch");
+        tracing::warn!(%client_id, "auth code redirect_uri mismatch");
         return Err(OAuthError::invalid_grant());
     }
     if db::parse_ts(&expires_at).map_err(|e| OAuthError::from_crate(&e))? < Utc::now() {
-        tracing::warn!(client_id = %client_id, "auth code expired");
+        tracing::warn!(%client_id, "auth code expired");
         return Err(OAuthError::invalid_grant());
     }
     if pkce_s256(verifier) != stored_challenge {
-        tracing::warn!(client_id = %client_id, "PKCE verifier did not match challenge");
+        tracing::warn!(%client_id, "PKCE verifier did not match challenge");
         return Err(OAuthError::invalid_grant());
     }
 
