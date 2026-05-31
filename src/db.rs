@@ -151,11 +151,8 @@ pub async fn open(cfg: &DbConfig) -> Result<Database> {
         )
         .build()
         .await?;
-        // Pull remote frames before `migrate` writes anything locally.
-        // `Builder::build` only opens the replica; without an explicit pull
-        // a fresh local re-applies migrations that already exist remotely,
-        // forking the WAL and getting rejected on every subsequent push as
-        // a generation conflict.
+        // Pull remote frames before local writes, including migrations.
+        // Otherwise we see a version conflict during sync.
         db.sync().await?;
         db
     } else {
