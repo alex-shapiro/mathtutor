@@ -11,37 +11,35 @@ tail of fringe features.
 
 ## Roles
 
-`mt` is invoked as a tool from inside an existing LLM agent loop
-(e.g. Claude Code, Claude iOS via MCP, Codex). The two-actor split:
+`mt` is invoked as a tool from inside an existing LLM agent (e.g. Claude, ChatGPT, Gemini):
 
-- **`mt`** owns scheduling, persistence, deterministic reuse, graph
+- `mt` owns scheduling, persistence, deterministic reuse, graph
   validation, and the per-path overlay where the user's authored
   content lives.
-- **The LLM agent** owns authoring lessons / quizzes, user-facing
-  presentation, and grading of free-text answers.
+- The LLM authors lessons and quizzes, presents them to the user,
+  and grades free-text answers.
 
 `mt path next` decides _what_ should be presented; the agent decides
 _how_ it is presented. When a lesson or quiz is presented for the first
 time on a given path, the agent authors it and persists via
-`mt lesson upsert` / `mt quiz create`; every subsequent presentation is
-deterministic. `mt lesson upsert` is an upsert — a second call replaces
-the prior body, which is also how a lesson is revised. Quizzes are
-revised by id with `mt quiz update`. All authoring writes to the user
+`mt lesson upsert` or `mt quiz create`. Every subsequent presentation is
+deterministic. `mt lesson upsert` can be used to create or revise a lesson.
+Quizzes are revised with `mt quiz update`. All authoring writes to the user
 overlay, never to the shipped curriculum.
 
 Each atom is one concept. Lessons are short (1–2 paragraphs, ≤ 2 minutes
 reading, ≤ 1 theorem / rule / definition). Quizzes are short, free-text
 by default, and depend only on the current lesson plus previously-taught
-lessons — never on lookahead material.
+lessons. No lesson depends on lookahead material.
 
-The agent's operator playbook is embedded in the binary; run
-`mt instruct` to print it.
+The binary embeds the agent operator playbook and prints it via `mt instruct`.
 
 ## Commands
 
-Subcommands are resource-first (`mt <noun> <verb>`) and track the MCP
-tool surface 1:1. Operator-only verbs (`graph check`, `graph dump`,
-`instruct`, `migrate-from-ayml`, `mcp`) have no MCP equivalent.
+Subcommands are resource-first (`mt <noun> <verb>`).
+Most commands exist in both CLI and MCP interfaces.
+Operator-only verbs (`graph check`, `graph dump`, `instruct`,
+`migrate-from-ayml`, `mcp`) have no MCP equivalent.
 
 ```bash
 # Path lifecycle
@@ -115,7 +113,7 @@ sorted by prerequisite order before being stored as the path's
 5. **Quiz answered.** `mt path next` returns `present_quiz`. The agent
    presents the stored question, grades the user's reply against the
    reference answer + rubric, and calls `mt quiz answer <quiz-id>
-   --rating …`.
+--rating …`.
 
 Each lesson and each individual quiz is generated lazily — only when the
 scheduler first asks for it. An atom can be in a partial state (lesson
@@ -297,11 +295,11 @@ curriculum/graph/                # source for the embedded copy
 
 Three roles, three files, all distinct:
 
-| File           | Role                      | Mutability                              |
-| -------------- | ------------------------- | --------------------------------------- |
-| (embedded)     | shipped curriculum        | recompile only                                          |
-| `path.ayml`    | per-path intent           | written once at `mt path new`; never updated            |
-| `log.ayml`     | per-path history          | append-only                                             |
+| File           | Role                      | Mutability                                                       |
+| -------------- | ------------------------- | ---------------------------------------------------------------- |
+| (embedded)     | shipped curriculum        | recompile only                                                   |
+| `path.ayml`    | per-path intent           | written once at `mt path new`; never updated                     |
+| `log.ayml`     | per-path history          | append-only                                                      |
 | `overlay.ayml` | per-path authored content | mutated by `mt lesson upsert` / `mt quiz {create,update,delete}` |
 
 ## Per-path overlay

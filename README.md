@@ -20,12 +20,12 @@ mt graph check                     # validate the shipped curriculum
 mt graph dump                      # print the user overlay AYML
 
 mt lesson upsert <ATOM>    --body TEXT
-mt quiz   create <ATOM>    --difficulty D --question TEXT --answer TEXT \
-                           [--rubric TEXT] [--type {free_text,multiple_choice}]
-mt quiz   update <QUIZ_ID> [--question TEXT] [--answer TEXT] [--rubric TEXT] \
-                           [--difficulty D] [--type T]
-mt quiz   delete <QUIZ_ID>
-mt quiz   answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT]
+mt quiz create <ATOM>    --difficulty D --question TEXT --answer TEXT \
+                         [--rubric TEXT] [--type {free_text,multiple_choice}]
+mt quiz update <QUIZ_ID> [--question TEXT] [--answer TEXT] [--rubric TEXT] \
+                         [--difficulty D] [--type T]
+mt quiz delete <QUIZ_ID>
+mt quiz answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT]
 
 mt instruct                        # print the agent operator playbook
 mt mcp                             # run the MCP server (SSE over HTTP)
