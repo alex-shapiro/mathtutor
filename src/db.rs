@@ -129,10 +129,9 @@ pub fn default_path() -> Result<PathBuf> {
 /// Creates the parent directory if missing. Idempotent: safe to call
 /// on a fresh directory or against an already-initialized file.
 ///
-/// When sync is configured and the local path holds a plain `SQLite` file
+/// If sync is configured and the local path holds a plain `SQLite` file
 /// from an earlier non-sync session, the file is upgraded in place to
-/// a libSQL embedded replica without losing data — see
-/// [`upgrade_local_to_replica`].
+/// a libSQL embedded replica without losing data.
 pub async fn open(cfg: &DbConfig) -> Result<Database> {
     if let Some(parent) = cfg.local_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| Error::FileIo {
