@@ -917,12 +917,10 @@ pub async fn run(
         app = app.merge(oauth::router(oauth_state));
     }
 
-    // Request-level access log. Default tower-http span / response levels
-    // are DEBUG; we raise both to INFO so the standard `mt mcp` filter
-    // surfaces them without users having to twiddle `RUST_LOG`.
     let trace = tower_http::trace::TraceLayer::new_for_http()
         .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
         .on_response(DefaultOnResponse::new().level(tracing::Level::INFO));
+
     let app = app.layer(trace);
 
     let listener = tokio::net::TcpListener::bind(socket_addr)
