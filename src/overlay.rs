@@ -218,9 +218,9 @@ pub async fn remove_quiz(conn: &Connection, quiz_id: &str) -> Result<()> {
     Ok(())
 }
 
-// ── `mt overlay dump` ──────────────────────────────────────────────
+// ── `mt graph dump` ────────────────────────────────────────────────
 
-pub async fn cmd_dump(conn: &Connection) -> Result<()> {
+pub async fn cmd_graph_dump(conn: &Connection) -> Result<()> {
     let overlay = load(conn).await?;
     let text = ayml::to_string(&overlay).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");

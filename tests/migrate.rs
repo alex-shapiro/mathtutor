@@ -53,7 +53,7 @@ async fn empty_root_is_noop() {
 #[tokio::test]
 async fn missing_paths_subdir_returns_zero_report() {
     // A directory that exists but lacks `paths/` (e.g. a fresh
-    // `$MATHTUTOR_HOME` from before any `mt new` ever ran) must return
+    // `$MATHTUTOR_HOME` from before any `mt path new` ever ran) must return
     // an empty report — not error.
     let tmp = TempDir::new().unwrap();
     let conn = fresh_db(&tmp).await;
@@ -69,7 +69,7 @@ async fn missing_paths_subdir_returns_zero_report() {
 #[tokio::test]
 async fn path_dir_without_path_ayml_is_skipped() {
     // A path directory missing its `path.ayml` is malformed (partial
-    // `mt new`, hand-edited, etc.); migration must skip it without
+    // `mt path new`, hand-edited, etc.); migration must skip it without
     // crashing or importing orphaned overlay/log files.
     let tmp = TempDir::new().unwrap();
     let conn = fresh_db(&tmp).await;

@@ -9,7 +9,7 @@ CREATE TABLE paths (
     created_at DATETIME NOT NULL
 );
 
--- `position` preserves the topo-sorted order of targets set at `mt new`
+-- `position` preserves the topo-sorted order of targets set at `mt path new`
 -- time; the scheduler's outer loop walks targets in that order, and
 -- SQLite doesn't promise selection order without an explicit column.
 CREATE TABLE path_targets (

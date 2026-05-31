@@ -1,4 +1,4 @@
-//! Learning-path data, per-path storage, and `mt new`.
+//! Learning-path data, per-path storage, and `mt path new`/`mt path list`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use crate::graph::Graph;
 use crate::{Error, Result};
 
 /// Immutable record of the learner's goal for a path. Written once at
-/// `mt new`; never updated. All mutable per-path state lives in the
+/// `mt path new`; never updated. All mutable per-path state lives in the
 /// event log; FSRS state is the cards table maintained as a write-through
 /// cache by `event_log::append`.
 #[derive(Debug, Clone)]
@@ -124,7 +124,7 @@ pub async fn resolve_id(conn: &Connection, explicit: Option<&str>) -> Result<Str
 
 // ── Commands ────────────────────────────────────────────────────────
 
-pub async fn cmd_new(
+pub async fn cmd_path_new(
     conn: &Connection,
     goal: &str,
     ids: &[String],
@@ -150,6 +150,72 @@ pub async fn cmd_new(
     tx.commit().await?;
 
     Ok(id)
+}
+
+/// Compact summary of one path. Same fields as `mt path state` shows
+/// for a single path, so callers can format both with the same logic.
+#[derive(Debug, serde::Serialize)]
+pub struct PathSummary {
+    pub id: String,
+    pub goal: String,
+    pub created_at: chrono::DateTime<Utc>,
+    pub targets: usize,
+    pub learned: usize,
+    pub learned_pct: usize,
+}
+
+#[derive(serde::Serialize)]
+struct PathListView {
+    paths: Vec<PathSummary>,
+}
+
+/// List every path with goal, creation time, target count, and progress
+/// percent. AYML on stdout — same envelope conventions as `mt path next`.
+pub async fn cmd_path_list(conn: &Connection, graph_dir: Option<&Path>) -> Result<()> {
+    let summaries = list_summaries(conn, graph_dir).await?;
+    let view = PathListView { paths: summaries };
+    let text = ayml::to_string(&view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
+    print!("{text}");
+    Ok(())
+}
+
+async fn list_summaries(conn: &Connection, graph_dir: Option<&Path>) -> Result<Vec<PathSummary>> {
+    let g = Graph::load_for_path(conn, graph_dir).await?;
+    let mut rows = conn
+        .query(
+            "SELECT id, goal, created_at FROM paths ORDER BY created_at ASC",
+            params![],
+        )
+        .await?;
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let id: String = row.get(0)?;
+        let goal: String = row.get(1)?;
+        let created_str: String = row.get(2)?;
+        let created_at = db::parse_ts(&created_str)?;
+        let p = load_path(conn, &id).await?;
+        let events = event_log::load(conn, &id).await?;
+        let targets = p.target_atoms.len();
+        let learned = p
+            .target_atoms
+            .iter()
+            .filter(|a| crate::scheduler::is_atom_complete(&g, &events, a))
+            .count();
+        let learned_pct = if targets > 0 {
+            learned * 100 / targets
+        } else {
+            0
+        };
+        out.push(PathSummary {
+            id,
+            goal,
+            created_at,
+            targets,
+            learned,
+            learned_pct,
+        });
+    }
+    Ok(out)
 }
 
 /// Expand each input ID into a deduplicated set of atom IDs.

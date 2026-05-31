@@ -1,4 +1,4 @@
-//! `mt tree`: hierarchical view of the active path.
+//! `mt path tree`: hierarchical view of the active path.
 //!
 //! Renders every atom reachable from the path's targets — targets plus
 //! the transitive closure of their prerequisites — at its natural cluster
@@ -20,7 +20,7 @@ use crate::path::{load_path, resolve_id};
 use crate::scheduler;
 use crate::types::Difficulty;
 
-pub async fn cmd_tree(
+pub async fn cmd_path_tree(
     conn: &Connection,
     explicit_id: Option<&str>,
     graph_dir: Option<&Path>,

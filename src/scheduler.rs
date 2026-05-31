@@ -1,4 +1,4 @@
-//! `mt next` scheduler: action selection + AYML envelope output.
+//! `mt path next` scheduler: action selection + AYML envelope output.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -17,7 +17,7 @@ use crate::{Error, Result};
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
-pub async fn cmd_next(
+pub async fn cmd_path_next(
     conn: &Connection,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
@@ -113,7 +113,7 @@ impl Action {
 ///
 /// `due_quizzes` is an ordered list of `(quiz_id, due_at)` pairs the
 /// caller already filtered to those past their `due_at` — the cards
-/// table makes this an O(1) lookup per `mt next` instead of a full
+/// table makes this an O(1) lookup per `mt path next` instead of a full
 /// event-log replay.
 ///
 /// (2) walks per-atom: an atom isn't considered complete — and the
@@ -231,7 +231,7 @@ pub fn quiz_answered_correctly(events: &[Event], quiz_id: &str) -> bool {
 }
 
 /// Has this atom's lesson been presented to the user during *this* path?
-/// `mt store lesson` and `mt next → present_lesson` both auto-log
+/// `mt lesson upsert` and `mt path next → present_lesson` both auto-log
 /// `LessonTaught` so authoring or re-presenting count as teaching.
 ///
 /// `LessonAuthored` is accepted as an equivalent signal so that paths
@@ -469,7 +469,7 @@ impl Envelope {
                         atom,
                         reason: "not_taught",
                         history,
-                        next_step: "mt next".to_string(),
+                        next_step: "mt path next".to_string(),
                     }),
                 }
             }
@@ -503,7 +503,9 @@ impl Envelope {
                         atom,
                         quiz,
                         history,
-                        next_step: format!("mt answer {quiz_id} --rating {{again|hard|good|easy}}"),
+                        next_step: format!(
+                            "mt quiz answer {quiz_id} --rating {{again|hard|good|easy}}"
+                        ),
                     }),
                 }
             }
@@ -523,7 +525,7 @@ impl Envelope {
                     payload: Payload::CreateLesson(CreateLessonPayload {
                         atom,
                         prerequisites,
-                        next_step: format!("mt store lesson {atom_id} --body TEXT"),
+                        next_step: format!("mt lesson upsert {atom_id} --body TEXT"),
                     }),
                 }
             }
@@ -549,7 +551,7 @@ impl Envelope {
                     .collect();
                 let prerequisites = collect_prereqs(g, c);
                 let next_step = format!(
-                    "mt store quiz {atom_id} --difficulty {difficulty} \
+                    "mt quiz create {atom_id} --difficulty {difficulty} \
                      --question TEXT --answer TEXT [--rubric TEXT]"
                 );
                 Envelope {
