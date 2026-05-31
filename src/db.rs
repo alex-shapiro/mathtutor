@@ -144,9 +144,20 @@ pub async fn open(cfg: &DbConfig) -> Result<Database> {
         if needs_replica_upgrade(&cfg.local_path) {
             return upgrade_local_to_replica(&cfg.local_path, sync).await;
         }
-        Builder::new_synced_database(&cfg.local_path, sync.url.clone(), sync.auth_token.clone())
-            .build()
-            .await?
+        let db = Builder::new_synced_database(
+            &cfg.local_path,
+            sync.url.clone(),
+            sync.auth_token.clone(),
+        )
+        .build()
+        .await?;
+        // Pull remote frames before `migrate` writes anything locally.
+        // `Builder::build` only opens the replica; without an explicit pull
+        // a fresh local re-applies migrations that already exist remotely,
+        // forking the WAL and getting rejected on every subsequent push as
+        // a generation conflict.
+        db.sync().await?;
+        db
     } else {
         Builder::new_local(&cfg.local_path).build().await?
     };
