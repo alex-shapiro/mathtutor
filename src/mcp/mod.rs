@@ -912,10 +912,7 @@ pub async fn run(
     let public_url = resolve_public_url(auth.public_url.as_deref(), socket_addr)?;
 
     let auth_state = AuthState::new(&auth, &public_url, db.clone());
-    // Scope the auth middleware to the MCP transport only. `route_layer`
-    // (rather than `layer`) restricts the middleware to routes present at
-    // call time, so routes added afterward — `/health` here, the OAuth
-    // and `/.well-known/*` endpoints below — stay unauthenticated.
+    // Auth middleware is scoped to MCP transport routes
     let mut app = Router::new()
         .nest_service("/mcp", mcp_service)
         .route_layer(middleware::from_fn_with_state(auth_state, auth_middleware))
@@ -1070,11 +1067,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 
-/// Liveness probe for Fly (and any other prober that wants a cheap
-/// signal). Deliberately doesn't touch the database — a DB hiccup
-/// shouldn't restart the machine, since restart can't fix a remote
-/// libSQL outage and would just thrash. Tool calls surface DB failures
-/// directly to the caller.
+/// Liveness probe
 async fn health() -> &'static str {
     "ok"
 }
