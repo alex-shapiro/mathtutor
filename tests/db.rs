@@ -7,8 +7,8 @@
 
 use std::path::PathBuf;
 
-use libsql::params;
-use mathtutor::db::{self, DbConfig};
+use libsql::{Builder, params};
+use mathtutor::db::{self, DbConfig, SyncConfig};
 use tempfile::TempDir;
 
 fn cfg_in(dir: &TempDir) -> DbConfig {
@@ -255,6 +255,55 @@ async fn maybe_sync_is_noop_on_local_only_db() {
     assert!(cfg.sync.is_none());
     let db = db::open(&cfg).await.expect("open");
     db::maybe_sync(&db, &cfg).await;
+}
+
+#[tokio::test]
+async fn open_with_sync_pulls_remote_before_migrating() {
+    // Regression: when sync is configured, `open` must pull remote
+    // frames before `migrate` writes anything locally. A fresh replica
+    // that runs `migrate` first creates a divergent commit generation;
+    // the remote then rejects every push as `server returned a conflict`
+    // (sent=1, got=N), and writes pile up on a fork that can never land.
+    //
+    // We pin that contract behaviorally: with sync configured against an
+    // unreachable remote, `open` must fail rather than silently proceed
+    // to migrate. Port 1 refuses connections, so the HTTP attempt
+    // completes synchronously without hanging the test.
+    let tmp = TempDir::new().unwrap();
+    let local = tmp.path().join("mt.db");
+    let cfg = DbConfig {
+        local_path: local.clone(),
+        sync: SyncConfig::new("http://127.0.0.1:1".into(), "irrelevant".into()),
+    };
+    assert!(cfg.sync.is_some(), "sync must be configured for this test");
+
+    let err = db::open(&cfg)
+        .await
+        .expect_err("open must fail when the sync remote is unreachable");
+    let msg = err.to_string().to_lowercase();
+    assert!(
+        msg.contains("sync") || msg.contains("connect"),
+        "expected a sync/connect error, got: {msg}",
+    );
+
+    // Migrate writes the bookkeeping table on its first run. If sync ran
+    // before migrate (correct order), the table must not exist on disk
+    // after the failed open. Reopening as a plain local db lets us look
+    // without re-running migrations.
+    let plain = Builder::new_local(&local).build().await.unwrap();
+    let conn = plain.connect().unwrap();
+    let mut rows = conn
+        .query(
+            "SELECT name FROM sqlite_master \
+             WHERE type='table' AND name='schema_migrations'",
+            (),
+        )
+        .await
+        .unwrap();
+    assert!(
+        rows.next().await.unwrap().is_none(),
+        "schema_migrations must not exist: migrate ran before the failed sync",
+    );
 }
 
 #[tokio::test]

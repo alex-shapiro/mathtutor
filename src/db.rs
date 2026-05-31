@@ -144,9 +144,17 @@ pub async fn open(cfg: &DbConfig) -> Result<Database> {
         if needs_replica_upgrade(&cfg.local_path) {
             return upgrade_local_to_replica(&cfg.local_path, sync).await;
         }
-        Builder::new_synced_database(&cfg.local_path, sync.url.clone(), sync.auth_token.clone())
-            .build()
-            .await?
+        let db = Builder::new_synced_database(
+            &cfg.local_path,
+            sync.url.clone(),
+            sync.auth_token.clone(),
+        )
+        .build()
+        .await?;
+        // Pull remote frames before local writes, including migrations.
+        // Otherwise we see a version conflict during sync.
+        db.sync().await?;
+        db
     } else {
         Builder::new_local(&cfg.local_path).build().await?
     };
