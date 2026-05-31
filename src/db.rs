@@ -128,6 +128,11 @@ pub fn default_path() -> Result<PathBuf> {
 /// Open the user database, applying any pending schema migrations.
 /// Creates the parent directory if missing. Idempotent: safe to call
 /// on a fresh directory or against an already-initialized file.
+///
+/// When sync is configured and the local path holds a plain `SQLite` file
+/// from an earlier non-sync session, the file is upgraded in place to
+/// a libSQL embedded replica without losing data — see
+/// [`upgrade_local_to_replica`].
 pub async fn open(cfg: &DbConfig) -> Result<Database> {
     if let Some(parent) = cfg.local_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| Error::FileIo {
@@ -137,6 +142,9 @@ pub async fn open(cfg: &DbConfig) -> Result<Database> {
     }
 
     let db = if let Some(sync) = &cfg.sync {
+        if needs_replica_upgrade(&cfg.local_path) {
+            return upgrade_local_to_replica(&cfg.local_path, sync).await;
+        }
         Builder::new_synced_database(&cfg.local_path, sync.url.clone(), sync.auth_token.clone())
             .build()
             .await?
@@ -147,6 +155,128 @@ pub async fn open(cfg: &DbConfig) -> Result<Database> {
     let conn = connect(&db).await?;
     migrate(&conn).await?;
     Ok(db)
+}
+
+/// libSQL's embedded replica stores its frame-tracking metadata in a
+/// sibling file named `<path>-info`. Its presence is what tells us a
+/// local file is already a replica (versus a plain `SQLite` file left by
+/// an earlier non-sync session).
+fn info_sidecar(local_path: &Path) -> PathBuf {
+    let mut name = local_path.file_name().unwrap_or_default().to_os_string();
+    name.push("-info");
+    local_path.with_file_name(name)
+}
+
+/// `true` when there's a plain local `SQLite` file at `local_path` but no
+/// replica metadata — i.e. the user previously ran `mt` without
+/// `TURSO_*` set and is now turning sync on.
+fn needs_replica_upgrade(local_path: &Path) -> bool {
+    local_path.exists() && !info_sidecar(local_path).exists()
+}
+
+/// Convert a plain local `SQLite` file into an embedded replica without
+/// losing data. The old file is renamed to `<path>.preupgrade` and
+/// preserved; a fresh replica is opened at the original path, migrated
+/// to the current schema, populated from the backup via `ATTACH`, and
+/// synced to push the rows up to Turso.
+///
+/// Bails out if `<path>.preupgrade` already exists — that means a prior
+/// upgrade attempt left state behind, and silently overwriting it could
+/// destroy whatever the user was trying to recover.
+async fn upgrade_local_to_replica(local_path: &Path, sync: &SyncConfig) -> Result<Database> {
+    let backup_path = {
+        let mut name = local_path.file_name().unwrap_or_default().to_os_string();
+        name.push(".preupgrade");
+        local_path.with_file_name(name)
+    };
+    if backup_path.exists() {
+        return Err(Error::FileIo {
+            path: backup_path,
+            source: std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "previous upgrade backup exists; resolve manually before retrying",
+            ),
+        });
+    }
+
+    tracing::info!(
+        backup = %backup_path.display(),
+        "converting local SQLite file to libSQL embedded replica",
+    );
+
+    std::fs::rename(local_path, &backup_path).map_err(|e| Error::FileIo {
+        path: local_path.to_path_buf(),
+        source: e,
+    })?;
+
+    let db = Builder::new_synced_database(local_path, sync.url.clone(), sync.auth_token.clone())
+        .build()
+        .await?;
+
+    let conn = connect(&db).await?;
+    migrate(&conn).await?;
+    copy_user_tables_via_attach(&conn, &backup_path).await?;
+    drop(conn);
+
+    // Push the freshly-imported rows to Turso so the local replica and
+    // the remote agree before the caller starts reading.
+    let cfg = DbConfig {
+        local_path: local_path.to_path_buf(),
+        sync: Some(sync.clone()),
+    };
+    maybe_sync(&db, &cfg).await;
+
+    tracing::info!(
+        backup = %backup_path.display(),
+        "replica upgrade complete; original file preserved",
+    );
+    Ok(db)
+}
+
+/// Copy every user table from the `SQLite` file at `backup_path` into the
+/// connection's `main` schema using `ATTACH`. Skips `schema_migrations`
+/// (already populated by [`migrate`] in the new replica) and any table
+/// names that don't exist in the backup. `INSERT OR IGNORE` covers the
+/// edge case where the replica's initial sync from remote already
+/// brought matching rows back.
+async fn copy_user_tables_via_attach(conn: &Connection, backup_path: &Path) -> Result<()> {
+    let attach_path = backup_path.to_str().ok_or_else(|| Error::FileIo {
+        path: backup_path.to_path_buf(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "backup path is not valid UTF-8",
+        ),
+    })?;
+    conn.execute("ATTACH DATABASE ? AS legacy", params![attach_path])
+        .await?;
+
+    // The data is internally consistent (it came from a working DB), so
+    // turning FK enforcement off during the copy lets us insert in any
+    // order without weakening any invariant.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;").await?;
+    for table in list_user_tables(conn, "legacy").await? {
+        if table == "schema_migrations" {
+            continue;
+        }
+        let sql = format!(r#"INSERT OR IGNORE INTO main."{table}" SELECT * FROM legacy."{table}""#);
+        conn.execute(&sql, ()).await?;
+    }
+    conn.execute_batch("PRAGMA foreign_keys = ON;").await?;
+    conn.execute_batch("DETACH DATABASE legacy;").await?;
+    Ok(())
+}
+
+async fn list_user_tables(conn: &Connection, schema: &str) -> Result<Vec<String>> {
+    let sql = format!(
+        "SELECT name FROM {schema}.sqlite_master \
+         WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    );
+    let mut rows = conn.query(&sql, ()).await?;
+    let mut tables = Vec::new();
+    while let Some(row) = rows.next().await? {
+        tables.push(row.get::<String>(0)?);
+    }
+    Ok(tables)
 }
 
 /// Open a new db connection to with FK enforcement enabled.
@@ -228,6 +358,7 @@ pub async fn open_local(path: &Path) -> Result<Database> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn sync_config_requires_both_fields_non_empty() {
@@ -246,5 +377,155 @@ mod tests {
         let cfg = DbConfig::local("/tmp/never-opened.db");
         assert!(cfg.sync.is_none());
         assert_eq!(cfg.local_path, PathBuf::from("/tmp/never-opened.db"));
+    }
+
+    #[test]
+    fn info_sidecar_appends_dash_info() {
+        assert_eq!(
+            info_sidecar(Path::new("/var/lib/mt.db")),
+            PathBuf::from("/var/lib/mt.db-info"),
+        );
+        assert_eq!(
+            info_sidecar(Path::new("mt.db")),
+            PathBuf::from("mt.db-info")
+        );
+    }
+
+    #[test]
+    fn needs_replica_upgrade_detects_plain_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("mt.db");
+
+        assert!(!needs_replica_upgrade(&path), "missing file => no upgrade");
+
+        std::fs::write(&path, b"plain sqlite bytes").unwrap();
+        assert!(needs_replica_upgrade(&path), "plain file => upgrade");
+
+        std::fs::write(info_sidecar(&path), b"replica meta").unwrap();
+        assert!(
+            !needs_replica_upgrade(&path),
+            "-info sidecar present => already a replica"
+        );
+    }
+
+    /// End-to-end check of the data-preservation step: a plain local DB
+    /// with user rows is renamed to a backup, a fresh DB is opened at
+    /// the original path and migrated, and `copy_user_tables_via_attach`
+    /// pulls every row across. This is the part of the upgrade that
+    /// must not lose data; the surrounding sync plumbing needs a real
+    /// Turso endpoint and is not exercised here.
+    #[tokio::test]
+    async fn copy_user_tables_via_attach_preserves_rows() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("mt.db");
+
+        // 1. Plain local DB with one row in `paths` and one in `events`.
+        let old = Builder::new_local(&path).build().await.unwrap();
+        let conn = connect(&old).await.unwrap();
+        migrate(&conn).await.unwrap();
+        conn.execute(
+            "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
+            params!["p1", "learn calc", "2026-05-31T00:00:00Z"],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO events(ts, kind, path_id, payload) VALUES (?, ?, ?, ?)",
+            params!["2026-05-31T00:00:01Z", "path_created", "p1", r#"{"k":"v"}"#],
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        drop(old);
+
+        // 2. Simulate the rename step of `upgrade_local_to_replica`.
+        let backup = path.with_extension("db.preupgrade");
+        std::fs::rename(&path, &backup).unwrap();
+
+        // 3. Fresh DB at the original path, migrated to current schema.
+        let fresh = Builder::new_local(&path).build().await.unwrap();
+        let conn = connect(&fresh).await.unwrap();
+        migrate(&conn).await.unwrap();
+
+        // 4. Copy from backup.
+        copy_user_tables_via_attach(&conn, &backup).await.unwrap();
+
+        // 5. Rows are present in the fresh DB.
+        let mut rows = conn
+            .query("SELECT goal FROM paths WHERE id = ?", params!["p1"])
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("path row");
+        assert_eq!(row.get::<String>(0).unwrap(), "learn calc");
+
+        let mut rows = conn
+            .query(
+                "SELECT payload FROM events WHERE path_id = ?",
+                params!["p1"],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("event row");
+        assert_eq!(row.get::<String>(0).unwrap(), r#"{"k":"v"}"#);
+
+        // FK enforcement is still on after the copy (the helper flips it
+        // off mid-copy, then back on); inserting an orphan must fail.
+        let bad = conn
+            .execute(
+                "INSERT INTO path_targets(path_id, atom_id, position) VALUES (?, ?, ?)",
+                params!["nope", "atom", 0],
+            )
+            .await;
+        assert!(bad.is_err(), "FKs must be re-enabled after copy");
+    }
+
+    /// Copying into a fresh replica must be safe even when remote sync
+    /// has already populated some rows: `INSERT OR IGNORE` skips PK
+    /// collisions rather than failing the upgrade.
+    #[tokio::test]
+    async fn copy_user_tables_via_attach_tolerates_existing_rows() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("mt.db");
+
+        let old = Builder::new_local(&path).build().await.unwrap();
+        let conn = connect(&old).await.unwrap();
+        migrate(&conn).await.unwrap();
+        conn.execute(
+            "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
+            params!["dup", "old goal", "2026-05-31T00:00:00Z"],
+        )
+        .await
+        .unwrap();
+        drop(conn);
+        drop(old);
+
+        let backup = path.with_extension("db.preupgrade");
+        std::fs::rename(&path, &backup).unwrap();
+
+        let fresh = Builder::new_local(&path).build().await.unwrap();
+        let conn = connect(&fresh).await.unwrap();
+        migrate(&conn).await.unwrap();
+        // Pre-existing remote row with the same PK as the backup.
+        conn.execute(
+            "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
+            params!["dup", "remote goal", "2026-05-31T00:00:00Z"],
+        )
+        .await
+        .unwrap();
+
+        copy_user_tables_via_attach(&conn, &backup)
+            .await
+            .expect("copy must not fail on PK collisions");
+
+        let mut rows = conn
+            .query("SELECT goal FROM paths WHERE id = ?", params!["dup"])
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        assert_eq!(
+            row.get::<String>(0).unwrap(),
+            "remote goal",
+            "existing row wins; backup row is ignored"
+        );
     }
 }
