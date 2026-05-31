@@ -1,0 +1,37 @@
+# fly.toml app configuration file generated for mathtutor
+# See https://fly.io/docs/reference/configuration
+#
+# App Secrets:
+#
+# MT_ADMIN_PASSWORD
+# MT_API_KEY
+# TURSO_URL
+# TURSO_AUTH_TOKEN
+
+app = 'mathtutor'
+primary_region = 'ewr'
+
+[build]
+
+[env]
+MT_PUBLIC_URL = 'https://mathtutor.fly.dev'
+
+[http_service]
+internal_port = 8080
+force_https = true
+auto_stop_machines = 'stop'
+auto_start_machines = true
+min_machines_running = 0
+processes = ['app']
+
+[[http_service.checks]]
+interval = '30s'
+timeout = '5s'
+grace_period = '10s'
+method = 'GET'
+path = '/health'
+
+[[vm]]
+cpu_kind = 'shared'
+memory = '256mb'
+cpus = 1

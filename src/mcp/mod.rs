@@ -27,6 +27,7 @@ use axum::{
     http::{self, Request, StatusCode, header::AUTHORIZATION},
     middleware::{self, Next},
     response::Response,
+    routing::get,
 };
 use chrono::{DateTime, Utc};
 use libsql::{Connection, Database};
@@ -868,15 +869,15 @@ pub async fn run(
     let db = Arc::new(db::open(&cfg).await?);
     let cfg_arc = Arc::new(cfg);
 
+    // Pull the latest remote state before accepting traffic
+    db::maybe_sync(&db, &cfg_arc).await;
+
     let shutdown = CancellationToken::new();
     let background = spawn_background_sync(db.clone(), cfg_arc.clone(), shutdown.child_token());
 
     let mcp_config = StreamableHttpServerConfig::default()
         .with_sse_keep_alive(Some(Duration::from_secs(15)))
         .with_cancellation_token(shutdown.child_token())
-        // Auth is the security boundary; host validation would reject every
-        // non-localhost client and make the server useless once deployed.
-        // Bearer / OAuth tokens below are mandatory.
         .disable_allowed_hosts();
 
     let factory = {
@@ -905,25 +906,21 @@ pub async fn run(
     let public_url = resolve_public_url(auth.public_url.as_deref(), socket_addr)?;
 
     let auth_state = AuthState::new(&auth, &public_url, db.clone());
-    // Scope the auth middleware to the MCP transport only. `route_layer`
-    // (rather than `layer`) restricts the middleware to routes present at
-    // call time, so subsequent `.merge()` calls don't drag auth onto the
-    // OAuth and `/.well-known/*` endpoints, which must stay unauthenticated.
+    // Auth middleware is scoped to MCP transport routes
     let mut app = Router::new()
         .nest_service("/mcp", mcp_service)
-        .route_layer(middleware::from_fn_with_state(auth_state, auth_middleware));
+        .route_layer(middleware::from_fn_with_state(auth_state, auth_middleware))
+        .route("/health", get(health));
 
     if let Some(password) = auth.admin_password.as_deref() {
         let oauth_state = oauth::OAuthState::new(db.clone(), password, public_url.clone());
         app = app.merge(oauth::router(oauth_state));
     }
 
-    // Request-level access log. Default tower-http span / response levels
-    // are DEBUG; we raise both to INFO so the standard `mt mcp` filter
-    // surfaces them without users having to twiddle `RUST_LOG`.
     let trace = tower_http::trace::TraceLayer::new_for_http()
         .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
         .on_response(DefaultOnResponse::new().level(tracing::Level::INFO));
+
     let app = app.layer(trace);
 
     let listener = tokio::net::TcpListener::bind(socket_addr)
@@ -1062,6 +1059,11 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 
+/// Liveness probe
+async fn health() -> &'static str {
+    "ok"
+}
+
 /// Wait for SIGINT or SIGTERM, whichever comes first. On non-unix
 /// targets, only Ctrl-C is wired.
 async fn wait_for_shutdown() {
@@ -1094,8 +1096,8 @@ fn spawn_background_sync(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(BACKGROUND_SYNC_INTERVAL);
-        // The first tick fires immediately; skip it so we don't sync on
-        // startup before any writes have landed.
+        // Drop the immediate first tick.
+        // DB runs `maybe_sync` at startup so sync here is redundant.
         tick.tick().await;
         loop {
             tokio::select! {

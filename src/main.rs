@@ -110,6 +110,8 @@ async fn real_main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Pull the latest remote state before running.
+    db::maybe_sync(&db, &cfg).await;
     let conn = match db::connect(&db).await {
         Ok(c) => c,
         Err(e) => {
