@@ -868,11 +868,8 @@ pub async fn run(
 
     let db = Arc::new(db::open(&cfg).await?);
     let cfg_arc = Arc::new(cfg);
-    // Pull the latest remote state before accepting traffic. Without
-    // this, every read tool served the first ~5 minutes after startup
-    // would return whatever the local replica had cached from the
-    // previous session. Failures are non-fatal; `maybe_sync` logs and
-    // we proceed against local state.
+
+    // Pull the latest remote state before accepting traffic
     db::maybe_sync(&db, &cfg_arc).await;
 
     let shutdown = CancellationToken::new();
@@ -881,9 +878,6 @@ pub async fn run(
     let mcp_config = StreamableHttpServerConfig::default()
         .with_sse_keep_alive(Some(Duration::from_secs(15)))
         .with_cancellation_token(shutdown.child_token())
-        // Auth is the security boundary; host validation would reject every
-        // non-localhost client and make the server useless once deployed.
-        // Bearer / OAuth tokens below are mandatory.
         .disable_allowed_hosts();
 
     let factory = {
