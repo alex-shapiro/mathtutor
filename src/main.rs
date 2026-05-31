@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 use libsql::Connection;
-use mathtutor::cli::{AmendOp, Cmd, GraphOp, Mt, OverlayOp, RemoveOp, StoreOp};
+use mathtutor::cli::{Cmd, GraphOp, LessonOp, Mt, PathOp, QuizOp};
 #[cfg(feature = "mcp")]
 use mathtutor::mcp;
 use mathtutor::{
@@ -29,8 +29,9 @@ async fn real_main() -> ExitCode {
     // `mt graph check` has its own success-vs-issues exit logic and
     // prints its report independently — handle outside the unified
     // dispatch.
-    if let Cmd::Graph(g) = &cli.cmd {
-        let GraphOp::Check(c) = &g.op;
+    if let Cmd::Graph(g) = &cli.cmd
+        && let GraphOp::Check(c) = &g.op
+    {
         return match graph::run_check(c.path.as_deref()) {
             Ok(report) => {
                 report.print();
@@ -56,15 +57,6 @@ async fn real_main() -> ExitCode {
                 ExitCode::from(1)
             }
         };
-    }
-
-    // `mt show` / `mt list` operate purely on the embedded curriculum
-    // graph and have no per-user state — skip opening the database.
-    if let Cmd::Show(c) = &cli.cmd {
-        return run_simple(discover::cmd_show(&c.id, c.graph.as_deref()), 2);
-    }
-    if let Cmd::List(c) = &cli.cmd {
-        return run_simple(discover::cmd_list(c.id.as_deref(), c.graph.as_deref()), 2);
     }
 
     // `mt mcp` owns its own DB lifecycle (long-running, background sync
@@ -136,20 +128,18 @@ async fn real_main() -> ExitCode {
     }
 }
 
-/// Commands that write to the database. Read-only commands (`state`,
-/// `tree`, `overlay dump`) don't trigger a foreground sync; pure
-/// curriculum lookups (`show`, `list`) don't even open the database.
+/// Commands that write to the database. `mt path next` mutates because
+/// it auto-logs `quiz_presented` / `lesson_taught`; read-only path
+/// queries (`list`, `state`, `tree`) and the operator-only graph
+/// inspectors (`show`, `list`, `dump`) don't trigger a foreground sync.
 fn mutating(cmd: &Cmd) -> bool {
-    matches!(
-        cmd,
-        Cmd::New(_)
-            | Cmd::Next(_)
-            | Cmd::Answer(_)
-            | Cmd::Store(_)
-            | Cmd::Amend(_)
-            | Cmd::Remove(_)
-            | Cmd::MigrateFromAyml(_)
-    )
+    match cmd {
+        Cmd::Path(p) => matches!(p.op, PathOp::New(_) | PathOp::Next(_)),
+        Cmd::Lesson(_) | Cmd::Quiz(_) | Cmd::MigrateFromAyml(_) => true,
+        Cmd::Graph(_) | Cmd::Instruct(_) => false,
+        #[cfg(feature = "mcp")]
+        Cmd::Mcp(_) => false,
+    }
 }
 
 /// CLI helper: treat empty strings (e.g. `MT_API_KEY=`) as "not set" so
@@ -188,87 +178,139 @@ fn init_tracing(verbose: bool) {
         .init();
 }
 
-fn run_simple(result: Result<()>, err_code: u8) -> ExitCode {
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::from(err_code)
-        }
-    }
-}
-
 /// Run the chosen subcommand. Returns the result plus the exit code to
 /// use on failure — most commands exit `2` (config / IO / validation),
-/// `mt next` / `mt state` / `mt tree` / `mt overlay dump` exit `1` to
-/// distinguish "scheduling / state read failure" from "you held it wrong."
+/// `mt path next` / `mt path state` / `mt path tree` / `mt graph dump`
+/// exit `1` to distinguish "scheduling / state read failure" from
+/// "you held it wrong."
 #[allow(clippy::too_many_lines)]
 async fn dispatch(conn: &Connection, cmd: Cmd) -> (Result<()>, u8) {
     match cmd {
-        Cmd::Graph(_) | Cmd::Instruct(_) | Cmd::Show(_) | Cmd::List(_) => {
-            unreachable!("handled before dispatch")
-        }
+        Cmd::Instruct(_) => unreachable!("handled before dispatch"),
         #[cfg(feature = "mcp")]
         Cmd::Mcp(_) => unreachable!("handled before dispatch"),
-        Cmd::New(c) => {
-            let r = path::cmd_new(conn, &c.goal, &c.atom, c.graph.as_deref())
+        Cmd::Path(p) => dispatch_path(conn, p.op).await,
+        Cmd::Graph(g) => dispatch_graph(conn, g.op).await,
+        Cmd::Lesson(l) => dispatch_lesson(conn, l.op).await,
+        Cmd::Quiz(q) => dispatch_quiz(conn, q.op).await,
+        Cmd::MigrateFromAyml(c) => (migrate::cmd_migrate(conn, c.from.as_deref()).await, 2),
+    }
+}
+
+async fn dispatch_path(conn: &Connection, op: PathOp) -> (Result<()>, u8) {
+    match op {
+        PathOp::List(c) => (path::cmd_path_list(conn, c.graph.as_deref()).await, 1),
+        PathOp::New(c) => {
+            let r = path::cmd_path_new(conn, &c.goal, &c.atom, c.graph.as_deref())
                 .await
                 .map(|id| {
                     eprintln!("created path: {id}");
                 });
             (r, 2)
         }
-        Cmd::Next(c) => (
-            scheduler::cmd_next(conn, c.path.as_deref(), c.graph.as_deref()).await,
+        PathOp::State(c) => (
+            state::cmd_path_state(conn, c.path.as_deref(), c.graph.as_deref()).await,
             1,
         ),
-        Cmd::State(c) => (
-            state::cmd_state(conn, c.path.as_deref(), c.graph.as_deref()).await,
+        PathOp::Next(c) => (
+            scheduler::cmd_path_next(conn, c.path.as_deref(), c.graph.as_deref()).await,
             1,
         ),
-        Cmd::Tree(c) => (
-            tree::cmd_tree(conn, c.path.as_deref(), c.graph.as_deref()).await,
+        PathOp::Tree(c) => (
+            tree::cmd_path_tree(conn, c.path.as_deref(), c.graph.as_deref()).await,
             1,
         ),
-        Cmd::Store(s) => match s.op {
-            StoreOp::Lesson(c) => {
-                let atom = c.atom.clone();
-                let r = store::cmd_store_lesson(
-                    conn,
-                    &c.atom,
-                    c.body,
-                    c.path.as_deref(),
-                    c.graph.as_deref(),
-                )
+    }
+}
+
+async fn dispatch_graph(conn: &Connection, op: GraphOp) -> (Result<()>, u8) {
+    match op {
+        GraphOp::Check(_) => unreachable!("handled before dispatch"),
+        GraphOp::Show(c) => (
+            discover::cmd_graph_show(conn, &c.id, c.path.as_deref(), c.graph.as_deref()).await,
+            2,
+        ),
+        GraphOp::List(c) => (
+            discover::cmd_graph_list(conn, c.id.as_deref(), c.path.as_deref(), c.graph.as_deref())
+                .await,
+            2,
+        ),
+        GraphOp::Dump(_) => (overlay::cmd_graph_dump(conn).await, 1),
+    }
+}
+
+async fn dispatch_lesson(conn: &Connection, op: LessonOp) -> (Result<()>, u8) {
+    match op {
+        LessonOp::Upsert(c) => {
+            let atom = c.atom.clone();
+            let r = store::cmd_lesson_upsert(
+                conn,
+                &c.atom,
+                c.body,
+                c.path.as_deref(),
+                c.graph.as_deref(),
+            )
+            .await
+            .map(|()| {
+                eprintln!("upserted lesson: {atom}");
+            });
+            (r, 2)
+        }
+    }
+}
+
+async fn dispatch_quiz(conn: &Connection, op: QuizOp) -> (Result<()>, u8) {
+    match op {
+        QuizOp::Create(c) => {
+            let r = store::cmd_quiz_create(
+                conn,
+                &c.atom,
+                c.difficulty,
+                c.question,
+                c.answer,
+                c.rubric,
+                c.quiz_type,
+                c.path.as_deref(),
+                c.graph.as_deref(),
+            )
+            .await
+            .map(|qid| {
+                eprintln!("created quiz: {qid}");
+            });
+            (r, 2)
+        }
+        QuizOp::Update(c) => {
+            let quiz = c.quiz.clone();
+            let r = store::cmd_quiz_update(
+                conn,
+                &c.quiz,
+                c.question,
+                c.answer,
+                c.rubric,
+                c.difficulty,
+                c.quiz_type,
+                c.path.as_deref(),
+                c.graph.as_deref(),
+            )
+            .await
+            .map(|()| {
+                eprintln!("updated quiz: {quiz}");
+            });
+            (r, 2)
+        }
+        QuizOp::Delete(c) => {
+            let quiz = c.quiz.clone();
+            let r = store::cmd_quiz_delete(conn, &c.quiz, c.path.as_deref(), c.graph.as_deref())
                 .await
                 .map(|()| {
-                    eprintln!("stored lesson: {atom}");
+                    eprintln!("deleted quiz: {quiz}");
                 });
-                (r, 2)
-            }
-            StoreOp::Quiz(c) => {
-                let r = store::cmd_store_quiz(
-                    conn,
-                    &c.atom,
-                    c.difficulty,
-                    c.question,
-                    c.answer,
-                    c.rubric,
-                    c.quiz_type,
-                    c.path.as_deref(),
-                    c.graph.as_deref(),
-                )
-                .await
-                .map(|qid| {
-                    eprintln!("stored quiz: {qid}");
-                });
-                (r, 2)
-            }
-        },
-        Cmd::Answer(c) => {
+            (r, 2)
+        }
+        QuizOp::Answer(c) => {
             let quiz = c.quiz.clone();
             let rating = c.rating;
-            let r = answer::cmd_answer(
+            let r = answer::cmd_quiz_answer(
                 conn,
                 &c.quiz,
                 c.rating,
@@ -282,42 +324,5 @@ async fn dispatch(conn: &Connection, cmd: Cmd) -> (Result<()>, u8) {
             });
             (r, 2)
         }
-        Cmd::Overlay(o) => match o.op {
-            OverlayOp::Dump(_) => (overlay::cmd_dump(conn).await, 1),
-        },
-        Cmd::Amend(a) => match a.op {
-            AmendOp::Quiz(c) => {
-                let quiz = c.quiz.clone();
-                let r = store::cmd_amend_quiz(
-                    conn,
-                    &c.quiz,
-                    c.question,
-                    c.answer,
-                    c.rubric,
-                    c.difficulty,
-                    c.quiz_type,
-                    c.path.as_deref(),
-                    c.graph.as_deref(),
-                )
-                .await
-                .map(|()| {
-                    eprintln!("amended quiz: {quiz}");
-                });
-                (r, 2)
-            }
-        },
-        Cmd::Remove(r) => match r.op {
-            RemoveOp::Quiz(c) => {
-                let quiz = c.quiz.clone();
-                let r =
-                    store::cmd_remove_quiz(conn, &c.quiz, c.path.as_deref(), c.graph.as_deref())
-                        .await
-                        .map(|()| {
-                            eprintln!("removed quiz: {quiz}");
-                        });
-                (r, 2)
-            }
-        },
-        Cmd::MigrateFromAyml(c) => (migrate::cmd_migrate(conn, c.from.as_deref()).await, 2),
     }
 }

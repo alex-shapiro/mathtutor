@@ -1,5 +1,5 @@
-//! `mt state`: summary report combining path data, graph state, and
-//! the event log.
+//! `mt path state`: summary report combining path data, graph state,
+//! and the event log.
 
 use std::path::Path;
 
@@ -37,7 +37,7 @@ pub struct AtomRef {
     pub name: String,
 }
 
-pub async fn cmd_state(
+pub async fn cmd_path_state(
     conn: &Connection,
     explicit_id: Option<&str>,
     graph_dir: Option<&Path>,

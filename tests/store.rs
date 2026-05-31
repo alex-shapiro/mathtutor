@@ -1,4 +1,4 @@
-//! Integration tests for `store::cmd_store_lesson`.
+//! Integration tests for `store::cmd_lesson_upsert`.
 //!
 //! These pin the upsert contract: the first call for an atom emits
 //! `lesson_authored`, subsequent calls emit `lesson_amended`, and
@@ -47,7 +47,7 @@ async fn first_store_on_lesson_less_atom_emits_authored_then_taught() {
     let tmp = TempDir::new().unwrap();
     let (conn, path_id) = fresh_db_with_path(&tmp).await;
 
-    store::cmd_store_lesson(&conn, NO_LESSON_ATOM, "body".into(), Some(&path_id), None)
+    store::cmd_lesson_upsert(&conn, NO_LESSON_ATOM, "body".into(), Some(&path_id), None)
         .await
         .expect("store");
 
@@ -64,10 +64,10 @@ async fn second_store_on_same_atom_emits_amended_then_taught() {
     let tmp = TempDir::new().unwrap();
     let (conn, path_id) = fresh_db_with_path(&tmp).await;
 
-    store::cmd_store_lesson(&conn, NO_LESSON_ATOM, "first".into(), Some(&path_id), None)
+    store::cmd_lesson_upsert(&conn, NO_LESSON_ATOM, "first".into(), Some(&path_id), None)
         .await
         .unwrap();
-    store::cmd_store_lesson(&conn, NO_LESSON_ATOM, "second".into(), Some(&path_id), None)
+    store::cmd_lesson_upsert(&conn, NO_LESSON_ATOM, "second".into(), Some(&path_id), None)
         .await
         .expect("second store succeeds (upsert)");
 
@@ -89,7 +89,7 @@ async fn store_on_shipped_lesson_atom_emits_amended() {
     let tmp = TempDir::new().unwrap();
     let (conn, path_id) = fresh_db_with_path(&tmp).await;
 
-    store::cmd_store_lesson(
+    store::cmd_lesson_upsert(
         &conn,
         WITH_LESSON_ATOM,
         "override".into(),

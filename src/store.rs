@@ -1,7 +1,7 @@
 //! Persist agent-authored content to the user overlay.
 //!
-//! `mt store lesson`, `mt store quiz`, `mt amend quiz`, and `mt remove
-//! quiz` write to the SQL overlay tables — never to the shipped
+//! `mt lesson upsert`, `mt quiz create`, `mt quiz update`, and `mt quiz
+//! delete` write to the SQL overlay tables — never to the shipped
 //! curriculum. The shipped graph is read-only; user-authored content
 //! lives globally on the user database and is shared across every path.
 //!
@@ -24,7 +24,7 @@ use crate::{Error, Result};
 /// `lesson_amended` if a lesson already existed in the merged view
 /// (shipped or overlay), else `lesson_authored`. Always emits
 /// `lesson_taught`: per the agent playbook, storing implies presenting.
-pub async fn cmd_store_lesson(
+pub async fn cmd_lesson_upsert(
     conn: &Connection,
     atom_id: &str,
     body: String,
@@ -53,7 +53,7 @@ pub async fn cmd_store_lesson(
 /// the `<atom>.qN` sequence past the highest existing N across shipped
 /// + overlay so IDs are globally unique within the merged graph.
 #[allow(clippy::too_many_arguments)]
-pub async fn cmd_store_quiz(
+pub async fn cmd_quiz_create(
     conn: &Connection,
     atom_id: &str,
     difficulty: Difficulty,
@@ -101,9 +101,9 @@ pub async fn cmd_store_quiz(
 ///
 /// FSRS history is preserved: the quiz id doesn't change, so the
 /// scheduler keeps treating it as the same card. If you want a fresh
-/// schedule, use `mt remove quiz` followed by `mt store quiz`.
+/// schedule, use `mt quiz delete` followed by `mt quiz create`.
 #[allow(clippy::too_many_arguments)]
-pub async fn cmd_amend_quiz(
+pub async fn cmd_quiz_update(
     conn: &Connection,
     quiz_id: &str,
     question: Option<String>,
@@ -141,7 +141,7 @@ pub async fn cmd_amend_quiz(
 /// Tombstone a quiz so it no longer appears in the merged view. Past
 /// `QuizAnswered` events stay in the log for audit; the scheduler
 /// simply stops surfacing it. Idempotent.
-pub async fn cmd_remove_quiz(
+pub async fn cmd_quiz_delete(
     conn: &Connection,
     quiz_id: &str,
     path_id: Option<&str>,

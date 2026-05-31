@@ -124,7 +124,7 @@ struct Concept {
 }
 
 /// A single quiz card. Serializable for AYML round-trip (shipped
-/// curriculum, `mt overlay dump`) and as the in-memory shape used by
+/// curriculum, `mt graph dump`) and as the in-memory shape used by
 /// the scheduler and merge logic.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Quiz {
@@ -289,7 +289,7 @@ fn load_area_default(explicit: Option<&Path>, filename: &str) -> Result<AreaFile
     load_area_embedded(filename)
 }
 
-// ── Flat graph (for scheduler / `mt new`) ──────────────────────────
+// ── Flat graph (for scheduler / `mt path new`) ─────────────────────
 
 /// Flattened lookup view: every concept (cluster + atom) keyed by ID.
 /// Built once via `Graph::load`.

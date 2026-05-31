@@ -1,4 +1,4 @@
-//! Regression tests for `mt next`'s per-atom completion walker.
+//! Regression tests for `mt path next`'s per-atom completion walker.
 //!
 //! Each test builds an in-memory `Graph`, `PathFile`, and event log,
 //! then asserts on the `Action` returned by `scheduler::next_action`.
@@ -326,7 +326,7 @@ fn advance_to_next_target_lesson_after_first_complete() {
 
 #[test]
 fn does_not_advance_after_only_lesson_stored() {
-    // The exact regression: after `create_lesson` on `a`, `mt next`
+    // The exact regression: after `create_lesson` on `a`, `mt path next`
     // must NOT jump to `b`'s lesson. With the present_lesson step in
     // place, the precise next action is to re-surface `a`'s lesson
     // (since this path has no `LessonTaught` for it yet).

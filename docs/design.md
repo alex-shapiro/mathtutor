@@ -11,70 +11,76 @@ tail of fringe features.
 
 ## Roles
 
-`mt` is invoked as a tool from inside an existing LLM agent loop
-(e.g. Claude Code, Claude iOS via MCP, Codex). The two-actor split:
+`mt` is invoked as a tool from inside an existing LLM agent (e.g. Claude, ChatGPT, Gemini):
 
-- **`mt`** owns scheduling, persistence, deterministic reuse, graph
+- `mt` owns scheduling, persistence, deterministic reuse, graph
   validation, and the per-path overlay where the user's authored
   content lives.
-- **The LLM agent** owns authoring lessons / quizzes, user-facing
-  presentation, and grading of free-text answers.
+- The LLM authors lessons and quizzes, presents them to the user,
+  and grades free-text answers.
 
-`mt next` decides _what_ should be presented; the agent decides _how_ it
-is presented. When a lesson or quiz is presented for the first time on
-a given path, the agent authors it and persists via `mt store …`; every
-subsequent presentation is deterministic. `mt store lesson` is an upsert
-— a second call replaces the prior body, so revising a lesson and
-revising a quiz both go through the same verb (`store` for lessons,
-`amend` for quizzes by ID). All authoring writes to the user overlay,
-never to the shipped curriculum.
+`mt path next` decides _what_ should be presented; the agent decides
+_how_ it is presented. When a lesson or quiz is presented for the first
+time on a given path, the agent authors it and persists via
+`mt lesson upsert` or `mt quiz create`. Every subsequent presentation is
+deterministic. `mt lesson upsert` can be used to create or revise a lesson.
+Quizzes are revised with `mt quiz update`. All authoring writes to the user
+overlay, never to the shipped curriculum.
 
 Each atom is one concept. Lessons are short (1–2 paragraphs, ≤ 2 minutes
 reading, ≤ 1 theorem / rule / definition). Quizzes are short, free-text
 by default, and depend only on the current lesson plus previously-taught
-lessons — never on lookahead material.
+lessons. No lesson depends on lookahead material.
 
-The agent's operator playbook is embedded in the binary; run
-`mt instruct` to print it.
+The binary embeds the agent operator playbook and prints it via `mt instruct`.
 
 ## Commands
 
+Subcommands are resource-first (`mt <noun> <verb>`).
+Most commands exist in both CLI and MCP interfaces.
+Operator-only verbs (`graph check`, `graph dump`, `instruct`,
+`migrate-from-ayml`, `mcp`) have no MCP equivalent.
+
 ```bash
 # Path lifecycle
-mt new <GOAL> --atom <ID>...   # start a new learning path
-mt state [--path P]            # one-screen status summary
-mt next  [--path P]            # next scheduled action (AYML on stdout)
-mt tree  [--path P]            # full reachable-graph progress view
+mt path list                       # list all paths with goal / progress
+mt path new <GOAL> --atom <ID>...  # start a new learning path
+mt path state [--path P]           # one-screen status summary
+mt path next  [--path P]           # next scheduled action (AYML on stdout)
+mt path tree  [--path P]           # full reachable-graph progress view
 
-# Curriculum lookup (read-only, no path context)
-mt list [<ID>]                 # areas, or children of a cluster
-mt show <ID>                   # full detail on atom / cluster / area
-mt graph check                 # validate the shipped curriculum
+# Curriculum lookup (read-only)
+mt graph list  [<ID>] [--path P]   # areas, or children of a cluster
+mt graph show  <ID>   [--path P]   # full detail on atom / cluster / area
+mt graph check                     # validate the shipped curriculum
+mt graph dump                      # print the user overlay AYML (operator-only)
 
 # Authoring (writes to the user overlay, not to shipped data)
-mt store  lesson <ATOM>     --body TEXT                       # upsert by atom id
-mt store  quiz   <ATOM>     --difficulty D \
-                            --question TEXT --answer TEXT [--rubric TEXT] \
-                            [--type {free_text,multiple_choice}]
-mt amend  quiz   <QUIZ_ID>  [--question TEXT] [--answer TEXT] [--rubric TEXT] \
-                            [--difficulty D] [--type T]
-mt remove quiz   <QUIZ_ID>
+mt lesson upsert <ATOM>    --body TEXT                       # upsert by atom id
+mt quiz   create <ATOM>    --difficulty D \
+                           --question TEXT --answer TEXT [--rubric TEXT] \
+                           [--type {free_text,multiple_choice}]
+mt quiz   update <QUIZ_ID> [--question TEXT] [--answer TEXT] [--rubric TEXT] \
+                           [--difficulty D] [--type T]
+mt quiz   delete <QUIZ_ID>
 
 # User outcomes
-mt answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT]
-
-# Overlay
-mt overlay dump                # print the user overlay AYML
+mt quiz answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT]
 
 # Agent operator playbook
-mt instruct                    # print AGENTS playbook embedded in binary
+mt instruct                        # print AGENTS playbook embedded in binary
 ```
+
+`mt graph show` and `mt graph list` are pure curriculum lookups by
+default. When `--path P` is supplied, atom output is enriched with
+per-path status (`lesson_taught`, `complete`) without altering the
+base shape — fields are added via `skip_serializing_if`.
 
 Every command that writes appends a structured event to the per-path
 log (see "Event log" below). Agents read the log if they need history;
 nothing else is needed to reconstruct user state.
 
-### `--atom` ID resolution on `mt new`
+### `--atom` ID resolution on `mt path new`
 
 Each `--atom` argument may be:
 
@@ -95,26 +101,27 @@ sorted by prerequisite order before being stored as the path's
    has no entry for it.
 2. **Lesson present.** Either the shipped curriculum already has a
    lesson body for the atom, or the agent authors one via
-   `mt store lesson` (overlay).
+   `mt lesson upsert` (overlay).
 3. **Lesson taught.** Once the path's log records `lesson_taught` (or
    the implicitly-equivalent `lesson_authored`) for the atom, the
    scheduler considers the lesson "delivered" for this path and moves
    on to quiz work.
-4. **Quiz stored (per slot, lazy).** When `mt next` returns
+4. **Quiz stored (per slot, lazy).** When `mt path next` returns
    `create_quiz` for a difficulty slot, the agent authors a question,
-   reference answer, and optional rubric, then calls `mt store quiz`
+   reference answer, and optional rubric, then calls `mt quiz create`
    — which appends to the overlay.
-5. **Quiz answered.** `mt next` returns `present_quiz`. The agent
+5. **Quiz answered.** `mt path next` returns `present_quiz`. The agent
    presents the stored question, grades the user's reply against the
-   reference answer + rubric, and calls `mt answer <quiz-id> --rating …`.
+   reference answer + rubric, and calls `mt quiz answer <quiz-id>
+--rating …`.
 
 Each lesson and each individual quiz is generated lazily — only when the
 scheduler first asks for it. An atom can be in a partial state (lesson
 exists, only the easy quiz exists) for arbitrarily long.
 
-## `mt next` I/O
+## `mt path next` I/O
 
-`mt next` writes one AYML record to stdout. Top-level shape:
+`mt path next` writes one AYML record to stdout. Top-level shape:
 
 ```yaml
 schema_version: 1
@@ -130,15 +137,16 @@ Conventions for every payload:
   AYML triple-quoted strings.
 - `next_step` is an informational hint for the agent — the canonical
   command to call after acting on this output.
-- All atoms `mt next` returns satisfy the prerequisite invariant: every
-  direct prerequisite already has a stored lesson in the merged view.
+- All atoms `mt path next` returns satisfy the prerequisite invariant:
+  every direct prerequisite already has a stored lesson in the merged
+  view.
 
 ### `create_lesson`
 
 The next path-target atom has no stored lesson anywhere (neither in the
 shipped curriculum nor the overlay). The agent authors one (1–2
 paragraphs, ≤ 1 theorem / rule / definition), persists via
-`mt store lesson`, and presents to the user.
+`mt lesson upsert`, and presents to the user.
 
 ```yaml
 action: create_lesson
@@ -157,7 +165,7 @@ payload:
       name: "Eigenvalue / eigenvector"
       description: "Av = λv with v ≠ 0; λ ∈ 𝔽 is the eigenvalue."
       lesson: """..."""
-  next_step: "mt store lesson la.5.4.7 --body TEXT"
+  next_step: "mt lesson upsert la.5.4.7 --body TEXT"
 ```
 
 ### `present_lesson`
@@ -166,8 +174,9 @@ A lesson body already exists for this atom (shipped, or authored under
 a previous path), but the current path has never taught it. The
 scheduler re-surfaces the stored body so the user gets context before
 any quiz. The agent shows the body verbatim — not re-authored — then
-calls `mt next` again. `mt next` auto-logs `lesson_taught` when it
-returns this action, so no explicit "I taught it" command is needed.
+calls `mt path next` again. `mt path next` auto-logs `lesson_taught`
+when it returns this action, so no explicit "I taught it" command is
+needed.
 
 ```yaml
 action: present_lesson
@@ -181,7 +190,7 @@ payload:
   reason: not_taught                # the only reason currently emitted
   history:
     repetitions: 0                  # past `lesson_taught` events for this atom in this path
-  next_step: "mt next"
+  next_step: "mt path next"
 ```
 
 ### `create_quiz`
@@ -189,8 +198,8 @@ payload:
 The atom has a lesson (shipped or overlay) and the path is taught it,
 but a difficulty slot has no quiz yet. The agent authors a free-text
 question + reference answer + optional rubric, persists via
-`mt store quiz`, then presents to the user. The reply rating is logged
-with `mt answer` afterwards.
+`mt quiz create`, then presents to the user. The reply rating is logged
+with `mt quiz answer` afterwards.
 
 ```yaml
 action: create_quiz
@@ -211,14 +220,14 @@ payload:
       name: "Singular value"
       description: "..."
       lesson: """..."""
-  next_step: "mt store quiz la.5.4.7 --difficulty medium --question TEXT --answer TEXT [--rubric TEXT]"
+  next_step: "mt quiz create la.5.4.7 --difficulty medium --question TEXT --answer TEXT [--rubric TEXT]"
 ```
 
 ### `present_quiz`
 
 A quiz card is due. The agent shows the stored question to the user,
 grades the reply against the reference answer + rubric, and reports the
-FSRS grade with `mt answer`.
+FSRS grade with `mt quiz answer`.
 
 ```yaml
 action: present_quiz
@@ -243,7 +252,7 @@ payload:
     total_count: 5
     correct_pct: 60
     recent_ratings: [easy, good, hard, again, good]   # most recent first
-  next_step: "mt answer la.5.4.7.q2 --rating {again|hard|good|easy}"
+  next_step: "mt quiz answer la.5.4.7.q2 --rating {again|hard|good|easy}"
 ```
 
 ### `done`
@@ -286,12 +295,12 @@ curriculum/graph/                # source for the embedded copy
 
 Three roles, three files, all distinct:
 
-| File           | Role                      | Mutability                              |
-| -------------- | ------------------------- | --------------------------------------- |
-| (embedded)     | shipped curriculum        | recompile only                          |
-| `path.ayml`    | per-path intent           | written once at `mt new`; never updated |
-| `log.ayml`     | per-path history          | append-only                             |
-| `overlay.ayml` | per-path authored content | mutated by `mt store / amend / remove`  |
+| File           | Role                      | Mutability                                                       |
+| -------------- | ------------------------- | ---------------------------------------------------------------- |
+| (embedded)     | shipped curriculum        | recompile only                                                   |
+| `path.ayml`    | per-path intent           | written once at `mt path new`; never updated                     |
+| `log.ayml`     | per-path history          | append-only                                                      |
+| `overlay.ayml` | per-path authored content | mutated by `mt lesson upsert` / `mt quiz {create,update,delete}` |
 
 ## Per-path overlay
 
@@ -319,20 +328,20 @@ tombstone always overrides a shipped item with the same ID. Tombstones
 override everything. Concretely:
 
 - **Lesson** — if the overlay has one, use it; otherwise use the
-  shipped lesson if present. `mt store lesson` is an upsert; a second
+  shipped lesson if present. `mt lesson upsert` is an upsert; a second
   call replaces the body.
 - **Quizzes** — start with shipped, replace any with the same id from
-  the overlay (this is how `mt amend quiz` works), then append overlay
-  quizzes whose ids don't match shipped (added by `mt store quiz`),
+  the overlay (this is how `mt quiz update` works), then append overlay
+  quizzes whose ids don't match shipped (added by `mt quiz create`),
   then filter out anything whose id appears in `overlay_removed_quizzes`.
 - **Prerequisites / cluster structure** — not overridable. The shape
   of the curriculum is fixed by the shipped graph; the overlay only
   carries content.
 
 Blast-radius is per-path on purpose: an unaudited lesson authored under
-path A doesn't leak into path B that targets the same atom. `mt overlay
-dump --path P` prints a path's overlay for review and eventual merge
-back into the canonical curriculum.
+path A doesn't leak into path B that targets the same atom. `mt graph
+dump` prints the user overlay (shared across paths) for review and
+eventual merge back into the canonical curriculum.
 
 ## Event log
 
@@ -355,17 +364,17 @@ not optional — so the log can be re-played and `time_since_last` /
 Implemented event kinds:
 
 - `path_created`
-- `lesson_authored` (on `mt store lesson` when no prior lesson existed
+- `lesson_authored` (on `mt lesson upsert` when no prior lesson existed
   in the merged view)
-- `lesson_amended` (on `mt store lesson` when a lesson — shipped or
+- `lesson_amended` (on `mt lesson upsert` when a lesson — shipped or
   overlay — was already in the merged view)
-- `lesson_taught` (auto-logged on `mt next → present_lesson`, and on
-  every `mt store lesson` since authoring implies presenting)
-- `quiz_authored` (on `mt store quiz`)
-- `quiz_presented` (auto-logged on `mt next → present_quiz`)
-- `quiz_answered` (on `mt answer`; payload carries rating and user_answer)
-- `quiz_amended` (on `mt amend quiz`)
-- `quiz_removed` (on `mt remove quiz`)
+- `lesson_taught` (auto-logged on `mt path next → present_lesson`, and on
+  every `mt lesson upsert` since authoring implies presenting)
+- `quiz_authored` (on `mt quiz create`)
+- `quiz_presented` (auto-logged on `mt path next → present_quiz`)
+- `quiz_answered` (on `mt quiz answer`; payload carries rating and user_answer)
+- `quiz_amended` (on `mt quiz update`)
+- `quiz_removed` (on `mt quiz delete`)
 
 The log is the source of truth for what the user has seen and how they
 performed. FSRS state is derived from `quiz_answered` events on demand
@@ -382,7 +391,7 @@ performed. FSRS state is derived from `quiz_answered` events on demand
   log — keeps the invariant "log is source of truth" sharp, and at our
   scale (≤ ~10k events per path) the replay cost stays under ~50ms.
   A persistent `cards.ayml` cache becomes interesting beyond that scale.
-- **`mt next` algorithm:**
+- **`mt path next` algorithm:**
   1. Earliest-due quiz card whose atom is in the merged view → `present_quiz`.
   2. Else, walk targets (and their prereqs) in topo order. For each
      incomplete atom, return the first applicable action:
@@ -443,7 +452,7 @@ error hierarchy.
   action today; `idle` (returns when nothing is due but future
   reviews exist) is reserved for when FSRS scheduling produces gaps
   worth signaling.
-- **Goal → atom-set mapping.** `mt new <goal>` relies on the agent
+- **Goal → atom-set mapping.** `mt path new <goal>` relies on the agent
   to translate the free-text goal into a target set of atom IDs;
   `mt` stores the resulting list and orders it by prerequisite
   topology.

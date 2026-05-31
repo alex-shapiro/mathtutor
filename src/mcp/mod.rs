@@ -231,7 +231,7 @@ impl MathTutorServer {
         Parameters(args): Parameters<NewPathArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let conn = self.conn().await?;
-        let result = path::cmd_new(&conn, &args.goal, &args.atoms, self.graph_path()).await;
+        let result = path::cmd_path_new(&conn, &args.goal, &args.atoms, self.graph_path()).await;
         if result.is_ok() {
             self.spawn_sync();
         }
@@ -302,7 +302,7 @@ impl MathTutorServer {
         Parameters(args): Parameters<UpsertLessonArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let conn = self.conn().await?;
-        let result = store::cmd_store_lesson(
+        let result = store::cmd_lesson_upsert(
             &conn,
             &args.atom,
             args.body,
@@ -322,7 +322,7 @@ impl MathTutorServer {
         Parameters(args): Parameters<CreateQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let conn = self.conn().await?;
-        let result = store::cmd_store_quiz(
+        let result = store::cmd_quiz_create(
             &conn,
             &args.atom,
             args.difficulty,
@@ -346,7 +346,7 @@ impl MathTutorServer {
         Parameters(args): Parameters<UpdateQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let conn = self.conn().await?;
-        let result = store::cmd_amend_quiz(
+        let result = store::cmd_quiz_update(
             &conn,
             &args.quiz_id,
             args.question,
@@ -371,7 +371,7 @@ impl MathTutorServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         let conn = self.conn().await?;
         let result =
-            store::cmd_remove_quiz(&conn, &args.quiz_id, Some(&args.path_id), self.graph_path())
+            store::cmd_quiz_delete(&conn, &args.quiz_id, Some(&args.path_id), self.graph_path())
                 .await;
         if result.is_ok() {
             self.spawn_sync();
@@ -385,7 +385,7 @@ impl MathTutorServer {
         Parameters(args): Parameters<AnswerQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let conn = self.conn().await?;
-        let result = answer::cmd_answer(
+        let result = answer::cmd_quiz_answer(
             &conn,
             &args.quiz_id,
             args.rating,

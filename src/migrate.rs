@@ -189,7 +189,7 @@ async fn migrate_one_path(
     let log_file = path_dir.join("log.ayml");
 
     // A path directory with no `path.ayml` is junk left by a partial
-    // `mt new` or by hand; skip it entirely. Overlays can't be merged
+    // `mt path new` or by hand; skip it entirely. Overlays can't be merged
     // without knowing which path they belonged to (for ordering only —
     // overlays are global now), but absent a path file we have nothing
     // to anchor on.

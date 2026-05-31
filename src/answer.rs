@@ -1,4 +1,4 @@
-//! `mt answer`: record a quiz answer.
+//! `mt quiz answer`: record a quiz answer.
 
 use std::path::Path;
 
@@ -16,7 +16,7 @@ pub fn atom_from_quiz_id(quiz_id: &str) -> Option<String> {
     Some(quiz_id[..pos].to_string())
 }
 
-pub async fn cmd_answer(
+pub async fn cmd_quiz_answer(
     conn: &Connection,
     quiz_id: &str,
     rating: Rating,

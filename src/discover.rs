@@ -1,32 +1,66 @@
-//! `mt show` and `mt list`: read-only curriculum lookup. Both emit
-//! AYML on stdout so callers parse them the same way as `mt next`.
+//! `mt graph show` and `mt graph list`: read-only curriculum lookup.
+//! Both emit AYML on stdout so callers parse them the same way as
+//! `mt path next`.
 
 use std::path::Path;
 
+use libsql::Connection;
 use serde::Serialize;
 
+use crate::event_log;
 use crate::graph::{self, FlatConcept, Graph, Manifest, ManifestArea};
+use crate::scheduler;
 use crate::{Error, Result};
 
 // ── Commands ───────────────────────────────────────────────────────
 
-pub fn cmd_show(id: &str, graph_dir: Option<&Path>) -> Result<()> {
+/// Read-only `mt graph show`. When `path_id` is set, atom output is
+/// enriched with per-path status (`lesson_taught`, `complete`).
+pub async fn cmd_graph_show(
+    conn: &Connection,
+    id: &str,
+    path_id: Option<&str>,
+    graph_dir: Option<&Path>,
+) -> Result<()> {
     let manifest = graph::load_manifest_default(graph_dir)?;
-    let g = Graph::load_default(graph_dir)?;
-    let view = show_view(&g, &manifest, id)?;
+    let g = if path_id.is_some() {
+        Graph::load_for_path(conn, graph_dir).await?
+    } else {
+        Graph::load_default(graph_dir)?
+    };
+    let mut view = show_view(&g, &manifest, id)?;
+    if let Some(pid) = path_id {
+        let events = event_log::load(conn, pid).await?;
+        enrich_show_view(&mut view, &g, &events, id);
+    }
     emit(&view)
 }
 
-pub fn cmd_list(id: Option<&str>, graph_dir: Option<&Path>) -> Result<()> {
+/// Read-only `mt graph list`. When `path_id` is set, atom children are
+/// enriched with per-path status.
+pub async fn cmd_graph_list(
+    conn: &Connection,
+    id: Option<&str>,
+    path_id: Option<&str>,
+    graph_dir: Option<&Path>,
+) -> Result<()> {
     let manifest = graph::load_manifest_default(graph_dir)?;
-    let g = Graph::load_default(graph_dir)?;
-    let view = list_view(&g, &manifest, id)?;
+    let g = if path_id.is_some() {
+        Graph::load_for_path(conn, graph_dir).await?
+    } else {
+        Graph::load_default(graph_dir)?
+    };
+    let mut view = list_view(&g, &manifest, id)?;
+    if let Some(pid) = path_id {
+        let events = event_log::load(conn, pid).await?;
+        enrich_list_view(&mut view, &g, &events);
+    }
     emit(&view)
 }
 
-/// Build the `mt show` view (atom / cluster / area) for `id` against the
-/// provided graph and manifest. Pure data — used by the CLI for AYML
-/// output and by the MCP `GetItem` tool for JSON.
+/// Build the `mt graph show` view (atom / cluster / area) for `id`
+/// against the provided graph and manifest. Pure data — used by the
+/// CLI for AYML output and by the MCP `GetItem` tool for JSON.
 pub fn show_view(g: &Graph, manifest: &Manifest, id: &str) -> Result<ShowView> {
     if let Some(c) = g.by_id.get(id) {
         return Ok(ShowView::Concept(concept_view(g, c)));
@@ -37,8 +71,8 @@ pub fn show_view(g: &Graph, manifest: &Manifest, id: &str) -> Result<ShowView> {
     Err(Error::UnknownId(id.to_string()))
 }
 
-/// Build the `mt list` view (areas, area, or cluster) for `id` (or `None`
-/// for the top-level area set).
+/// Build the `mt graph list` view (areas, area, or cluster) for `id`
+/// (or `None` for the top-level area set).
 pub fn list_view(g: &Graph, manifest: &Manifest, id: Option<&str>) -> Result<ListView> {
     let Some(id) = id else {
         return Ok(ListView::Areas(areas_view(manifest)));
@@ -94,6 +128,21 @@ pub struct ChildBrief {
     pub id: String,
     pub name: String,
     pub is_atom: bool,
+    /// Per-path status. Populated only when `--path P` (or MCP
+    /// `path_id`) is supplied; omitted from output otherwise so the
+    /// path-less shape stays byte-identical to the pre-overlay format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<AtomStatus>,
+}
+
+/// Per-path status fields shared by `mt graph show` and `mt graph
+/// list` when `--path P` is set. `lesson_taught` is true once the path
+/// has logged `LessonTaught` for the atom; `complete` reflects the
+/// scheduler's `is_atom_complete` invariant.
+#[derive(Serialize, Debug, Clone, Copy)]
+pub struct AtomStatus {
+    pub lesson_taught: bool,
+    pub complete: bool,
 }
 
 #[derive(Serialize)]
@@ -113,6 +162,9 @@ pub struct AtomView {
     pub prerequisites: Vec<ChildBrief>,
     pub has_lesson: bool,
     pub quizzes: usize,
+    /// Set when `--path P` is supplied — see [`ChildBrief::status`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<AtomStatus>,
 }
 
 #[derive(Serialize)]
@@ -193,6 +245,7 @@ fn concept_view(g: &Graph, c: &FlatConcept) -> ConceptView {
             prerequisites,
             has_lesson: c.lesson.is_some(),
             quizzes: c.quizzes.len(),
+            status: None,
         })
     } else {
         let children: Vec<ChildBrief> = c
@@ -220,6 +273,35 @@ fn child_brief(c: &FlatConcept) -> ChildBrief {
         id: c.id.clone(),
         name: c.name.clone(),
         is_atom: c.children_ids.is_empty(),
+        status: None,
+    }
+}
+
+fn atom_status(g: &Graph, events: &[event_log::Event], atom_id: &str) -> Option<AtomStatus> {
+    let c = g.by_id.get(atom_id)?;
+    if !c.children_ids.is_empty() {
+        return None;
+    }
+    Some(AtomStatus {
+        lesson_taught: scheduler::lesson_taught_in_path(events, atom_id),
+        complete: scheduler::is_atom_complete(g, events, atom_id),
+    })
+}
+
+fn enrich_show_view(view: &mut ShowView, g: &Graph, events: &[event_log::Event], id: &str) {
+    if let ShowView::Concept(ConceptView::Atom(av)) = view {
+        av.status = atom_status(g, events, id);
+    }
+}
+
+fn enrich_list_view(view: &mut ListView, g: &Graph, events: &[event_log::Event]) {
+    let ListView::Children(cv) = view else {
+        return;
+    };
+    for child in &mut cv.children {
+        if child.is_atom {
+            child.status = atom_status(g, events, &child.id);
+        }
     }
 }
 
