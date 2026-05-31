@@ -1,5 +1,5 @@
 # Minimal runtime image
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY mathtutor /mathtutor
+COPY mt /mt
 EXPOSE 8080
-ENTRYPOINT ["/mathtutor", "mcp", "--addr", "0.0.0.0:8080"]
+ENTRYPOINT ["/mt", "mcp", "--addr", "0.0.0.0:8080"]
