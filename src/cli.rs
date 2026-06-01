@@ -384,7 +384,8 @@ pub struct MigrateFromAymlCmd {
     pub from: Option<PathBuf>,
 }
 
-/// Run the MCP server (SSE over HTTP).
+/// Run the MCP server (SSE over HTTP), or `mt mcp tools` to dump the
+/// in-process JSON-RPC tool catalogue for debugging.
 ///
 /// Authentication is layered. Set at least one of:
 ///
@@ -416,7 +417,23 @@ pub struct McpCmd {
     /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
+
+    #[argh(subcommand)]
+    pub op: Option<McpOp>,
 }
+
+#[cfg(feature = "mcp")]
+#[derive(FromArgs, Debug)]
+#[argh(subcommand)]
+pub enum McpOp {
+    Tools(McpToolsOp),
+}
+
+/// Dump the MCP tool catalogue as JSON.
+#[cfg(feature = "mcp")]
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "tools")]
+pub struct McpToolsOp {}
 
 #[cfg(feature = "mcp")]
 fn default_mcp_addr() -> String {

@@ -853,6 +853,12 @@ impl AuthConfig {
     }
 }
 
+pub fn print_tools() -> CrateResult<()> {
+    let tools = MathTutorServer::tool_router().list_all();
+    println!("{}", serde_json::to_string_pretty(&tools)?);
+    Ok(())
+}
+
 /// Run the MCP server until SIGINT/SIGTERM. On shutdown, runs one final
 /// foreground `db.sync()` so locally-acked writes land on Turso before
 /// the process exits.
@@ -906,9 +912,11 @@ pub async fn run(
     let public_url = resolve_public_url(auth.public_url.as_deref(), socket_addr)?;
 
     let auth_state = AuthState::new(&auth, &public_url, db.clone());
-    // Auth middleware is scoped to MCP transport routes
+    // Auth middleware is scoped to MCP transport routes. Body logging
+    // runs after auth so only authenticated payloads are buffered.
     let mut app = Router::new()
         .nest_service("/mcp", mcp_service)
+        .route_layer(middleware::from_fn(log_request_body))
         .route_layer(middleware::from_fn_with_state(auth_state, auth_middleware))
         .route("/health", get(health));
 
@@ -1057,6 +1065,43 @@ async fn auth_middleware(
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     use subtle::ConstantTimeEq;
     a.ct_eq(b).into()
+}
+
+const MAX_LOGGED_BODY: usize = 1 << 20;
+
+async fn log_request_body(req: Request<Body>, next: Next) -> Response {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return next.run(req).await;
+    }
+    let too_big = req
+        .headers()
+        .get(http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse::<usize>().ok())
+        .is_some_and(|n| n > MAX_LOGGED_BODY);
+    if too_big {
+        tracing::debug!("mcp request body too large to log");
+        return next.run(req).await;
+    }
+    let (parts, body) = req.into_parts();
+    let bytes = match axum::body::to_bytes(body, MAX_LOGGED_BODY).await {
+        Ok(b) => b,
+        Err(e) => {
+            // Body is consumed and can't be replayed — surface as 400 so
+            // the client retries instead of seeing a confusing 500.
+            tracing::warn!(error = %e, "mcp request body buffering failed");
+            let mut resp = Response::new(Body::empty());
+            *resp.status_mut() = StatusCode::BAD_REQUEST;
+            return resp;
+        }
+    };
+    if let Ok(s) = std::str::from_utf8(&bytes) {
+        tracing::debug!(body = %s, "mcp request body");
+    } else {
+        tracing::debug!(bytes = bytes.len(), "mcp request body (non-utf8)");
+    }
+    next.run(Request::from_parts(parts, Body::from(bytes)))
+        .await
 }
 
 /// Liveness probe
