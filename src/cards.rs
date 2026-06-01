@@ -74,7 +74,7 @@ pub fn apply_answer(
         difficulty: c.difficulty,
     });
 
-    let fsrs = FSRS::new(Some(&[])).map_err(|e| Error::Fsrs(format!("{e:?}")))?;
+    let fsrs = FSRS::new(&[]).map_err(|e| Error::Fsrs(format!("{e:?}")))?;
     let next_states = fsrs
         .next_states(memory, DESIRED_RETENTION, days_elapsed)
         .map_err(|e| Error::Fsrs(format!("{e:?}")))?;

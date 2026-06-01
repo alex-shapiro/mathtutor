@@ -55,7 +55,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = { version = "2.5", optional = true }
 
 [dev-dependencies]
-reqwest = { version = "0.13.4", features = ["json", "stream"] }
+reqwest = { version = "0.13.4", features = ["form", "json", "stream"] }
 tempfile = "3.27"
 
 [lints.clippy]
