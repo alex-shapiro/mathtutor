@@ -855,6 +855,16 @@ impl AuthConfig {
     }
 }
 
+/// Print the tool catalogue as pretty JSON on stdout. Each entry is the
+/// same `Tool` shape `tools/list` would return over the wire, with the
+/// per-tool `inputSchema` populated. Runs entirely in-process, so no DB,
+/// HTTP server, or session handshake is required.
+pub fn print_tools() -> CrateResult<()> {
+    let tools = MathTutorServer::tool_router().list_all();
+    println!("{}", serde_json::to_string_pretty(&tools)?);
+    Ok(())
+}
+
 /// Run the MCP server until SIGINT/SIGTERM. On shutdown, runs one final
 /// foreground `db.sync()` so locally-acked writes land on Turso before
 /// the process exits.

@@ -1,6 +1,8 @@
 use std::process::ExitCode;
 
 use libsql::Connection;
+#[cfg(feature = "mcp")]
+use mathtutor::cli::McpOp;
 use mathtutor::cli::{Cmd, GraphOp, LessonOp, Mt, PathOp, QuizOp};
 #[cfg(feature = "mcp")]
 use mathtutor::mcp;
@@ -61,9 +63,19 @@ async fn real_main() -> ExitCode {
 
     // `mt mcp` owns its own DB lifecycle (long-running, background sync
     // task, graceful shutdown) so it sits outside the per-command DB
-    // setup the rest of the dispatch block does.
+    // setup the rest of the dispatch block does. `mt mcp tools` is a
+    // pure in-process schema dump and needs neither DB nor server.
     #[cfg(feature = "mcp")]
     if let Cmd::Mcp(c) = cli.cmd {
+        if let Some(McpOp::Tools(_)) = c.op {
+            return match mcp::print_tools() {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(2)
+                }
+            };
+        }
         let auth = mcp::AuthConfig {
             api_key: nonempty(c.api_key.or_else(|| std::env::var("MT_API_KEY").ok())),
             admin_password: nonempty(
