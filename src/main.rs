@@ -63,8 +63,7 @@ async fn real_main() -> ExitCode {
 
     // `mt mcp` owns its own DB lifecycle (long-running, background sync
     // task, graceful shutdown) so it sits outside the per-command DB
-    // setup the rest of the dispatch block does. `mt mcp tools` is a
-    // pure in-process schema dump and needs neither DB nor server.
+    // setup the rest of the dispatch block does.
     #[cfg(feature = "mcp")]
     if let Cmd::Mcp(c) = cli.cmd {
         if let Some(McpOp::Tools(_)) = c.op {

@@ -207,8 +207,6 @@ pub struct AnswerQuizArgs {
     pub quiz_id: String,
     #[serde(default)]
     pub answer: Option<String>,
-    /// FSRS difficulty grade for this answer. Required — must be one of
-    /// the string literals `"again"`, `"hard"`, `"good"`, or `"easy"`.
     pub rating: Rating,
     pub path_id: String,
 }
@@ -855,10 +853,6 @@ impl AuthConfig {
     }
 }
 
-/// Print the tool catalogue as pretty JSON on stdout. Each entry is the
-/// same `Tool` shape `tools/list` would return over the wire, with the
-/// per-tool `inputSchema` populated. Runs entirely in-process, so no DB,
-/// HTTP server, or session handshake is required.
 pub fn print_tools() -> CrateResult<()> {
     let tools = MathTutorServer::tool_router().list_all();
     println!("{}", serde_json::to_string_pretty(&tools)?);
@@ -1073,14 +1067,8 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 
-/// Cap on the request body we'll buffer for debug logging. MCP frames
-/// are small JSON-RPC envelopes; anything bigger is almost certainly a
-/// mistake or attack and not worth holding in memory.
 const MAX_LOGGED_BODY: usize = 1 << 20;
 
-/// Buffer and log the `/mcp` request body at DEBUG. No-op when DEBUG
-/// is disabled, so production overhead is one atomic load per request.
-/// Oversized bodies are passed through without buffering.
 async fn log_request_body(req: Request<Body>, next: Next) -> Response {
     if !tracing::enabled!(tracing::Level::DEBUG) {
         return next.run(req).await;

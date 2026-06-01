@@ -422,7 +422,6 @@ pub struct McpCmd {
     pub op: Option<McpOp>,
 }
 
-/// Operations on the MCP surface that don't run the long-lived server.
 #[cfg(feature = "mcp")]
 #[derive(FromArgs, Debug)]
 #[argh(subcommand)]
@@ -430,9 +429,7 @@ pub enum McpOp {
     Tools(McpToolsOp),
 }
 
-/// Print the JSON-RPC tool catalogue (one `Tool` entry per registered
-/// tool, with `inputSchema` populated) to stdout. Runs entirely in-process
-/// — no HTTP, no DB, no session handshake.
+/// Dump the MCP tool catalogue as JSON.
 #[cfg(feature = "mcp")]
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "tools")]
