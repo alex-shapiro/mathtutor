@@ -81,7 +81,7 @@ impl argh::FromArgValue for Rating {
 
 /// Quiz difficulty. Every atom has at most one quiz per difficulty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
 #[serde(rename_all = "lowercase")]
 pub enum Difficulty {
     Easy,
@@ -123,7 +123,7 @@ impl std::str::FromStr for Difficulty {
 /// reserved for the rare case where a definition is best taught as a
 /// distinguish-this-from-look-alikes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
 #[serde(rename_all = "snake_case")]
 pub enum QuizType {
     #[default]
