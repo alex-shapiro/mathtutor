@@ -1,6 +1,6 @@
 //! Curriculum graph: AYML-backed types, loader, and `mt graph check`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -361,6 +361,34 @@ impl Graph {
         let overlay = crate::overlay::load(conn).await?;
         g.apply_overlay(overlay);
         Ok(g)
+    }
+
+    /// Targets plus the transitive closure of their prerequisites,
+    /// returned as the set of atomic concepts (no clusters). Cluster
+    /// IDs may legally appear as prereqs in the graph — meaning "all
+    /// atoms in that cluster" — so we expand any cluster encountered
+    /// into its atomic descendants and continue the walk from each.
+    pub fn reachable_atoms(&self, targets: &[String]) -> HashSet<String> {
+        let mut out: HashSet<String> = HashSet::new();
+        let mut stack: Vec<String> = targets.to_vec();
+        while let Some(id) = stack.pop() {
+            let Some(c) = self.by_id.get(&id) else {
+                continue;
+            };
+            if !c.children_ids.is_empty() {
+                // Cluster — expand to atoms and carry along any prereqs
+                // the cluster itself declares (v2 schema allows them at
+                // any level).
+                stack.extend(c.children_ids.iter().cloned());
+                stack.extend(c.prerequisites.iter().cloned());
+                continue;
+            }
+            if !out.insert(id.clone()) {
+                continue;
+            }
+            stack.extend(c.prerequisites.iter().cloned());
+        }
+        out
     }
 
     /// Validate `id` resolves to an atom (leaf concept) in the merged
@@ -913,5 +941,85 @@ mod tests {
     fn atom_rejects_unknown_id() {
         let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
         assert!(matches!(g.atom("nope"), Err(Error::AtomNotFound(_))));
+    }
+
+    fn atom(id: &str, prereqs: &[&str]) -> FlatConcept {
+        FlatConcept {
+            id: id.into(),
+            name: id.into(),
+            description: None,
+            prerequisites: prereqs.iter().map(|s| (*s).to_string()).collect(),
+            children_ids: Vec::new(),
+            lesson: None,
+            quizzes: Vec::new(),
+        }
+    }
+
+    fn cluster(id: &str, children: &[&str]) -> FlatConcept {
+        FlatConcept {
+            id: id.into(),
+            name: id.into(),
+            description: None,
+            prerequisites: Vec::new(),
+            children_ids: children.iter().map(|s| (*s).to_string()).collect(),
+            lesson: None,
+            quizzes: Vec::new(),
+        }
+    }
+
+    fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
+        let mut by_id = HashMap::new();
+        for c in concepts {
+            by_id.insert(c.id.clone(), c);
+        }
+        Graph { by_id }
+    }
+
+    #[test]
+    fn reachable_includes_transitive_prereqs() {
+        // tx.1.1 → la.2.2 → la.1.1 ; tx.1.1 → fnd.2.3.1 (different area).
+        // All four should be reachable from a single tx.1.1 target.
+        let g = graph_of(vec![
+            atom("tx.1.1", &["la.2.2", "fnd.2.3.1"]),
+            atom("la.2.2", &["la.1.1"]),
+            atom("la.1.1", &[]),
+            atom("fnd.2.3.1", &[]),
+        ]);
+        let reach = g.reachable_atoms(&["tx.1.1".to_string()]);
+        assert!(reach.contains("tx.1.1"));
+        assert!(reach.contains("la.2.2"));
+        assert!(reach.contains("la.1.1"));
+        assert!(reach.contains("fnd.2.3.1"));
+    }
+
+    #[test]
+    fn reachable_expands_cluster_prereqs_to_their_atoms() {
+        // tx.1.1's prereq points at the cluster `la.2.2`, not a specific
+        // atom. The cluster has two leaves; both must end up reachable.
+        let g = graph_of(vec![
+            atom("tx.1.1", &["la.2.2"]),
+            cluster("la.2.2", &["la.2.2.1", "la.2.2.2"]),
+            atom("la.2.2.1", &[]),
+            atom("la.2.2.2", &[]),
+        ]);
+        let reach = g.reachable_atoms(&["tx.1.1".to_string()]);
+        assert!(reach.contains("tx.1.1"));
+        assert!(reach.contains("la.2.2.1"));
+        assert!(reach.contains("la.2.2.2"));
+        // The cluster itself is not an atom and must not appear.
+        assert!(!reach.contains("la.2.2"));
+    }
+
+    #[test]
+    fn reachable_handles_diamond_without_looping() {
+        // tx.1 → A, tx.1 → B ; A → C, B → C. C must show up exactly once.
+        let g = graph_of(vec![
+            atom("tx.1", &["a", "b"]),
+            atom("a", &["c"]),
+            atom("b", &["c"]),
+            atom("c", &[]),
+        ]);
+        let reach = g.reachable_atoms(&["tx.1".to_string()]);
+        assert_eq!(reach.len(), 4);
     }
 }

@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use libsql::Connection;
 
 use crate::Result;
+use crate::cards;
 
 #[derive(Debug, Default, Clone)]
 pub struct PathProgress {
@@ -21,12 +22,13 @@ impl PathProgress {
         self.correct_quizzes.contains(quiz_id)
     }
 
+    /// Compose the per-path snapshot from its two backing tables.
+    /// `taught_atoms` is sourced from the event log; `correct_quizzes`
+    /// from the FSRS cards cache (`reps > lapses`).
     pub async fn load(conn: &Connection, path_id: &str) -> Result<Self> {
-        let taught_atoms = load_taught_atoms(conn, path_id).await?;
-        let correct_quizzes = load_correct_quizzes(conn, path_id).await?;
         Ok(Self {
-            taught_atoms,
-            correct_quizzes,
+            taught_atoms: load_taught_atoms(conn, path_id).await?,
+            correct_quizzes: cards::correct_quiz_ids(conn, path_id).await?,
         })
     }
 }
@@ -42,25 +44,7 @@ async fn load_taught_atoms(conn: &Connection, path_id: &str) -> Result<HashSet<S
         .await?;
     let mut out = HashSet::new();
     while let Some(row) = rows.next().await? {
-        let atom: String = row.get(0)?;
-        out.insert(atom);
-    }
-    Ok(out)
-}
-
-async fn load_correct_quizzes(conn: &Connection, path_id: &str) -> Result<HashSet<String>> {
-    // `reps > lapses` ⇔ at least one non-`Again` answer, because
-    // `lapses` only increments on `Again`.
-    let mut rows = conn
-        .query(
-            "SELECT quiz_id FROM cards WHERE path_id = ? AND reps > lapses",
-            libsql::params![path_id],
-        )
-        .await?;
-    let mut out = HashSet::new();
-    while let Some(row) = rows.next().await? {
-        let quiz: String = row.get(0)?;
-        out.insert(quiz);
+        out.insert(row.get(0)?);
     }
     Ok(out)
 }

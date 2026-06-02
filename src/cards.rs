@@ -12,7 +12,7 @@
 //!    remains the source of truth; [`recompute`] rebuilds the cache by
 //!    replaying every `QuizAnswered` event for a path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
@@ -120,6 +120,22 @@ pub async fn read_counts(
         u32::try_from(lapses)
             .map_err(|_| Error::CardsCorrupt(format!("invalid lapses {lapses}")))?,
     )))
+}
+
+/// Quiz ids whose card has at least one non-`Again` answer on this
+/// path. `reps > lapses` because `lapses` only increments on `Again`.
+pub async fn correct_quiz_ids(conn: &Connection, path_id: &str) -> Result<HashSet<String>> {
+    let mut rows = conn
+        .query(
+            "SELECT quiz_id FROM cards WHERE path_id = ? AND reps > lapses",
+            params![path_id],
+        )
+        .await?;
+    let mut out = HashSet::new();
+    while let Some(row) = rows.next().await? {
+        out.insert(row.get(0)?);
+    }
+    Ok(out)
 }
 
 /// Load the cached row for one `(path, quiz)` pair, if present.

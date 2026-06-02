@@ -655,7 +655,7 @@ async fn compute_tree(
     let manifest = graph::load_manifest_default(graph_dir)?;
     let progress = PathProgress::load(conn, path_id).await?;
 
-    let reachable = tree::reachable_atoms(&g, &p.target_atoms);
+    let reachable = g.reachable_atoms(&p.target_atoms);
     let spine = tree::build_spine(&g, &reachable);
 
     let targets_total = p.target_atoms.len();

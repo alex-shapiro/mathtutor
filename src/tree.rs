@@ -33,7 +33,7 @@ pub async fn cmd_path_tree(
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 
     let targets: HashSet<String> = p.target_atoms.iter().cloned().collect();
-    let reachable = reachable_atoms(&g, &p.target_atoms);
+    let reachable = g.reachable_atoms(&p.target_atoms);
     let spine = build_spine(&g, &reachable);
     let next_atom = scheduler::next_action(&g, &p, &progress, &due)
         .atom_id()
@@ -96,37 +96,6 @@ pub async fn cmd_path_tree(
         println!();
     }
     Ok(())
-}
-
-/// Targets plus the transitive closure of their prerequisites, returned
-/// as the set of atomic concepts (no clusters). Cluster IDs may legally
-/// appear as prereqs in the graph — meaning "all atoms in that cluster"
-/// — so we expand any cluster encountered into its atomic descendants
-/// and continue the walk from each of those.
-pub fn reachable_atoms(g: &Graph, targets: &[String]) -> HashSet<String> {
-    let mut out: HashSet<String> = HashSet::new();
-    let mut stack: Vec<String> = targets.to_vec();
-    while let Some(id) = stack.pop() {
-        let Some(c) = g.by_id.get(&id) else { continue };
-        if !c.children_ids.is_empty() {
-            // Cluster — expand to atoms, and carry along any prereqs the
-            // cluster itself declares (v2 schema allows them at any level).
-            for child in &c.children_ids {
-                stack.push(child.clone());
-            }
-            for prereq in &c.prerequisites {
-                stack.push(prereq.clone());
-            }
-            continue;
-        }
-        if !out.insert(id.clone()) {
-            continue;
-        }
-        for prereq in &c.prerequisites {
-            stack.push(prereq.clone());
-        }
-    }
-    out
 }
 
 /// Cluster IDs (and atom IDs) needed to root every reachable atom in the
@@ -256,7 +225,7 @@ mod tests {
 
     use crate::graph::{FlatConcept, Graph};
 
-    use super::{build_spine, natural_id_key, parent_id, reachable_atoms};
+    use super::{build_spine, natural_id_key, parent_id};
 
     fn cluster(id: &str, children: &[&str]) -> FlatConcept {
         FlatConcept {
@@ -304,54 +273,6 @@ mod tests {
         assert_eq!(parent_id("la.5.4.7"), Some("la.5.4"));
         assert_eq!(parent_id("la.5"), Some("la"));
         assert_eq!(parent_id("la"), None);
-    }
-
-    #[test]
-    fn reachable_includes_transitive_prereqs() {
-        // tx.1.1 → la.2.2 → la.1.1 ; tx.1.1 → fnd.2.3.1 (different area).
-        // All four should be reachable from a single tx.1.1 target.
-        let g = graph_of(vec![
-            atom("tx.1.1", &["la.2.2", "fnd.2.3.1"]),
-            atom("la.2.2", &["la.1.1"]),
-            atom("la.1.1", &[]),
-            atom("fnd.2.3.1", &[]),
-        ]);
-        let reach = reachable_atoms(&g, &["tx.1.1".to_string()]);
-        assert!(reach.contains("tx.1.1"));
-        assert!(reach.contains("la.2.2"));
-        assert!(reach.contains("la.1.1"));
-        assert!(reach.contains("fnd.2.3.1"));
-    }
-
-    #[test]
-    fn reachable_expands_cluster_prereqs_to_their_atoms() {
-        // tx.1.1's prereq points at the cluster `la.2.2`, not a specific
-        // atom. The cluster has two leaves; both must end up reachable.
-        let g = graph_of(vec![
-            atom("tx.1.1", &["la.2.2"]),
-            cluster("la.2.2", &["la.2.2.1", "la.2.2.2"]),
-            atom("la.2.2.1", &[]),
-            atom("la.2.2.2", &[]),
-        ]);
-        let reach = reachable_atoms(&g, &["tx.1.1".to_string()]);
-        assert!(reach.contains("tx.1.1"));
-        assert!(reach.contains("la.2.2.1"));
-        assert!(reach.contains("la.2.2.2"));
-        // The cluster itself is not an atom and must not appear.
-        assert!(!reach.contains("la.2.2"));
-    }
-
-    #[test]
-    fn reachable_handles_diamond_without_looping() {
-        // tx.1 → A, tx.1 → B ; A → C, B → C. C must show up exactly once.
-        let g = graph_of(vec![
-            atom("tx.1", &["a", "b"]),
-            atom("a", &["c"]),
-            atom("b", &["c"]),
-            atom("c", &[]),
-        ]);
-        let reach = reachable_atoms(&g, &["tx.1".to_string()]);
-        assert_eq!(reach.len(), 4);
     }
 
     #[test]

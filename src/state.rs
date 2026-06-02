@@ -13,7 +13,7 @@ use crate::db;
 use crate::graph::{FlatConcept, Graph};
 use crate::path::{PathFile, load_path, resolve_id};
 use crate::progress::PathProgress;
-use crate::{scheduler, tree};
+use crate::scheduler;
 
 /// Per-path progress snapshot returned by `compute_state`.
 #[derive(Debug, Serialize)]
@@ -96,7 +96,7 @@ pub async fn compute_state(
     let progress = PathProgress::load(conn, &id).await?;
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 
-    let reachable = tree::reachable_atoms(&g, &p.target_atoms);
+    let reachable = g.reachable_atoms(&p.target_atoms);
     let complete = complete_set(&g, &reachable, &progress);
     let (targets, reach) = counters(&p, &reachable, &complete, &progress);
 
@@ -126,7 +126,7 @@ pub fn compute_progress(
     p: &PathFile,
     progress: &PathProgress,
 ) -> (TargetProgress, ReachProgress) {
-    let reachable = tree::reachable_atoms(g, &p.target_atoms);
+    let reachable = g.reachable_atoms(&p.target_atoms);
     let complete = complete_set(g, &reachable, progress);
     counters(p, &reachable, &complete, progress)
 }
