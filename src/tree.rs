@@ -414,8 +414,31 @@ mod tests {
         assert!(!spine.contains("la"));
     }
 
+    /// Build a `PathProgress` from a synthetic event list. Mirrors the
+    /// projection that `PathProgress::load` runs over SQL: taught atoms
+    /// from `LessonTaught` / `LessonAuthored`, correct quizzes from any
+    /// `QuizAnswered` with a non-`Again` rating.
     fn progress_of(events: &[Event]) -> PathProgress {
-        PathProgress::from_events(events)
+        use crate::types::Rating;
+        let mut p = PathProgress::default();
+        for e in events {
+            match e.kind {
+                EventKind::LessonTaught | EventKind::LessonAuthored => {
+                    if let Some(atom) = &e.atom {
+                        p.taught_atoms.insert(atom.clone());
+                    }
+                }
+                EventKind::QuizAnswered => {
+                    if let (Some(q), Some(r)) = (&e.quiz, e.payload.rating)
+                        && Rating::is_correct(r)
+                    {
+                        p.correct_quizzes.insert(q.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        p
     }
 
     #[test]
