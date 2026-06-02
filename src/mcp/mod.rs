@@ -145,9 +145,13 @@ pub struct GetTreeArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct GetSyllabusArgs {
     pub path_id: String,
-    /// Max upcoming atoms to return. Omit for the full upcoming list.
-    #[serde(default)]
-    pub n: Option<usize>,
+    /// Max upcoming atoms to return. Defaults to 10 when omitted.
+    #[serde(default = "default_syllabus_n")]
+    pub n: usize,
+}
+
+fn default_syllabus_n() -> usize {
+    10
 }
 
 #[derive(Deserialize, JsonSchema)]

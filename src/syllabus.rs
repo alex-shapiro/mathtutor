@@ -24,8 +24,7 @@ pub struct SyllabusView {
     pub path: String,
     pub goal: String,
     /// Total upcoming-untaught atoms reachable from the path's targets.
-    /// `atoms.len() < total_remaining` iff the caller passed `--n` and the
-    /// view was truncated.
+    /// `atoms.len() < total_remaining` whenever `n` truncates the view.
     pub total_remaining: usize,
     pub atoms: Vec<SyllabusAtom>,
 }
@@ -41,7 +40,7 @@ pub struct SyllabusAtom {
 pub async fn cmd_path_syllabus(
     conn: &Connection,
     explicit_id: Option<&str>,
-    n: Option<usize>,
+    n: usize,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
     let view = compute_syllabus(conn, explicit_id, n, graph_dir).await?;
@@ -55,7 +54,7 @@ pub async fn cmd_path_syllabus(
 pub async fn compute_syllabus(
     conn: &Connection,
     explicit_id: Option<&str>,
-    n: Option<usize>,
+    n: usize,
     graph_dir: Option<&Path>,
 ) -> Result<SyllabusView> {
     let id = resolve_id(conn, explicit_id).await?;
@@ -67,7 +66,7 @@ pub async fn compute_syllabus(
     let total_remaining = upcoming.len();
     let atoms: Vec<SyllabusAtom> = upcoming
         .into_iter()
-        .take(n.unwrap_or(usize::MAX))
+        .take(n)
         .filter_map(|aid| {
             g.by_id.get(&aid).map(|c| SyllabusAtom {
                 id: c.id.clone(),

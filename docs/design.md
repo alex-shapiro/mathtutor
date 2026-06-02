@@ -47,7 +47,7 @@ mt path list                       # list all paths with goal / progress
 mt path new <GOAL> --atom <ID>...  # start a new learning path
 mt path state [--path P]           # one-screen status summary
 mt path next  [--path P]           # next scheduled action (AYML on stdout)
-mt path syllabus [--path P] [-n N] # upcoming lesson topics (no bodies)
+mt path syllabus [--path P] [-n N] # upcoming lesson topics (no bodies; default N=10)
 mt path tree  [--path P]           # full reachable-graph progress view
 
 # Curriculum lookup (read-only)
@@ -282,8 +282,8 @@ or is empty. Exit codes: `0` ok; `1` scheduler / state-read failure;
 event log, `syllabus` walks the path's prerequisite graph and lists every
 upcoming atom whose lesson hasn't been taught yet, in scheduler-teach
 order. Lesson bodies are deliberately omitted — this is a roadmap, not a
-reader. `-n N` truncates the list; `total_remaining` always reports the
-untruncated count.
+reader. `-n N` caps the list (default 10); `total_remaining` always
+reports the untruncated count.
 
 ```yaml
 schema_version: 1

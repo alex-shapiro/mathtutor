@@ -121,9 +121,9 @@ pub struct PathSyllabusCmd {
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// max upcoming atoms to return (omit for all)
-    #[argh(option, short = 'n')]
-    pub n: Option<usize>,
+    /// max upcoming atoms to return (default: 10)
+    #[argh(option, short = 'n', default = "10")]
+    pub n: usize,
 
     /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
     #[argh(option)]

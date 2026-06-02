@@ -64,8 +64,8 @@ struct GetTree {
 /// roadmap, not the do-iterator.
 struct GetSyllabus {
     path_id: String,
-    /// Max upcoming atoms to return. Omit for the full upcoming list.
-    n: Option<usize>,
+    /// Max upcoming atoms to return. Defaults to 10 when omitted.
+    n: usize,
 }
 
 /// Show a detailed view of a curriculum node (atom, cluster, or area).
