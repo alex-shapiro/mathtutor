@@ -2,9 +2,8 @@
 //!
 //! Card state lives in two places:
 //!
-//! 1. An in-memory step, [`apply_answer`], takes a previous [`CardState`]
-//!    plus a new rating/timestamp and produces the next state. Pure FSRS
-//!    — no I/O.
+//! 1. In-memory step, [`apply_answer`], takes a previous [`CardState`]
+//!    plus a new rating/timestamp and produces the next state.
 //!
 //! 2. SQL helpers read and write the `cards` table, a write-through cache
 //!    of the latest FSRS state per `(path, quiz)` so the scheduler can
@@ -26,7 +25,7 @@ use crate::{Error, Result};
 const DESIRED_RETENTION: f32 = 0.9;
 
 /// FSRS state for a single quiz card. The fields exist precisely when a
-/// card has been answered at least once — `apply_answer(None, …)` is the
+/// card has been answered at least once. `apply_answer(None, …)` is the
 /// first step that produces a state, so every field is always populated.
 #[derive(Debug, Clone, Copy)]
 pub struct CardState {
@@ -236,10 +235,10 @@ async fn upsert_card_row(
 /// Drop every cached row for `path_id` and rebuild from the event log.
 /// Use after a suspected cache corruption or a schema-altering migration.
 ///
-/// The replay is wrapped in one transaction — including the event-log
-/// read — so concurrent `QuizAnswered` appends can't slip in between
-/// the snapshot we fold and the rows we write back, and a mid-rebuild
-/// failure leaves the existing cache in place rather than half-erased.
+/// The replay is wrapped in a transaction so concurrent `QuizAnswered`
+/// appends can't slip in between the snapshot we fold and the rows we
+/// write back, and a mid-rebuild failure leaves the existing cache in
+/// place rather than half-erased.
 pub async fn recompute(conn: &Connection, path_id: &str) -> Result<()> {
     let tx = conn.transaction().await?;
     let events = event_log::load(&tx, path_id).await?;
@@ -267,8 +266,7 @@ pub async fn recompute(conn: &Connection, path_id: &str) -> Result<()> {
 /// full rebuild does K upserts instead of N.
 fn fold_history(path_id: &str, events: &[Event]) -> Result<Vec<CardRow>> {
     // Group answered events per quiz, in event-log order. The log is
-    // already chronological — `ORDER BY id ASC` in `event_log::load` —
-    // so a single pass suffices to bucket the history.
+    // pre-sorted chronologically.
     let mut history: HashMap<String, Vec<(DateTime<Utc>, Rating)>> = HashMap::new();
     for e in events {
         if e.kind != EventKind::QuizAnswered {

@@ -175,7 +175,7 @@ fn info_sidecar(local_path: &Path) -> PathBuf {
 }
 
 /// `true` when there's a plain local `SQLite` file at `local_path` but no
-/// replica metadata — i.e. the user previously ran `mt` without
+/// replica metadata. This can occur if the user previously ran `mt` without
 /// `TURSO_*` set and is now turning sync on.
 fn needs_replica_upgrade(local_path: &Path) -> bool {
     local_path.exists() && !info_sidecar(local_path).exists()
@@ -187,9 +187,9 @@ fn needs_replica_upgrade(local_path: &Path) -> bool {
 /// to the current schema, populated from the backup via `ATTACH`, and
 /// synced to push the rows up to Turso.
 ///
-/// Bails out if `<path>.preupgrade` already exists — that means a prior
-/// upgrade attempt left state behind, and silently overwriting it could
-/// destroy whatever the user was trying to recover.
+/// Bails out if `<path>.preupgrade` already exists. The user has already
+/// upgraded, and a silently overwrite will destroy whatever the user
+/// was trying to recover.
 async fn upgrade_local_to_replica(local_path: &Path, sync: &SyncConfig) -> Result<Database> {
     let backup_path = {
         let mut name = local_path.file_name().unwrap_or_default().to_os_string();
@@ -340,7 +340,7 @@ pub async fn open_default() -> Result<Database> {
 
 /// Push local writes to the remote Turso replica if sync is configured.
 /// No-op for local-only databases. On timeout (after `SYNC_TIMEOUT`) or
-/// transport failure we warn to stderr and return — libSQL will retry
+/// transport failure we warn to stderr and return. libSQL will retry
 /// on the next sync, so a transient hiccup never fails a CLI command.
 pub async fn maybe_sync(db: &Database, cfg: &DbConfig) {
     if cfg.sync.is_none() {

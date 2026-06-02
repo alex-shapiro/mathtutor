@@ -108,8 +108,8 @@ impl MathTutorServer {
             .map_err(|e| map_protocol_error(&e))
     }
 
-    /// Non-blocking sync after a state-modifying tool. Fire-and-forget —
-    /// failures show up in stderr; libSQL retries on the next sync.
+    /// Non-blocking sync after a state-modifying tool.
+    /// Failures are logged to stderr.
     fn spawn_sync(&self) {
         let db = self.db.clone();
         let cfg = self.cfg.clone();
@@ -955,8 +955,7 @@ pub async fn run(
     // Drain the background sync task before the final sync so we don't
     // race with it on the same `Database` handle.
     background.await.ok();
-    // Final sync — ensure every locally-acked write lands on Turso before
-    // the process exits. Best-effort; `maybe_sync` already swallows errors.
+    // Best-effort sync to push local writes to Turso before process exit
     db::maybe_sync(&db, &cfg_arc).await;
     tracing::info!("mt mcp shutdown complete");
     Ok(())
@@ -980,12 +979,7 @@ struct AuthState {
     /// is disabled.
     db: Option<Arc<Database>>,
     /// Pre-formatted `WWW-Authenticate` value pointing at the protected-
-    /// resource metadata, so OAuth-aware clients can discover the AS on
-    /// 401s. Always populated — even bearer-only setups can advertise the
-    /// resource ID, the lack of an authorization server just shows up as
-    /// no `authorization_servers` entry in the metadata if the client
-    /// fetches it (and bearer-only deployments shouldn't ship that route
-    /// in the first place).
+    /// resource metadata so OAuth-aware clients can discover the AS on 401.
     www_authenticate: Arc<str>,
 }
 
@@ -1018,8 +1012,7 @@ struct TokenQuery {
 /// Layered bearer / OAuth auth on `/mcp`. Order:
 ///
 /// 1. `Authorization: Bearer <token>` header.
-/// 2. `?token=<token>` query parameter (legacy `EventSource` fallback,
-///    bearer mode only — Claude clients don't use this path).
+/// 2. `?token=<token>` query parameter (legacy `EventSource` fallback, bearer mode only).
 ///
 /// The presented value is matched against the static API key first
 /// (when enabled), then looked up as an OAuth access token (when
@@ -1087,8 +1080,8 @@ async fn log_request_body(req: Request<Body>, next: Next) -> Response {
     let bytes = match axum::body::to_bytes(body, MAX_LOGGED_BODY).await {
         Ok(b) => b,
         Err(e) => {
-            // Body is consumed and can't be replayed — surface as 400 so
-            // the client retries instead of seeing a confusing 500.
+            // Body is consumed and can't be replayed.
+            // Surface as 400 so the client retries instead of seeing a confusing 500.
             tracing::warn!(error = %e, "mcp request body buffering failed");
             let mut resp = Response::new(Body::empty());
             *resp.status_mut() = StatusCode::BAD_REQUEST;

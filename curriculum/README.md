@@ -1,4 +1,4 @@
-# Mathematics for Deep Learning Research — Curriculum Graph
+# Math Tutor Curriculum Graph
 
 A hierarchical, prerequisite-aware concept graph covering the mathematical
 foundations needed to deeply understand contemporary deep-learning research,
@@ -13,7 +13,7 @@ with a focus on:
 ```
 curriculum/
 ├── README.md            (this file)
-├── SCHEMA.md            (YAML schema spec — human-readable)
+├── SCHEMA.md            (YAML schema spec)
 └── graph/
     ├── manifest.yaml    (top-level area registry)
     └── areas/

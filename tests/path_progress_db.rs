@@ -79,8 +79,7 @@ async fn correct_answer_lands_in_correct_quizzes() {
 
 #[tokio::test]
 async fn only_again_answers_do_not_count_as_correct() {
-    // An `Again` answer keeps `lapses == reps`, so `reps > lapses` is false.
-    // The cards row exists but the quiz is not "answered correctly."
+    // An `Again` answer keeps `lapses == reps`
     let tmp = TempDir::new().unwrap();
     let conn = common::fresh_db(&tmp, PATH_ID).await;
     event_log::append(
@@ -102,9 +101,8 @@ async fn only_again_answers_do_not_count_as_correct() {
 
 #[tokio::test]
 async fn earlier_correct_answer_survives_later_again() {
-    // Get it right, then later get it wrong: the quiz still counts as
-    // "answered correctly at least once" — `reps` grew by 2, `lapses`
-    // grew by 1, so `reps > lapses` still holds.
+    // Get it right, then later get it wrong.
+    // The quiz still counts as "answered correctly at least once"
     let tmp = TempDir::new().unwrap();
     let conn = common::fresh_db(&tmp, PATH_ID).await;
     event_log::append(

@@ -59,8 +59,7 @@ pub async fn cmd_graph_list(
 }
 
 /// Build the `mt graph show` view (atom / cluster / area) for `id`
-/// against the provided graph and manifest. Pure data — used by the
-/// CLI for AYML output and by the MCP `GetItem` tool for JSON.
+/// against the provided graph and manifest.
 pub fn show_view(g: &Graph, manifest: &Manifest, id: &str) -> Result<ShowView> {
     if let Some(c) = g.by_id.get(id) {
         return Ok(ShowView::Concept(concept_view(g, c)));
@@ -162,7 +161,7 @@ pub struct AtomView {
     pub prerequisites: Vec<ChildBrief>,
     pub has_lesson: bool,
     pub quizzes: usize,
-    /// Set when `--path P` is supplied — see [`ChildBrief::status`].
+    /// Set when `--path P` is supplied. See [`ChildBrief::status`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<AtomStatus>,
 }

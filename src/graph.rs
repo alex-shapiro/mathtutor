@@ -12,9 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::types::{Difficulty, QuizType};
 use crate::{Error, Result};
 
-/// Curriculum bytes baked into the binary at compile time. Lets `mt`
-/// ship as a single artifact — no checked-out repo required at runtime.
-/// The `--graph DIR` CLI flag and `MT_GRAPH` env var both override this
+/// Curriculum bytes baked into the binary at compile time.
+/// The `--graph DIR` CLI flag and `MT_GRAPH` env override this
 /// for development against a working tree.
 static EMBEDDED_GRAPH: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/curriculum/graph");
 
@@ -111,7 +110,7 @@ struct NodeRaw {
 
 // ── Unified concept tree ────────────────────────────────────────────
 
-/// Normalized concept node — used for validation and scheduling regardless of schema.
+/// Concept node
 #[derive(Debug, Clone)]
 struct Concept {
     id: String,
@@ -322,7 +321,7 @@ impl Graph {
         Ok(Self { by_id })
     }
 
-    /// Load curriculum from compiled-in bytes — no filesystem access.
+    /// Load curriculum from compiled-in bytes
     pub fn load_embedded() -> Result<Self> {
         let manifest = load_manifest_embedded()?;
         let mut by_id = HashMap::new();
@@ -349,9 +348,9 @@ impl Graph {
         Self::load_embedded()
     }
 
-    /// Effective graph "as the user sees it" — shipped curriculum with
-    /// the user overlay applied. The single entry point for scheduler /
-    /// tree / state queries; consumers stay overlay-unaware.
+    /// Effective graph "as the user sees it", merging the shipped curriculum
+    /// and user overlay. This is the entrypoint for scheduler, tree, and state
+    /// queries.
     ///
     /// Conflict resolution rule: an overlay lesson, quiz, or tombstone
     /// always overrides a built-in item with the same ID. Tombstones
@@ -421,10 +420,10 @@ impl Graph {
     fn apply_overlay(&mut self, overlay: crate::overlay::Overlay) {
         for (atom_id, entry) in overlay.atoms {
             let Some(c) = self.by_id.get_mut(&atom_id) else {
-                // Atom isn't in the shipped graph — skip silently. A
-                // future graph version may add it, at which point the
-                // overlay starts taking effect; or the user is welcome
-                // to clean up the overlay manually.
+                // Atom is not in the shipped graph and should be skipped.
+                // A future graph version may add it, at which point the
+                // overlay starts taking effect; or the user can clean
+                // up the overlay manually.
                 continue;
             };
             if entry.lesson.is_some() {
