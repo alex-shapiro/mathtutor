@@ -194,12 +194,12 @@ async fn list_summaries(conn: &Connection, graph_dir: Option<&Path>) -> Result<V
         let created_str: String = row.get(2)?;
         let created_at = db::parse_ts(&created_str)?;
         let p = load_path(conn, &id).await?;
-        let events = event_log::load(conn, &id).await?;
+        let progress = crate::progress::PathProgress::load(conn, &id).await?;
         let targets = p.target_atoms.len();
         let learned = p
             .target_atoms
             .iter()
-            .filter(|a| crate::scheduler::is_atom_complete(&g, &events, a))
+            .filter(|a| crate::scheduler::is_atom_complete(&g, &progress, a))
             .count();
         let learned_pct = if targets > 0 {
             learned * 100 / targets

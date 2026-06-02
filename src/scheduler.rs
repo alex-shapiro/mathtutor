@@ -12,6 +12,7 @@ use crate::cards;
 use crate::event_log::{self, Event, EventKind};
 use crate::graph::{FlatConcept, Graph};
 use crate::path::{self, PathFile};
+use crate::progress::PathProgress;
 use crate::types::{Difficulty, QuizType, Rating};
 use crate::{Error, Result};
 
@@ -43,8 +44,9 @@ pub async fn compute_next(
     let p = path::load_path(&tx, &id).await?;
     let events = event_log::load(&tx, &id).await?;
     let due = cards::due_quizzes(&tx, &id, Utc::now()).await?;
+    let progress = PathProgress::from_events(&events);
 
-    let action = next_action(&g, &p, &events, &due);
+    let action = next_action(&g, &p, &progress, &due);
     // Build the envelope first — it reads the log to compute `history`,
     // and we want `history.repetitions` to count past presentations only,
     // not the one we are about to log below.
@@ -123,7 +125,7 @@ impl Action {
 pub fn next_action(
     g: &Graph,
     p: &PathFile,
-    events: &[Event],
+    progress: &PathProgress,
     due_quizzes: &[(String, DateTime<Utc>)],
 ) -> Action {
     if let Some((quiz_id, atom_id)) = first_due_card(g, due_quizzes) {
@@ -132,7 +134,7 @@ pub fn next_action(
 
     let mut visited = HashSet::new();
     for target in &p.target_atoms {
-        if let Some(action) = next_atom_action(g, events, target, &mut visited) {
+        if let Some(action) = next_atom_action(g, progress, target, &mut visited) {
             return action;
         }
     }
@@ -143,7 +145,7 @@ pub fn next_action(
 /// pending action, or `None` if everything reachable is complete.
 fn next_atom_action(
     g: &Graph,
-    events: &[Event],
+    progress: &PathProgress,
     id: &str,
     visited: &mut HashSet<String>,
 ) -> Option<Action> {
@@ -153,14 +155,14 @@ fn next_atom_action(
     let c = g.by_id.get(id)?;
 
     for prereq in &c.prerequisites {
-        if let Some(action) = next_atom_action(g, events, prereq, visited) {
+        if let Some(action) = next_atom_action(g, progress, prereq, visited) {
             return Some(action);
         }
     }
 
     if !c.children_ids.is_empty() {
         for child_id in &c.children_ids {
-            if let Some(action) = next_atom_action(g, events, child_id, visited) {
+            if let Some(action) = next_atom_action(g, progress, child_id, visited) {
                 return Some(action);
             }
         }
@@ -177,7 +179,7 @@ fn next_atom_action(
     // yet (e.g. authored under a previous path, or this is the first
     // walk and we haven't created/presented it yet). Surface the stored
     // body before any quiz so the user gets context.
-    if !lesson_taught_in_path(events, id) {
+    if !progress.lesson_taught(id) {
         return Some(Action::PresentLesson {
             atom_id: id.to_string(),
         });
@@ -191,7 +193,7 @@ fn next_atom_action(
                 });
             }
             Some(quiz) => {
-                if !quiz_answered_correctly(events, &quiz.id) {
+                if !progress.quiz_answered_correctly(&quiz.id) {
                     return Some(Action::PresentQuiz {
                         quiz_id: quiz.id.clone(),
                         atom_id: id.to_string(),
@@ -217,37 +219,10 @@ fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<
     None
 }
 
-/// Has this quiz ever been answered correctly (any rating except
-/// `Again`)? Used by the per-atom walker to decide whether to advance
-/// past a quiz; `Again` is the only rating that triggers immediate
-/// re-presentation, since `Hard`/`Good`/`Easy` all mean "got it right"
-/// and re-presentation timing for those is FSRS's job.
-pub fn quiz_answered_correctly(events: &[Event], quiz_id: &str) -> bool {
-    events.iter().any(|e| {
-        matches!(e.kind, EventKind::QuizAnswered)
-            && e.quiz.as_deref() == Some(quiz_id)
-            && e.payload.rating.is_some_and(Rating::is_correct)
-    })
-}
-
-/// Has this atom's lesson been presented to the user during *this* path?
-/// `mt lesson upsert` and `mt path next → present_lesson` both auto-log
-/// `LessonTaught` so authoring or re-presenting count as teaching.
-///
-/// `LessonAuthored` is accepted as an equivalent signal so that paths
-/// created before `LessonTaught` existed still register correctly —
-/// authoring a lesson always implies presenting it (see AGENTS.md's
-/// `create_lesson` playbook).
-pub fn lesson_taught_in_path(events: &[Event], atom_id: &str) -> bool {
-    events.iter().any(|e| {
-        matches!(e.kind, EventKind::LessonTaught | EventKind::LessonAuthored)
-            && e.atom.as_deref() == Some(atom_id)
-    })
-}
-
-/// "Complete" = lesson stored AND all three difficulty quizzes exist
-/// AND each has at least one correct answer in the log.
-pub fn is_atom_complete(g: &Graph, events: &[Event], atom_id: &str) -> bool {
+/// "Complete" = lesson stored in the merged graph AND all three
+/// difficulty quizzes exist AND each has at least one correct answer
+/// (per `PathProgress`).
+pub fn is_atom_complete(g: &Graph, progress: &PathProgress, atom_id: &str) -> bool {
     let Some(c) = g.by_id.get(atom_id) else {
         return false;
     };
@@ -258,26 +233,8 @@ pub fn is_atom_complete(g: &Graph, events: &[Event], atom_id: &str) -> bool {
         c.quizzes
             .iter()
             .find(|q| q.difficulty == *diff)
-            .is_some_and(|q| quiz_answered_correctly(events, &q.id))
+            .is_some_and(|q| progress.quiz_answered_correctly(&q.id))
     })
-}
-
-/// Wall-clock time at which this atom became complete (max ts among
-/// the three first-correct answers). `None` if not yet complete.
-pub fn atom_completed_at(g: &Graph, events: &[Event], atom_id: &str) -> Option<DateTime<Utc>> {
-    let c = g.by_id.get(atom_id)?;
-    c.lesson.as_ref()?;
-    let mut latest: Option<DateTime<Utc>> = None;
-    for diff in DIFFICULTIES {
-        let quiz = c.quizzes.iter().find(|q| q.difficulty == diff)?;
-        let first_correct = events.iter().find(|e| {
-            matches!(e.kind, EventKind::QuizAnswered)
-                && e.quiz.as_deref() == Some(&quiz.id)
-                && e.payload.rating.is_some_and(Rating::is_correct)
-        })?;
-        latest = Some(latest.map_or(first_correct.ts, |l| l.max(first_correct.ts)));
-    }
-    latest
 }
 
 // ── Quiz history (derived from the event log on every present_quiz) ──

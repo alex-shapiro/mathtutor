@@ -24,6 +24,7 @@ pub mod graph;
 pub mod mcp;
 pub mod migrate;
 pub mod path;
+pub mod progress;
 pub mod scheduler;
 pub mod state;
 pub mod store;

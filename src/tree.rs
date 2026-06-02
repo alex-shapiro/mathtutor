@@ -14,9 +14,9 @@ use libsql::Connection;
 
 use crate::Result;
 use crate::cards;
-use crate::event_log::{self, Event};
 use crate::graph::{self, FlatConcept, Graph};
 use crate::path::{load_path, resolve_id};
+use crate::progress::PathProgress;
 use crate::scheduler;
 use crate::types::Difficulty;
 
@@ -29,13 +29,13 @@ pub async fn cmd_path_tree(
     let p = load_path(conn, &id).await?;
     let g = Graph::load_for_path(conn, graph_dir).await?;
     let manifest = graph::load_manifest_default(graph_dir)?;
-    let events = event_log::load(conn, &id).await?;
+    let progress = PathProgress::load(conn, &id).await?;
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 
     let targets: HashSet<String> = p.target_atoms.iter().cloned().collect();
     let reachable = reachable_atoms(&g, &p.target_atoms);
     let spine = build_spine(&g, &reachable);
-    let next_atom = scheduler::next_action(&g, &p, &events, &due)
+    let next_atom = scheduler::next_action(&g, &p, &progress, &due)
         .atom_id()
         .map(String::from);
 
@@ -43,7 +43,7 @@ pub async fn cmd_path_tree(
     let target_learned = p
         .target_atoms
         .iter()
-        .filter(|a| scheduler::is_atom_complete(&g, &events, a))
+        .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
         .count();
     let pct = if total > 0 {
         target_learned * 100 / total
@@ -53,11 +53,11 @@ pub async fn cmd_path_tree(
     let reach_total = reachable.len();
     let reach_taught = reachable
         .iter()
-        .filter(|a| scheduler::lesson_taught_in_path(&events, a))
+        .filter(|a| progress.lesson_taught(a))
         .count();
     let reach_learned = reachable
         .iter()
-        .filter(|a| scheduler::is_atom_complete(&g, &events, a))
+        .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
         .count();
     println!("path:        {}", p.id);
     println!("goal:        {}", p.goal);
@@ -84,7 +84,7 @@ pub async fn cmd_path_tree(
         for (i, root) in roots.iter().enumerate() {
             render_node(
                 &g,
-                &events,
+                &progress,
                 &spine,
                 &targets,
                 root,
@@ -178,7 +178,7 @@ fn natural_id_key(id: &str) -> Vec<u32> {
 #[allow(clippy::too_many_arguments)]
 fn render_node(
     g: &Graph,
-    events: &[Event],
+    progress: &PathProgress,
     spine: &HashSet<String>,
     targets: &HashSet<String>,
     c: &FlatConcept,
@@ -190,7 +190,7 @@ fn render_node(
     let child_prefix = format!("{prefix}{}", if is_last { "   " } else { "│  " });
 
     if c.children_ids.is_empty() {
-        let badge = state_badge(events, c);
+        let badge = state_badge(progress, c);
         let star = if targets.contains(&c.id) { " *" } else { "" };
         let mark = if next_atom == Some(c.id.as_str()) {
             "  ← NEXT"
@@ -212,7 +212,7 @@ fn render_node(
     for (i, kid) in kids.iter().enumerate() {
         render_node(
             g,
-            events,
+            progress,
             spine,
             targets,
             kid,
@@ -223,25 +223,25 @@ fn render_node(
     }
 }
 
-pub fn state_badge(events: &[Event], c: &FlatConcept) -> String {
+pub fn state_badge(progress: &PathProgress, c: &FlatConcept) -> String {
     // The `L` slot reflects "taught in this path" (per-path), not just
     // "lesson body exists in the graph" (cross-path / authored anywhere).
-    let lesson = if scheduler::lesson_taught_in_path(events, &c.id) {
+    let lesson = if progress.lesson_taught(&c.id) {
         'L'
     } else {
         '·'
     };
-    let easy = quiz_badge(events, c, Difficulty::Easy, 'E');
-    let med = quiz_badge(events, c, Difficulty::Medium, 'M');
-    let hard = quiz_badge(events, c, Difficulty::Hard, 'H');
+    let easy = quiz_badge(progress, c, Difficulty::Easy, 'E');
+    let med = quiz_badge(progress, c, Difficulty::Medium, 'M');
+    let hard = quiz_badge(progress, c, Difficulty::Hard, 'H');
     format!("[{lesson}{easy}{med}{hard}]")
 }
 
-fn quiz_badge(events: &[Event], c: &FlatConcept, diff: Difficulty, upper: char) -> char {
+fn quiz_badge(progress: &PathProgress, c: &FlatConcept, diff: Difficulty, upper: char) -> char {
     match c.quizzes.iter().find(|q| q.difficulty == diff) {
         None => '·',
         Some(q) => {
-            if scheduler::quiz_answered_correctly(events, &q.id) {
+            if progress.quiz_answered_correctly(&q.id) {
                 upper
             } else {
                 upper.to_ascii_lowercase()
@@ -258,6 +258,7 @@ mod tests {
 
     use crate::event_log::{Event, EventKind, EventPayload};
     use crate::graph::{FlatConcept, Graph, Quiz};
+    use crate::progress::PathProgress;
     use crate::types::{Difficulty, Rating};
 
     use super::{build_spine, natural_id_key, parent_id, reachable_atoms, state_badge};
@@ -413,10 +414,14 @@ mod tests {
         assert!(!spine.contains("la"));
     }
 
+    fn progress_of(events: &[Event]) -> PathProgress {
+        PathProgress::from_events(events)
+    }
+
     #[test]
     fn state_badge_empty_when_nothing_stored() {
         let a = atom("a", &[], None, vec![]);
-        assert_eq!(state_badge(&[], &a), "[····]");
+        assert_eq!(state_badge(&PathProgress::default(), &a), "[····]");
     }
 
     #[test]
@@ -424,9 +429,9 @@ mod tests {
         let a = atom("a", &[], Some("body"), vec![]);
         // Body exists in the graph but no `LessonTaught` event for this
         // path yet — `L` stays unlit.
-        assert_eq!(state_badge(&[], &a), "[····]");
+        assert_eq!(state_badge(&PathProgress::default(), &a), "[····]");
         let events = vec![taught("a")];
-        assert_eq!(state_badge(&events, &a), "[L···]");
+        assert_eq!(state_badge(&progress_of(&events), &a), "[L···]");
     }
 
     #[test]
@@ -441,7 +446,7 @@ mod tests {
             ],
         );
         let events = vec![taught("a")];
-        assert_eq!(state_badge(&events, &a), "[Lem·]");
+        assert_eq!(state_badge(&progress_of(&events), &a), "[Lem·]");
     }
 
     #[test]
@@ -462,6 +467,6 @@ mod tests {
             answered("a.q2", Rating::Easy),
             answered("a.q3", Rating::Again), // wrong → stays lowercase
         ];
-        assert_eq!(state_badge(&events, &a), "[LEMh]");
+        assert_eq!(state_badge(&progress_of(&events), &a), "[LEMh]");
     }
 }
