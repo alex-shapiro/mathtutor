@@ -364,10 +364,7 @@ impl Graph {
     }
 
     /// Targets plus the transitive closure of their prerequisites,
-    /// returned as the set of atomic concepts (no clusters). Cluster
-    /// IDs may legally appear as prereqs in the graph — meaning "all
-    /// atoms in that cluster" — so we expand any cluster encountered
-    /// into its atomic descendants and continue the walk from each.
+    /// returned as the set of atomic concepts.
     pub fn reachable_atoms(&self, targets: &[String]) -> HashSet<String> {
         let mut out: HashSet<String> = HashSet::new();
         let mut stack: Vec<String> = targets.to_vec();
@@ -376,9 +373,7 @@ impl Graph {
                 continue;
             };
             if !c.children_ids.is_empty() {
-                // Cluster — expand to atoms and carry along any prereqs
-                // the cluster itself declares (v2 schema allows them at
-                // any level).
+                // Expand cluster to atoms and prereqs
                 stack.extend(c.children_ids.iter().cloned());
                 stack.extend(c.prerequisites.iter().cloned());
                 continue;
@@ -391,9 +386,8 @@ impl Graph {
         out
     }
 
-    /// Validate `id` resolves to an atom (leaf concept) in the merged
-    /// graph. Returns `AtomNotFound` if missing, `NotAtom` if it points
-    /// at a cluster.
+    /// Validate `id` resolves to an atom (leaf concept) in the merged graph.
+    /// Returns `AtomNotFound` if missing and `NotAtom` if id is a cluster.
     pub fn atom(&self, id: &str) -> Result<&FlatConcept> {
         let c = self
             .by_id
