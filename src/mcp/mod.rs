@@ -135,6 +135,18 @@ pub struct PathOnlyArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+pub struct GetNextArgs {
+    pub path_id: String,
+    /// Filter on retrievable next actions:
+    ///
+    /// - `default` (or omit) returns the next new item or due quiz
+    /// - `new` returns only the next new lesson or quiz
+    /// - `due` returns only the next due quiz
+    #[serde(default)]
+    pub mode: scheduler::NextMode,
+}
+
+#[derive(Deserialize, JsonSchema)]
 pub struct GetTreeArgs {
     pub path_id: String,
     /// Max levels to traverse. Omit for full tree.
@@ -250,13 +262,14 @@ impl MathTutorServer {
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
-    #[tool(description = "Get the next action (lesson or quiz) in the path.")]
+    #[tool(description = "Get the next lesson or quiz in the path.")]
     async fn get_next(
         &self,
-        Parameters(args): Parameters<PathOnlyArgs>,
+        Parameters(args): Parameters<GetNextArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let conn = self.conn().await?;
-        let result = scheduler::compute_next(&conn, Some(&args.path_id), self.graph_path()).await;
+        let result =
+            scheduler::compute_next(&conn, Some(&args.path_id), self.graph_path(), args.mode).await;
         if result.is_ok() {
             self.spawn_sync();
         }
@@ -281,8 +294,7 @@ impl MathTutorServer {
         encode(compute_tree(&conn, &args.path_id, args.depth, self.graph_path()).await)
     }
 
-    #[tool(description = "Preview upcoming lesson topics. Forward-looking only; \
-                       lesson bodies omitted. Distinct from `get_next` (the do-iterator).")]
+    #[tool(description = "Preview upcoming lesson topics.")]
     async fn get_syllabus(
         &self,
         Parameters(args): Parameters<GetSyllabusArgs>,
@@ -320,7 +332,7 @@ impl MathTutorServer {
         )
     }
 
-    #[tool(description = "Create or update an agent-authored lesson for an atom.")]
+    #[tool(description = "Create or update a lesson.")]
     async fn upsert_lesson(
         &self,
         Parameters(args): Parameters<UpsertLessonArgs>,
@@ -340,7 +352,7 @@ impl MathTutorServer {
         encode(result.map(|()| json!({ "atom_id": args.atom })))
     }
 
-    #[tool(description = "Create an agent-authored quiz.")]
+    #[tool(description = "Create a quiz.")]
     async fn create_quiz(
         &self,
         Parameters(args): Parameters<CreateQuizArgs>,
@@ -840,6 +852,7 @@ fn error_kind(e: &Error) -> &'static str {
         Error::Db(_) => "database",
         Error::Json(_) => "json",
         Error::Fsrs(_) => "fsrs",
+        Error::ConflictingFlags(_, _) => "conflicting_flags",
         Error::MissingAuth
         | Error::BadBindAddr { .. }
         | Error::BadPublicUrl { .. }

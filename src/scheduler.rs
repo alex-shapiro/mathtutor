@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::answer::atom_from_quiz_id;
 use crate::cards;
 use crate::db;
-use crate::event_log;
+use crate::event_log::{self, Event, EventKind};
 use crate::graph::{FlatConcept, Graph};
 use crate::path::{self, PathFile};
 use crate::progress::PathProgress;
@@ -23,11 +23,40 @@ pub async fn cmd_path_next(
     conn: &Connection,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
+    mode: NextMode,
 ) -> Result<()> {
-    let envelope = compute_next(conn, path_id, graph_dir).await?;
+    let envelope = compute_next(conn, path_id, graph_dir, mode).await?;
     let text = ayml::to_string(&envelope).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
+}
+
+/// Caller-selected filter for `compute_next`
+///
+/// - `Default` returns the earliest-due quiz first, else the next new item
+/// - `New` returns the next new item
+/// - `Due` returns the earliest-due quiz
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum NextMode {
+    #[default]
+    Default,
+    New,
+    Due,
+}
+
+impl NextMode {
+    /// Translate the `--new` / `--due` CLI switches into a mode.
+    /// Errors if both switches were set.
+    pub fn from_flags(new: bool, due: bool) -> Result<Self> {
+        match (new, due) {
+            (true, true) => Err(Error::ConflictingFlags("--new", "--due")),
+            (true, false) => Ok(Self::New),
+            (false, true) => Ok(Self::Due),
+            (false, false) => Ok(Self::Default),
+        }
+    }
 }
 
 /// Pick the next action for `path_id` and auto-log its
@@ -36,6 +65,7 @@ pub async fn compute_next(
     conn: &Connection,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
+    mode: NextMode,
 ) -> Result<Envelope> {
     let tx = conn.transaction().await?;
     let id = path::resolve_id(&tx, path_id).await?;
@@ -44,7 +74,7 @@ pub async fn compute_next(
     let progress = PathProgress::load(&tx, &id).await?;
     let due = cards::due_quizzes(&tx, &id, Utc::now()).await?;
 
-    let action = next_action(&g, &p, &progress, &due);
+    let action = next_action(&g, &p, &progress, &due, mode);
     // Build the envelope first — its history aggregates count past
     // presentations only, not the `quiz_presented` / `lesson_taught`
     // we are about to log below.
@@ -111,17 +141,28 @@ impl Action {
 ///      c. quiz never answered correctly → `present_quiz`
 ///   3. otherwise → `done`
 ///
-/// An atom isn't considered complete — and the walker doesn't advance
-/// past it — until its lesson is stored, all three difficulty slots are
-/// filled, and each quiz has at least one non-`Again` answer.
+/// The `mode` param lets the caller filter items:
+///
+/// - `New` skips step 1
+/// - `Due` skips step 2
+///
+/// An atom is considered incomplete until its lesson is stored,
+/// all three difficulty slots are filled, and each quiz has at
+/// least one non-`Again` answer.
 pub fn next_action(
     g: &Graph,
     p: &PathFile,
     progress: &PathProgress,
     due_quizzes: &[(String, DateTime<Utc>)],
+    mode: NextMode,
 ) -> Action {
-    if let Some((quiz_id, atom_id)) = first_due_card(g, due_quizzes) {
+    if mode != NextMode::New
+        && let Some((quiz_id, atom_id)) = first_due_card(g, due_quizzes)
+    {
         return Action::PresentQuiz { quiz_id, atom_id };
+    }
+    if mode == NextMode::Due {
+        return Action::Done;
     }
 
     let mut visited = HashSet::new();
@@ -133,8 +174,8 @@ pub fn next_action(
     Action::Done
 }
 
-/// Walk an atom (and its prereqs / children) and return the first
-/// pending action, or `None` if everything reachable is complete.
+/// Walk the graph starting at `id` and return the first incomplete action.
+/// Return `None` if all reachable items are complete.
 fn next_atom_action(
     g: &Graph,
     progress: &PathProgress,
@@ -167,10 +208,8 @@ fn next_atom_action(
             atom_id: id.to_string(),
         });
     }
-    // Lesson exists in the graph but hasn't been taught in *this* path
-    // yet (e.g. authored under a previous path, or this is the first
-    // walk and we haven't created/presented it yet). Surface the stored
-    // body before any quiz so the user gets context.
+    // Lesson exists in the graph but hasn't been taught in this path yet.
+    // Show the lesson body before quizzing to ensure the user has context.
     if !progress.lesson_taught(id) {
         return Some(Action::PresentLesson {
             atom_id: id.to_string(),
@@ -195,6 +234,16 @@ fn next_atom_action(
         }
     }
     None
+}
+
+/// True when `events` contains a `LessonTaught` or `LessonAuthored`
+/// event for `atom_id`. Mirrors `PathProgress::lesson_taught` for
+/// callers (like `syllabus`) that already hold the full event list.
+pub fn lesson_taught_in_path(events: &[Event], atom_id: &str) -> bool {
+    events.iter().any(|e| {
+        matches!(e.kind, EventKind::LessonTaught | EventKind::LessonAuthored)
+            && e.atom.as_deref() == Some(atom_id)
+    })
 }
 
 /// First quiz that's both due and still present in the merged graph.

@@ -115,7 +115,7 @@ pub async fn compute_state(
     let (targets, reach) = counters(&p, &reachable, &complete, &progress);
 
     let updated_at = latest_event_ts(conn, &id).await?.unwrap_or(p.created_at);
-    let next = scheduler::next_action(&g, &p, &progress, &due)
+    let next = scheduler::next_action(&g, &p, &progress, &due, scheduler::NextMode::Default)
         .atom_id()
         .and_then(|id| atom_ref(&g, id));
     let most_recent = most_recent_completed_target(conn, &id, &g, &p, &complete)

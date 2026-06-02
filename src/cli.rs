@@ -101,14 +101,22 @@ pub struct PathNextCmd {
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
+    /// return the next new action.
+    /// Mutually exclusive with `--due`.
+    #[argh(switch)]
+    pub new: bool,
+
+    /// return the earliest-due quiz card, or `done` if none is due.
+    /// Mutually exclusive with `--new`.
+    #[argh(switch)]
+    pub due: bool,
+
     /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Preview the next upcoming lesson topics for a path. Forward-looking
-/// only — atoms whose lesson is already taught (and any in-progress
-/// quiz work on them) are skipped. Lesson bodies are not included.
+/// Preview the next upcoming lesson topics for a path
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "syllabus")]
 pub struct PathSyllabusCmd {

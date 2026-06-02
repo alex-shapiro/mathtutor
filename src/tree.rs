@@ -35,7 +35,7 @@ pub async fn cmd_path_tree(
     let targets: HashSet<String> = p.target_atoms.iter().cloned().collect();
     let reachable = g.reachable_atoms(&p.target_atoms);
     let spine = build_spine(&g, &reachable);
-    let next_atom = scheduler::next_action(&g, &p, &progress, &due)
+    let next_atom = scheduler::next_action(&g, &p, &progress, &due, scheduler::NextMode::Default)
         .atom_id()
         .map(String::from);
 

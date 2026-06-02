@@ -223,10 +223,13 @@ async fn dispatch_path(conn: &Connection, op: PathOp) -> (Result<()>, u8) {
             state::cmd_path_state(conn, c.path.as_deref(), c.graph.as_deref()).await,
             1,
         ),
-        PathOp::Next(c) => (
-            scheduler::cmd_path_next(conn, c.path.as_deref(), c.graph.as_deref()).await,
-            1,
-        ),
+        PathOp::Next(c) => match scheduler::NextMode::from_flags(c.new, c.due) {
+            Err(e) => (Err(e), 2),
+            Ok(mode) => (
+                scheduler::cmd_path_next(conn, c.path.as_deref(), c.graph.as_deref(), mode).await,
+                1,
+            ),
+        },
         PathOp::Syllabus(c) => (
             syllabus::cmd_path_syllabus(conn, c.path.as_deref(), c.n, c.graph.as_deref()).await,
             1,
