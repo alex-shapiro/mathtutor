@@ -363,8 +363,8 @@ impl Graph {
         Ok(g)
     }
 
-    /// Targets plus the transitive closure of their prerequisites,
-    /// returned as the set of atomic concepts.
+    /// Returns targets and the transitive closure of their prerequisites
+    /// as a set of atoms.
     pub fn reachable_atoms(&self, targets: &[String]) -> HashSet<String> {
         let mut out: HashSet<String> = HashSet::new();
         let mut stack: Vec<String> = targets.to_vec();
@@ -386,7 +386,7 @@ impl Graph {
         out
     }
 
-    /// Validate `id` resolves to an atom (leaf concept) in the merged graph.
+    /// Validate `id` resolves to an atom in the merged graph.
     /// Returns `AtomNotFound` if missing and `NotAtom` if id is a cluster.
     pub fn atom(&self, id: &str) -> Result<&FlatConcept> {
         let c = self
