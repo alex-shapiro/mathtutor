@@ -1,12 +1,7 @@
-//! Integration tests for `PathProgress::load` — the SQL path that lets
-//! `mt path state` (and the MCP `get_state` tool) build its progress
-//! snapshot without materializing the full event log.
+//! Integration tests for `PathProgress::load`
 //!
-//! The cards-backed predicate `reps > lapses` is supposed to be the SQL
-//! equivalent of the event-derived "answered correctly at least once"
-//! check. These tests pin that equivalence: every assertion either
-//! exercises the cards table (write-through cache populated by
-//! `event_log::append`) or the indexed lesson projection.
+//! The cards-backed predicate `reps > lapses` must ensure that the
+//! quiz has been answered correctly at least once.
 
 use libsql::params;
 use mathtutor::event_log;
@@ -46,8 +41,8 @@ async fn lesson_taught_event_lands_in_taught_atoms() {
 
 #[tokio::test]
 async fn lesson_authored_event_also_counts_as_taught() {
-    // Authoring a lesson implies presenting it (the `lesson upsert`
-    // playbook). `PathProgress` must recognize either kind.
+    // Authoring a lesson implies presenting it.
+    // `PathProgress` must recognize either kind.
     let tmp = TempDir::new().unwrap();
     let conn = common::fresh_db(&tmp, PATH_ID).await;
     event_log::append(
@@ -84,8 +79,8 @@ async fn correct_answer_lands_in_correct_quizzes() {
 
 #[tokio::test]
 async fn only_again_answers_do_not_count_as_correct() {
-    // `Again` alone keeps `lapses == reps`, so `reps > lapses` is false
-    // — the cards row exists but the quiz is not "answered correctly."
+    // An `Again` answer keeps `lapses == reps`, so `reps > lapses` is false.
+    // The cards row exists but the quiz is not "answered correctly."
     let tmp = TempDir::new().unwrap();
     let conn = common::fresh_db(&tmp, PATH_ID).await;
     event_log::append(

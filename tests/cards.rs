@@ -1,4 +1,4 @@
-//! Pure-FSRS step tests for `cards::apply_answer`.
+//! FSRS step tests for `cards::apply_answer`
 
 use chrono::{Duration, TimeZone, Utc};
 use mathtutor::cards::apply_answer;
@@ -6,9 +6,9 @@ use mathtutor::types::Rating;
 
 #[test]
 fn apply_answer_updates_last_review_each_step() {
-    // A fresh `apply_answer` call must overwrite `last_review`,
-    // otherwise future replays would compute `days_elapsed` from
-    // the very first answer instead of the most recent one.
+    // A fresh `apply_answer` call must overwrite `last_review`.
+    // Otherwise, the next replay computes `days_elapsed` from
+    // the first answer instead of the most recent one.
     let t1 = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
     let t2 = t1 + Duration::days(30);
 
@@ -25,7 +25,7 @@ fn apply_answer_updates_last_review_each_step() {
 #[test]
 fn chained_steps_use_gap_to_most_recent_answer_not_first() {
     // Same quiz answered three times. Each FSRS step must see the gap
-    // to its *immediately preceding* answer, not to the original. We
+    // to its immediately preceding answer, not to the original. We
     // prove it by showing that a three-step chain (gaps 30, 60) ends in
     // a different state than a two-step chain that skips the middle
     // answer (gap 90). If `apply_answer` ever used `ts - first` for

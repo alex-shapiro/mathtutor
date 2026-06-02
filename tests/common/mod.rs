@@ -1,9 +1,7 @@
 //! Shared helpers for integration tests.
 //!
-//! Each test binary in `tests/` compiles this module independently, so
-//! helpers that one binary doesn't call are flagged dead by the linter.
-//! Allow at the module level — every helper has at least one caller
-//! somewhere in the integration suite.
+//! Each test binary in `tests/` compiles this module independently and
+//! flags different dead code. To avoid, we allow dead code here.
 
 #![allow(dead_code)]
 
@@ -76,8 +74,8 @@ pub fn cluster(id: &str, children: &[&str]) -> FlatConcept {
     }
 }
 
-/// `atom` with no lesson and no quizzes — i.e., a leaf the walker
-/// has to author from scratch.
+/// `atom` with no lesson and no quizzes.
+/// Represents a leaf that must be authored from scratch.
 pub fn empty_atom(id: &str, prereqs: &[&str]) -> FlatConcept {
     atom(id, prereqs, None, Vec::new())
 }
@@ -175,8 +173,8 @@ pub fn presented_at(quiz_id: &str, ts: DateTime<Utc>) -> Event {
     }
 }
 
-/// Events that mark `atom_id` complete: lesson taught + a non-`Again`
-/// answer on each of its three difficulty quizzes (`{atom_id}.q1`..q3).
+/// The set of events that mark `atom_id` complete:
+/// lesson taught + an answer on each of its quizzes.
 pub fn complete_events(atom_id: &str) -> Vec<Event> {
     vec![
         taught(atom_id),
@@ -188,9 +186,9 @@ pub fn complete_events(atom_id: &str) -> Vec<Event> {
 
 // ── Progress ────────────────────────────────────────────────────────
 
-/// Fold a synthetic event log into a `PathProgress`. Mirrors what the
-/// production `PathProgress::load` projects out of `events` and `cards`,
-/// so tests can pin walker behavior without standing up a database.
+/// Fold a synthetic event log into a `PathProgress`. Mirrors
+/// `PathProgress::load` from `events` and `cards` to let tests
+/// simulate the behavior without a database.
 pub fn progress_of(events: &[Event]) -> PathProgress {
     let mut p = PathProgress::default();
     for e in events {

@@ -22,9 +22,7 @@ impl PathProgress {
         self.correct_quizzes.contains(quiz_id)
     }
 
-    /// Compose the per-path snapshot from its two backing tables.
-    /// `taught_atoms` is sourced from the event log; `correct_quizzes`
-    /// from the FSRS cards cache (`reps > lapses`).
+    /// Load a path's progress snapshot from its two backing tables.
     pub async fn load(conn: &Connection, path_id: &str) -> Result<Self> {
         Ok(Self {
             taught_atoms: load_taught_atoms(conn, path_id).await?,

@@ -1,4 +1,4 @@
-//! `mt path state`: per-path progress summary.
+//! Learning path progress summary
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -30,7 +30,7 @@ pub struct StateSummary {
     pub next: Option<AtomRef>,
 }
 
-/// Completion of the path's explicit target atoms.
+/// Completion of the learning path's explicit target atoms
 #[derive(Debug, Serialize)]
 pub struct TargetProgress {
     pub total: usize,
@@ -38,8 +38,7 @@ pub struct TargetProgress {
     pub learned_pct: usize,
 }
 
-/// Completion across the targets plus the transitive closure of their
-/// prerequisites.
+/// Completion across learning path targets & prerequisites
 #[derive(Debug, Serialize)]
 pub struct ReachProgress {
     pub total: usize,
@@ -247,7 +246,7 @@ async fn load_first_correct_chunk(
     out: &mut std::collections::HashMap<String, DateTime<Utc>>,
 ) -> Result<()> {
     let placeholders = vec!["?"; quiz_ids.len()].join(",");
-    // rating > 1 = any non-`Again` answer (see `types::Rating`).
+    // rating > 1 implies a real quiz answer
     let sql = format!(
         "SELECT quiz_id, MIN(ts) FROM events \
          WHERE path_id = ? AND kind = 'quiz_answered' AND rating > 1 \
