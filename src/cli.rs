@@ -1,16 +1,11 @@
-//! CLI surface — every `argh::FromArgs` struct lives here. main.rs
-//! imports the top-level `Mt` parser and dispatches on its variants.
+//! CLI command structure
+//!
+//! Every `argh::FromArgs` struct lives here.
 //!
 //! Subcommand layout is resource-first (`mt <noun> <verb>`) and tracks
 //! the MCP tool surface 1:1. Operator-only verbs (`graph check`,
 //! `graph dump`, `instruct`, `migrate-from-ayml`, `mcp`) have no MCP
 //! equivalent and are explicitly flagged in the docs.
-//!
-//! Curriculum location: the binary ships an embedded copy of the
-//! curriculum graph (see `graph::EMBEDDED_GRAPH`). The `--graph DIR`
-//! flag and `MT_GRAPH` environment variable both override this for
-//! development against a working tree. Per-command, `graph` is an
-//! `Option<PathBuf>` whose absence means "use embedded / env".
 
 use std::path::PathBuf;
 
@@ -18,8 +13,8 @@ use argh::FromArgs;
 
 use crate::types;
 
+/// Math tutor lessons & spaced repetition over a curriculum graph
 #[derive(FromArgs, Debug)]
-/// Math Tutor — small lessons + spaced repetition over a curriculum graph.
 pub struct Mt {
     #[argh(subcommand)]
     pub cmd: Cmd,
@@ -176,7 +171,7 @@ pub struct GraphListCmd {
     pub graph: Option<PathBuf>,
 }
 
-/// Validate the curriculum graph (operator-only — no MCP equivalent).
+/// Validate the curriculum graph
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "check")]
 pub struct GraphCheckCmd {
@@ -186,7 +181,6 @@ pub struct GraphCheckCmd {
 }
 
 /// Print the user overlay to stdout, for review or upstreaming
-/// (operator-only — no MCP equivalent).
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "dump")]
 pub struct GraphDumpCmd {}
@@ -353,7 +347,7 @@ pub struct QuizAnswerCmd {
     #[argh(option)]
     pub rating: types::Rating,
 
-    /// the user's reply, verbatim — logged with the rating for review
+    /// the user's verbatim reply
     #[argh(option, long = "user-answer")]
     pub user_answer: Option<String>,
 
@@ -389,10 +383,8 @@ pub struct MigrateFromAymlCmd {
 ///
 /// Authentication is layered. Set at least one of:
 ///
-/// * `--api-key` / `$MT_API_KEY` — static bearer token (CLI / `mcp-remote` /
-///   test path).
-/// * `--admin-password` / `$MT_ADMIN_PASSWORD` — admin password for the
-///   built-in OAuth authorization server (Claude Desktop / iOS path).
+/// * `--api-key` / `$MT_API_KEY` for HTTP basic auth with static bearer token (CLI / `mcp-remote` / test path).
+/// * `--admin-password` / `$MT_ADMIN_PASSWORD` for OAuth authorization server (Claude Desktop / iOS path).
 #[cfg(feature = "mcp")]
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "mcp")]

@@ -1,10 +1,8 @@
-//! Library entry. The `mt` binary is a thin shell over these modules;
-//! integration tests in `tests/` call into them directly.
+//! Library entrypoint.
 //!
-//! This isn't a public API — `pub` here means "visible to the test
-//! binary," not "stable for external consumers." The two pedantic
-//! doc lints below would otherwise demand library-grade boilerplate
-//! on every internal helper.
+//! The `mt` binary is a thin shell over these modules and
+//! integration tests in `tests/` call into them directly.
+//! `pub` here means "visible for tests," not "stable for external consumers."
 
 #![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
@@ -24,6 +22,7 @@ pub mod graph;
 pub mod mcp;
 pub mod migrate;
 pub mod path;
+pub mod progress;
 pub mod scheduler;
 pub mod state;
 pub mod store;

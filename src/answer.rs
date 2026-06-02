@@ -28,7 +28,7 @@ pub async fn cmd_quiz_answer(
     let id = path::resolve_id(&tx, path_id).await?;
     let g = Graph::load_for_path(&tx, graph_dir).await?;
     // Validate the quiz exists in the merged graph before writing
-    // anything — otherwise a typo silently leaves an event row and a
+    // anything. Otherwise a typo silently leaves an event row and a
     // ghost `cards` entry for a quiz no scheduler will ever surface.
     let (atom, _) = g.quiz(quiz_id)?;
     let atom_id = atom.id.clone();

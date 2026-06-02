@@ -1,12 +1,4 @@
-//! Crate-wide unified error type.
-//!
-//! Every fallible function in this binary returns `crate::Result<T>` —
-//! one enum, one Display, one shape. Per-module error types used to be
-//! a thing here; they ended up mostly wrapping each other via `#[from]`,
-//! adding noise without buying behavioral granularity (nothing in
-//! `main.rs` pattern-matches on which subsystem failed). Single Error
-//! keeps the type system out of the way of a CLI that only ever prints
-//! and exits.
+//! Crate-wide unified error type
 
 use std::path::PathBuf;
 

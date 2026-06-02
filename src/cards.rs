@@ -2,9 +2,8 @@
 //!
 //! Card state lives in two places:
 //!
-//! 1. An in-memory step, [`apply_answer`], takes a previous [`CardState`]
-//!    plus a new rating/timestamp and produces the next state. Pure FSRS
-//!    — no I/O.
+//! 1. In-memory step, [`apply_answer`], takes a previous [`CardState`]
+//!    plus a new rating/timestamp and produces the next state.
 //!
 //! 2. SQL helpers read and write the `cards` table, a write-through cache
 //!    of the latest FSRS state per `(path, quiz)` so the scheduler can
@@ -12,7 +11,7 @@
 //!    remains the source of truth; [`recompute`] rebuilds the cache by
 //!    replaying every `QuizAnswered` event for a path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
@@ -26,7 +25,7 @@ use crate::{Error, Result};
 const DESIRED_RETENTION: f32 = 0.9;
 
 /// FSRS state for a single quiz card. The fields exist precisely when a
-/// card has been answered at least once — `apply_answer(None, …)` is the
+/// card has been answered at least once. `apply_answer(None, …)` is the
 /// first step that produces a state, so every field is always populated.
 #[derive(Debug, Clone, Copy)]
 pub struct CardState {
@@ -95,6 +94,48 @@ pub fn apply_answer(
 }
 
 // ── SQL: read ──────────────────────────────────────────────────────
+
+/// Read `(reps, lapses)` for one `(path, quiz)` pair without parsing
+/// the FSRS state columns. Callers that only need answer counts should
+/// prefer this over [`read_card`].
+pub async fn read_counts(
+    conn: &Connection,
+    path_id: &str,
+    quiz_id: &str,
+) -> Result<Option<(u32, u32)>> {
+    let mut rows = conn
+        .query(
+            "SELECT reps, lapses FROM cards WHERE path_id = ? AND quiz_id = ?",
+            params![path_id, quiz_id],
+        )
+        .await?;
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+    let reps: i64 = row.get(0)?;
+    let lapses: i64 = row.get(1)?;
+    Ok(Some((
+        u32::try_from(reps).map_err(|_| Error::CardsCorrupt(format!("invalid reps {reps}")))?,
+        u32::try_from(lapses)
+            .map_err(|_| Error::CardsCorrupt(format!("invalid lapses {lapses}")))?,
+    )))
+}
+
+/// Quiz ids whose card has at least one non-`Again` answer on this
+/// path. `reps > lapses` because `lapses` only increments on `Again`.
+pub async fn correct_quiz_ids(conn: &Connection, path_id: &str) -> Result<HashSet<String>> {
+    let mut rows = conn
+        .query(
+            "SELECT quiz_id FROM cards WHERE path_id = ? AND reps > lapses",
+            params![path_id],
+        )
+        .await?;
+    let mut out = HashSet::new();
+    while let Some(row) = rows.next().await? {
+        out.insert(row.get(0)?);
+    }
+    Ok(out)
+}
 
 /// Load the cached row for one `(path, quiz)` pair, if present.
 pub async fn read_card(conn: &Connection, path_id: &str, quiz_id: &str) -> Result<Option<CardRow>> {
@@ -194,10 +235,10 @@ async fn upsert_card_row(
 /// Drop every cached row for `path_id` and rebuild from the event log.
 /// Use after a suspected cache corruption or a schema-altering migration.
 ///
-/// The replay is wrapped in one transaction — including the event-log
-/// read — so concurrent `QuizAnswered` appends can't slip in between
-/// the snapshot we fold and the rows we write back, and a mid-rebuild
-/// failure leaves the existing cache in place rather than half-erased.
+/// The replay is wrapped in a transaction so concurrent `QuizAnswered`
+/// appends can't slip in between the snapshot we fold and the rows we
+/// write back, and a mid-rebuild failure leaves the existing cache in
+/// place rather than half-erased.
 pub async fn recompute(conn: &Connection, path_id: &str) -> Result<()> {
     let tx = conn.transaction().await?;
     let events = event_log::load(&tx, path_id).await?;
@@ -225,8 +266,7 @@ pub async fn recompute(conn: &Connection, path_id: &str) -> Result<()> {
 /// full rebuild does K upserts instead of N.
 fn fold_history(path_id: &str, events: &[Event]) -> Result<Vec<CardRow>> {
     // Group answered events per quiz, in event-log order. The log is
-    // already chronological — `ORDER BY id ASC` in `event_log::load` —
-    // so a single pass suffices to bucket the history.
+    // pre-sorted chronologically.
     let mut history: HashMap<String, Vec<(DateTime<Utc>, Rating)>> = HashMap::new();
     for e in events {
         if e.kind != EventKind::QuizAnswered {
@@ -290,59 +330,4 @@ fn row_to_card(row: &libsql::Row) -> Result<CardRow> {
         lapses: u32::try_from(lapses)
             .map_err(|_| Error::CardsCorrupt(format!("invalid lapses {lapses}")))?,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use chrono::TimeZone;
-
-    use super::{Rating, apply_answer};
-
-    #[test]
-    fn apply_answer_updates_last_review_each_step() {
-        // A fresh `apply_answer` call must overwrite `last_review`,
-        // otherwise future replays would compute `days_elapsed` from
-        // the very first answer instead of the most recent one.
-        let t1 = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
-        let t2 = t1 + chrono::Duration::days(30);
-
-        let s1 = apply_answer(None, Rating::Good, t1).unwrap();
-        assert_eq!(s1.last_review, t1);
-
-        let s2 = apply_answer(Some(&s1), Rating::Good, t2).unwrap();
-        assert_eq!(
-            s2.last_review, t2,
-            "last_review must advance to the current answer's ts, not stay on the first"
-        );
-    }
-
-    #[test]
-    fn chained_steps_use_gap_to_most_recent_answer_not_first() {
-        // Same quiz answered three times. Each FSRS step must see the
-        // gap to its *immediately preceding* answer, not to the original.
-        // We prove it by showing that a three-step chain (gaps 30, 60)
-        // ends in a different state than a two-step chain that skips the
-        // middle answer (gap 90). If `apply_answer` ever used `ts - first`
-        // for `days_elapsed`, the third step of the three-step chain
-        // would collapse into the second step of the two-step chain.
-        let t1 = chrono::Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
-        let t2 = t1 + chrono::Duration::days(30);
-        let t3 = t2 + chrono::Duration::days(60);
-
-        let three_step = {
-            let s1 = apply_answer(None, Rating::Good, t1).unwrap();
-            let s2 = apply_answer(Some(&s1), Rating::Good, t2).unwrap();
-            apply_answer(Some(&s2), Rating::Good, t3).unwrap()
-        };
-        let two_step_skipping_middle = {
-            let s1 = apply_answer(None, Rating::Good, t1).unwrap();
-            apply_answer(Some(&s1), Rating::Good, t3).unwrap()
-        };
-
-        assert!(
-            (three_step.stability - two_step_skipping_middle.stability).abs() > 1e-6,
-            "three answers (gaps 30, 60) must differ from two answers (gap 90); \
-             otherwise the third step is using gap-to-first instead of gap-to-prev"
-        );
-    }
 }

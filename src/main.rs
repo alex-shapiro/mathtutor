@@ -29,7 +29,7 @@ async fn real_main() -> ExitCode {
     init_tracing(is_mcp(&cli.cmd));
 
     // `mt graph check` has its own success-vs-issues exit logic and
-    // prints its report independently — handle outside the unified
+    // prints its report independently handled outside the unified
     // dispatch.
     if let Cmd::Graph(g) = &cli.cmd
         && let GraphOp::Check(c) = &g.op
@@ -190,7 +190,7 @@ fn init_tracing(verbose: bool) {
 }
 
 /// Run the chosen subcommand. Returns the result plus the exit code to
-/// use on failure — most commands exit `2` (config / IO / validation),
+/// use on failure. Most commands exit `2` (config / IO / validation),
 /// `mt path next` / `mt path state` / `mt path tree` / `mt graph dump`
 /// exit `1` to distinguish "scheduling / state read failure" from
 /// "you held it wrong."

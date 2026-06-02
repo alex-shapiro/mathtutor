@@ -9,9 +9,11 @@ use serde::Serialize;
 
 use crate::answer::atom_from_quiz_id;
 use crate::cards;
-use crate::event_log::{self, Event, EventKind};
+use crate::db;
+use crate::event_log;
 use crate::graph::{FlatConcept, Graph};
 use crate::path::{self, PathFile};
+use crate::progress::PathProgress;
 use crate::types::{Difficulty, QuizType, Rating};
 use crate::{Error, Result};
 
@@ -28,10 +30,8 @@ pub async fn cmd_path_next(
     Ok(())
 }
 
-/// Resolve the path, fold the event log, pick the next action, and
-/// auto-log the corresponding `quiz_presented` / `lesson_taught` event.
-/// Returns the structured envelope so both the CLI (AYML) and the MCP
-/// server (JSON) share one source of truth.
+/// Pick the next action for `path_id` and auto-log its
+/// `quiz_presented` / `lesson_taught` side effect.
 pub async fn compute_next(
     conn: &Connection,
     path_id: Option<&str>,
@@ -41,14 +41,14 @@ pub async fn compute_next(
     let id = path::resolve_id(&tx, path_id).await?;
     let g = Graph::load_for_path(&tx, graph_dir).await?;
     let p = path::load_path(&tx, &id).await?;
-    let events = event_log::load(&tx, &id).await?;
+    let progress = PathProgress::load(&tx, &id).await?;
     let due = cards::due_quizzes(&tx, &id, Utc::now()).await?;
 
-    let action = next_action(&g, &p, &events, &due);
-    // Build the envelope first — it reads the log to compute `history`,
-    // and we want `history.repetitions` to count past presentations only,
-    // not the one we are about to log below.
-    let envelope = Envelope::build(&g, &p, &events, action.clone());
+    let action = next_action(&g, &p, &progress, &due);
+    // Build the envelope first — its history aggregates count past
+    // presentations only, not the `quiz_presented` / `lesson_taught`
+    // we are about to log below.
+    let envelope = Envelope::build(&tx, &g, &p, action.clone()).await?;
 
     match &action {
         Action::PresentQuiz { quiz_id, atom_id } => {
@@ -111,19 +111,13 @@ impl Action {
 ///      c. quiz never answered correctly → `present_quiz`
 ///   3. otherwise → `done`
 ///
-/// `due_quizzes` is an ordered list of `(quiz_id, due_at)` pairs the
-/// caller already filtered to those past their `due_at` — the cards
-/// table makes this an O(1) lookup per `mt path next` instead of a full
-/// event-log replay.
-///
-/// (2) walks per-atom: an atom isn't considered complete — and the
-/// walker doesn't advance to the next atom — until its lesson is
-/// stored, all three difficulty slots are filled, and each quiz has
-/// at least one `quiz_answered` event with rating `good` or `easy`.
+/// An atom isn't considered complete — and the walker doesn't advance
+/// past it — until its lesson is stored, all three difficulty slots are
+/// filled, and each quiz has at least one non-`Again` answer.
 pub fn next_action(
     g: &Graph,
     p: &PathFile,
-    events: &[Event],
+    progress: &PathProgress,
     due_quizzes: &[(String, DateTime<Utc>)],
 ) -> Action {
     if let Some((quiz_id, atom_id)) = first_due_card(g, due_quizzes) {
@@ -132,7 +126,7 @@ pub fn next_action(
 
     let mut visited = HashSet::new();
     for target in &p.target_atoms {
-        if let Some(action) = next_atom_action(g, events, target, &mut visited) {
+        if let Some(action) = next_atom_action(g, progress, target, &mut visited) {
             return action;
         }
     }
@@ -143,7 +137,7 @@ pub fn next_action(
 /// pending action, or `None` if everything reachable is complete.
 fn next_atom_action(
     g: &Graph,
-    events: &[Event],
+    progress: &PathProgress,
     id: &str,
     visited: &mut HashSet<String>,
 ) -> Option<Action> {
@@ -153,14 +147,14 @@ fn next_atom_action(
     let c = g.by_id.get(id)?;
 
     for prereq in &c.prerequisites {
-        if let Some(action) = next_atom_action(g, events, prereq, visited) {
+        if let Some(action) = next_atom_action(g, progress, prereq, visited) {
             return Some(action);
         }
     }
 
     if !c.children_ids.is_empty() {
         for child_id in &c.children_ids {
-            if let Some(action) = next_atom_action(g, events, child_id, visited) {
+            if let Some(action) = next_atom_action(g, progress, child_id, visited) {
                 return Some(action);
             }
         }
@@ -177,7 +171,7 @@ fn next_atom_action(
     // yet (e.g. authored under a previous path, or this is the first
     // walk and we haven't created/presented it yet). Surface the stored
     // body before any quiz so the user gets context.
-    if !lesson_taught_in_path(events, id) {
+    if !progress.lesson_taught(id) {
         return Some(Action::PresentLesson {
             atom_id: id.to_string(),
         });
@@ -191,7 +185,7 @@ fn next_atom_action(
                 });
             }
             Some(quiz) => {
-                if !quiz_answered_correctly(events, &quiz.id) {
+                if !progress.quiz_answered_correctly(&quiz.id) {
                     return Some(Action::PresentQuiz {
                         quiz_id: quiz.id.clone(),
                         atom_id: id.to_string(),
@@ -204,8 +198,7 @@ fn next_atom_action(
 }
 
 /// First quiz that's both due and still present in the merged graph.
-/// Tombstoned or graph-pruned quizzes silently skip; the rest are
-/// already in due-order from the SQL caller.
+/// Tombstoned or graph-pruned quizzes are silently skipped.
 fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<(String, String)> {
     for (quiz_id, _) in due_quizzes {
         let atom_id = atom_from_quiz_id(quiz_id)?;
@@ -217,37 +210,10 @@ fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<
     None
 }
 
-/// Has this quiz ever been answered correctly (any rating except
-/// `Again`)? Used by the per-atom walker to decide whether to advance
-/// past a quiz; `Again` is the only rating that triggers immediate
-/// re-presentation, since `Hard`/`Good`/`Easy` all mean "got it right"
-/// and re-presentation timing for those is FSRS's job.
-pub fn quiz_answered_correctly(events: &[Event], quiz_id: &str) -> bool {
-    events.iter().any(|e| {
-        matches!(e.kind, EventKind::QuizAnswered)
-            && e.quiz.as_deref() == Some(quiz_id)
-            && e.payload.rating.is_some_and(Rating::is_correct)
-    })
-}
-
-/// Has this atom's lesson been presented to the user during *this* path?
-/// `mt lesson upsert` and `mt path next → present_lesson` both auto-log
-/// `LessonTaught` so authoring or re-presenting count as teaching.
-///
-/// `LessonAuthored` is accepted as an equivalent signal so that paths
-/// created before `LessonTaught` existed still register correctly —
-/// authoring a lesson always implies presenting it (see AGENTS.md's
-/// `create_lesson` playbook).
-pub fn lesson_taught_in_path(events: &[Event], atom_id: &str) -> bool {
-    events.iter().any(|e| {
-        matches!(e.kind, EventKind::LessonTaught | EventKind::LessonAuthored)
-            && e.atom.as_deref() == Some(atom_id)
-    })
-}
-
-/// "Complete" = lesson stored AND all three difficulty quizzes exist
-/// AND each has at least one correct answer in the log.
-pub fn is_atom_complete(g: &Graph, events: &[Event], atom_id: &str) -> bool {
+/// "Complete" = lesson stored in the merged graph AND all three
+/// difficulty quizzes exist AND each has at least one correct answer
+/// (per `PathProgress`).
+pub fn is_atom_complete(g: &Graph, progress: &PathProgress, atom_id: &str) -> bool {
     let Some(c) = g.by_id.get(atom_id) else {
         return false;
     };
@@ -258,91 +224,110 @@ pub fn is_atom_complete(g: &Graph, events: &[Event], atom_id: &str) -> bool {
         c.quizzes
             .iter()
             .find(|q| q.difficulty == *diff)
-            .is_some_and(|q| quiz_answered_correctly(events, &q.id))
+            .is_some_and(|q| progress.quiz_answered_correctly(&q.id))
     })
 }
 
-/// Wall-clock time at which this atom became complete (max ts among
-/// the three first-correct answers). `None` if not yet complete.
-pub fn atom_completed_at(g: &Graph, events: &[Event], atom_id: &str) -> Option<DateTime<Utc>> {
-    let c = g.by_id.get(atom_id)?;
-    c.lesson.as_ref()?;
-    let mut latest: Option<DateTime<Utc>> = None;
-    for diff in DIFFICULTIES {
-        let quiz = c.quizzes.iter().find(|q| q.difficulty == diff)?;
-        let first_correct = events.iter().find(|e| {
-            matches!(e.kind, EventKind::QuizAnswered)
-                && e.quiz.as_deref() == Some(&quiz.id)
-                && e.payload.rating.is_some_and(Rating::is_correct)
-        })?;
-        latest = Some(latest.map_or(first_correct.ts, |l| l.max(first_correct.ts)));
-    }
-    latest
+// ── Quiz / lesson history (targeted SQL — one quiz_id or atom_id) ──
+
+#[derive(Serialize, Default, Debug)]
+pub struct QuizHistory {
+    pub repetitions: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_presented_at: Option<DateTime<Utc>>,
+    pub correct_count: u32,
+    pub total_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correct_pct: Option<u32>,
+    pub recent_ratings: Vec<Rating>,
 }
 
-// ── Quiz history (derived from the event log on every present_quiz) ──
-
-#[derive(Serialize, Default)]
-struct QuizHistory {
-    repetitions: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_presented_at: Option<DateTime<Utc>>,
-    correct_count: u32,
-    total_count: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    correct_pct: Option<u32>,
-    recent_ratings: Vec<Rating>,
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss
-)]
-fn compute_quiz_history(events: &[Event], quiz_id: &str) -> QuizHistory {
+/// Past presentations, answer counts, and the last 10 ratings for one
+/// quiz card on one path.
+pub async fn compute_quiz_history(
+    conn: &Connection,
+    path_id: &str,
+    quiz_id: &str,
+) -> Result<QuizHistory> {
     let mut h = QuizHistory::default();
-    for e in events {
-        if e.quiz.as_deref() != Some(quiz_id) {
-            continue;
-        }
-        match e.kind {
-            EventKind::QuizPresented => {
-                h.repetitions += 1;
-                h.last_presented_at = Some(e.ts);
-            }
-            EventKind::QuizAnswered => {
-                if let Some(r) = e.payload.rating {
-                    h.recent_ratings.insert(0, r);
-                    h.recent_ratings.truncate(10);
-                    if r.is_correct() {
-                        h.correct_count += 1;
-                    }
-                    h.total_count += 1;
-                }
-            }
-            _ => {}
-        }
+
+    // Presentations: count and most-recent ts (one row, aggregate).
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*), MAX(ts) FROM events \
+             WHERE path_id = ? AND kind = 'quiz_presented' AND quiz_id = ?",
+            libsql::params![path_id, quiz_id],
+        )
+        .await?;
+    if let Some(row) = rows.next().await? {
+        let count: i64 = row.get(0)?;
+        h.repetitions = u32::try_from(count)
+            .map_err(|_| Error::CardsCorrupt(format!("bad presented count {count}")))?;
+        let max_ts: Option<String> = row.get(1)?;
+        h.last_presented_at = max_ts.as_deref().map(db::parse_ts).transpose()?;
     }
-    h.correct_pct = if h.total_count > 0 {
-        Some(((h.correct_count as f32 / h.total_count as f32) * 100.0).round() as u32)
-    } else {
-        None
-    };
-    h
+
+    // `lapses <= reps` is an invariant of `apply_answer_to_cache`;
+    // checked_sub surfaces a broken cache instead of silently zeroing.
+    if let Some((reps, lapses)) = cards::read_counts(conn, path_id, quiz_id).await? {
+        h.total_count = reps;
+        h.correct_count = reps.checked_sub(lapses).ok_or_else(|| {
+            Error::CardsCorrupt(format!(
+                "lapses {lapses} > reps {reps} for {path_id}/{quiz_id}"
+            ))
+        })?;
+        h.correct_pct = percent(h.correct_count, h.total_count);
+    }
+
+    // Recent ratings: newest first, capped at 10. `quiz_answered`
+    // events always carry a rating (validated by `event_log::append`).
+    let mut rows = conn
+        .query(
+            "SELECT rating FROM events \
+             WHERE path_id = ? AND kind = 'quiz_answered' AND quiz_id = ? \
+             ORDER BY id DESC LIMIT 10",
+            libsql::params![path_id, quiz_id],
+        )
+        .await?;
+    while let Some(row) = rows.next().await? {
+        let r: i64 = row.get(0)?;
+        h.recent_ratings.push(Rating::try_from(r)?);
+    }
+
+    Ok(h)
 }
 
-fn compute_lesson_history(events: &[Event], atom_id: &str) -> LessonHistory {
-    let mut h = LessonHistory::default();
-    for e in events {
-        if e.atom.as_deref() != Some(atom_id) {
-            continue;
-        }
-        if matches!(e.kind, EventKind::LessonTaught) {
-            h.repetitions += 1;
-            h.last_presented_at = Some(e.ts);
-        }
+/// Nearest-integer percent, or `None` when `denominator == 0`.
+fn percent(numerator: u32, denominator: u32) -> Option<u32> {
+    if denominator == 0 {
+        return None;
     }
-    h
+    let num = u64::from(numerator) * 100 + u64::from(denominator) / 2;
+    Some(u32::try_from(num / u64::from(denominator)).expect("percent fits in u32"))
+}
+
+/// Past `lesson_taught` count and the most-recent ts for one atom.
+pub async fn compute_lesson_history(
+    conn: &Connection,
+    path_id: &str,
+    atom_id: &str,
+) -> Result<LessonHistory> {
+    let mut h = LessonHistory::default();
+    let mut rows = conn
+        .query(
+            "SELECT COUNT(*), MAX(ts) FROM events \
+             WHERE path_id = ? AND kind = 'lesson_taught' AND atom_id = ?",
+            libsql::params![path_id, atom_id],
+        )
+        .await?;
+    if let Some(row) = rows.next().await? {
+        let count: i64 = row.get(0)?;
+        h.repetitions = u32::try_from(count)
+            .map_err(|_| Error::CardsCorrupt(format!("bad lesson_taught count {count}")))?;
+        let max_ts: Option<String> = row.get(1)?;
+        h.last_presented_at = max_ts.as_deref().map(db::parse_ts).transpose()?;
+    }
+    Ok(h)
 }
 
 // ── AYML output shape ──────────────────────────────────────────────
@@ -380,11 +365,11 @@ struct PresentLessonPayload {
     next_step: String,
 }
 
-#[derive(Serialize, Default)]
-struct LessonHistory {
-    repetitions: u32,
+#[derive(Serialize, Default, Debug)]
+pub struct LessonHistory {
+    pub repetitions: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    last_presented_at: Option<DateTime<Utc>>,
+    pub last_presented_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
@@ -450,7 +435,7 @@ struct DonePayload {
 
 impl Envelope {
     #[allow(clippy::too_many_lines)]
-    fn build(g: &Graph, p: &PathFile, events: &[Event], action: Action) -> Self {
+    async fn build(conn: &Connection, g: &Graph, p: &PathFile, action: Action) -> Result<Self> {
         match action {
             Action::PresentLesson { atom_id } => {
                 let c = g.by_id.get(&atom_id).expect("atom exists in graph");
@@ -460,8 +445,8 @@ impl Envelope {
                     description: c.description.clone(),
                     lesson: c.lesson.clone(),
                 };
-                let history = compute_lesson_history(events, &atom_id);
-                Envelope {
+                let history = compute_lesson_history(conn, &p.id, &atom_id).await?;
+                Ok(Envelope {
                     schema_version: 1,
                     action: "present_lesson".to_string(),
                     path: p.id.clone(),
@@ -471,7 +456,7 @@ impl Envelope {
                         history,
                         next_step: "mt path next".to_string(),
                     }),
-                }
+                })
             }
             Action::PresentQuiz { quiz_id, atom_id } => {
                 let c = g.by_id.get(&atom_id).expect("atom exists in graph");
@@ -494,8 +479,8 @@ impl Envelope {
                     answer: q.answer.clone(),
                     rubric: q.rubric.clone(),
                 };
-                let history = compute_quiz_history(events, &quiz_id);
-                Envelope {
+                let history = compute_quiz_history(conn, &p.id, &quiz_id).await?;
+                Ok(Envelope {
                     schema_version: 1,
                     action: "present_quiz".to_string(),
                     path: p.id.clone(),
@@ -507,7 +492,7 @@ impl Envelope {
                             "mt quiz answer {quiz_id} --rating {{again|hard|good|easy}}"
                         ),
                     }),
-                }
+                })
             }
             Action::CreateLesson { atom_id } => {
                 let c = g.by_id.get(&atom_id).expect("atom exists in graph");
@@ -518,7 +503,7 @@ impl Envelope {
                     lesson: None,
                 };
                 let prerequisites = collect_prereqs(g, c);
-                Envelope {
+                Ok(Envelope {
                     schema_version: 1,
                     action: "create_lesson".to_string(),
                     path: p.id.clone(),
@@ -527,7 +512,7 @@ impl Envelope {
                         prerequisites,
                         next_step: format!("mt lesson upsert {atom_id} --body TEXT"),
                     }),
-                }
+                })
             }
             Action::CreateQuiz {
                 atom_id,
@@ -554,7 +539,7 @@ impl Envelope {
                     "mt quiz create {atom_id} --difficulty {difficulty} \
                      --question TEXT --answer TEXT [--rubric TEXT]"
                 );
-                Envelope {
+                Ok(Envelope {
                     schema_version: 1,
                     action: "create_quiz".to_string(),
                     path: p.id.clone(),
@@ -565,16 +550,16 @@ impl Envelope {
                         prerequisites,
                         next_step,
                     }),
-                }
+                })
             }
-            Action::Done => Envelope {
+            Action::Done => Ok(Envelope {
                 schema_version: 1,
                 action: "done".to_string(),
                 path: p.id.clone(),
                 payload: Payload::Done(DonePayload {
                     message: "Path complete.".into(),
                 }),
-            },
+            }),
         }
     }
 }

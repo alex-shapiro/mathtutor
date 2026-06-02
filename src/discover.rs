@@ -7,8 +7,8 @@ use std::path::Path;
 use libsql::Connection;
 use serde::Serialize;
 
-use crate::event_log;
 use crate::graph::{self, FlatConcept, Graph, Manifest, ManifestArea};
+use crate::progress::PathProgress;
 use crate::scheduler;
 use crate::{Error, Result};
 
@@ -30,8 +30,8 @@ pub async fn cmd_graph_show(
     };
     let mut view = show_view(&g, &manifest, id)?;
     if let Some(pid) = path_id {
-        let events = event_log::load(conn, pid).await?;
-        enrich_show_view(&mut view, &g, &events, id);
+        let progress = PathProgress::load(conn, pid).await?;
+        enrich_show_view(&mut view, &g, &progress, id);
     }
     emit(&view)
 }
@@ -52,15 +52,14 @@ pub async fn cmd_graph_list(
     };
     let mut view = list_view(&g, &manifest, id)?;
     if let Some(pid) = path_id {
-        let events = event_log::load(conn, pid).await?;
-        enrich_list_view(&mut view, &g, &events);
+        let progress = PathProgress::load(conn, pid).await?;
+        enrich_list_view(&mut view, &g, &progress);
     }
     emit(&view)
 }
 
 /// Build the `mt graph show` view (atom / cluster / area) for `id`
-/// against the provided graph and manifest. Pure data — used by the
-/// CLI for AYML output and by the MCP `GetItem` tool for JSON.
+/// against the provided graph and manifest.
 pub fn show_view(g: &Graph, manifest: &Manifest, id: &str) -> Result<ShowView> {
     if let Some(c) = g.by_id.get(id) {
         return Ok(ShowView::Concept(concept_view(g, c)));
@@ -162,7 +161,7 @@ pub struct AtomView {
     pub prerequisites: Vec<ChildBrief>,
     pub has_lesson: bool,
     pub quizzes: usize,
-    /// Set when `--path P` is supplied — see [`ChildBrief::status`].
+    /// Set when `--path P` is supplied. See [`ChildBrief::status`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<AtomStatus>,
 }
@@ -277,30 +276,30 @@ fn child_brief(c: &FlatConcept) -> ChildBrief {
     }
 }
 
-fn atom_status(g: &Graph, events: &[event_log::Event], atom_id: &str) -> Option<AtomStatus> {
+fn atom_status(g: &Graph, progress: &PathProgress, atom_id: &str) -> Option<AtomStatus> {
     let c = g.by_id.get(atom_id)?;
     if !c.children_ids.is_empty() {
         return None;
     }
     Some(AtomStatus {
-        lesson_taught: scheduler::lesson_taught_in_path(events, atom_id),
-        complete: scheduler::is_atom_complete(g, events, atom_id),
+        lesson_taught: progress.lesson_taught(atom_id),
+        complete: scheduler::is_atom_complete(g, progress, atom_id),
     })
 }
 
-fn enrich_show_view(view: &mut ShowView, g: &Graph, events: &[event_log::Event], id: &str) {
+fn enrich_show_view(view: &mut ShowView, g: &Graph, progress: &PathProgress, id: &str) {
     if let ShowView::Concept(ConceptView::Atom(av)) = view {
-        av.status = atom_status(g, events, id);
+        av.status = atom_status(g, progress, id);
     }
 }
 
-fn enrich_list_view(view: &mut ListView, g: &Graph, events: &[event_log::Event]) {
+fn enrich_list_view(view: &mut ListView, g: &Graph, progress: &PathProgress) {
     let ListView::Children(cv) = view else {
         return;
     };
     for child in &mut cv.children {
         if child.is_atom {
-            child.status = atom_status(g, events, &child.id);
+            child.status = atom_status(g, progress, &child.id);
         }
     }
 }

@@ -74,7 +74,7 @@ mt instruct                        # print AGENTS playbook embedded in binary
 `mt graph show` and `mt graph list` are pure curriculum lookups by
 default. When `--path P` is supplied, atom output is enriched with
 per-path status (`lesson_taught`, `complete`) without altering the
-base shape — fields are added via `skip_serializing_if`.
+base shape. Fields are added via `skip_serializing_if`.
 
 Every command that writes appends a structured event to the per-path
 log (see "Event log" below). Agents read the log if they need history;
@@ -84,11 +84,9 @@ nothing else is needed to reconstruct user state.
 
 Each `--atom` argument may be:
 
-- an **atom ID** (leaf concept, e.g. `tx.1.1`) — included as-is
-- a **cluster ID** (any non-leaf node, e.g. `tx.1` or `tx.5`) — expanded
-  to all atomic descendants
-- a bare **area prefix** (e.g. `tx`) — expanded to every atom in that
-  area
+- an **atom ID** is a leaf concept (e.g. `tx.1.1`)
+- a **cluster ID** is a non-leaf node (e.g. `tx.1` or `tx.5`) and is expanded to all atomic descendants
+- a bare **area prefix** is a non-leaf node (e.g. `tx`) and is expanded to every atom in that area
 
 Mixing forms is allowed; results are deduplicated and topologically
 sorted by prerequisite order before being stored as the path's
@@ -109,15 +107,15 @@ sorted by prerequisite order before being stored as the path's
 4. **Quiz stored (per slot, lazy).** When `mt path next` returns
    `create_quiz` for a difficulty slot, the agent authors a question,
    reference answer, and optional rubric, then calls `mt quiz create`
-   — which appends to the overlay.
+   to append to the overlay.
 5. **Quiz answered.** `mt path next` returns `present_quiz`. The agent
    presents the stored question, grades the user's reply against the
    reference answer + rubric, and calls `mt quiz answer <quiz-id>
 --rating …`.
 
-Each lesson and each individual quiz is generated lazily — only when the
-scheduler first asks for it. An atom can be in a partial state (lesson
-exists, only the easy quiz exists) for arbitrarily long.
+Each lesson and each individual quiz is generated lazily when the
+scheduler first asks for it. An atom may be in a partial state (lesson
+exists, only the easy quiz exists).
 
 ## `mt path next` I/O
 
@@ -135,8 +133,7 @@ Conventions for every payload:
 - IDs are stable curriculum-graph identifiers (`la.5.4.7`, `la.5.4.7.q2`).
 - Multi-paragraph fields (`lesson`, `question`, `answer`, `rubric`) are
   AYML triple-quoted strings.
-- `next_step` is an informational hint for the agent — the canonical
-  command to call after acting on this output.
+- `next_step` is tells the agent the canonical command to call after acting on this output.
 - All atoms `mt path next` returns satisfy the prerequisite invariant:
   every direct prerequisite already has a stored lesson in the merged
   view.
@@ -173,10 +170,9 @@ payload:
 A lesson body already exists for this atom (shipped, or authored under
 a previous path), but the current path has never taught it. The
 scheduler re-surfaces the stored body so the user gets context before
-any quiz. The agent shows the body verbatim — not re-authored — then
-calls `mt path next` again. `mt path next` auto-logs `lesson_taught`
-when it returns this action, so no explicit "I taught it" command is
-needed.
+any quiz. The agent shows the body verbatim, then calls `mt path next` again.
+`mt path next` auto-logs `lesson_taught` when it returns this action,
+so no explicit "I taught it" command is needed.
 
 ```yaml
 action: present_lesson
@@ -327,14 +323,14 @@ Merge semantics (`Graph::load_for_path`): an overlay lesson, quiz, or
 tombstone always overrides a shipped item with the same ID. Tombstones
 override everything. Concretely:
 
-- **Lesson** — if the overlay has one, use it; otherwise use the
+- **Lesson:** if the overlay has one, use it; otherwise use the
   shipped lesson if present. `mt lesson upsert` is an upsert; a second
   call replaces the body.
-- **Quizzes** — start with shipped, replace any with the same id from
+- **Quizzes:** start with shipped, replace any with the same id from
   the overlay (this is how `mt quiz update` works), then append overlay
   quizzes whose ids don't match shipped (added by `mt quiz create`),
   then filter out anything whose id appears in `overlay_removed_quizzes`.
-- **Prerequisites / cluster structure** — not overridable. The shape
+- **Prerequisites / cluster structure:** not overridable. The shape
   of the curriculum is fixed by the shipped graph; the overlay only
   carries content.
 
@@ -346,9 +342,9 @@ eventual merge back into the canonical curriculum.
 ## Event log
 
 One append-only AYML file per learning path. Every event has a top-level
-`ts` field in RFC 3339 / ISO 8601 format with UTC timezone — required,
-not optional — so the log can be re-played and `time_since_last` /
-`repetitions` derived without additional state. Each entry:
+`ts` field in RFC 3339 / ISO 8601 format with UTC timezone so the log can
+be re-played and `time_since_last` / `repetitions` derived without
+additional state. Each entry:
 
 ```yaml
 - ts: 2026-05-09T18:42:01Z   # required, RFC 3339 UTC
@@ -364,10 +360,8 @@ not optional — so the log can be re-played and `time_since_last` /
 Implemented event kinds:
 
 - `path_created`
-- `lesson_authored` (on `mt lesson upsert` when no prior lesson existed
-  in the merged view)
-- `lesson_amended` (on `mt lesson upsert` when a lesson — shipped or
-  overlay — was already in the merged view)
+- `lesson_authored` (on `mt lesson upsert` when no lesson existed)
+- `lesson_amended` (on `mt lesson upsert` when a lesson already existed)
 - `lesson_taught` (auto-logged on `mt path next → present_lesson`, and on
   every `mt lesson upsert` since authoring implies presenting)
 - `quiz_authored` (on `mt quiz create`)
@@ -377,20 +371,15 @@ Implemented event kinds:
 - `quiz_removed` (on `mt quiz delete`)
 
 The log is the source of truth for what the user has seen and how they
-performed. FSRS state is derived from `quiz_answered` events on demand
-(`crate::cards`) — not persisted as a separate cache.
+performed. FSRS state is derived from a rebuildable cache of the log.
 
 ## Spaced repetition (FSRS)
 
-- **One FSRS card per quiz question.** Not per atom, not per difficulty
-  slot — per individual question. Memorizing an easy question shouldn't
-  pull a hard one out of rotation.
+- **One FSRS card per quiz question.**
 - **No persistent card state.** The card state for any quiz is
   reconstructed by replaying its `quiz_answered` events through the
-  FSRS algorithm in order. This is intentionally a pure function of the
-  log — keeps the invariant "log is source of truth" sharp, and at our
-  scale (≤ ~10k events per path) the replay cost stays under ~50ms.
-  A persistent `cards.ayml` cache becomes interesting beyond that scale.
+  FSRS algorithm in order. This is intentionally a pure function to
+  keep the log as the sole source of truth
 - **`mt path next` algorithm:**
   1. Earliest-due quiz card whose atom is in the merged view → `present_quiz`.
   2. Else, walk targets (and their prereqs) in topo order. For each
@@ -407,11 +396,9 @@ performed. FSRS state is derived from `quiz_answered` events on demand
   freshly-taught atom always gets all three quizzes authored and
   answered before the next target's lesson is requested.
 
-  "Correct" means anything except `Again` — i.e. `Hard`, `Good`, or
-  `Easy`. `Hard` is "got it right, with effort"; FSRS handles its
-  shorter follow-up interval. The per-atom walker only re-presents
-  immediately on `Again`, so a `Hard`-rated card doesn't loop back the
-  moment the user finishes answering it.
+  "Correct" is any answer with a rating `Hard`, `Good`, or `Easy`.
+  `Hard` is "got it right, with effort"; FSRS handles its shorter follow-up interval.
+  The per-atom walker presents again immediately on rating `Again`.
 
 ## Tool I/O
 
@@ -420,27 +407,14 @@ performed. FSRS state is derived from `quiz_answered` events on demand
 - Exit codes: `0` ok; `1` scheduler / state-read failure; `2` config /
   IO / validation.
 - Multi-paragraph content (lesson bodies, quiz questions/answers/
-  rubrics) is passed as `TEXT` arguments — literal strings on the
-  command line. Agents typically pass them via heredoc to preserve
-  newlines.
+  rubrics) is passed as text. Agents may pass them via heredoc
+  to preserve newlines.
 
 ## Errors
 
 A single crate-wide `Error` enum covers every failure mode. Every
 fallible function returns `crate::Result<T>`. There is no per-module
 error hierarchy.
-
-## Crates
-
-- `argh` — CLI parsing
-- `ayml` + `serde` — data serialization (per-path files only;
-  curriculum is compiled-in bytes)
-- `chrono` — timestamps
-- `fsrs` — spaced-repetition scheduling
-- `include_dir` — compile-time curriculum embedding
-- `thiserror` — error type derive
-- `tracing` — debug logging (unused for output; reserved for future
-  observability)
 
 ## Out of scope for V1
 
@@ -461,6 +435,5 @@ error hierarchy.
 - **Multi-modal content** (diagrams, images, code execution).
 - **Multi-user hosting.** Storage is single-user single-tenant; multi-
   user requires identity, per-user storage scoping, and an MCP/HTTP
-  server layer — none of which is built. A personal hosted setup
-  (one-user Fly VM with MCP) is reachable from this codebase with a
-  modest server wrapper; multi-tenant SaaS is a separate project.
+  server layer. A personal hosted setup (one-user Fly VM with MCP) is
+  reachable from this codebase with a modest server wrapper.

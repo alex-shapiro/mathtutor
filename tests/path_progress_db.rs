@@ -1,0 +1,171 @@
+//! Integration tests for `PathProgress::load`
+//!
+//! The cards-backed predicate `reps > lapses` must ensure that the
+//! quiz has been answered correctly at least once.
+
+use libsql::params;
+use mathtutor::event_log;
+use mathtutor::progress::PathProgress;
+use mathtutor::types::Rating;
+use tempfile::TempDir;
+
+mod common;
+
+use common::PATH_ID;
+
+#[tokio::test]
+async fn load_empty_path_yields_default_progress() {
+    let tmp = TempDir::new().unwrap();
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
+
+    let p = PathProgress::load(&conn, PATH_ID).await.expect("load");
+    assert!(p.taught_atoms.is_empty());
+    assert!(p.correct_quizzes.is_empty());
+}
+
+#[tokio::test]
+async fn lesson_taught_event_lands_in_taught_atoms() {
+    let tmp = TempDir::new().unwrap();
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    event_log::append(
+        &conn,
+        &event_log::lesson_taught(PATH_ID.into(), "atom.a".into()),
+    )
+    .await
+    .unwrap();
+
+    let p = PathProgress::load(&conn, PATH_ID).await.unwrap();
+    assert!(p.lesson_taught("atom.a"));
+    assert!(!p.lesson_taught("atom.b"));
+}
+
+#[tokio::test]
+async fn lesson_authored_event_also_counts_as_taught() {
+    // Authoring a lesson implies presenting it.
+    // `PathProgress` must recognize either kind.
+    let tmp = TempDir::new().unwrap();
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    event_log::append(
+        &conn,
+        &event_log::lesson_authored(PATH_ID.into(), "atom.a".into()),
+    )
+    .await
+    .unwrap();
+
+    let p = PathProgress::load(&conn, PATH_ID).await.unwrap();
+    assert!(p.lesson_taught("atom.a"));
+}
+
+#[tokio::test]
+async fn correct_answer_lands_in_correct_quizzes() {
+    let tmp = TempDir::new().unwrap();
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    event_log::append(
+        &conn,
+        &event_log::quiz_answered(
+            PATH_ID.into(),
+            Some("atom.a".into()),
+            "atom.a.q1".into(),
+            Rating::Good,
+            None,
+        ),
+    )
+    .await
+    .unwrap();
+
+    let p = PathProgress::load(&conn, PATH_ID).await.unwrap();
+    assert!(p.quiz_answered_correctly("atom.a.q1"));
+}
+
+#[tokio::test]
+async fn only_again_answers_do_not_count_as_correct() {
+    // An `Again` answer keeps `lapses == reps`
+    let tmp = TempDir::new().unwrap();
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    event_log::append(
+        &conn,
+        &event_log::quiz_answered(
+            PATH_ID.into(),
+            Some("atom.a".into()),
+            "atom.a.q1".into(),
+            Rating::Again,
+            None,
+        ),
+    )
+    .await
+    .unwrap();
+
+    let p = PathProgress::load(&conn, PATH_ID).await.unwrap();
+    assert!(!p.quiz_answered_correctly("atom.a.q1"));
+}
+
+#[tokio::test]
+async fn earlier_correct_answer_survives_later_again() {
+    // Get it right, then later get it wrong.
+    // The quiz still counts as "answered correctly at least once"
+    let tmp = TempDir::new().unwrap();
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    event_log::append(
+        &conn,
+        &event_log::quiz_answered(
+            PATH_ID.into(),
+            Some("atom.a".into()),
+            "atom.a.q1".into(),
+            Rating::Good,
+            None,
+        ),
+    )
+    .await
+    .unwrap();
+    event_log::append(
+        &conn,
+        &event_log::quiz_answered(
+            PATH_ID.into(),
+            Some("atom.a".into()),
+            "atom.a.q1".into(),
+            Rating::Again,
+            None,
+        ),
+    )
+    .await
+    .unwrap();
+
+    let p = PathProgress::load(&conn, PATH_ID).await.unwrap();
+    assert!(p.quiz_answered_correctly("atom.a.q1"));
+}
+
+#[tokio::test]
+async fn loads_only_rows_for_the_named_path() {
+    // A second path's events and cards must not leak into the snapshot.
+    let tmp = TempDir::new().unwrap();
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    conn.execute(
+        "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
+        params!["p_other", "other goal", "2026-05-26T00:00:00Z"],
+    )
+    .await
+    .unwrap();
+
+    event_log::append(
+        &conn,
+        &event_log::lesson_taught("p_other".into(), "atom.other".into()),
+    )
+    .await
+    .unwrap();
+    event_log::append(
+        &conn,
+        &event_log::quiz_answered(
+            "p_other".into(),
+            Some("atom.other".into()),
+            "atom.other.q1".into(),
+            Rating::Good,
+            None,
+        ),
+    )
+    .await
+    .unwrap();
+
+    let p = PathProgress::load(&conn, PATH_ID).await.unwrap();
+    assert!(!p.lesson_taught("atom.other"));
+    assert!(!p.quiz_answered_correctly("atom.other.q1"));
+}

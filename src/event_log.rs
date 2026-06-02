@@ -235,10 +235,7 @@ pub fn quiz_answered(
 /// rating into the `cards` write-through cache so the scheduler sees
 /// the new due date on its next pass.
 ///
-/// Atomicity is the caller's responsibility: pass `&tx` (deref-coerced
-/// from a `libsql::Transaction`) when both writes — and any surrounding
-/// command work — must succeed or fail together. Every mutating cmd in
-/// this crate already wraps its writes in `conn.transaction()`.
+/// Atomicity is the caller's responsibility.
 pub async fn append(conn: &Connection, event: &Event) -> Result<()> {
     let stored = StoredPayload {
         reason: event.payload.reason.as_deref(),

@@ -55,8 +55,8 @@ use url::Url;
 
 use crate::Error;
 use crate::db::{self, DbConfig};
-use crate::event_log;
 use crate::graph::Graph;
+use crate::progress::PathProgress;
 use crate::types::{Difficulty, QuizType, Rating};
 use crate::{answer, discover, graph, path, scheduler, state, store, tree};
 
@@ -108,8 +108,8 @@ impl MathTutorServer {
             .map_err(|e| map_protocol_error(&e))
     }
 
-    /// Non-blocking sync after a state-modifying tool. Fire-and-forget —
-    /// failures show up in stderr; libSQL retries on the next sync.
+    /// Non-blocking sync after a state-modifying tool.
+    /// Failures are logged to stderr.
     fn spawn_sync(&self) {
         let db = self.db.clone();
         let cfg = self.cfg.clone();
@@ -588,10 +588,10 @@ async fn status_for(
     if !c.children_ids.is_empty() {
         return Ok(None);
     }
-    let events = event_log::load(conn, path_id).await?;
+    let progress = PathProgress::load(conn, path_id).await?;
     Ok(Some(AtomStatus {
-        lesson_taught: scheduler::lesson_taught_in_path(&events, id),
-        complete: scheduler::is_atom_complete(g, &events, id),
+        lesson_taught: progress.lesson_taught(id),
+        complete: scheduler::is_atom_complete(g, &progress, id),
     }))
 }
 
@@ -653,16 +653,16 @@ async fn compute_tree(
     let p = path::load_path(conn, path_id).await?;
     let g = Graph::load_for_path(conn, graph_dir).await?;
     let manifest = graph::load_manifest_default(graph_dir)?;
-    let events = event_log::load(conn, path_id).await?;
+    let progress = PathProgress::load(conn, path_id).await?;
 
-    let reachable = tree::reachable_atoms(&g, &p.target_atoms);
+    let reachable = g.reachable_atoms(&p.target_atoms);
     let spine = tree::build_spine(&g, &reachable);
 
     let targets_total = p.target_atoms.len();
     let targets_learned = p
         .target_atoms
         .iter()
-        .filter(|a| scheduler::is_atom_complete(&g, &events, a))
+        .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
         .count();
     let targets_pct = if targets_total > 0 {
         targets_learned * 100 / targets_total
@@ -672,11 +672,11 @@ async fn compute_tree(
     let reach_total = reachable.len();
     let reach_taught = reachable
         .iter()
-        .filter(|a| scheduler::lesson_taught_in_path(&events, a))
+        .filter(|a| progress.lesson_taught(a))
         .count();
     let reach_learned = reachable
         .iter()
-        .filter(|a| scheduler::is_atom_complete(&g, &events, a))
+        .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
         .count();
 
     let target_set: std::collections::HashSet<&str> =
@@ -691,7 +691,7 @@ async fn compute_tree(
                 let parts: Vec<&str> = c.id.split('.').collect();
                 parts.len() == 2 && parts[0] == area.prefix && spine.contains(&c.id)
             })
-            .map(|c| build_tree_node(&g, &events, &spine, &target_set, c, depth, 1))
+            .map(|c| build_tree_node(&g, &progress, &spine, &target_set, c, depth, 1))
             .collect();
         top.sort_by(|a, b| natural_cmp(&a.id, &b.id));
         nodes.extend(top);
@@ -716,7 +716,7 @@ async fn compute_tree(
 
 fn build_tree_node(
     g: &Graph,
-    events: &[event_log::Event],
+    progress: &PathProgress,
     spine: &std::collections::HashSet<String>,
     targets: &std::collections::HashSet<&str>,
     c: &graph::FlatConcept,
@@ -726,8 +726,8 @@ fn build_tree_node(
     let is_atom = c.children_ids.is_empty();
     let status = if is_atom {
         Some(AtomStatus {
-            lesson_taught: scheduler::lesson_taught_in_path(events, &c.id),
-            complete: scheduler::is_atom_complete(g, events, &c.id),
+            lesson_taught: progress.lesson_taught(&c.id),
+            complete: scheduler::is_atom_complete(g, progress, &c.id),
         })
     } else {
         None
@@ -740,7 +740,7 @@ fn build_tree_node(
             .iter()
             .filter_map(|cid| g.by_id.get(cid))
             .filter(|kc| spine.contains(&kc.id))
-            .map(|kc| build_tree_node(g, events, spine, targets, kc, max_depth, depth + 1))
+            .map(|kc| build_tree_node(g, progress, spine, targets, kc, max_depth, depth + 1))
             .collect();
         kids.sort_by(|a, b| natural_cmp(&a.id, &b.id));
         kids
@@ -955,8 +955,7 @@ pub async fn run(
     // Drain the background sync task before the final sync so we don't
     // race with it on the same `Database` handle.
     background.await.ok();
-    // Final sync — ensure every locally-acked write lands on Turso before
-    // the process exits. Best-effort; `maybe_sync` already swallows errors.
+    // Best-effort sync to push local writes to Turso before process exit
     db::maybe_sync(&db, &cfg_arc).await;
     tracing::info!("mt mcp shutdown complete");
     Ok(())
@@ -980,12 +979,7 @@ struct AuthState {
     /// is disabled.
     db: Option<Arc<Database>>,
     /// Pre-formatted `WWW-Authenticate` value pointing at the protected-
-    /// resource metadata, so OAuth-aware clients can discover the AS on
-    /// 401s. Always populated — even bearer-only setups can advertise the
-    /// resource ID, the lack of an authorization server just shows up as
-    /// no `authorization_servers` entry in the metadata if the client
-    /// fetches it (and bearer-only deployments shouldn't ship that route
-    /// in the first place).
+    /// resource metadata so OAuth-aware clients can discover the AS on 401.
     www_authenticate: Arc<str>,
 }
 
@@ -1018,8 +1012,7 @@ struct TokenQuery {
 /// Layered bearer / OAuth auth on `/mcp`. Order:
 ///
 /// 1. `Authorization: Bearer <token>` header.
-/// 2. `?token=<token>` query parameter (legacy `EventSource` fallback,
-///    bearer mode only — Claude clients don't use this path).
+/// 2. `?token=<token>` query parameter (legacy `EventSource` fallback, bearer mode only).
 ///
 /// The presented value is matched against the static API key first
 /// (when enabled), then looked up as an OAuth access token (when
@@ -1087,8 +1080,8 @@ async fn log_request_body(req: Request<Body>, next: Next) -> Response {
     let bytes = match axum::body::to_bytes(body, MAX_LOGGED_BODY).await {
         Ok(b) => b,
         Err(e) => {
-            // Body is consumed and can't be replayed — surface as 400 so
-            // the client retries instead of seeing a confusing 500.
+            // Body is consumed and can't be replayed.
+            // Surface as 400 so the client retries instead of seeing a confusing 500.
             tracing::warn!(error = %e, "mcp request body buffering failed");
             let mut resp = Response::new(Body::empty());
             *resp.status_mut() = StatusCode::BAD_REQUEST;

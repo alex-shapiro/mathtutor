@@ -166,7 +166,7 @@ The server is single-user, single-tenant: one SQLite database, one human operato
 Two parallel auth modes coexist on the `/mcp` endpoint. A request is accepted if either mode succeeds:
 
 1.  **Static API key (bearer).** A long-lived secret in `MT_API_KEY`, supplied either as `Authorization: Bearer <token>` or as `?token=<token>`. Intended for CLI tooling, `mcp-remote` bridges, integration tests, and any caller that can't run an OAuth flow. The bearer mode is enabled iff `MT_API_KEY` is set on the server.
-2.  **OAuth 2.1 access token.** Issued by the server's built-in authorization server (see below), supplied as `Authorization: Bearer <token>`. Intended for MCP clients that natively speak OAuth — notably Claude Desktop's "Add custom connector" flow, which then syncs the registered connector to Claude iOS. The OAuth mode is enabled iff `MT_ADMIN_PASSWORD` is set on the server.
+2.  **OAuth 2.1 access token.** Issued by the server's built-in authorization server (see below), supplied as `Authorization: Bearer <token>`. Intended for MCP clients that natively speak OAuth, notably Claude's "Add custom connector" flow. OAuth mode is enabled iff `MT_ADMIN_PASSWORD` is set on the server.
 
 At least one of `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set or the server refuses to start.
 
@@ -182,7 +182,7 @@ Claude apps authenticate OAuth on remote connectors. To satisfy this requirement
 | ----------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------- |
 | `/.well-known/oauth-protected-resource`   | GET    | RFC 9728 metadata: lists the issuer URL the MCP server trusts                                                             |
 | `/.well-known/oauth-authorization-server` | GET    | RFC 8414 metadata: advertises endpoints, supported scopes, PKCE methods                                                   |
-| `/oauth/register`                         | POST   | RFC 7591 dynamic client registration. Open (no auth) — see "Open DCR" below                                               |
+| `/oauth/register`                         | POST   | RFC 7591 dynamic client registration. Open (no auth), see "Open DCR" below                                                |
 | `/oauth/authorize`                        | GET    | Renders the operator login form, carries the OAuth request params in hidden fields                                        |
 | `/oauth/authorize`                        | POST   | Validates `MT_ADMIN_PASSWORD`, issues a single-use authorization code, redirects to `redirect_uri` with `?code=…&state=…` |
 | `/oauth/token`                            | POST   | `authorization_code` grant (with PKCE verifier) and `refresh_token` grant                                                 |
@@ -191,7 +191,7 @@ CORS allow-any is enabled on `/.well-known/*`, `/oauth/register`, and `/oauth/to
 
 ##### Login UX
 
-The operator authenticates with a static password from the `MT_ADMIN_PASSWORD` environment variable. `/oauth/authorize` GETs render a minimal HTML form; the POST validates the password with a constant-time compare and issues the authorization code. There is no consent prompt — single-user implies the operator and the user are the same person, so client-registration is taken as implicit consent.
+The operator authenticates with a static password from the `MT_ADMIN_PASSWORD` environment variable. `/oauth/authorize` GETs render a minimal HTML form; the POST validates the password with a constant-time compare and issues the authorization code. There is no consent prompt. Single-user implies the operator and the user are the same person, so client-registration is taken as implicit consent.
 
 The form carries the OAuth parameters (`client_id`, `redirect_uri`, `code_challenge`, `state`, `scope`) plus an HMAC-signed CSRF token derived from a per-process secret so the form can't be cross-submitted.
 
@@ -206,16 +206,16 @@ The form carries the OAuth parameters (`client_id`, `redirect_uri`, `code_challe
 
 ##### Open DCR (RFC 7591)
 
-Dynamic client registration accepts any well-formed request and issues a fresh `client_id` (no `client_secret` — Claude's native flow is a public PKCE client). This is the spec-mandated UX for "paste URL, log in, done" — pre-registration would require the operator to dig client IDs out of UI on every device. The risk is bounded: a registered client can do nothing until someone with the password completes `/oauth/authorize`.
+Dynamic client registration accepts any well-formed request and issues a fresh `client_id` (no `client_secret` because Claude's native flow is a public PKCE client). This is the spec-mandated UX for "paste URL, log in, done" — pre-registration would require the operator to dig client IDs out of UI on every device. The risk is bounded: a registered client can do nothing until someone with the password completes `/oauth/authorize`.
 
 ##### Storage
 
 OAuth state lives in four new SQL tables, scoped to the single-user database:
 
-- `oauth_clients` — DCR-registered clients (id, name, redirect URIs).
-- `oauth_authorization_codes` — short-lived codes binding client + redirect URI + PKCE challenge.
-- `oauth_access_tokens` — opaque access tokens with expiries.
-- `oauth_refresh_tokens` — long-lived refresh tokens with expiries.
+- `oauth_clients` are DCR-registered clients (id, name, redirect URIs).
+- `oauth_authorization_codes` are short-lived codes binding client + redirect URI + PKCE challenge.
+- `oauth_access_tokens` are opaque access tokens with expiries.
+- `oauth_refresh_tokens` are long-lived refresh tokens with expiries.
 
 These never leak between MCP databases / Turso instances because they live in the same SQLite file as `paths`, `events`, etc.
 
@@ -407,11 +407,9 @@ flyctl secrets set TURSO_URL='…'            # Turso DB URL
 flyctl secrets set TURSO_AUTH_TOKEN='…'     # Turso auth token
 ```
 
-At least one of `MT_ADMIN_PASSWORD` or `MT_API_KEY` must be set — the
-server refuses to start without one. `MT_PUBLIC_URL` is configured in
-`fly.toml` to match the default `https://<app>.fly.dev` URL; edit it
-there if you front the app with a custom domain (it has to match what the
-client uses, or OAuth discovery and `resource` validation will fail).
+At least one of `MT_ADMIN_PASSWORD` or `MT_API_KEY` must be set or the
+server refuses to start. `MT_PUBLIC_URL` is configured in `fly.toml` to
+match the default `https://<app>.fly.dev` URL.
 
 Persist state across machine restarts with `TURSO_URL` and `TURSO_AUTH_TOKEN`
 to sync the embedded libSQL to a remote replica. Without those, the local SQLite

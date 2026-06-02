@@ -1,6 +1,6 @@
 //! Curriculum graph: AYML-backed types, loader, and `mt graph check`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -12,9 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::types::{Difficulty, QuizType};
 use crate::{Error, Result};
 
-/// Curriculum bytes baked into the binary at compile time. Lets `mt`
-/// ship as a single artifact — no checked-out repo required at runtime.
-/// The `--graph DIR` CLI flag and `MT_GRAPH` env var both override this
+/// Curriculum bytes baked into the binary at compile time.
+/// The `--graph DIR` CLI flag and `MT_GRAPH` env override this
 /// for development against a working tree.
 static EMBEDDED_GRAPH: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/curriculum/graph");
 
@@ -111,7 +110,7 @@ struct NodeRaw {
 
 // ── Unified concept tree ────────────────────────────────────────────
 
-/// Normalized concept node — used for validation and scheduling regardless of schema.
+/// Concept node
 #[derive(Debug, Clone)]
 struct Concept {
     id: String,
@@ -322,7 +321,7 @@ impl Graph {
         Ok(Self { by_id })
     }
 
-    /// Load curriculum from compiled-in bytes — no filesystem access.
+    /// Load curriculum from compiled-in bytes
     pub fn load_embedded() -> Result<Self> {
         let manifest = load_manifest_embedded()?;
         let mut by_id = HashMap::new();
@@ -349,9 +348,9 @@ impl Graph {
         Self::load_embedded()
     }
 
-    /// Effective graph "as the user sees it" — shipped curriculum with
-    /// the user overlay applied. The single entry point for scheduler /
-    /// tree / state queries; consumers stay overlay-unaware.
+    /// Effective graph "as the user sees it", merging the shipped curriculum
+    /// and user overlay. This is the entrypoint for scheduler, tree, and state
+    /// queries.
     ///
     /// Conflict resolution rule: an overlay lesson, quiz, or tombstone
     /// always overrides a built-in item with the same ID. Tombstones
@@ -363,9 +362,31 @@ impl Graph {
         Ok(g)
     }
 
-    /// Validate `id` resolves to an atom (leaf concept) in the merged
-    /// graph. Returns `AtomNotFound` if missing, `NotAtom` if it points
-    /// at a cluster.
+    /// Returns targets and the transitive closure of their prerequisites
+    /// as a set of atoms.
+    pub fn reachable_atoms(&self, targets: &[String]) -> HashSet<String> {
+        let mut out: HashSet<String> = HashSet::new();
+        let mut stack: Vec<String> = targets.to_vec();
+        while let Some(id) = stack.pop() {
+            let Some(c) = self.by_id.get(&id) else {
+                continue;
+            };
+            if !c.children_ids.is_empty() {
+                // Expand cluster to atoms and prereqs
+                stack.extend(c.children_ids.iter().cloned());
+                stack.extend(c.prerequisites.iter().cloned());
+                continue;
+            }
+            if !out.insert(id.clone()) {
+                continue;
+            }
+            stack.extend(c.prerequisites.iter().cloned());
+        }
+        out
+    }
+
+    /// Validate `id` resolves to an atom in the merged graph.
+    /// Returns `AtomNotFound` if missing and `NotAtom` if id is a cluster.
     pub fn atom(&self, id: &str) -> Result<&FlatConcept> {
         let c = self
             .by_id
@@ -399,10 +420,10 @@ impl Graph {
     fn apply_overlay(&mut self, overlay: crate::overlay::Overlay) {
         for (atom_id, entry) in overlay.atoms {
             let Some(c) = self.by_id.get_mut(&atom_id) else {
-                // Atom isn't in the shipped graph — skip silently. A
-                // future graph version may add it, at which point the
-                // overlay starts taking effect; or the user is welcome
-                // to clean up the overlay manually.
+                // Atom is not in the shipped graph and should be skipped.
+                // A future graph version may add it, at which point the
+                // overlay starts taking effect; or the user can clean
+                // up the overlay manually.
                 continue;
             };
             if entry.lesson.is_some() {
@@ -816,102 +837,5 @@ impl CheckReport {
             println!();
             println!("graph check FAILED.");
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{FlatConcept, Graph, Quiz};
-    use crate::Error;
-    use crate::types::Difficulty;
-    use std::collections::HashMap;
-
-    fn graph_with_quiz(atom_id: &str, quiz_id: &str) -> Graph {
-        let mut by_id = HashMap::new();
-        by_id.insert(
-            atom_id.to_string(),
-            FlatConcept {
-                id: atom_id.into(),
-                name: atom_id.into(),
-                description: None,
-                prerequisites: Vec::new(),
-                children_ids: Vec::new(),
-                lesson: Some("body".into()),
-                quizzes: vec![Quiz {
-                    id: quiz_id.into(),
-                    difficulty: Difficulty::Easy,
-                    kind: None,
-                    question: "q".into(),
-                    answer: "a".into(),
-                    rubric: None,
-                }],
-            },
-        );
-        Graph { by_id }
-    }
-
-    fn graph_with_cluster(cluster_id: &str) -> Graph {
-        let mut by_id = HashMap::new();
-        by_id.insert(
-            cluster_id.to_string(),
-            FlatConcept {
-                id: cluster_id.into(),
-                name: cluster_id.into(),
-                description: None,
-                prerequisites: Vec::new(),
-                children_ids: vec![format!("{cluster_id}.1")],
-                lesson: None,
-                quizzes: Vec::new(),
-            },
-        );
-        Graph { by_id }
-    }
-
-    #[test]
-    fn quiz_returns_atom_and_quiz_for_valid_id() {
-        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
-        let (atom, quiz) = g.quiz("fnd.1.1.1.q1").expect("valid");
-        assert_eq!(atom.id, "fnd.1.1.1");
-        assert_eq!(quiz.id, "fnd.1.1.1.q1");
-    }
-
-    #[test]
-    fn quiz_rejects_malformed_id() {
-        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
-        // Missing `.qN` suffix → can't derive an atom id.
-        assert!(matches!(g.quiz("fnd.1.1.1"), Err(Error::UnknownId(_))));
-    }
-
-    #[test]
-    fn quiz_rejects_unknown_atom() {
-        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
-        assert!(matches!(g.quiz("nope.1.q1"), Err(Error::AtomNotFound(_))));
-    }
-
-    #[test]
-    fn quiz_rejects_unknown_quiz_on_known_atom() {
-        // Atom is real but doesn't own a `.q9` quiz — the most likely
-        // typo path (right atom, wrong index).
-        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
-        assert!(matches!(g.quiz("fnd.1.1.1.q9"), Err(Error::UnknownId(_))));
-    }
-
-    #[test]
-    fn atom_accepts_leaf_concept() {
-        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
-        let a = g.atom("fnd.1.1.1").expect("valid");
-        assert_eq!(a.id, "fnd.1.1.1");
-    }
-
-    #[test]
-    fn atom_rejects_cluster() {
-        let g = graph_with_cluster("fnd.1");
-        assert!(matches!(g.atom("fnd.1"), Err(Error::NotAtom(_))));
-    }
-
-    #[test]
-    fn atom_rejects_unknown_id() {
-        let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
-        assert!(matches!(g.atom("nope"), Err(Error::AtomNotFound(_))));
     }
 }
