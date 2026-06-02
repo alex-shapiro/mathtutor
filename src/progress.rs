@@ -1,13 +1,4 @@
-//! Per-path progress snapshot consumed by the scheduler and the state
-//! summaries.
-//!
-//! `PathProgress` answers the two questions the scheduler asks of the
-//! event log without holding the log itself:
-//!
-//! - Which atoms have had their lesson taught or authored in this path?
-//! - Which quizzes have ever been answered correctly?
-//!
-//! Loaded from SQL projections to avoid materializing the event log.
+//! Per-path progress: atoms taught, quizzes answered correctly.
 
 use std::collections::HashSet;
 
@@ -16,7 +7,6 @@ use libsql::Connection;
 use crate::Result;
 use crate::event_log::{Event, EventKind};
 
-/// Cheap per-path snapshot: atoms taught, quizzes answered correctly.
 #[derive(Debug, Default, Clone)]
 pub struct PathProgress {
     pub taught_atoms: HashSet<String>,
@@ -32,8 +22,6 @@ impl PathProgress {
         self.correct_quizzes.contains(quiz_id)
     }
 
-    /// Load over SQL — two indexed queries against `events` (lessons)
-    /// and `cards` (correct quizzes). The production entry point.
     pub async fn load(conn: &Connection, path_id: &str) -> Result<Self> {
         let taught_atoms = load_taught_atoms(conn, path_id).await?;
         let correct_quizzes = load_correct_quizzes(conn, path_id).await?;
@@ -43,8 +31,7 @@ impl PathProgress {
         })
     }
 
-    /// Fold a synthetic event log into the same shape `load` produces.
-    /// Test-only — production never has a `Vec<Event>` in hand to fold.
+    /// Test helper: fold a synthetic event log into a `PathProgress`.
     pub fn from_events(events: &[Event]) -> Self {
         let mut p = Self::default();
         for e in events {

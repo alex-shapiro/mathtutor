@@ -1,9 +1,4 @@
 //! `mt path state`: per-path progress summary.
-//!
-//! Reads strictly from indexed projections (path row, cards, two
-//! event-table aggregates) and the merged curriculum graph — never the
-//! full event log. The raw log is event-payload-heavy; state needs only
-//! atom/quiz identifiers plus aggregate timestamps.
 
 use std::path::Path;
 
@@ -19,8 +14,7 @@ use crate::path::{PathFile, load_path, resolve_id};
 use crate::progress::PathProgress;
 use crate::{scheduler, tree};
 
-/// Structured snapshot used by both the CLI's human-readable output and
-/// the MCP `GetState` tool's JSON.
+/// Per-path progress snapshot returned by `compute_state`.
 #[derive(Debug, Serialize)]
 pub struct StateSummary {
     pub path: String,
@@ -43,9 +37,8 @@ pub struct TargetProgress {
     pub learned_pct: usize,
 }
 
-/// Completion of every atom reachable from the targets (targets plus the
-/// transitive closure of their prerequisites). Surfaces prerequisite
-/// progress that the `targets` counter alone hides.
+/// Completion across the targets plus the transitive closure of their
+/// prerequisites.
 #[derive(Debug, Serialize)]
 pub struct ReachProgress {
     pub total: usize,
@@ -123,10 +116,7 @@ pub async fn compute_state(
     })
 }
 
-/// Count target completion and reachable-atom completion. Pure; takes
-/// the merged graph, the path, and a `PathProgress`. Reachable = targets
-/// plus the transitive closure of their prerequisites, matching the set
-/// rendered by `mt path tree`.
+/// Count completed targets and completed reachable atoms.
 pub fn compute_progress(
     g: &Graph,
     p: &PathFile,
@@ -179,9 +169,8 @@ async fn latest_event_ts(conn: &Connection, path_id: &str) -> Result<Option<Date
     raw.map(|s| db::parse_ts(&s)).transpose()
 }
 
-/// Atom whose three first-correct quiz answers landed most recently —
-/// the target the learner most recently fully nailed. Returns `None`
-/// when no target is fully complete.
+/// Target whose three first-correct answers are the most recent;
+/// `None` when no target is fully complete.
 async fn most_recent_completed_target(
     conn: &Connection,
     path_id: &str,
@@ -205,8 +194,8 @@ async fn most_recent_completed_target(
 
     let first_correct = load_first_correct(conn, path_id, &quiz_ids).await?;
 
-    // `is_atom_complete` already guarantees every quiz has a correct
-    // answer logged; the SQL must therefore return a row for each id.
+    // `is_atom_complete` guarantees a logged correct answer for every
+    // quiz, so the SQL returns a row for each id.
     let best = completed
         .into_iter()
         .map(|c| {

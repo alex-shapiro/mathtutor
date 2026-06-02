@@ -30,9 +30,8 @@ pub async fn cmd_path_next(
     Ok(())
 }
 
-/// Resolve the path, pick the next action, and auto-log its
-/// `quiz_presented` / `lesson_taught` event. One envelope shape for
-/// both the CLI (AYML) and the MCP server (JSON).
+/// Pick the next action for `path_id` and auto-log its
+/// `quiz_presented` / `lesson_taught` side effect.
 pub async fn compute_next(
     conn: &Connection,
     path_id: Option<&str>,
@@ -112,15 +111,9 @@ impl Action {
 ///      c. quiz never answered correctly → `present_quiz`
 ///   3. otherwise → `done`
 ///
-/// `due_quizzes` is an ordered list of `(quiz_id, due_at)` pairs the
-/// caller already filtered to those past their `due_at` — the cards
-/// table makes this an O(1) lookup per `mt path next` instead of a full
-/// event-log replay.
-///
-/// (2) walks per-atom: an atom isn't considered complete — and the
-/// walker doesn't advance to the next atom — until its lesson is
-/// stored, all three difficulty slots are filled, and each quiz has
-/// at least one `quiz_answered` event with rating `good` or `easy`.
+/// An atom isn't considered complete — and the walker doesn't advance
+/// past it — until its lesson is stored, all three difficulty slots are
+/// filled, and each quiz has at least one non-`Again` answer.
 pub fn next_action(
     g: &Graph,
     p: &PathFile,
@@ -205,8 +198,7 @@ fn next_atom_action(
 }
 
 /// First quiz that's both due and still present in the merged graph.
-/// Tombstoned or graph-pruned quizzes silently skip; the rest are
-/// already in due-order from the SQL caller.
+/// Tombstoned or graph-pruned quizzes are silently skipped.
 fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<(String, String)> {
     for (quiz_id, _) in due_quizzes {
         let atom_id = atom_from_quiz_id(quiz_id)?;
@@ -250,9 +242,8 @@ pub struct QuizHistory {
     pub recent_ratings: Vec<Rating>,
 }
 
-/// Build a quiz's history from the indexed `events` rows for that
-/// `quiz_id` plus the cards write-through cache. Three lookups, all keyed
-/// by `(path_id, quiz_id)`; no path-wide event scan.
+/// Past presentations, answer counts, and the last 10 ratings for one
+/// quiz card on one path.
 pub async fn compute_quiz_history(
     conn: &Connection,
     path_id: &str,
@@ -276,11 +267,8 @@ pub async fn compute_quiz_history(
         h.last_presented_at = max_ts.as_deref().map(db::parse_ts).transpose()?;
     }
 
-    // Answer aggregates: cards is updated write-through on every
-    // `QuizAnswered`, so `reps`/`lapses` already match the event-log
-    // counts for this `(path_id, quiz_id)`. `lapses <= reps` is an
-    // invariant of `apply_answer_to_cache`; `checked_sub` surfaces a
-    // broken cache rather than silently reporting `correct_count = 0`.
+    // `lapses <= reps` is an invariant of `apply_answer_to_cache`;
+    // checked_sub surfaces a broken cache instead of silently zeroing.
     if let Some(card) = cards::read_card(conn, path_id, quiz_id).await? {
         h.total_count = card.reps;
         h.correct_count = card.reps.checked_sub(card.lapses).ok_or_else(|| {
@@ -310,8 +298,7 @@ pub async fn compute_quiz_history(
     Ok(h)
 }
 
-/// Round `numerator / denominator` to the nearest integer percent, or
-/// `None` when `denominator == 0`. Pure integer math; no float drift.
+/// Nearest-integer percent, or `None` when `denominator == 0`.
 fn percent(numerator: u32, denominator: u32) -> Option<u32> {
     if denominator == 0 {
         return None;
