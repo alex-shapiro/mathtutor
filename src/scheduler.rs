@@ -36,7 +36,9 @@ pub async fn cmd_path_next(
 /// * `Default` — earliest-due quiz first, else per-target walk, else `done`.
 /// * `New` — skip due quizzes; return the next per-target walk action only.
 /// * `Due` — return the earliest-due quiz; `done` if no card is due.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
 pub enum NextMode {
     #[default]
     Default,

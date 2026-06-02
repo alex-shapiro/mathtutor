@@ -139,26 +139,10 @@ pub struct GetNextArgs {
     pub path_id: String,
     /// Filter the action tier: `new` skips due cards and returns the next
     /// per-target walk action; `due` returns only the earliest-due quiz
-    /// (or `done` if none is due). Omit for the default priority.
+    /// (or `done` if none is due). `default` (or omit) for the default
+    /// priority.
     #[serde(default)]
-    pub mode: Option<NextModeArg>,
-}
-
-#[derive(Deserialize, JsonSchema, Clone, Copy)]
-#[serde(rename_all = "snake_case")]
-pub enum NextModeArg {
-    New,
-    Due,
-}
-
-impl From<Option<NextModeArg>> for scheduler::NextMode {
-    fn from(arg: Option<NextModeArg>) -> Self {
-        match arg {
-            None => Self::Default,
-            Some(NextModeArg::New) => Self::New,
-            Some(NextModeArg::Due) => Self::Due,
-        }
-    }
+    pub mode: scheduler::NextMode,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -272,13 +256,8 @@ impl MathTutorServer {
         Parameters(args): Parameters<GetNextArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let conn = self.conn().await?;
-        let result = scheduler::compute_next(
-            &conn,
-            Some(&args.path_id),
-            self.graph_path(),
-            args.mode.into(),
-        )
-        .await;
+        let result =
+            scheduler::compute_next(&conn, Some(&args.path_id), self.graph_path(), args.mode).await;
         if result.is_ok() {
             self.spawn_sync();
         }
