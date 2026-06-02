@@ -101,13 +101,12 @@ pub struct PathNextCmd {
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// skip due cards and return the next per-target action
-    /// (`create_lesson`, `present_lesson`, `create_quiz`, or `present_quiz`).
+    /// return the next new action.
     /// Mutually exclusive with `--due`.
     #[argh(switch)]
     pub new: bool,
 
-    /// return only the earliest-due quiz card, or `done` if none is due.
+    /// return the earliest-due quiz card, or `done` if none is due.
     /// Mutually exclusive with `--new`.
     #[argh(switch)]
     pub due: bool,
@@ -117,9 +116,7 @@ pub struct PathNextCmd {
     pub graph: Option<PathBuf>,
 }
 
-/// Preview the next upcoming lesson topics for a path. Forward-looking
-/// only — atoms whose lesson is already taught (and any in-progress
-/// quiz work on them) are skipped. Lesson bodies are not included.
+/// Preview the next upcoming lesson topics for a path
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "syllabus")]
 pub struct PathSyllabusCmd {

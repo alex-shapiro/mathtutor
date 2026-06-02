@@ -261,8 +261,7 @@ impl MathTutorServer {
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
-    #[tool(description = "Get the next action (lesson or quiz) in the path. \
-                       Optional `mode`: `new` skips due cards, `due` returns only the earliest-due card.")]
+    #[tool(description = "Get the next lesson or quiz in the path.")]
     async fn get_next(
         &self,
         Parameters(args): Parameters<GetNextArgs>,
@@ -294,8 +293,7 @@ impl MathTutorServer {
         encode(compute_tree(&conn, &args.path_id, args.depth, self.graph_path()).await)
     }
 
-    #[tool(description = "Preview upcoming lesson topics. Forward-looking only; \
-                       lesson bodies omitted. Distinct from `get_next` (the do-iterator).")]
+    #[tool(description = "Preview upcoming lesson topics.")]
     async fn get_syllabus(
         &self,
         Parameters(args): Parameters<GetSyllabusArgs>,
@@ -333,7 +331,7 @@ impl MathTutorServer {
         )
     }
 
-    #[tool(description = "Create or update an agent-authored lesson for an atom.")]
+    #[tool(description = "Create or update a lesson.")]
     async fn upsert_lesson(
         &self,
         Parameters(args): Parameters<UpsertLessonArgs>,
@@ -353,7 +351,7 @@ impl MathTutorServer {
         encode(result.map(|()| json!({ "atom_id": args.atom })))
     }
 
-    #[tool(description = "Create an agent-authored quiz.")]
+    #[tool(description = "Create a quiz.")]
     async fn create_quiz(
         &self,
         Parameters(args): Parameters<CreateQuizArgs>,
