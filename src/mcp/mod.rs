@@ -137,10 +137,11 @@ pub struct PathOnlyArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct GetNextArgs {
     pub path_id: String,
-    /// Filter the action tier: `new` skips due cards and returns the next
-    /// per-target walk action; `due` returns only the earliest-due quiz
-    /// (or `done` if none is due). `default` (or omit) for the default
-    /// priority.
+    /// Filter on retrievable next actions:
+    ///
+    /// - `default` (or omit) returns the next new item or due quiz
+    /// - `new` returns only the next new lesson or quiz
+    /// - `due` returns only the next due quiz
     #[serde(default)]
     pub mode: scheduler::NextMode,
 }
