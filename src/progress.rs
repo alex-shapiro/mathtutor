@@ -4,15 +4,10 @@
 //! `PathProgress` answers the two questions the scheduler asks of the
 //! event log without holding the log itself:
 //!
-//! - Which atoms have had their lesson taught (or authored) in this path?
+//! - Which atoms have had their lesson taught or authored in this path?
 //! - Which quizzes have ever been answered correctly?
 //!
-//! Loaded over SQL from indexed projections (one `events` aggregate, one
-//! `cards` lookup) so callers never materialize the per-path event log.
-//! The cards-derived predicate `reps > lapses` is equivalent to "at
-//! least one non-`Again` answer," because `lapses` only increments on
-//! `Again` while `reps` increments on every answer (see
-//! `cards::apply_answer_to_cache`).
+//! Loaded from SQL projections to avoid materializing the event log.
 
 use std::collections::HashSet;
 
