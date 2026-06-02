@@ -7,11 +7,21 @@
 
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+
+use chrono::{DateTime, Utc};
 use libsql::{Connection, params};
 use mathtutor::db::{self, DbConfig};
-use mathtutor::event_log::{Event, EventKind};
+use mathtutor::event_log::{Event, EventKind, EventPayload};
+use mathtutor::graph::{FlatConcept, Graph, Quiz};
+use mathtutor::path::PathFile;
 use mathtutor::progress::PathProgress;
+use mathtutor::types::{Difficulty, Rating};
 use tempfile::TempDir;
+
+pub const PATH_ID: &str = "p_test";
+
+// ── Database ────────────────────────────────────────────────────────
 
 /// Open a freshly-migrated libSQL database under `dir` and seed one
 /// path row keyed by `path_id`. Callers add their own `path_targets`,
@@ -28,6 +38,155 @@ pub async fn fresh_db(dir: &TempDir, path_id: &str) -> Connection {
     .expect("seed path");
     conn
 }
+
+// ── Concept builders ────────────────────────────────────────────────
+
+pub fn quiz(id: &str, difficulty: Difficulty) -> Quiz {
+    Quiz {
+        id: id.into(),
+        difficulty,
+        kind: None,
+        question: "q".into(),
+        answer: "a".into(),
+        rubric: None,
+    }
+}
+
+pub fn atom(id: &str, prereqs: &[&str], lesson: Option<&str>, quizzes: Vec<Quiz>) -> FlatConcept {
+    FlatConcept {
+        id: id.into(),
+        name: id.into(),
+        description: None,
+        prerequisites: prereqs.iter().map(|s| (*s).to_string()).collect(),
+        children_ids: Vec::new(),
+        lesson: lesson.map(String::from),
+        quizzes,
+    }
+}
+
+pub fn cluster(id: &str, children: &[&str]) -> FlatConcept {
+    FlatConcept {
+        id: id.into(),
+        name: id.into(),
+        description: None,
+        prerequisites: Vec::new(),
+        children_ids: children.iter().map(|s| (*s).to_string()).collect(),
+        lesson: None,
+        quizzes: Vec::new(),
+    }
+}
+
+/// `atom` with no lesson and no quizzes — i.e., a leaf the walker
+/// has to author from scratch.
+pub fn empty_atom(id: &str, prereqs: &[&str]) -> FlatConcept {
+    atom(id, prereqs, None, Vec::new())
+}
+
+/// `atom` pre-populated with a lesson body and one quiz per difficulty,
+/// IDs derived as `{id}.q1`/`.q2`/`.q3`.
+pub fn complete_atom(id: &str, prereqs: &[&str]) -> FlatConcept {
+    atom(
+        id,
+        prereqs,
+        Some("body"),
+        vec![
+            quiz(&format!("{id}.q1"), Difficulty::Easy),
+            quiz(&format!("{id}.q2"), Difficulty::Medium),
+            quiz(&format!("{id}.q3"), Difficulty::Hard),
+        ],
+    )
+}
+
+pub fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
+    let mut by_id = HashMap::new();
+    for c in concepts {
+        by_id.insert(c.id.clone(), c);
+    }
+    Graph { by_id }
+}
+
+pub fn path_with(targets: &[&str]) -> PathFile {
+    PathFile {
+        id: PATH_ID.into(),
+        goal: "test".into(),
+        created_at: Utc::now(),
+        target_atoms: targets.iter().map(|s| (*s).to_string()).collect(),
+    }
+}
+
+// ── Event builders ──────────────────────────────────────────────────
+
+pub fn taught(atom_id: &str) -> Event {
+    taught_at(atom_id, Utc::now())
+}
+
+pub fn taught_at(atom_id: &str, ts: DateTime<Utc>) -> Event {
+    Event {
+        ts,
+        kind: EventKind::LessonTaught,
+        path: PATH_ID.into(),
+        atom: Some(atom_id.into()),
+        quiz: None,
+        payload: EventPayload::default(),
+    }
+}
+
+pub fn lesson_authored(atom_id: &str) -> Event {
+    Event {
+        ts: Utc::now(),
+        kind: EventKind::LessonAuthored,
+        path: PATH_ID.into(),
+        atom: Some(atom_id.into()),
+        quiz: None,
+        payload: EventPayload::default(),
+    }
+}
+
+pub fn answered(quiz_id: &str, rating: Rating) -> Event {
+    answered_at(quiz_id, rating, Utc::now())
+}
+
+pub fn answered_at(quiz_id: &str, rating: Rating, ts: DateTime<Utc>) -> Event {
+    Event {
+        ts,
+        kind: EventKind::QuizAnswered,
+        path: PATH_ID.into(),
+        atom: None,
+        quiz: Some(quiz_id.into()),
+        payload: EventPayload {
+            rating: Some(rating),
+            ..Default::default()
+        },
+    }
+}
+
+pub fn presented(quiz_id: &str) -> Event {
+    presented_at(quiz_id, Utc::now())
+}
+
+pub fn presented_at(quiz_id: &str, ts: DateTime<Utc>) -> Event {
+    Event {
+        ts,
+        kind: EventKind::QuizPresented,
+        path: PATH_ID.into(),
+        atom: None,
+        quiz: Some(quiz_id.into()),
+        payload: EventPayload::default(),
+    }
+}
+
+/// Events that mark `atom_id` complete: lesson taught + a non-`Again`
+/// answer on each of its three difficulty quizzes (`{atom_id}.q1`..q3).
+pub fn complete_events(atom_id: &str) -> Vec<Event> {
+    vec![
+        taught(atom_id),
+        answered(&format!("{atom_id}.q1"), Rating::Good),
+        answered(&format!("{atom_id}.q2"), Rating::Good),
+        answered(&format!("{atom_id}.q3"), Rating::Good),
+    ]
+}
+
+// ── Progress ────────────────────────────────────────────────────────
 
 /// Fold a synthetic event log into a `PathProgress`. Mirrors what the
 /// production `PathProgress::load` projects out of `events` and `cards`,

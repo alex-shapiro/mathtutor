@@ -221,43 +221,7 @@ fn quiz_badge(progress: &PathProgress, c: &FlatConcept, diff: Difficulty, upper:
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
-
-    use crate::graph::{FlatConcept, Graph};
-
-    use super::{build_spine, natural_id_key, parent_id};
-
-    fn cluster(id: &str, children: &[&str]) -> FlatConcept {
-        FlatConcept {
-            id: id.into(),
-            name: id.into(),
-            description: None,
-            prerequisites: Vec::new(),
-            children_ids: children.iter().map(|s| (*s).to_string()).collect(),
-            lesson: None,
-            quizzes: Vec::new(),
-        }
-    }
-
-    fn atom(id: &str, prereqs: &[&str]) -> FlatConcept {
-        FlatConcept {
-            id: id.into(),
-            name: id.into(),
-            description: None,
-            prerequisites: prereqs.iter().map(|s| (*s).to_string()).collect(),
-            children_ids: Vec::new(),
-            lesson: None,
-            quizzes: Vec::new(),
-        }
-    }
-
-    fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
-        let mut by_id = HashMap::new();
-        for c in concepts {
-            by_id.insert(c.id.clone(), c);
-        }
-        Graph { by_id }
-    }
+    use super::{natural_id_key, parent_id};
 
     #[test]
     fn natural_id_key_sorts_tx_2_before_tx_10() {
@@ -273,24 +237,5 @@ mod tests {
         assert_eq!(parent_id("la.5.4.7"), Some("la.5.4"));
         assert_eq!(parent_id("la.5"), Some("la"));
         assert_eq!(parent_id("la"), None);
-    }
-
-    #[test]
-    fn build_spine_includes_atoms_and_existing_ancestors() {
-        // Cluster `la.5` exists; the bare prefix `la` does not (it's an
-        // area root, only in the manifest). Spine should include the
-        // cluster but stop at the missing bare prefix.
-        let g = graph_of(vec![
-            cluster("la.5", &["la.5.4"]),
-            cluster("la.5.4", &["la.5.4.7"]),
-            atom("la.5.4.7", &[]),
-        ]);
-        let mut atoms = HashSet::new();
-        atoms.insert("la.5.4.7".to_string());
-        let spine = build_spine(&g, &atoms);
-        assert!(spine.contains("la.5.4.7"));
-        assert!(spine.contains("la.5.4"));
-        assert!(spine.contains("la.5"));
-        assert!(!spine.contains("la"));
     }
 }

@@ -15,13 +15,13 @@
 use chrono::{Duration, Utc};
 use libsql::params;
 use mathtutor::cards;
-use mathtutor::event_log::{self, Event, EventKind, EventPayload};
+use mathtutor::event_log::{self, EventKind};
 use mathtutor::types::Rating;
 use tempfile::TempDir;
 
 mod common;
 
-const PATH_ID: &str = "p_test";
+use common::PATH_ID;
 
 #[tokio::test]
 async fn append_and_load_round_trip() {
@@ -59,17 +59,15 @@ async fn load_returns_events_in_insertion_order() {
     let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let ts = Utc::now();
-    let mk = |quiz: &str| Event {
-        ts,
-        kind: EventKind::QuizPresented,
-        path: PATH_ID.into(),
-        atom: Some("atom.x".into()),
-        quiz: Some(quiz.into()),
-        payload: EventPayload::default(),
-    };
-    event_log::append(&conn, &mk("q1")).await.unwrap();
-    event_log::append(&conn, &mk("q2")).await.unwrap();
-    event_log::append(&conn, &mk("q3")).await.unwrap();
+    event_log::append(&conn, &common::presented_at("q1", ts))
+        .await
+        .unwrap();
+    event_log::append(&conn, &common::presented_at("q2", ts))
+        .await
+        .unwrap();
+    event_log::append(&conn, &common::presented_at("q3", ts))
+        .await
+        .unwrap();
 
     let events = event_log::load(&conn, PATH_ID).await.unwrap();
     let quizzes: Vec<_> = events.iter().map(|e| e.quiz.clone().unwrap()).collect();
@@ -285,18 +283,9 @@ async fn recompute_rebuilds_cache_identically_to_live_append() {
         (Rating::Good, t0 + Duration::days(25)),
     ];
     for (rating, ts) in ratings {
-        let event = Event {
-            ts,
-            kind: EventKind::QuizAnswered,
-            path: PATH_ID.into(),
-            atom: Some("atom.x".into()),
-            quiz: Some("atom.x.q1".into()),
-            payload: EventPayload {
-                rating: Some(rating),
-                ..Default::default()
-            },
-        };
-        event_log::append(&conn, &event).await.unwrap();
+        event_log::append(&conn, &common::answered_at("atom.x.q1", rating, ts))
+            .await
+            .unwrap();
     }
 
     let before = cards::read_card(&conn, PATH_ID, "atom.x.q1")

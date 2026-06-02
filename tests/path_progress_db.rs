@@ -16,7 +16,7 @@ use tempfile::TempDir;
 
 mod common;
 
-const PATH_ID: &str = "p_test";
+use common::PATH_ID;
 
 #[tokio::test]
 async fn load_empty_path_yields_default_progress() {

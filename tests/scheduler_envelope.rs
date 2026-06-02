@@ -16,45 +16,10 @@ use tempfile::TempDir;
 
 mod common;
 
-const PATH_ID: &str = "p_test";
+use common::{PATH_ID, answered_at, presented_at, taught_at};
+
 const ATOM: &str = "test.atom";
 const QUIZ: &str = "test.atom.q1";
-
-fn presented(quiz_id: &str, ts: chrono::DateTime<Utc>) -> Event {
-    Event {
-        ts,
-        kind: EventKind::QuizPresented,
-        path: PATH_ID.into(),
-        atom: Some(ATOM.into()),
-        quiz: Some(quiz_id.into()),
-        payload: EventPayload::default(),
-    }
-}
-
-fn answered(quiz_id: &str, rating: Rating, ts: chrono::DateTime<Utc>) -> Event {
-    Event {
-        ts,
-        kind: EventKind::QuizAnswered,
-        path: PATH_ID.into(),
-        atom: Some(ATOM.into()),
-        quiz: Some(quiz_id.into()),
-        payload: EventPayload {
-            rating: Some(rating),
-            ..Default::default()
-        },
-    }
-}
-
-fn taught(atom_id: &str, ts: chrono::DateTime<Utc>) -> Event {
-    Event {
-        ts,
-        kind: EventKind::LessonTaught,
-        path: PATH_ID.into(),
-        atom: Some(atom_id.into()),
-        quiz: None,
-        payload: EventPayload::default(),
-    }
-}
 
 // ── compute_quiz_history ────────────────────────────────────────────
 
@@ -82,13 +47,13 @@ async fn quiz_history_counts_presentations_and_picks_latest_ts() {
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
     let t1 = t0 + Duration::minutes(5);
     let t2 = t0 + Duration::minutes(15);
-    event_log::append(&conn, &presented(QUIZ, t0))
+    event_log::append(&conn, &presented_at(QUIZ, t0))
         .await
         .unwrap();
-    event_log::append(&conn, &presented(QUIZ, t1))
+    event_log::append(&conn, &presented_at(QUIZ, t1))
         .await
         .unwrap();
-    event_log::append(&conn, &presented(QUIZ, t2))
+    event_log::append(&conn, &presented_at(QUIZ, t2))
         .await
         .unwrap();
 
@@ -107,18 +72,18 @@ async fn quiz_history_answer_aggregates_match_cards_cache() {
     let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
-    event_log::append(&conn, &answered(QUIZ, Rating::Good, t0))
+    event_log::append(&conn, &answered_at(QUIZ, Rating::Good, t0))
         .await
         .unwrap();
     event_log::append(
         &conn,
-        &answered(QUIZ, Rating::Again, t0 + Duration::minutes(1)),
+        &answered_at(QUIZ, Rating::Again, t0 + Duration::minutes(1)),
     )
     .await
     .unwrap();
     event_log::append(
         &conn,
-        &answered(QUIZ, Rating::Easy, t0 + Duration::minutes(2)),
+        &answered_at(QUIZ, Rating::Easy, t0 + Duration::minutes(2)),
     )
     .await
     .unwrap();
@@ -155,7 +120,7 @@ async fn quiz_history_recent_ratings_newest_first_capped_at_ten() {
     ];
     for (i, r) in ratings.iter().enumerate() {
         let ts = t0 + Duration::seconds(i64::try_from(i).unwrap());
-        event_log::append(&conn, &answered(QUIZ, *r, ts))
+        event_log::append(&conn, &answered_at(QUIZ, *r, ts))
             .await
             .unwrap();
     }
@@ -186,7 +151,7 @@ async fn quiz_history_isolates_quiz_id_and_path_id() {
     .unwrap();
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
-    event_log::append(&conn, &presented("other.q1", t0))
+    event_log::append(&conn, &presented_at("other.q1", t0))
         .await
         .unwrap();
     event_log::append(
@@ -235,9 +200,15 @@ async fn lesson_history_counts_taught_events_and_picks_latest_ts() {
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
     let t1 = t0 + Duration::days(1);
     let t2 = t0 + Duration::days(3);
-    event_log::append(&conn, &taught(ATOM, t0)).await.unwrap();
-    event_log::append(&conn, &taught(ATOM, t1)).await.unwrap();
-    event_log::append(&conn, &taught(ATOM, t2)).await.unwrap();
+    event_log::append(&conn, &taught_at(ATOM, t0))
+        .await
+        .unwrap();
+    event_log::append(&conn, &taught_at(ATOM, t1))
+        .await
+        .unwrap();
+    event_log::append(&conn, &taught_at(ATOM, t2))
+        .await
+        .unwrap();
 
     let h = scheduler::compute_lesson_history(&conn, PATH_ID, ATOM)
         .await
@@ -258,7 +229,7 @@ async fn lesson_history_isolates_atom_and_path() {
     .unwrap();
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
-    event_log::append(&conn, &taught("other.atom", t0))
+    event_log::append(&conn, &taught_at("other.atom", t0))
         .await
         .unwrap();
     event_log::append(

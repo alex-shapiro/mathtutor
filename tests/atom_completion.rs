@@ -4,91 +4,19 @@
 //! then asserts on the `Action` returned by `scheduler::next_action`.
 //! No filesystem, no curriculum AYML — just the scheduler's contract.
 
-use std::collections::HashMap;
-
 use chrono::{DateTime, Utc};
 
-use mathtutor::event_log::{Event, EventKind, EventPayload};
-use mathtutor::graph::{FlatConcept, Graph, Quiz};
-use mathtutor::path::PathFile;
 use mathtutor::progress::PathProgress;
 use mathtutor::scheduler::{self, Action};
 use mathtutor::types::{Difficulty, Rating};
 
 mod common;
 
-// ── Fixture builders ────────────────────────────────────────────────
-
-const PATH_ID: &str = "p_test";
-
-fn quiz(id: &str, difficulty: Difficulty) -> Quiz {
-    Quiz {
-        id: id.to_string(),
-        difficulty,
-        kind: None,
-        question: format!("q? {id}"),
-        answer: "a".into(),
-        rubric: None,
-    }
-}
-
-fn atom(id: &str, prereqs: &[&str], lesson: Option<&str>, quizzes: Vec<Quiz>) -> FlatConcept {
-    FlatConcept {
-        id: id.into(),
-        name: id.into(),
-        description: None,
-        prerequisites: prereqs.iter().map(|s| (*s).to_string()).collect(),
-        children_ids: Vec::new(),
-        lesson: lesson.map(String::from),
-        quizzes,
-    }
-}
-
-fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
-    let mut by_id = HashMap::new();
-    for c in concepts {
-        by_id.insert(c.id.clone(), c);
-    }
-    Graph { by_id }
-}
-
-fn path_with(targets: &[&str]) -> PathFile {
-    PathFile {
-        id: PATH_ID.into(),
-        goal: "test".into(),
-        created_at: Utc::now(),
-        target_atoms: targets.iter().map(|s| (*s).to_string()).collect(),
-    }
-}
+use common::{atom, graph_of, path_with, quiz, taught};
 
 /// Default empty due-quiz list for tests that don't exercise the FSRS
 /// scheduling path. `next_action` only inspects this slice for due cards.
-const NO_DUE: &[(String, chrono::DateTime<Utc>)] = &[];
-
-fn answered(quiz_id: &str, rating: Rating, ts: DateTime<Utc>) -> Event {
-    Event {
-        ts,
-        kind: EventKind::QuizAnswered,
-        path: PATH_ID.into(),
-        atom: None,
-        quiz: Some(quiz_id.into()),
-        payload: EventPayload {
-            rating: Some(rating),
-            ..Default::default()
-        },
-    }
-}
-
-fn taught(atom_id: &str) -> Event {
-    Event {
-        ts: Utc::now(),
-        kind: EventKind::LessonTaught,
-        path: PATH_ID.into(),
-        atom: Some(atom_id.into()),
-        quiz: None,
-        payload: EventPayload::default(),
-    }
-}
+const NO_DUE: &[(String, DateTime<Utc>)] = &[];
 
 fn assert_create_lesson(action: &Action, expected_atom: &str) {
     match action {
@@ -160,14 +88,7 @@ fn lesson_authored_event_satisfies_taught_check() {
     // already authored in this path.
     let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
     let p = path_with(&["a"]);
-    let events = vec![Event {
-        ts: Utc::now(),
-        kind: EventKind::LessonAuthored,
-        path: PATH_ID.into(),
-        atom: Some("a".into()),
-        quiz: None,
-        payload: EventPayload::default(),
-    }];
+    let events = vec![common::lesson_authored("a")];
     assert_create_quiz(
         &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
         "a",
@@ -213,7 +134,7 @@ fn keep_presenting_easy_after_again_rating() {
         vec![quiz("a.q1", Difficulty::Easy)],
     )]);
     let p = path_with(&["a"]);
-    let events = vec![taught("a"), answered("a.q1", Rating::Again, Utc::now())];
+    let events = vec![taught("a"), common::answered("a.q1", Rating::Again)];
     assert_present_quiz(
         &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
         "a",
@@ -234,7 +155,7 @@ fn advance_to_medium_after_hard_rating() {
         vec![quiz("a.q1", Difficulty::Easy)],
     )]);
     let p = path_with(&["a"]);
-    let events = vec![taught("a"), answered("a.q1", Rating::Hard, Utc::now())];
+    let events = vec![taught("a"), common::answered("a.q1", Rating::Hard)];
     assert_create_quiz(
         &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
         "a",
@@ -251,7 +172,7 @@ fn advance_to_medium_after_easy_correct() {
         vec![quiz("a.q1", Difficulty::Easy)],
     )]);
     let p = path_with(&["a"]);
-    let events = vec![taught("a"), answered("a.q1", Rating::Good, Utc::now())];
+    let events = vec![taught("a"), common::answered("a.q1", Rating::Good)];
     assert_create_quiz(
         &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
         "a",
@@ -273,8 +194,8 @@ fn advance_to_hard_after_easy_and_medium_correct() {
     let p = path_with(&["a"]);
     let events = vec![
         taught("a"),
-        answered("a.q1", Rating::Easy, Utc::now()),
-        answered("a.q2", Rating::Good, Utc::now()),
+        common::answered("a.q1", Rating::Easy),
+        common::answered("a.q2", Rating::Good),
     ];
     assert_create_quiz(
         &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
@@ -298,9 +219,9 @@ fn done_after_all_three_correct_on_only_target() {
     let p = path_with(&["a"]);
     let events = vec![
         taught("a"),
-        answered("a.q1", Rating::Good, Utc::now()),
-        answered("a.q2", Rating::Good, Utc::now()),
-        answered("a.q3", Rating::Easy, Utc::now()),
+        common::answered("a.q1", Rating::Good),
+        common::answered("a.q2", Rating::Good),
+        common::answered("a.q3", Rating::Easy),
     ];
     assert!(matches!(
         scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
@@ -326,9 +247,9 @@ fn advance_to_next_target_lesson_after_first_complete() {
     let p = path_with(&["a", "b"]);
     let events = vec![
         taught("a"),
-        answered("a.q1", Rating::Good, Utc::now()),
-        answered("a.q2", Rating::Good, Utc::now()),
-        answered("a.q3", Rating::Good, Utc::now()),
+        common::answered("a.q1", Rating::Good),
+        common::answered("a.q2", Rating::Good),
+        common::answered("a.q3", Rating::Good),
     ];
     assert_create_lesson(
         &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
@@ -411,8 +332,8 @@ fn is_atom_complete_false_with_only_two_correct() {
         ],
     )]);
     let events = vec![
-        answered("a.q1", Rating::Good, Utc::now()),
-        answered("a.q2", Rating::Good, Utc::now()),
+        common::answered("a.q1", Rating::Good),
+        common::answered("a.q2", Rating::Good),
     ];
     assert!(!scheduler::is_atom_complete(
         &g,
@@ -434,9 +355,9 @@ fn is_atom_complete_true_with_all_three_correct() {
         ],
     )]);
     let events = vec![
-        answered("a.q1", Rating::Good, Utc::now()),
-        answered("a.q2", Rating::Easy, Utc::now()),
-        answered("a.q3", Rating::Good, Utc::now()),
+        common::answered("a.q1", Rating::Good),
+        common::answered("a.q2", Rating::Easy),
+        common::answered("a.q3", Rating::Good),
     ];
     assert!(scheduler::is_atom_complete(
         &g,

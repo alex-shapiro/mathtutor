@@ -2,120 +2,22 @@
 //! reachable-atom counters surfaced by `mt path state` and the MCP
 //! `get_state` tool.
 
-use std::collections::HashMap;
-
-use chrono::Utc;
-
-use mathtutor::event_log::{Event, EventKind, EventPayload};
-use mathtutor::graph::{FlatConcept, Graph, Quiz};
-use mathtutor::path::PathFile;
 use mathtutor::progress::PathProgress;
 use mathtutor::state;
-use mathtutor::types::{Difficulty, Rating};
 
 mod common;
 
-const PATH_ID: &str = "p_test";
-
-fn quiz(id: &str, difficulty: Difficulty) -> Quiz {
-    Quiz {
-        id: id.into(),
-        difficulty,
-        kind: None,
-        question: format!("q? {id}"),
-        answer: "a".into(),
-        rubric: None,
-    }
-}
-
-fn complete_atom(id: &str, prereqs: &[&str]) -> FlatConcept {
-    FlatConcept {
-        id: id.into(),
-        name: id.into(),
-        description: None,
-        prerequisites: prereqs.iter().map(|s| (*s).to_string()).collect(),
-        children_ids: Vec::new(),
-        lesson: Some("body".into()),
-        quizzes: vec![
-            quiz(&format!("{id}.q1"), Difficulty::Easy),
-            quiz(&format!("{id}.q2"), Difficulty::Medium),
-            quiz(&format!("{id}.q3"), Difficulty::Hard),
-        ],
-    }
-}
-
-fn empty_atom(id: &str, prereqs: &[&str]) -> FlatConcept {
-    FlatConcept {
-        id: id.into(),
-        name: id.into(),
-        description: None,
-        prerequisites: prereqs.iter().map(|s| (*s).to_string()).collect(),
-        children_ids: Vec::new(),
-        lesson: None,
-        quizzes: Vec::new(),
-    }
-}
-
-fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
-    let mut by_id = HashMap::new();
-    for c in concepts {
-        by_id.insert(c.id.clone(), c);
-    }
-    Graph { by_id }
-}
-
-fn path_with(targets: &[&str]) -> PathFile {
-    PathFile {
-        id: PATH_ID.into(),
-        goal: "test".into(),
-        created_at: Utc::now(),
-        target_atoms: targets.iter().map(|s| (*s).to_string()).collect(),
-    }
-}
-
-fn taught(atom_id: &str) -> Event {
-    Event {
-        ts: Utc::now(),
-        kind: EventKind::LessonTaught,
-        path: PATH_ID.into(),
-        atom: Some(atom_id.into()),
-        quiz: None,
-        payload: EventPayload::default(),
-    }
-}
-
-fn answered(quiz_id: &str, rating: Rating) -> Event {
-    Event {
-        ts: Utc::now(),
-        kind: EventKind::QuizAnswered,
-        path: PATH_ID.into(),
-        atom: None,
-        quiz: Some(quiz_id.into()),
-        payload: EventPayload {
-            rating: Some(rating),
-            ..Default::default()
-        },
-    }
-}
-
-/// Mark a fully-equipped atom as complete: lesson taught, all three
-/// difficulty quizzes answered correctly at least once.
-fn complete(atom_id: &str) -> Vec<Event> {
-    vec![
-        taught(atom_id),
-        answered(&format!("{atom_id}.q1"), Rating::Good),
-        answered(&format!("{atom_id}.q2"), Rating::Good),
-        answered(&format!("{atom_id}.q3"), Rating::Good),
-    ]
-}
+use common::{
+    complete_atom, complete_events, empty_atom, graph_of, path_with, progress_of, taught,
+};
 
 #[test]
 fn target_complete_counts_toward_both_targets_and_reachable() {
     let g = graph_of(vec![complete_atom("a", &[])]);
     let p = path_with(&["a"]);
-    let events = complete("a");
+    let events = complete_events("a");
 
-    let (t, r) = state::compute_progress(&g, &p, &common::progress_of(&events));
+    let (t, r) = state::compute_progress(&g, &p, &progress_of(&events));
     assert_eq!(t.total, 1);
     assert_eq!(t.learned, 1);
     assert_eq!(t.learned_pct, 100);
@@ -133,9 +35,9 @@ fn prereq_complete_counts_toward_reachable_only() {
         complete_atom("target", &["pre"]),
     ]);
     let p = path_with(&["target"]);
-    let events = complete("pre");
+    let events = complete_events("pre");
 
-    let (t, r) = state::compute_progress(&g, &p, &common::progress_of(&events));
+    let (t, r) = state::compute_progress(&g, &p, &progress_of(&events));
     assert_eq!(t.total, 1);
     assert_eq!(t.learned, 0, "target itself is not yet complete");
     assert_eq!(t.learned_pct, 0);
@@ -152,7 +54,7 @@ fn taught_counts_lesson_taught_in_path_regardless_of_quiz_progress() {
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
 
-    let (t, r) = state::compute_progress(&g, &p, &common::progress_of(&events));
+    let (t, r) = state::compute_progress(&g, &p, &progress_of(&events));
     assert_eq!(t.learned, 0);
     assert_eq!(r.taught, 1);
     assert_eq!(r.learned, 0);
@@ -195,9 +97,9 @@ fn learned_pct_rounds_down() {
         complete_atom("c", &[]),
     ]);
     let p = path_with(&["a", "b", "c"]);
-    let events = complete("a");
+    let events = complete_events("a");
 
-    let (t, _r) = state::compute_progress(&g, &p, &common::progress_of(&events));
+    let (t, _r) = state::compute_progress(&g, &p, &progress_of(&events));
     assert_eq!(t.learned, 1);
     assert_eq!(t.learned_pct, 33);
 }
