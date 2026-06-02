@@ -15,8 +15,6 @@ use mathtutor::progress::PathProgress;
 use mathtutor::scheduler::{self, Action};
 use mathtutor::types::{Difficulty, Rating};
 
-mod common;
-
 // ── Fixture builders ────────────────────────────────────────────────
 
 const PATH_ID: &str = "p_test";
@@ -169,7 +167,7 @@ fn lesson_authored_event_satisfies_taught_check() {
         payload: EventPayload::default(),
     }];
     assert_create_quiz(
-        &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
+        &scheduler::next_action(&g, &p, &PathProgress::from_events(&events), NO_DUE),
         "a",
         Difficulty::Easy,
     );
@@ -181,7 +179,7 @@ fn create_easy_quiz_when_lesson_stored_and_taught() {
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
     assert_create_quiz(
-        &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
+        &scheduler::next_action(&g, &p, &PathProgress::from_events(&events), NO_DUE),
         "a",
         Difficulty::Easy,
     );
@@ -198,7 +196,7 @@ fn present_easy_quiz_when_authored_but_unanswered() {
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
     assert_present_quiz(
-        &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
+        &scheduler::next_action(&g, &p, &PathProgress::from_events(&events), NO_DUE),
         "a",
         "a.q1",
     );
@@ -215,7 +213,7 @@ fn keep_presenting_easy_after_again_rating() {
     let p = path_with(&["a"]);
     let events = vec![taught("a"), answered("a.q1", Rating::Again, Utc::now())];
     assert_present_quiz(
-        &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
+        &scheduler::next_action(&g, &p, &PathProgress::from_events(&events), NO_DUE),
         "a",
         "a.q1",
     );
@@ -236,7 +234,7 @@ fn advance_to_medium_after_hard_rating() {
     let p = path_with(&["a"]);
     let events = vec![taught("a"), answered("a.q1", Rating::Hard, Utc::now())];
     assert_create_quiz(
-        &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
+        &scheduler::next_action(&g, &p, &PathProgress::from_events(&events), NO_DUE),
         "a",
         Difficulty::Medium,
     );
@@ -253,7 +251,7 @@ fn advance_to_medium_after_easy_correct() {
     let p = path_with(&["a"]);
     let events = vec![taught("a"), answered("a.q1", Rating::Good, Utc::now())];
     assert_create_quiz(
-        &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
+        &scheduler::next_action(&g, &p, &PathProgress::from_events(&events), NO_DUE),
         "a",
         Difficulty::Medium,
     );
@@ -277,7 +275,7 @@ fn advance_to_hard_after_easy_and_medium_correct() {
         answered("a.q2", Rating::Good, Utc::now()),
     ];
     assert_create_quiz(
-        &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
+        &scheduler::next_action(&g, &p, &PathProgress::from_events(&events), NO_DUE),
         "a",
         Difficulty::Hard,
     );
@@ -303,7 +301,7 @@ fn done_after_all_three_correct_on_only_target() {
         answered("a.q3", Rating::Easy, Utc::now()),
     ];
     assert!(matches!(
-        scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
+        scheduler::next_action(&g, &p, &PathProgress::from_events(&events), NO_DUE),
         Action::Done
     ));
 }
@@ -331,7 +329,7 @@ fn advance_to_next_target_lesson_after_first_complete() {
         answered("a.q3", Rating::Good, Utc::now()),
     ];
     assert_create_lesson(
-        &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
+        &scheduler::next_action(&g, &p, &PathProgress::from_events(&events), NO_DUE),
         "b",
     );
 }
@@ -380,7 +378,7 @@ fn finishes_prereq_quizzes_before_target_lesson() {
     let p = path_with(&["target"]);
     let events = vec![taught("pre")];
     assert_present_quiz(
-        &scheduler::next_action(&g, &p, &common::progress_of(&events), NO_DUE),
+        &scheduler::next_action(&g, &p, &PathProgress::from_events(&events), NO_DUE),
         "pre",
         "pre.q1",
     );
@@ -416,7 +414,7 @@ fn is_atom_complete_false_with_only_two_correct() {
     ];
     assert!(!scheduler::is_atom_complete(
         &g,
-        &common::progress_of(&events),
+        &PathProgress::from_events(&events),
         "a"
     ));
 }
@@ -440,7 +438,7 @@ fn is_atom_complete_true_with_all_three_correct() {
     ];
     assert!(scheduler::is_atom_complete(
         &g,
-        &common::progress_of(&events),
+        &PathProgress::from_events(&events),
         "a"
     ));
 }

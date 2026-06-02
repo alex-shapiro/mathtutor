@@ -8,29 +8,17 @@
 //! prereq tree seeded for any embedded-curriculum target).
 
 use chrono::{Duration, TimeZone, Utc};
-use libsql::{Connection, params};
-use mathtutor::db::{self, DbConfig};
+use libsql::params;
 use mathtutor::event_log::{self, Event, EventKind, EventPayload};
 use mathtutor::scheduler;
 use mathtutor::types::Rating;
 use tempfile::TempDir;
 
+mod common;
+
 const PATH_ID: &str = "p_test";
 const ATOM: &str = "test.atom";
 const QUIZ: &str = "test.atom.q1";
-
-async fn fresh_db(dir: &TempDir) -> Connection {
-    let cfg = DbConfig::local(dir.path().join("mt.db"));
-    let database = db::open(&cfg).await.expect("open");
-    let conn = db::connect(&database).await.expect("connect");
-    conn.execute(
-        "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
-        params![PATH_ID, "test goal", "2026-05-26T00:00:00Z"],
-    )
-    .await
-    .expect("seed path");
-    conn
-}
 
 fn presented(quiz_id: &str, ts: chrono::DateTime<Utc>) -> Event {
     Event {
@@ -73,7 +61,7 @@ fn taught(atom_id: &str, ts: chrono::DateTime<Utc>) -> Event {
 #[tokio::test]
 async fn quiz_history_empty_when_quiz_never_touched() {
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let h = scheduler::compute_quiz_history(&conn, PATH_ID, QUIZ)
         .await
@@ -89,7 +77,7 @@ async fn quiz_history_empty_when_quiz_never_touched() {
 #[tokio::test]
 async fn quiz_history_counts_presentations_and_picks_latest_ts() {
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
     let t1 = t0 + Duration::minutes(5);
@@ -116,7 +104,7 @@ async fn quiz_history_answer_aggregates_match_cards_cache() {
     // Three answers: Good, Again, Easy → reps=3, lapses=1.
     // correct_count = reps - lapses = 2; correct_pct = round(2/3 * 100) = 67.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
     event_log::append(&conn, &answered(QUIZ, Rating::Good, t0))
@@ -146,7 +134,7 @@ async fn quiz_history_answer_aggregates_match_cards_cache() {
 #[tokio::test]
 async fn quiz_history_recent_ratings_newest_first_capped_at_ten() {
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
     // 12 answers in chronological order — only the last 10 should come
@@ -189,7 +177,7 @@ async fn quiz_history_isolates_quiz_id_and_path_id() {
     // Events for a different quiz, and for a different path, must not
     // leak into the aggregates.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     conn.execute(
         "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
         params!["p_other", "g", "2026-05-26T00:00:00Z"],
@@ -230,7 +218,7 @@ async fn quiz_history_isolates_quiz_id_and_path_id() {
 #[tokio::test]
 async fn lesson_history_empty_when_atom_never_taught() {
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let h = scheduler::compute_lesson_history(&conn, PATH_ID, ATOM)
         .await
@@ -242,7 +230,7 @@ async fn lesson_history_empty_when_atom_never_taught() {
 #[tokio::test]
 async fn lesson_history_counts_taught_events_and_picks_latest_ts() {
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
     let t1 = t0 + Duration::days(1);
@@ -261,7 +249,7 @@ async fn lesson_history_counts_taught_events_and_picks_latest_ts() {
 #[tokio::test]
 async fn lesson_history_isolates_atom_and_path() {
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     conn.execute(
         "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
         params!["p_other", "g", "2026-05-26T00:00:00Z"],

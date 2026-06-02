@@ -414,33 +414,6 @@ mod tests {
         assert!(!spine.contains("la"));
     }
 
-    /// Build a `PathProgress` from a synthetic event list. Mirrors the
-    /// projection that `PathProgress::load` runs over SQL: taught atoms
-    /// from `LessonTaught` / `LessonAuthored`, correct quizzes from any
-    /// `QuizAnswered` with a non-`Again` rating.
-    fn progress_of(events: &[Event]) -> PathProgress {
-        use crate::types::Rating;
-        let mut p = PathProgress::default();
-        for e in events {
-            match e.kind {
-                EventKind::LessonTaught | EventKind::LessonAuthored => {
-                    if let Some(atom) = &e.atom {
-                        p.taught_atoms.insert(atom.clone());
-                    }
-                }
-                EventKind::QuizAnswered => {
-                    if let (Some(q), Some(r)) = (&e.quiz, e.payload.rating)
-                        && Rating::is_correct(r)
-                    {
-                        p.correct_quizzes.insert(q.clone());
-                    }
-                }
-                _ => {}
-            }
-        }
-        p
-    }
-
     #[test]
     fn state_badge_empty_when_nothing_stored() {
         let a = atom("a", &[], None, vec![]);
@@ -454,7 +427,10 @@ mod tests {
         // path yet — `L` stays unlit.
         assert_eq!(state_badge(&PathProgress::default(), &a), "[····]");
         let events = vec![taught("a")];
-        assert_eq!(state_badge(&progress_of(&events), &a), "[L···]");
+        assert_eq!(
+            state_badge(&PathProgress::from_events(&events), &a),
+            "[L···]"
+        );
     }
 
     #[test]
@@ -469,7 +445,10 @@ mod tests {
             ],
         );
         let events = vec![taught("a")];
-        assert_eq!(state_badge(&progress_of(&events), &a), "[Lem·]");
+        assert_eq!(
+            state_badge(&PathProgress::from_events(&events), &a),
+            "[Lem·]"
+        );
     }
 
     #[test]
@@ -490,6 +469,9 @@ mod tests {
             answered("a.q2", Rating::Easy),
             answered("a.q3", Rating::Again), // wrong → stays lowercase
         ];
-        assert_eq!(state_badge(&progress_of(&events), &a), "[LEMh]");
+        assert_eq!(
+            state_badge(&PathProgress::from_events(&events), &a),
+            "[LEMh]"
+        );
     }
 }

@@ -8,32 +8,20 @@
 //! exercises the cards table (write-through cache populated by
 //! `event_log::append`) or the indexed lesson projection.
 
-use libsql::{Connection, params};
-use mathtutor::db::{self, DbConfig};
+use libsql::params;
 use mathtutor::event_log;
 use mathtutor::progress::PathProgress;
 use mathtutor::types::Rating;
 use tempfile::TempDir;
 
-const PATH_ID: &str = "p_test";
+mod common;
 
-async fn fresh_db(dir: &TempDir) -> Connection {
-    let cfg = DbConfig::local(dir.path().join("mt.db"));
-    let db = db::open(&cfg).await.expect("open");
-    let conn = db::connect(&db).await.expect("connect");
-    conn.execute(
-        "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
-        params![PATH_ID, "test goal", "2026-05-26T00:00:00Z"],
-    )
-    .await
-    .expect("seed path");
-    conn
-}
+const PATH_ID: &str = "p_test";
 
 #[tokio::test]
 async fn load_empty_path_yields_default_progress() {
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let p = PathProgress::load(&conn, PATH_ID).await.expect("load");
     assert!(p.taught_atoms.is_empty());
@@ -43,7 +31,7 @@ async fn load_empty_path_yields_default_progress() {
 #[tokio::test]
 async fn lesson_taught_event_lands_in_taught_atoms() {
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     event_log::append(
         &conn,
         &event_log::lesson_taught(PATH_ID.into(), "atom.a".into()),
@@ -61,7 +49,7 @@ async fn lesson_authored_event_also_counts_as_taught() {
     // Authoring a lesson implies presenting it (the `lesson upsert`
     // playbook). `PathProgress` must recognize either kind.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     event_log::append(
         &conn,
         &event_log::lesson_authored(PATH_ID.into(), "atom.a".into()),
@@ -76,7 +64,7 @@ async fn lesson_authored_event_also_counts_as_taught() {
 #[tokio::test]
 async fn correct_answer_lands_in_correct_quizzes() {
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     event_log::append(
         &conn,
         &event_log::quiz_answered(
@@ -99,7 +87,7 @@ async fn only_again_answers_do_not_count_as_correct() {
     // `Again` alone keeps `lapses == reps`, so `reps > lapses` is false
     // — the cards row exists but the quiz is not "answered correctly."
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     event_log::append(
         &conn,
         &event_log::quiz_answered(
@@ -123,7 +111,7 @@ async fn earlier_correct_answer_survives_later_again() {
     // "answered correctly at least once" — `reps` grew by 2, `lapses`
     // grew by 1, so `reps > lapses` still holds.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     event_log::append(
         &conn,
         &event_log::quiz_answered(
@@ -157,7 +145,7 @@ async fn earlier_correct_answer_survives_later_again() {
 async fn loads_only_rows_for_the_named_path() {
     // A second path's events and cards must not leak into the snapshot.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     conn.execute(
         "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
         params!["p_other", "other goal", "2026-05-26T00:00:00Z"],

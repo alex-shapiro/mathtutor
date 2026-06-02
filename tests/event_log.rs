@@ -13,32 +13,20 @@
 //!    the event log alone, matching live append behavior.
 
 use chrono::{Duration, Utc};
-use libsql::{Connection, params};
+use libsql::params;
 use mathtutor::cards;
-use mathtutor::db::{self, DbConfig};
 use mathtutor::event_log::{self, Event, EventKind, EventPayload};
 use mathtutor::types::Rating;
 use tempfile::TempDir;
 
-const PATH_ID: &str = "p_test";
+mod common;
 
-async fn fresh_db(dir: &TempDir) -> Connection {
-    let cfg = DbConfig::local(dir.path().join("mt.db"));
-    let db = db::open(&cfg).await.expect("open");
-    let conn = db::connect(&db).await.expect("connect");
-    conn.execute(
-        "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
-        params![PATH_ID, "test goal", "2026-05-26T00:00:00Z"],
-    )
-    .await
-    .expect("seed path");
-    conn
-}
+const PATH_ID: &str = "p_test";
 
 #[tokio::test]
 async fn append_and_load_round_trip() {
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     event_log::append(
         &conn,
@@ -68,7 +56,7 @@ async fn load_returns_events_in_insertion_order() {
     // order — the SQL `ORDER BY id ASC` is what guarantees replayability
     // for FSRS even when wall-clock ticks coincide.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let ts = Utc::now();
     let mk = |quiz: &str| Event {
@@ -91,7 +79,7 @@ async fn load_returns_events_in_insertion_order() {
 #[tokio::test]
 async fn append_preserves_payload_user_answer_and_rating() {
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     event_log::append(
         &conn,
@@ -119,7 +107,7 @@ async fn append_only_touches_the_named_path() {
     // `load` must be path-scoped: events for one path must not leak
     // into another path's view, even when their ids are sequential.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     conn.execute(
         "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
         params!["p_other", "other", "2026-05-26T00:00:00Z"],
@@ -155,7 +143,7 @@ async fn quiz_answered_creates_cards_row() {
     // creates a `cards` row whose due date is in the future and whose
     // last_rating reflects the new answer.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let before = Utc::now();
     event_log::append(
@@ -187,7 +175,7 @@ async fn again_rating_increments_lapses() {
     // `lapses` counts only `Again` ratings; a `Hard`/`Good`/`Easy`
     // review must leave it untouched.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     for rating in [Rating::Again, Rating::Good, Rating::Again] {
         event_log::append(
@@ -219,7 +207,7 @@ async fn non_answer_events_do_not_create_cards_rows() {
     // alone — otherwise the scheduler would treat unseen quizzes as
     // due-with-default-stability.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     event_log::append(
         &conn,
@@ -250,7 +238,7 @@ async fn due_quizzes_returns_only_past_due_in_order() {
     // without waiting wall-clock time. The query must filter by
     // path_id, respect `due_at <= now`, and return oldest-due first.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     let now = Utc::now();
 
     let rows: [(&str, i64); 3] = [
@@ -287,7 +275,7 @@ async fn recompute_rebuilds_cache_identically_to_live_append() {
     // match bit-for-bit (stability, difficulty, due_at, reps, lapses)
     // — otherwise the recovery path doesn't actually preserve state.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
 
     let t0 = Utc::now() - Duration::days(60);
     let ratings = [
@@ -342,7 +330,7 @@ async fn dropped_transaction_rolls_back_event_and_cards() {
     // a `QuizAnswered`, and dropping the transaction without commit —
     // both tables must remain empty for the path afterwards.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     {
         let tx = conn.transaction().await.unwrap();
         event_log::append(
@@ -371,7 +359,7 @@ async fn recompute_only_touches_target_path() {
     // Recompute must scope its delete to the named path. A second
     // path's cache should survive untouched.
     let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp).await;
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
     conn.execute(
         "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
         params!["p_other", "other", "2026-05-26T00:00:00Z"],

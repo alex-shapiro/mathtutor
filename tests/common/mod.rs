@@ -1,32 +1,21 @@
 //! Shared helpers for integration tests.
-//!
-//! `progress_of` mirrors the SQL projection that `PathProgress::load`
-//! runs in production, but reads a synthetic in-memory event list.
-//! Tests assert scheduler / state behavior by constructing events and
-//! folding them through the same predicates the production loader uses.
 
-use mathtutor::event_log::{Event, EventKind};
-use mathtutor::progress::PathProgress;
+use libsql::{Connection, params};
+use mathtutor::db::{self, DbConfig};
+use tempfile::TempDir;
 
-#[allow(dead_code)] // referenced by some test files but not all.
-pub fn progress_of(events: &[Event]) -> PathProgress {
-    let mut p = PathProgress::default();
-    for e in events {
-        match e.kind {
-            EventKind::LessonTaught | EventKind::LessonAuthored => {
-                if let Some(atom) = &e.atom {
-                    p.taught_atoms.insert(atom.clone());
-                }
-            }
-            EventKind::QuizAnswered => {
-                if let (Some(q), Some(r)) = (&e.quiz, e.payload.rating)
-                    && r.is_correct()
-                {
-                    p.correct_quizzes.insert(q.clone());
-                }
-            }
-            _ => {}
-        }
-    }
-    p
+/// Open a freshly-migrated libSQL database under `dir` and seed one
+/// path row keyed by `path_id`. Callers add their own `path_targets`,
+/// events, etc. on top.
+pub async fn fresh_db(dir: &TempDir, path_id: &str) -> Connection {
+    let cfg = DbConfig::local(dir.path().join("mt.db"));
+    let database = db::open(&cfg).await.expect("open");
+    let conn = db::connect(&database).await.expect("connect");
+    conn.execute(
+        "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
+        params![path_id, "test goal", "2026-05-26T00:00:00Z"],
+    )
+    .await
+    .expect("seed path");
+    conn
 }

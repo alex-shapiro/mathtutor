@@ -30,10 +30,9 @@ pub async fn cmd_path_next(
     Ok(())
 }
 
-/// Resolve the path, fold the event log, pick the next action, and
-/// auto-log the corresponding `quiz_presented` / `lesson_taught` event.
-/// Returns the structured envelope so both the CLI (AYML) and the MCP
-/// server (JSON) share one source of truth.
+/// Resolve the path, pick the next action, and auto-log its
+/// `quiz_presented` / `lesson_taught` event. One envelope shape for
+/// both the CLI (AYML) and the MCP server (JSON).
 pub async fn compute_next(
     conn: &Connection,
     path_id: Option<&str>,
@@ -254,11 +253,6 @@ pub struct QuizHistory {
 /// Build a quiz's history from the indexed `events` rows for that
 /// `quiz_id` plus the cards write-through cache. Three lookups, all keyed
 /// by `(path_id, quiz_id)`; no path-wide event scan.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss
-)]
 pub async fn compute_quiz_history(
     conn: &Connection,
     path_id: &str,
@@ -284,23 +278,26 @@ pub async fn compute_quiz_history(
 
     // Answer aggregates: cards is updated write-through on every
     // `QuizAnswered`, so `reps`/`lapses` already match the event-log
-    // counts for this `(path_id, quiz_id)`.
+    // counts for this `(path_id, quiz_id)`. `lapses <= reps` is an
+    // invariant of `apply_answer_to_cache`; `checked_sub` surfaces a
+    // broken cache rather than silently reporting `correct_count = 0`.
     if let Some(card) = cards::read_card(conn, path_id, quiz_id).await? {
         h.total_count = card.reps;
-        h.correct_count = card.reps.saturating_sub(card.lapses);
-        h.correct_pct = if h.total_count > 0 {
-            Some(((h.correct_count as f32 / h.total_count as f32) * 100.0).round() as u32)
-        } else {
-            None
-        };
+        h.correct_count = card.reps.checked_sub(card.lapses).ok_or_else(|| {
+            Error::CardsCorrupt(format!(
+                "lapses {} > reps {} for {path_id}/{quiz_id}",
+                card.lapses, card.reps
+            ))
+        })?;
+        h.correct_pct = percent(h.correct_count, h.total_count);
     }
 
-    // Recent ratings: newest first, capped at 10.
+    // Recent ratings: newest first, capped at 10. `quiz_answered`
+    // events always carry a rating (validated by `event_log::append`).
     let mut rows = conn
         .query(
             "SELECT rating FROM events \
-             WHERE path_id = ? AND kind = 'quiz_answered' \
-               AND quiz_id = ? AND rating IS NOT NULL \
+             WHERE path_id = ? AND kind = 'quiz_answered' AND quiz_id = ? \
              ORDER BY id DESC LIMIT 10",
             libsql::params![path_id, quiz_id],
         )
@@ -311,6 +308,16 @@ pub async fn compute_quiz_history(
     }
 
     Ok(h)
+}
+
+/// Round `numerator / denominator` to the nearest integer percent, or
+/// `None` when `denominator == 0`. Pure integer math; no float drift.
+fn percent(numerator: u32, denominator: u32) -> Option<u32> {
+    if denominator == 0 {
+        return None;
+    }
+    let num = u64::from(numerator) * 100 + u64::from(denominator) / 2;
+    Some(u32::try_from(num / u64::from(denominator)).expect("percent fits in u32"))
 }
 
 pub async fn compute_lesson_history(

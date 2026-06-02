@@ -14,7 +14,7 @@ use serde::Serialize;
 use crate::Result;
 use crate::cards;
 use crate::db;
-use crate::graph::Graph;
+use crate::graph::{FlatConcept, Graph};
 use crate::path::{PathFile, load_path, resolve_id};
 use crate::progress::PathProgress;
 use crate::{scheduler, tree};
@@ -182,9 +182,6 @@ async fn latest_event_ts(conn: &Connection, path_id: &str) -> Result<Option<Date
 /// Atom whose three first-correct quiz answers landed most recently —
 /// the target the learner most recently fully nailed. Returns `None`
 /// when no target is fully complete.
-///
-/// Resolves with a single targeted SQL query against `events`: only
-/// the quiz IDs belonging to completed target atoms are inspected.
 async fn most_recent_completed_target(
     conn: &Connection,
     path_id: &str,
@@ -192,73 +189,65 @@ async fn most_recent_completed_target(
     p: &PathFile,
     progress: &PathProgress,
 ) -> Result<Option<String>> {
-    let mut completed_quizzes: Vec<(String, String)> = Vec::new(); // (quiz_id, atom_id)
-    for atom_id in &p.target_atoms {
-        if !scheduler::is_atom_complete(g, progress, atom_id) {
-            continue;
-        }
-        let Some(c) = g.by_id.get(atom_id) else {
-            continue;
-        };
-        for q in &c.quizzes {
-            completed_quizzes.push((q.id.clone(), atom_id.clone()));
-        }
-    }
-    if completed_quizzes.is_empty() {
+    let completed: Vec<&FlatConcept> = p
+        .target_atoms
+        .iter()
+        .filter(|a| scheduler::is_atom_complete(g, progress, a))
+        .filter_map(|a| g.by_id.get(a.as_str()))
+        .collect();
+    if completed.is_empty() {
         return Ok(None);
     }
+    let quiz_ids: Vec<&str> = completed
+        .iter()
+        .flat_map(|c| c.quizzes.iter().map(|q| q.id.as_str()))
+        .collect();
 
-    let placeholders = vec!["?"; completed_quizzes.len()].join(",");
+    let first_correct = load_first_correct(conn, path_id, &quiz_ids).await?;
+
+    // `is_atom_complete` already guarantees every quiz has a correct
+    // answer logged; the SQL must therefore return a row for each id.
+    let best = completed
+        .into_iter()
+        .map(|c| {
+            let ts = c
+                .quizzes
+                .iter()
+                .map(|q| first_correct[q.id.as_str()])
+                .max()
+                .expect("complete atom has three quizzes");
+            (c.id.clone(), ts)
+        })
+        .max_by_key(|(_, ts)| *ts);
+    Ok(best.map(|(id, _)| id))
+}
+
+async fn load_first_correct(
+    conn: &Connection,
+    path_id: &str,
+    quiz_ids: &[&str],
+) -> Result<std::collections::HashMap<String, DateTime<Utc>>> {
+    let placeholders = vec!["?"; quiz_ids.len()].join(",");
+    // rating > 1 = any non-`Again` answer (see `types::Rating`).
     let sql = format!(
         "SELECT quiz_id, MIN(ts) FROM events \
          WHERE path_id = ? AND kind = 'quiz_answered' AND rating > 1 \
            AND quiz_id IN ({placeholders}) \
          GROUP BY quiz_id"
     );
-    let mut params_vec: Vec<libsql::Value> = Vec::with_capacity(1 + completed_quizzes.len());
-    params_vec.push(libsql::Value::from(path_id));
-    for (q, _) in &completed_quizzes {
-        params_vec.push(libsql::Value::from(q.as_str()));
+    let mut params: Vec<libsql::Value> = Vec::with_capacity(1 + quiz_ids.len());
+    params.push(libsql::Value::from(path_id));
+    for q in quiz_ids {
+        params.push(libsql::Value::from(*q));
     }
-    let mut rows = conn.query(&sql, params_vec).await?;
-
-    let mut first_correct: std::collections::HashMap<String, DateTime<Utc>> =
-        std::collections::HashMap::new();
+    let mut rows = conn.query(&sql, params).await?;
+    let mut out = std::collections::HashMap::with_capacity(quiz_ids.len());
     while let Some(row) = rows.next().await? {
         let quiz_id: String = row.get(0)?;
-        let ts_str: String = row.get(1)?;
-        first_correct.insert(quiz_id, db::parse_ts(&ts_str)?);
+        let ts: String = row.get(1)?;
+        out.insert(quiz_id, db::parse_ts(&ts)?);
     }
-
-    // Roll up: per atom, max across its quizzes' first-correct ts → atom_completed_at.
-    let mut best: Option<(String, DateTime<Utc>)> = None;
-    for atom_id in &p.target_atoms {
-        if !scheduler::is_atom_complete(g, progress, atom_id) {
-            continue;
-        }
-        let Some(c) = g.by_id.get(atom_id) else {
-            continue;
-        };
-        let mut atom_ts: Option<DateTime<Utc>> = None;
-        let mut all_present = true;
-        for q in &c.quizzes {
-            if let Some(ts) = first_correct.get(&q.id) {
-                atom_ts = Some(atom_ts.map_or(*ts, |prev| prev.max(*ts)));
-            } else {
-                all_present = false;
-                break;
-            }
-        }
-        if !all_present {
-            continue;
-        }
-        if let Some(ts) = atom_ts
-            && best.as_ref().is_none_or(|(_, prev)| ts > *prev)
-        {
-            best = Some((atom_id.clone(), ts));
-        }
-    }
-    Ok(best.map(|(id, _)| id))
+    Ok(out)
 }
 
 fn atom_ref(g: &Graph, id: &str) -> Option<AtomRef> {
