@@ -96,6 +96,32 @@ pub fn apply_answer(
 
 // ── SQL: read ──────────────────────────────────────────────────────
 
+/// Read `(reps, lapses)` for one `(path, quiz)` pair without parsing
+/// the FSRS state columns. Callers that only need answer counts should
+/// prefer this over [`read_card`].
+pub async fn read_counts(
+    conn: &Connection,
+    path_id: &str,
+    quiz_id: &str,
+) -> Result<Option<(u32, u32)>> {
+    let mut rows = conn
+        .query(
+            "SELECT reps, lapses FROM cards WHERE path_id = ? AND quiz_id = ?",
+            params![path_id, quiz_id],
+        )
+        .await?;
+    let Some(row) = rows.next().await? else {
+        return Ok(None);
+    };
+    let reps: i64 = row.get(0)?;
+    let lapses: i64 = row.get(1)?;
+    Ok(Some((
+        u32::try_from(reps).map_err(|_| Error::CardsCorrupt(format!("invalid reps {reps}")))?,
+        u32::try_from(lapses)
+            .map_err(|_| Error::CardsCorrupt(format!("invalid lapses {lapses}")))?,
+    )))
+}
+
 /// Load the cached row for one `(path, quiz)` pair, if present.
 pub async fn read_card(conn: &Connection, path_id: &str, quiz_id: &str) -> Result<Option<CardRow>> {
     let mut rows = conn

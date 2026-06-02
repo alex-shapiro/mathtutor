@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use libsql::Connection;
 
 use crate::Result;
-use crate::event_log::{Event, EventKind};
 
 #[derive(Debug, Default, Clone)]
 pub struct PathProgress {
@@ -29,29 +28,6 @@ impl PathProgress {
             taught_atoms,
             correct_quizzes,
         })
-    }
-
-    /// Test helper: fold a synthetic event log into a `PathProgress`.
-    pub fn from_events(events: &[Event]) -> Self {
-        let mut p = Self::default();
-        for e in events {
-            match e.kind {
-                EventKind::LessonTaught | EventKind::LessonAuthored => {
-                    if let Some(atom) = &e.atom {
-                        p.taught_atoms.insert(atom.clone());
-                    }
-                }
-                EventKind::QuizAnswered => {
-                    if let (Some(q), Some(r)) = (&e.quiz, e.payload.rating)
-                        && r.is_correct()
-                    {
-                        p.correct_quizzes.insert(q.clone());
-                    }
-                }
-                _ => {}
-            }
-        }
-        p
     }
 }
 

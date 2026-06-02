@@ -269,12 +269,11 @@ pub async fn compute_quiz_history(
 
     // `lapses <= reps` is an invariant of `apply_answer_to_cache`;
     // checked_sub surfaces a broken cache instead of silently zeroing.
-    if let Some(card) = cards::read_card(conn, path_id, quiz_id).await? {
-        h.total_count = card.reps;
-        h.correct_count = card.reps.checked_sub(card.lapses).ok_or_else(|| {
+    if let Some((reps, lapses)) = cards::read_counts(conn, path_id, quiz_id).await? {
+        h.total_count = reps;
+        h.correct_count = reps.checked_sub(lapses).ok_or_else(|| {
             Error::CardsCorrupt(format!(
-                "lapses {} > reps {} for {path_id}/{quiz_id}",
-                card.lapses, card.reps
+                "lapses {lapses} > reps {reps} for {path_id}/{quiz_id}"
             ))
         })?;
         h.correct_pct = percent(h.correct_count, h.total_count);
@@ -307,6 +306,7 @@ fn percent(numerator: u32, denominator: u32) -> Option<u32> {
     Some(u32::try_from(num / u64::from(denominator)).expect("percent fits in u32"))
 }
 
+/// Past `lesson_taught` count and the most-recent ts for one atom.
 pub async fn compute_lesson_history(
     conn: &Connection,
     path_id: &str,

@@ -1,5 +1,6 @@
 //! `mt path state`: per-path progress summary.
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -95,14 +96,17 @@ pub async fn compute_state(
     let progress = PathProgress::load(conn, &id).await?;
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 
-    let (targets, reachable) = compute_progress(&g, &p, &progress);
+    let reachable = tree::reachable_atoms(&g, &p.target_atoms);
+    let complete = complete_set(&g, &reachable, &progress);
+    let (targets, reach) = counters(&p, &reachable, &complete, &progress);
+
     let updated_at = latest_event_ts(conn, &id).await?.unwrap_or(p.created_at);
     let next = scheduler::next_action(&g, &p, &progress, &due)
         .atom_id()
         .and_then(|id| atom_ref(&g, id));
-    let most_recent = most_recent_completed_target(conn, &id, &g, &p, &progress)
+    let most_recent = most_recent_completed_target(conn, &id, &g, &p, &complete)
         .await?
-        .and_then(|id| atom_ref(&g, &id));
+        .map(atom_ref_of);
 
     Ok(StateSummary {
         path: p.id.clone(),
@@ -110,7 +114,7 @@ pub async fn compute_state(
         created_at: p.created_at,
         updated_at,
         targets,
-        reachable,
+        reachable: reach,
         most_recent,
         next,
     })
@@ -122,25 +126,40 @@ pub fn compute_progress(
     p: &PathFile,
     progress: &PathProgress,
 ) -> (TargetProgress, ReachProgress) {
+    let reachable = tree::reachable_atoms(g, &p.target_atoms);
+    let complete = complete_set(g, &reachable, progress);
+    counters(p, &reachable, &complete, progress)
+}
+
+fn complete_set(
+    g: &Graph,
+    reachable: &HashSet<String>,
+    progress: &PathProgress,
+) -> HashSet<String> {
+    reachable
+        .iter()
+        .filter(|a| scheduler::is_atom_complete(g, progress, a))
+        .cloned()
+        .collect()
+}
+
+fn counters(
+    p: &PathFile,
+    reachable: &HashSet<String>,
+    complete: &HashSet<String>,
+    progress: &PathProgress,
+) -> (TargetProgress, ReachProgress) {
     let total = p.target_atoms.len();
     let learned = p
         .target_atoms
         .iter()
-        .filter(|a| scheduler::is_atom_complete(g, progress, a))
+        .filter(|a| complete.contains(a.as_str()))
         .count();
     let learned_pct = if total > 0 { learned * 100 / total } else { 0 };
-
-    let reachable = tree::reachable_atoms(g, &p.target_atoms);
-    let reach_total = reachable.len();
     let reach_taught = reachable
         .iter()
         .filter(|a| progress.lesson_taught(a))
         .count();
-    let reach_learned = reachable
-        .iter()
-        .filter(|a| scheduler::is_atom_complete(g, progress, a))
-        .count();
-
     (
         TargetProgress {
             total,
@@ -148,9 +167,9 @@ pub fn compute_progress(
             learned_pct,
         },
         ReachProgress {
-            total: reach_total,
+            total: reachable.len(),
             taught: reach_taught,
-            learned: reach_learned,
+            learned: complete.len(),
         },
     )
 }
@@ -171,17 +190,17 @@ async fn latest_event_ts(conn: &Connection, path_id: &str) -> Result<Option<Date
 
 /// Target whose three first-correct answers are the most recent;
 /// `None` when no target is fully complete.
-async fn most_recent_completed_target(
+async fn most_recent_completed_target<'a>(
     conn: &Connection,
     path_id: &str,
-    g: &Graph,
+    g: &'a Graph,
     p: &PathFile,
-    progress: &PathProgress,
-) -> Result<Option<String>> {
+    complete: &HashSet<String>,
+) -> Result<Option<&'a FlatConcept>> {
     let completed: Vec<&FlatConcept> = p
         .target_atoms
         .iter()
-        .filter(|a| scheduler::is_atom_complete(g, progress, a))
+        .filter(|a| complete.contains(a.as_str()))
         .filter_map(|a| g.by_id.get(a.as_str()))
         .collect();
     if completed.is_empty() {
@@ -191,31 +210,42 @@ async fn most_recent_completed_target(
         .iter()
         .flat_map(|c| c.quizzes.iter().map(|q| q.id.as_str()))
         .collect();
-
     let first_correct = load_first_correct(conn, path_id, &quiz_ids).await?;
 
     // `is_atom_complete` guarantees a logged correct answer for every
     // quiz, so the SQL returns a row for each id.
-    let best = completed
-        .into_iter()
-        .map(|c| {
-            let ts = c
-                .quizzes
-                .iter()
-                .map(|q| first_correct[q.id.as_str()])
-                .max()
-                .expect("complete atom has three quizzes");
-            (c.id.clone(), ts)
-        })
-        .max_by_key(|(_, ts)| *ts);
-    Ok(best.map(|(id, _)| id))
+    Ok(completed.into_iter().max_by_key(|c| {
+        c.quizzes
+            .iter()
+            .map(|q| first_correct[q.id.as_str()])
+            .max()
+            .expect("complete atom has three quizzes")
+    }))
 }
+
+/// `SQLite`'s default `SQLITE_MAX_VARIABLE_NUMBER` is 999; we bind one
+/// placeholder for `path_id` plus one per `quiz_id`, so cap each chunk
+/// at 900 ids for headroom.
+const MAX_IN_PARAMS: usize = 900;
 
 async fn load_first_correct(
     conn: &Connection,
     path_id: &str,
     quiz_ids: &[&str],
 ) -> Result<std::collections::HashMap<String, DateTime<Utc>>> {
+    let mut out = std::collections::HashMap::with_capacity(quiz_ids.len());
+    for chunk in quiz_ids.chunks(MAX_IN_PARAMS) {
+        load_first_correct_chunk(conn, path_id, chunk, &mut out).await?;
+    }
+    Ok(out)
+}
+
+async fn load_first_correct_chunk(
+    conn: &Connection,
+    path_id: &str,
+    quiz_ids: &[&str],
+    out: &mut std::collections::HashMap<String, DateTime<Utc>>,
+) -> Result<()> {
     let placeholders = vec!["?"; quiz_ids.len()].join(",");
     // rating > 1 = any non-`Again` answer (see `types::Rating`).
     let sql = format!(
@@ -224,27 +254,27 @@ async fn load_first_correct(
            AND quiz_id IN ({placeholders}) \
          GROUP BY quiz_id"
     );
-    let mut params: Vec<libsql::Value> = Vec::with_capacity(1 + quiz_ids.len());
-    params.push(libsql::Value::from(path_id));
-    for q in quiz_ids {
-        params.push(libsql::Value::from(*q));
-    }
+    let params: Vec<libsql::Value> = std::iter::once(libsql::Value::from(path_id))
+        .chain(quiz_ids.iter().map(|&q| libsql::Value::from(q)))
+        .collect();
     let mut rows = conn.query(&sql, params).await?;
-    let mut out = std::collections::HashMap::with_capacity(quiz_ids.len());
     while let Some(row) = rows.next().await? {
         let quiz_id: String = row.get(0)?;
         let ts: String = row.get(1)?;
         out.insert(quiz_id, db::parse_ts(&ts)?);
     }
-    Ok(out)
+    Ok(())
 }
 
 fn atom_ref(g: &Graph, id: &str) -> Option<AtomRef> {
-    let c = g.by_id.get(id)?;
-    Some(AtomRef {
+    g.by_id.get(id).map(atom_ref_of)
+}
+
+fn atom_ref_of(c: &FlatConcept) -> AtomRef {
+    AtomRef {
         id: c.id.clone(),
         name: c.name.clone(),
-    })
+    }
 }
 
 fn print_atom_line(label: &str, atom: Option<&AtomRef>) {

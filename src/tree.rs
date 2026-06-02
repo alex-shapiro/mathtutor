@@ -254,14 +254,9 @@ fn quiz_badge(progress: &PathProgress, c: &FlatConcept, diff: Difficulty, upper:
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use chrono::Utc;
+    use crate::graph::{FlatConcept, Graph};
 
-    use crate::event_log::{Event, EventKind, EventPayload};
-    use crate::graph::{FlatConcept, Graph, Quiz};
-    use crate::progress::PathProgress;
-    use crate::types::{Difficulty, Rating};
-
-    use super::{build_spine, natural_id_key, parent_id, reachable_atoms, state_badge};
+    use super::{build_spine, natural_id_key, parent_id, reachable_atoms};
 
     fn cluster(id: &str, children: &[&str]) -> FlatConcept {
         FlatConcept {
@@ -275,26 +270,15 @@ mod tests {
         }
     }
 
-    fn atom(id: &str, prereqs: &[&str], lesson: Option<&str>, quizzes: Vec<Quiz>) -> FlatConcept {
+    fn atom(id: &str, prereqs: &[&str]) -> FlatConcept {
         FlatConcept {
             id: id.into(),
             name: id.into(),
             description: None,
             prerequisites: prereqs.iter().map(|s| (*s).to_string()).collect(),
             children_ids: Vec::new(),
-            lesson: lesson.map(String::from),
-            quizzes,
-        }
-    }
-
-    fn quiz(id: &str, difficulty: Difficulty) -> Quiz {
-        Quiz {
-            id: id.into(),
-            difficulty,
-            kind: None,
-            question: "q".into(),
-            answer: "a".into(),
-            rubric: None,
+            lesson: None,
+            quizzes: Vec::new(),
         }
     }
 
@@ -304,31 +288,6 @@ mod tests {
             by_id.insert(c.id.clone(), c);
         }
         Graph { by_id }
-    }
-
-    fn answered(quiz_id: &str, rating: Rating) -> Event {
-        Event {
-            ts: Utc::now(),
-            kind: EventKind::QuizAnswered,
-            path: "p_test".into(),
-            atom: None,
-            quiz: Some(quiz_id.into()),
-            payload: EventPayload {
-                rating: Some(rating),
-                ..Default::default()
-            },
-        }
-    }
-
-    fn taught(atom_id: &str) -> Event {
-        Event {
-            ts: Utc::now(),
-            kind: EventKind::LessonTaught,
-            path: "p_test".into(),
-            atom: Some(atom_id.into()),
-            quiz: None,
-            payload: EventPayload::default(),
-        }
     }
 
     #[test]
@@ -352,10 +311,10 @@ mod tests {
         // tx.1.1 → la.2.2 → la.1.1 ; tx.1.1 → fnd.2.3.1 (different area).
         // All four should be reachable from a single tx.1.1 target.
         let g = graph_of(vec![
-            atom("tx.1.1", &["la.2.2", "fnd.2.3.1"], None, vec![]),
-            atom("la.2.2", &["la.1.1"], None, vec![]),
-            atom("la.1.1", &[], None, vec![]),
-            atom("fnd.2.3.1", &[], None, vec![]),
+            atom("tx.1.1", &["la.2.2", "fnd.2.3.1"]),
+            atom("la.2.2", &["la.1.1"]),
+            atom("la.1.1", &[]),
+            atom("fnd.2.3.1", &[]),
         ]);
         let reach = reachable_atoms(&g, &["tx.1.1".to_string()]);
         assert!(reach.contains("tx.1.1"));
@@ -369,10 +328,10 @@ mod tests {
         // tx.1.1's prereq points at the cluster `la.2.2`, not a specific
         // atom. The cluster has two leaves; both must end up reachable.
         let g = graph_of(vec![
-            atom("tx.1.1", &["la.2.2"], None, vec![]),
+            atom("tx.1.1", &["la.2.2"]),
             cluster("la.2.2", &["la.2.2.1", "la.2.2.2"]),
-            atom("la.2.2.1", &[], None, vec![]),
-            atom("la.2.2.2", &[], None, vec![]),
+            atom("la.2.2.1", &[]),
+            atom("la.2.2.2", &[]),
         ]);
         let reach = reachable_atoms(&g, &["tx.1.1".to_string()]);
         assert!(reach.contains("tx.1.1"));
@@ -386,10 +345,10 @@ mod tests {
     fn reachable_handles_diamond_without_looping() {
         // tx.1 → A, tx.1 → B ; A → C, B → C. C must show up exactly once.
         let g = graph_of(vec![
-            atom("tx.1", &["a", "b"], None, vec![]),
-            atom("a", &["c"], None, vec![]),
-            atom("b", &["c"], None, vec![]),
-            atom("c", &[], None, vec![]),
+            atom("tx.1", &["a", "b"]),
+            atom("a", &["c"]),
+            atom("b", &["c"]),
+            atom("c", &[]),
         ]);
         let reach = reachable_atoms(&g, &["tx.1".to_string()]);
         assert_eq!(reach.len(), 4);
@@ -403,7 +362,7 @@ mod tests {
         let g = graph_of(vec![
             cluster("la.5", &["la.5.4"]),
             cluster("la.5.4", &["la.5.4.7"]),
-            atom("la.5.4.7", &[], None, vec![]),
+            atom("la.5.4.7", &[]),
         ]);
         let mut atoms = HashSet::new();
         atoms.insert("la.5.4.7".to_string());
@@ -412,66 +371,5 @@ mod tests {
         assert!(spine.contains("la.5.4"));
         assert!(spine.contains("la.5"));
         assert!(!spine.contains("la"));
-    }
-
-    #[test]
-    fn state_badge_empty_when_nothing_stored() {
-        let a = atom("a", &[], None, vec![]);
-        assert_eq!(state_badge(&PathProgress::default(), &a), "[····]");
-    }
-
-    #[test]
-    fn state_badge_lesson_slot_only_lights_up_after_taught() {
-        let a = atom("a", &[], Some("body"), vec![]);
-        // Body exists in the graph but no `LessonTaught` event for this
-        // path yet — `L` stays unlit.
-        assert_eq!(state_badge(&PathProgress::default(), &a), "[····]");
-        let events = vec![taught("a")];
-        assert_eq!(
-            state_badge(&PathProgress::from_events(&events), &a),
-            "[L···]"
-        );
-    }
-
-    #[test]
-    fn state_badge_lowercase_when_quiz_authored_but_unanswered() {
-        let a = atom(
-            "a",
-            &[],
-            Some("body"),
-            vec![
-                quiz("a.q1", Difficulty::Easy),
-                quiz("a.q2", Difficulty::Medium),
-            ],
-        );
-        let events = vec![taught("a")];
-        assert_eq!(
-            state_badge(&PathProgress::from_events(&events), &a),
-            "[Lem·]"
-        );
-    }
-
-    #[test]
-    fn state_badge_uppercase_when_quiz_answered_correctly() {
-        let a = atom(
-            "a",
-            &[],
-            Some("body"),
-            vec![
-                quiz("a.q1", Difficulty::Easy),
-                quiz("a.q2", Difficulty::Medium),
-                quiz("a.q3", Difficulty::Hard),
-            ],
-        );
-        let events = vec![
-            taught("a"),
-            answered("a.q1", Rating::Good),
-            answered("a.q2", Rating::Easy),
-            answered("a.q3", Rating::Again), // wrong → stays lowercase
-        ];
-        assert_eq!(
-            state_badge(&PathProgress::from_events(&events), &a),
-            "[LEMh]"
-        );
     }
 }

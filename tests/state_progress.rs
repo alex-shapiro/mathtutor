@@ -13,6 +13,8 @@ use mathtutor::progress::PathProgress;
 use mathtutor::state;
 use mathtutor::types::{Difficulty, Rating};
 
+mod common;
+
 const PATH_ID: &str = "p_test";
 
 fn quiz(id: &str, difficulty: Difficulty) -> Quiz {
@@ -113,7 +115,7 @@ fn target_complete_counts_toward_both_targets_and_reachable() {
     let p = path_with(&["a"]);
     let events = complete("a");
 
-    let (t, r) = state::compute_progress(&g, &p, &PathProgress::from_events(&events));
+    let (t, r) = state::compute_progress(&g, &p, &common::progress_of(&events));
     assert_eq!(t.total, 1);
     assert_eq!(t.learned, 1);
     assert_eq!(t.learned_pct, 100);
@@ -133,7 +135,7 @@ fn prereq_complete_counts_toward_reachable_only() {
     let p = path_with(&["target"]);
     let events = complete("pre");
 
-    let (t, r) = state::compute_progress(&g, &p, &PathProgress::from_events(&events));
+    let (t, r) = state::compute_progress(&g, &p, &common::progress_of(&events));
     assert_eq!(t.total, 1);
     assert_eq!(t.learned, 0, "target itself is not yet complete");
     assert_eq!(t.learned_pct, 0);
@@ -150,7 +152,7 @@ fn taught_counts_lesson_taught_in_path_regardless_of_quiz_progress() {
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
 
-    let (t, r) = state::compute_progress(&g, &p, &PathProgress::from_events(&events));
+    let (t, r) = state::compute_progress(&g, &p, &common::progress_of(&events));
     assert_eq!(t.learned, 0);
     assert_eq!(r.taught, 1);
     assert_eq!(r.learned, 0);
@@ -195,7 +197,7 @@ fn learned_pct_rounds_down() {
     let p = path_with(&["a", "b", "c"]);
     let events = complete("a");
 
-    let (t, _r) = state::compute_progress(&g, &p, &PathProgress::from_events(&events));
+    let (t, _r) = state::compute_progress(&g, &p, &common::progress_of(&events));
     assert_eq!(t.learned, 1);
     assert_eq!(t.learned_pct, 33);
 }
