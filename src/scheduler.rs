@@ -31,11 +31,11 @@ pub async fn cmd_path_next(
     Ok(())
 }
 
-/// Caller-selected filter for `compute_next`.
+/// Caller-selected filter for `compute_next`
 ///
-/// * `Default` — earliest-due quiz first, else per-target walk, else `done`.
-/// * `New` — skip due quizzes; return the next per-target walk action only.
-/// * `Due` — return the earliest-due quiz; `done` if no card is due.
+/// - `Default` returns the earliest-due quiz first, else the next new item
+/// - `New` returns the next new item
+/// - `Due` returns the earliest-due quiz
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -141,12 +141,14 @@ impl Action {
 ///      c. quiz never answered correctly → `present_quiz`
 ///   3. otherwise → `done`
 ///
-/// `mode` lets callers narrow the tier: `New` skips step 1 entirely,
-/// `Due` skips step 2 (and returns `Done` when nothing is due).
+/// The `mode` param lets the caller filter items:
 ///
-/// An atom isn't considered complete — and the walker doesn't advance
-/// past it — until its lesson is stored, all three difficulty slots are
-/// filled, and each quiz has at least one non-`Again` answer.
+/// - `New` skips step 1
+/// - `Due` skips step 2
+///
+/// An atom is considered incomplete until its lesson is stored,
+/// all three difficulty slots are filled, and each quiz has at
+/// least one non-`Again` answer.
 pub fn next_action(
     g: &Graph,
     p: &PathFile,
@@ -172,8 +174,8 @@ pub fn next_action(
     Action::Done
 }
 
-/// Walk an atom (and its prereqs / children) and return the first
-/// pending action, or `None` if everything reachable is complete.
+/// Walk the graph starting at `id` and return the first incomplete action.
+/// Return `None` if all reachable items are complete.
 fn next_atom_action(
     g: &Graph,
     progress: &PathProgress,
@@ -206,10 +208,8 @@ fn next_atom_action(
             atom_id: id.to_string(),
         });
     }
-    // Lesson exists in the graph but hasn't been taught in *this* path
-    // yet (e.g. authored under a previous path, or this is the first
-    // walk and we haven't created/presented it yet). Surface the stored
-    // body before any quiz so the user gets context.
+    // Lesson exists in the graph but hasn't been taught in this path yet.
+    // Show the lesson body before quizzing to ensure the user has context.
     if !progress.lesson_taught(id) {
         return Some(Action::PresentLesson {
             atom_id: id.to_string(),
