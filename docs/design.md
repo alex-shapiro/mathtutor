@@ -47,6 +47,7 @@ mt path list                       # list all paths with goal / progress
 mt path new <GOAL> --atom <ID>...  # start a new learning path
 mt path state [--path P]           # one-screen status summary
 mt path next  [--path P]           # next scheduled action (AYML on stdout)
+mt path syllabus [--path P] [-n N] # upcoming lesson topics (no bodies; default N=10)
 mt path tree  [--path P]           # full reachable-graph progress view
 
 # Curriculum lookup (read-only)
@@ -269,6 +270,35 @@ payload:
 Failures are written to stderr; stdout stays a single valid AYML record
 or is empty. Exit codes: `0` ok; `1` scheduler / state-read failure;
 `2` config / IO / validation.
+
+## `mt path syllabus` I/O
+
+`mt path syllabus` is the read-only counterpart to `mt path next`. Where
+`next` returns one action (lesson, quiz, or FSRS review) and mutates the
+event log, `syllabus` walks the path's prerequisite graph and lists every
+upcoming atom whose lesson hasn't been taught yet, in scheduler-teach
+order. Lesson bodies are deliberately omitted — this is a roadmap, not a
+reader. `-n N` caps the list (default 10); `total_remaining` always
+reports the untruncated count.
+
+```yaml
+schema_version: 1
+path: p_2026_05_09_173_42
+goal: "Understand SVD"
+total_remaining: 23
+atoms:
+  - id: la.5.4.7
+    name: "Singular values from A*A eigenvalues"
+    description: "σᵢ² are the non-zero eigenvalues of A* A."
+  - id: la.5.4.8
+    name: "..."
+    description: "..."
+```
+
+An atom drops out of the syllabus the moment its `lesson_taught` (or
+equivalent `lesson_authored`) event lands in the log, regardless of any
+pending quiz work on the same atom — quizzes are part of the do-iterator
+surface, not the lookahead.
 
 ## Storage
 
