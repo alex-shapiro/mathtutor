@@ -55,6 +55,7 @@ pub enum PathOp {
     New(PathNewCmd),
     State(PathStateCmd),
     Next(PathNextCmd),
+    Syllabus(PathSyllabusCmd),
     Tree(PathTreeCmd),
 }
 
@@ -104,6 +105,25 @@ pub struct PathNextCmd {
     /// path id (defaults to most recent)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
+
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
+}
+
+/// Preview the next upcoming lesson topics for a path. Forward-looking
+/// only — atoms whose lesson is already taught (and any in-progress
+/// quiz work on them) are skipped. Lesson bodies are not included.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "syllabus")]
+pub struct PathSyllabusCmd {
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    pub path: Option<String>,
+
+    /// max upcoming atoms to return (omit for all)
+    #[argh(option, short = 'n')]
+    pub n: Option<usize>,
 
     /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
     #[argh(option)]

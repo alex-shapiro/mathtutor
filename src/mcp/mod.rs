@@ -58,7 +58,7 @@ use crate::db::{self, DbConfig};
 use crate::event_log;
 use crate::graph::Graph;
 use crate::types::{Difficulty, QuizType, Rating};
-use crate::{answer, discover, graph, path, scheduler, state, store, tree};
+use crate::{answer, discover, graph, path, scheduler, state, store, syllabus, tree};
 
 /// Local alias kept distinct from `std::result::Result` so the rmcp tool /
 /// prompt macros (which expand to bare `Result<…, ErrorData>`) don't pick
@@ -140,6 +140,14 @@ pub struct GetTreeArgs {
     /// Max levels to traverse. Omit for full tree.
     #[serde(default)]
     pub depth: Option<u32>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct GetSyllabusArgs {
+    pub path_id: String,
+    /// Max upcoming atoms to return. Omit for the full upcoming list.
+    #[serde(default)]
+    pub n: Option<usize>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -267,6 +275,18 @@ impl MathTutorServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         let conn = self.conn().await?;
         encode(compute_tree(&conn, &args.path_id, args.depth, self.graph_path()).await)
+    }
+
+    #[tool(description = "Preview upcoming lesson topics. Forward-looking only; \
+                       lesson bodies omitted. Distinct from `get_next` (the do-iterator).")]
+    async fn get_syllabus(
+        &self,
+        Parameters(args): Parameters<GetSyllabusArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        let conn = self.conn().await?;
+        encode(
+            syllabus::compute_syllabus(&conn, Some(&args.path_id), args.n, self.graph_path()).await,
+        )
     }
 
     #[tool(description = "Detailed view of a curriculum node (atom, cluster, or area).")]

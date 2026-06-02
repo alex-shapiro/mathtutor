@@ -35,6 +35,12 @@ returns the children of a node (omit `id` for the root area list, pass
 Pass `path_id` to either to also get per-atom progress (taught /
 complete flags).
 
+If the user asks what's coming up, call
+`GetSyllabus { path_id, n? }` for an ordered list of the next upcoming
+lesson topics (no bodies). This is forward-looking only — taught atoms
+drop out — and is distinct from `GetNext`, which advances the iterator
+and may return a quiz or review.
+
 ## Main loop
 
 Each turn:
