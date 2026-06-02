@@ -8,7 +8,7 @@ use mathtutor::cli::{Cmd, GraphOp, LessonOp, Mt, PathOp, QuizOp};
 use mathtutor::mcp;
 use mathtutor::{
     Result, answer, db, discover, graph, instruct, migrate, overlay, path, scheduler, state, store,
-    tree,
+    syllabus, tree,
 };
 
 #[cfg(feature = "mcp")]
@@ -230,6 +230,10 @@ async fn dispatch_path(conn: &Connection, op: PathOp) -> (Result<()>, u8) {
                 1,
             ),
         },
+        PathOp::Syllabus(c) => (
+            syllabus::cmd_path_syllabus(conn, c.path.as_deref(), c.n, c.graph.as_deref()).await,
+            1,
+        ),
         PathOp::Tree(c) => (
             tree::cmd_path_tree(conn, c.path.as_deref(), c.graph.as_deref()).await,
             1,

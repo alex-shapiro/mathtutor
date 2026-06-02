@@ -236,6 +236,7 @@ async fn tools_list_includes_every_documented_tool() {
         "get_next",
         "get_state",
         "get_tree",
+        "get_syllabus",
         "get_item",
         "get_children",
         "upsert_lesson",
@@ -408,6 +409,61 @@ async fn unknown_atom_id_returns_structured_business_error() {
             .unwrap()
             .contains("no.such.atom.exists")
     );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn get_syllabus_returns_upcoming_topics_for_new_path() {
+    // End-to-end plumbing check: create a path, then call get_syllabus
+    // and verify the structured payload lists the path's untaught atoms.
+    let server = spawn_server().await;
+    let session = handshake(&server).await;
+
+    let res = mcp_post(
+        &server,
+        &session,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "new_path",
+                "arguments": { "goal": "Test", "atoms": ["fnd.1.1.2"] }
+            }
+        }),
+    )
+    .await;
+    let msg = parse_sse_message(&res.text().await.unwrap()).expect("sse");
+    let path_id = msg["result"]["structuredContent"]["path_id"]
+        .as_str()
+        .expect("path_id")
+        .to_string();
+
+    let res = mcp_post(
+        &server,
+        &session,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "get_syllabus",
+                "arguments": { "path_id": path_id, "n": 10 }
+            }
+        }),
+    )
+    .await;
+    let msg = parse_sse_message(&res.text().await.unwrap()).expect("sse");
+    let structured = &msg["result"]["structuredContent"];
+    assert_ne!(msg["result"]["isError"].as_bool(), Some(true));
+    assert_eq!(structured["schema_version"], json!(1));
+    assert_eq!(structured["path"], json!(path_id));
+    // fnd.1.1.2 depends on fnd.1.1.1, so both atoms appear with the
+    // prereq listed first.
+    assert_eq!(structured["total_remaining"], json!(2));
+    let atoms = structured["atoms"].as_array().expect("atoms array");
+    let ids: Vec<&str> = atoms.iter().map(|a| a["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["fnd.1.1.1", "fnd.1.1.2"]);
     server.stop().await;
 }
 

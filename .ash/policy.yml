@@ -18,6 +18,7 @@ network:
   rules: []
 exec:
   rules:
+  - path: /opt/homebrew/Cellar/ripgrep/*/bin/rg
   - path: ~/.cargo/bin/mt
 io_devices:
   rules:

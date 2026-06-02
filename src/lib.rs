@@ -26,5 +26,6 @@ pub mod progress;
 pub mod scheduler;
 pub mod state;
 pub mod store;
+pub mod syllabus;
 pub mod tree;
 pub mod types;

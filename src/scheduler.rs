@@ -10,7 +10,7 @@ use serde::Serialize;
 use crate::answer::atom_from_quiz_id;
 use crate::cards;
 use crate::db;
-use crate::event_log;
+use crate::event_log::{self, Event, EventKind};
 use crate::graph::{FlatConcept, Graph};
 use crate::path::{self, PathFile};
 use crate::progress::PathProgress;
@@ -234,6 +234,16 @@ fn next_atom_action(
         }
     }
     None
+}
+
+/// True when `events` contains a `LessonTaught` or `LessonAuthored`
+/// event for `atom_id`. Mirrors `PathProgress::lesson_taught` for
+/// callers (like `syllabus`) that already hold the full event list.
+pub fn lesson_taught_in_path(events: &[Event], atom_id: &str) -> bool {
+    events.iter().any(|e| {
+        matches!(e.kind, EventKind::LessonTaught | EventKind::LessonAuthored)
+            && e.atom.as_deref() == Some(atom_id)
+    })
 }
 
 /// First quiz that's both due and still present in the merged graph.

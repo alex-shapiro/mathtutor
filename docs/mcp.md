@@ -24,7 +24,7 @@ All CLI tools are ported to MCP tools. The server handles the mapping from JSON-
 
 - **`path_id`**: **Mandatory** for all path-specific tools:
   - State-modifying: `AnswerQuiz`, `UpsertLesson`, `CreateQuiz`, `UpdateQuiz`, `DeleteQuiz`.
-  - Progress-related: `GetNext`, `GetState`, `GetTree`.
+  - Progress-related: `GetNext`, `GetState`, `GetTree`, `GetSyllabus`.
 - **Curriculum Exploration**: `path_id` is **Optional** for `GetItem` and `GetChildren`. If omitted, these tools return static curriculum data only (no per-atom status or progress).
 - **`graph`**: Removed from all tool schemas. The server uses its own configured curriculum (embedded or via `MT_GRAPH`).
 - **Return Values**: All tools return structured JSON. Resource creation tools (`NewPath`, `CreateQuiz`) return the ID of the new resource in a JSON field.
@@ -57,6 +57,15 @@ struct GetTree {
     path_id: String,
     /// Max levels to traverse. Omit for full tree.
     depth: Option<u32>,
+}
+
+/// Forward-looking preview of upcoming lesson topics, in scheduler-teach
+/// order. Lesson bodies are omitted. Distinct from `GetNext`: this is a
+/// roadmap, not the do-iterator.
+struct GetSyllabus {
+    path_id: String,
+    /// Max upcoming atoms to return. Defaults to 10 when omitted.
+    n: usize,
 }
 
 /// Show a detailed view of a curriculum node (atom, cluster, or area).
