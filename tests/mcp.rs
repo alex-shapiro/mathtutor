@@ -254,6 +254,47 @@ async fn tools_list_includes_every_documented_tool() {
 }
 
 #[tokio::test]
+async fn get_next_advertises_mode_enum_in_schema() {
+    // The `mode` arg must surface in `inputSchema` so MCP clients can
+    // discover the `new` / `due` filter values without reading the docs.
+    let server = spawn_server().await;
+    let session = handshake(&server).await;
+
+    let res = mcp_post(
+        &server,
+        &session,
+        &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    )
+    .await;
+    assert_eq!(res.status(), 200);
+    let body = res.text().await.unwrap();
+    let msg = parse_sse_message(&body).expect("sse json");
+    let get_next = msg["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"].as_str() == Some("get_next"))
+        .expect("get_next tool");
+    let schema = &get_next["inputSchema"];
+    assert!(
+        !schema["properties"]["mode"].is_null(),
+        "`mode` property missing from inputSchema",
+    );
+    // schemars puts the variant strings in `$defs`. Easiest robust check
+    // is to stringify the whole schema and look for both literals.
+    let rendered = schema.to_string();
+    assert!(
+        rendered.contains("\"new\""),
+        "schema missing `new` variant: {rendered}",
+    );
+    assert!(
+        rendered.contains("\"due\""),
+        "schema missing `due` variant: {rendered}",
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn prompts_list_includes_playbook() {
     let server = spawn_server().await;
     let session = handshake(&server).await;

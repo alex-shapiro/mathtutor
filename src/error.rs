@@ -90,6 +90,10 @@ pub enum Error {
     #[error("unknown event kind: {0}")]
     UnknownEventKind(String),
 
+    /// Mutually exclusive CLI flags were both supplied.
+    #[error("flags {0} and {1} are mutually exclusive")]
+    ConflictingFlags(&'static str, &'static str),
+
     /// MCP started with neither `MT_API_KEY` nor `MT_ADMIN_PASSWORD` set
     #[error("missing MT_API_KEY or MT_ADMIN_PASSWORD")]
     MissingAuth,

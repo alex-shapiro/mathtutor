@@ -100,6 +100,17 @@ pub struct PathNextCmd {
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
+    /// skip due cards and return the next per-target action
+    /// (`create_lesson`, `present_lesson`, `create_quiz`, or `present_quiz`).
+    /// Mutually exclusive with `--due`.
+    #[argh(switch)]
+    pub new: bool,
+
+    /// return only the earliest-due quiz card, or `done` if none is due.
+    /// Mutually exclusive with `--new`.
+    #[argh(switch)]
+    pub due: bool,
+
     /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,

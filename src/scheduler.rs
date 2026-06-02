@@ -23,11 +23,38 @@ pub async fn cmd_path_next(
     conn: &Connection,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
+    mode: NextMode,
 ) -> Result<()> {
-    let envelope = compute_next(conn, path_id, graph_dir).await?;
+    let envelope = compute_next(conn, path_id, graph_dir, mode).await?;
     let text = ayml::to_string(&envelope).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
+}
+
+/// Caller-selected filter for `compute_next`.
+///
+/// * `Default` — earliest-due quiz first, else per-target walk, else `done`.
+/// * `New` — skip due quizzes; return the next per-target walk action only.
+/// * `Due` — return the earliest-due quiz; `done` if no card is due.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NextMode {
+    #[default]
+    Default,
+    New,
+    Due,
+}
+
+impl NextMode {
+    /// Translate the `--new` / `--due` CLI switches into a mode.
+    /// Errors if both switches were set.
+    pub fn from_flags(new: bool, due: bool) -> Result<Self> {
+        match (new, due) {
+            (true, true) => Err(Error::ConflictingFlags("--new", "--due")),
+            (true, false) => Ok(Self::New),
+            (false, true) => Ok(Self::Due),
+            (false, false) => Ok(Self::Default),
+        }
+    }
 }
 
 /// Pick the next action for `path_id` and auto-log its
@@ -36,6 +63,7 @@ pub async fn compute_next(
     conn: &Connection,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
+    mode: NextMode,
 ) -> Result<Envelope> {
     let tx = conn.transaction().await?;
     let id = path::resolve_id(&tx, path_id).await?;
@@ -44,7 +72,7 @@ pub async fn compute_next(
     let progress = PathProgress::load(&tx, &id).await?;
     let due = cards::due_quizzes(&tx, &id, Utc::now()).await?;
 
-    let action = next_action(&g, &p, &progress, &due);
+    let action = next_action(&g, &p, &progress, &due, mode);
     // Build the envelope first — its history aggregates count past
     // presentations only, not the `quiz_presented` / `lesson_taught`
     // we are about to log below.
@@ -111,6 +139,9 @@ impl Action {
 ///      c. quiz never answered correctly → `present_quiz`
 ///   3. otherwise → `done`
 ///
+/// `mode` lets callers narrow the tier: `New` skips step 1 entirely,
+/// `Due` skips step 2 (and returns `Done` when nothing is due).
+///
 /// An atom isn't considered complete — and the walker doesn't advance
 /// past it — until its lesson is stored, all three difficulty slots are
 /// filled, and each quiz has at least one non-`Again` answer.
@@ -119,9 +150,15 @@ pub fn next_action(
     p: &PathFile,
     progress: &PathProgress,
     due_quizzes: &[(String, DateTime<Utc>)],
+    mode: NextMode,
 ) -> Action {
-    if let Some((quiz_id, atom_id)) = first_due_card(g, due_quizzes) {
+    if mode != NextMode::New
+        && let Some((quiz_id, atom_id)) = first_due_card(g, due_quizzes)
+    {
         return Action::PresentQuiz { quiz_id, atom_id };
+    }
+    if mode == NextMode::Due {
+        return Action::Done;
     }
 
     let mut visited = HashSet::new();
