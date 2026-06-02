@@ -2,13 +2,16 @@
 //! reachable-atom counters surfaced by `mt path state` and the MCP
 //! `get_state` tool.
 
+use chrono::{Duration, Utc};
+use libsql::params;
 use mathtutor::progress::PathProgress;
 use mathtutor::state;
+use tempfile::TempDir;
 
 mod common;
 
 use common::{
-    complete_atom, complete_events, empty_atom, graph_of, path_with, progress_of, taught,
+    PATH_ID, complete_atom, complete_events, empty_atom, graph_of, path_with, progress_of, taught,
 };
 
 #[test]
@@ -102,4 +105,115 @@ fn learned_pct_rounds_down() {
     let (t, _r) = state::compute_progress(&g, &p, &progress_of(&events));
     assert_eq!(t.learned, 1);
     assert_eq!(t.learned_pct, 33);
+}
+
+// ── past_due ────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn compute_state_past_due_is_zero_on_fresh_path() {
+    let tmp = TempDir::new().unwrap();
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
+
+    let s = state::compute_state(&conn, Some(PATH_ID), None)
+        .await
+        .expect("compute_state");
+    assert_eq!(s.past_due, 0);
+}
+
+#[tokio::test]
+async fn compute_state_past_due_excludes_future_cards() {
+    // Cards exist but every `due_at` is strictly in the future, so the
+    // learner is caught up.
+    let tmp = TempDir::new().unwrap();
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    let now = Utc::now();
+
+    for (quiz_id, offset_secs) in [("q.a", 60_i64), ("q.b", 3600), ("q.c", 86_400)] {
+        let due = now + Duration::seconds(offset_secs);
+        conn.execute(
+            "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, \
+                               last_reviewed_at, reps, lapses) \
+             VALUES (?, ?, 1.0, 5.0, ?, ?, 1, 0)",
+            params![
+                PATH_ID,
+                quiz_id,
+                mathtutor::db::format_ts(due),
+                mathtutor::db::format_ts(now),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    let s = state::compute_state(&conn, Some(PATH_ID), None)
+        .await
+        .expect("compute_state");
+    assert_eq!(s.past_due, 0);
+}
+
+#[tokio::test]
+async fn compute_state_past_due_counts_overdue_cards() {
+    // Two overdue cards plus one not-yet-due card ⇒ past_due == 2.
+    let tmp = TempDir::new().unwrap();
+    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    let now = Utc::now();
+
+    for (quiz_id, offset_secs) in [
+        ("q.overdue.old", -3600_i64),
+        ("q.overdue.recent", -60),
+        ("q.future", 3600),
+    ] {
+        let due = now + Duration::seconds(offset_secs);
+        conn.execute(
+            "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, \
+                               last_reviewed_at, reps, lapses) \
+             VALUES (?, ?, 1.0, 5.0, ?, ?, 1, 0)",
+            params![
+                PATH_ID,
+                quiz_id,
+                mathtutor::db::format_ts(due),
+                mathtutor::db::format_ts(due - Duration::seconds(1)),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    let s = state::compute_state(&conn, Some(PATH_ID), None)
+        .await
+        .expect("compute_state");
+    assert_eq!(s.past_due, 2);
+}
+
+#[test]
+fn write_state_emits_past_due_line() {
+    // CLI output must include a "past due:" line so a learner sees the
+    // backlog without having to invoke the scheduler.
+    let mut buf = Vec::new();
+    let s = state::StateSummary {
+        path: PATH_ID.into(),
+        goal: "test".into(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        targets: state::TargetProgress {
+            total: 0,
+            learned: 0,
+            learned_pct: 0,
+        },
+        reachable: state::ReachProgress {
+            total: 0,
+            taught: 0,
+            learned: 0,
+        },
+        past_due: 7,
+        most_recent: None,
+        next: None,
+    };
+    state::write_state(&mut buf, &s).expect("write_state");
+    let out = String::from_utf8(buf).unwrap();
+    assert!(
+        out.lines()
+            .any(|l| l.starts_with("past due:") && l.contains('7')),
+        "missing 'past due: 7' line in:\n{out}"
+    );
 }

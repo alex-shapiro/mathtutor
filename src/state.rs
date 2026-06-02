@@ -1,6 +1,7 @@
 //! Learning path progress summary
 
 use std::collections::HashSet;
+use std::io::{self, Write};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -24,6 +25,7 @@ pub struct StateSummary {
     pub updated_at: DateTime<Utc>,
     pub targets: TargetProgress,
     pub reachable: ReachProgress,
+    pub past_due: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub most_recent: Option<AtomRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,35 +54,48 @@ pub struct AtomRef {
     pub name: String,
 }
 
+/// # Panics
+/// Panics on stdout write failure (e.g. broken pipe), matching `println!`.
 pub async fn cmd_path_state(
     conn: &Connection,
     explicit_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
     let s = compute_state(conn, explicit_id, graph_dir).await?;
+    write_state(&mut io::stdout(), &s).expect("write to stdout");
+    Ok(())
+}
 
-    println!("{:13}{}", "path:", s.path);
-    println!("{:13}{}", "goal:", s.goal);
-    println!(
+/// Render the human-readable summary to `w`. Splits the formatting
+/// from the print path so callers (e.g. tests) can capture output.
+pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
+    writeln!(w, "{:13}{}", "path:", s.path)?;
+    writeln!(w, "{:13}{}", "goal:", s.goal)?;
+    writeln!(
+        w,
         "{:13}{}",
         "created:",
         s.created_at.format("%Y-%m-%dT%H:%M:%SZ")
-    );
-    println!(
+    )?;
+    writeln!(
+        w,
         "{:13}{}",
         "updated:",
         s.updated_at.format("%Y-%m-%dT%H:%M:%SZ")
-    );
-    println!(
+    )?;
+    writeln!(
+        w,
         "{:13}{} / {} learned ({}%)",
         "targets:", s.targets.learned, s.targets.total, s.targets.learned_pct
-    );
-    println!(
+    )?;
+    writeln!(
+        w,
         "{:13}{} atoms ({} with lesson, {} learned)",
         "reachable:", s.reachable.total, s.reachable.taught, s.reachable.learned
-    );
-    print_atom_line("most recent:", s.most_recent.as_ref());
-    print_atom_line("next:", s.next.as_ref());
+    )?;
+    writeln!(w, "{:13}{}", "past due:", s.past_due)?;
+    write_atom_line(w, "most recent:", s.most_recent.as_ref())?;
+    write_atom_line(w, "next:", s.next.as_ref())?;
     Ok(())
 }
 
@@ -114,6 +129,7 @@ pub async fn compute_state(
         updated_at,
         targets,
         reachable: reach,
+        past_due: due.len(),
         most_recent,
         next,
     })
@@ -276,9 +292,9 @@ fn atom_ref_of(c: &FlatConcept) -> AtomRef {
     }
 }
 
-fn print_atom_line(label: &str, atom: Option<&AtomRef>) {
+fn write_atom_line<W: Write>(w: &mut W, label: &str, atom: Option<&AtomRef>) -> io::Result<()> {
     match atom {
-        Some(a) => println!("{label:13}{} — {}", a.id, a.name),
-        None => println!("{label:13}—"),
+        Some(a) => writeln!(w, "{label:13}{} — {}", a.id, a.name),
+        None => writeln!(w, "{label:13}—"),
     }
 }
