@@ -54,6 +54,7 @@ children:
             description: "ℝ, ℂ, ℚ, finite fields 𝔽_p; the scalars used throughout DL math are ℝ and ℂ."
             prerequisites:
               - la.1.1.1
+              - la.1.1.3
           - id: la.1.1.3
             name: Field characteristic
             description: Smallest n with n·1 = 0; 0 if no such n. ℝ and ℂ have characteristic 0.
@@ -77,6 +78,7 @@ children:
             description: "𝔽ⁿ, polynomials of degree ≤ n, m×n matrices, continuous functions, sequences."
             prerequisites:
               - la.1.1.4
+              - la.1.1.2
           - id: la.1.1.6
             name: Zero vector uniqueness
             description: The additive identity in a vector space is unique.
@@ -87,6 +89,7 @@ children:
             description: Each vector has exactly one additive inverse.
             prerequisites:
               - la.1.1.4
+              - la.1.1.6
           - id: la.1.1.8
             name: 0 · v = 0
             description: Scalar zero annihilates any vector.
@@ -102,6 +105,7 @@ children:
             description: u + w = v + w → u = v in any vector space.
             prerequisites:
               - la.1.1.7
+              - la.1.1.9
       - id: la.1.2
         name: Subspaces
         description: Subsets closed under the vector-space operations.
@@ -136,6 +140,7 @@ children:
             description: "U + W = {u + w : u ∈ U, w ∈ W}; the smallest subspace containing both."
             prerequisites:
               - la.1.2.4
+              - la.1.2.5
           - id: la.1.2.7
             name: Span as smallest subspace
             description: The intersection of all subspaces containing S equals span(S).
@@ -211,6 +216,7 @@ children:
             prerequisites:
               - la.1.3.4
               - la.1.3.3
+              - la.1.3.6
       - id: la.1.4
         name: Basis and dimension
         description: Coordinates from independent spanning sets.
@@ -221,6 +227,7 @@ children:
             prerequisites:
               - la.1.3.4
               - la.1.3.3
+              - la.1.3.7
           - id: la.1.4.2
             name: Standard basis of ℝⁿ
             description: "{e₁, …, eₙ} with eᵢ having 1 in position i and 0 elsewhere."
@@ -251,6 +258,7 @@ children:
             description: "dim 𝔽ⁿ = n, dim 𝒫_n = n+1, dim M_{m,n} = mn."
             prerequisites:
               - la.1.4.5
+              - la.1.1.5
           - id: la.1.4.8
             name: Extending an LI set to a basis
             description: Any LI set in a finite-dim V can be extended to a basis of V.
@@ -261,6 +269,7 @@ children:
             description: Any spanning set of a finite-dim V can be reduced to a basis.
             prerequisites:
               - la.1.4.4
+              - la.1.2.7
           - id: la.1.4.10
             name: n LI vectors in n-dim V form a basis
             description: "If dim V = n, any LI set of size n is automatically a basis."
@@ -275,6 +284,7 @@ children:
             description: "V = U ⊕ W iff every v ∈ V is uniquely u + w with u ∈ U, w ∈ W."
             prerequisites:
               - la.1.2.6
+              - la.1.1.10
           - id: la.1.5.2
             name: Direct-sum criterion
             description: "V = U + W and U ∩ W = {0} iff V = U ⊕ W."
@@ -291,6 +301,8 @@ children:
             prerequisites:
               - la.1.5.2
               - la.1.4.8
+              - la.1.4.9
+              - la.1.2.3
           - id: la.1.5.5
             name: Dimension formula for sums
             description: dim(U + W) = dim U + dim W − dim(U ∩ W).
@@ -323,6 +335,7 @@ children:
             prerequisites:
               - la.1.6.2
               - la.1.4.5
+              - la.1.6.3
   - id: la.2
     name: Linear maps and matrices
     description: Maps that respect the vector-space structure.
@@ -369,6 +382,7 @@ children:
             description: "dim Hom(V, W) = (dim V)(dim W) for finite-dimensional V, W."
             prerequisites:
               - la.2.1.5
+              - la.1.4.7
       - id: la.2.2
         name: Matrix representation and change of basis
         description: Coordinate-dependent encoding of linear maps.
@@ -379,6 +393,7 @@ children:
             prerequisites:
               - la.2.1.4
               - la.1.4.3
+              - la.1.4.2
           - id: la.2.2.2
             name: Change-of-basis matrix
             description: "P_{B → B'} expresses each new basis vector in the old basis."
@@ -457,6 +472,8 @@ children:
             prerequisites:
               - la.2.3.4
               - la.2.3.5
+              - la.1.5.5
+              - la.1.6.4
           - id: la.2.3.7
             name: Row rank = column rank
             description: rank from rows equals rank from columns; both equal rank A.
@@ -506,6 +523,7 @@ children:
               - la.2.4.3
               - la.2.6.10
               - la.2.3.4
+              - la.1.4.10
           - id: la.2.4.5
             name: Inverse of a product
             description: (AB)⁻¹ = B⁻¹A⁻¹.
@@ -551,6 +569,7 @@ children:
             description: Direct sum of square diagonal blocks.
             prerequisites:
               - la.2.5.3
+              - la.1.5.3
           - id: la.2.5.5
             name: Schur complement
             description: "S = D − CA⁻¹B in M = [[A, B],[C, D]]."
@@ -883,6 +902,7 @@ children:
             prerequisites:
               - la.3.3.8
               - la.1.5.1
+              - la.1.5.4
       - id: la.3.4
         name: Adjoint operators
         description: Matrix transpose / conjugate transpose at the operator level.
