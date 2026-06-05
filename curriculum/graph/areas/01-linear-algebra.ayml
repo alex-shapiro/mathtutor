@@ -1275,7 +1275,7 @@ children:
             description: PA = LU with P a permutation matrix; required for numerical stability.
             prerequisites:
               - la.5.1.1
-              - la.2.7.1
+              - la.2.7
           - id: la.5.1.3
             name: LU existence
             description: Exists iff every leading principal minor of A is non-zero.
@@ -1425,6 +1425,7 @@ children:
             prerequisites:
               - la.5.4.1
               - la.3.4.5
+              - la.2.3
           - id: la.5.4.12
             name: Condition number from SVD
             description: κ₂(A) = σ_max / σ_min.
@@ -1674,7 +1675,7 @@ children:
             description: A symmetric block matrix is PSD iff its diagonal blocks and Schur complements are PSD.
             prerequisites:
               - la.6.3.2
-              - la.2.5.5
+              - la.2.5
       - id: la.6.4
         name: Tensor product
         description: Universal construction for multilinear maps.
