@@ -24,7 +24,7 @@ topics:
       - id: dis.1.1
         name: "Permutations and combinations"
         description: "Counting arrangements and selections."
-        prerequisites: [fnd.4.2]
+        prerequisites: [fnd.4.2, fnd.4.4.4]
       - id: dis.1.2
         name: "Generating functions"
         description: "Formal power series encoding sequences."
@@ -36,7 +36,7 @@ topics:
       - id: dis.1.4
         name: "Probabilistic method"
         description: "Existence proofs via random construction."
-        prerequisites: [prob.1.4]
+        prerequisites: [prob.1.4, fnd.4.3.3]
 
   - id: dis.2
     name: "Graph theory"
@@ -108,11 +108,11 @@ topics:
       - id: dis.4.1
         name: "Turing machines and decidability"
         description: "(Cross-link to `fnd.5.1`/`fnd.5.2` with complexity flavor.)"
-        prerequisites: [fnd.5.2]
+        prerequisites: [fnd.5.2, fnd.5.5.6]
       - id: dis.4.2
         name: "P, NP, NP-completeness"
         description: "Time-bounded computation; Cook–Levin."
-        prerequisites: [dis.4.1]
+        prerequisites: [dis.4.1, fnd.1.1.38, fnd.5.1.3]
       - id: dis.4.3
         name: "Polynomial-time reductions"
         description: "Mapping reductions; classes of equivalent problems."
@@ -128,7 +128,7 @@ topics:
       - id: dis.4.6
         name: "Communication and circuit complexity (light)"
         description: "Lower bounds on attention / network expressivity."
-        prerequisites: [dis.4.1]
+        prerequisites: [dis.4.1, fnd.1.5.2]
 
   - id: dis.5
     name: "Descriptive / algorithmic complexity"

@@ -46,11 +46,6 @@ children:
             description: Inclusive OR; true iff at least one disjunct is true.
             prerequisites:
               - fnd.1.1.1
-          - id: fnd.1.1.5
-            name: Exclusive or (P ⊕ Q)
-            description: "True iff exactly one of P, Q is true; equals ¬(P ↔ Q)."
-            prerequisites:
-              - fnd.1.1.4
           - id: fnd.1.1.6
             name: Implication (P → Q)
             description: False only when P true and Q false; vacuously true when P is false.
@@ -109,6 +104,7 @@ children:
             description: ¬(P ∧ Q) ≡ ¬P ∨ ¬Q.
             prerequisites:
               - fnd.1.1.10
+              - fnd.1.1.3
           - id: fnd.1.1.17
             name: De Morgan's second law
             description: ¬(P ∨ Q) ≡ ¬P ∧ ¬Q.
@@ -180,11 +176,6 @@ children:
             description: Q → P; not equivalent to P → Q in general.
             prerequisites:
               - fnd.1.1.6
-          - id: fnd.1.1.31
-            name: Inverse
-            description: "¬P → ¬Q; equivalent to the converse, not to the original."
-            prerequisites:
-              - fnd.1.1.30
           - id: fnd.1.1.32
             name: Modus ponens
             description: From P and P → Q infer Q.
@@ -224,6 +215,7 @@ children:
             description: "Decision problem: does an assignment make a propositional formula true?"
             prerequisites:
               - fnd.1.1.36
+              - fnd.1.1.13
       - id: fnd.1.2
         name: Predicate logic and quantifiers
         description: "First-order logic with variables, predicates, and quantifiers."
@@ -285,22 +277,12 @@ children:
             description: ∃!x P(x) means exactly one x satisfies P.
             prerequisites:
               - fnd.1.2.4
-          - id: fnd.1.2.12
-            name: Prenex normal form
-            description: All quantifiers pulled to the front of the formula.
-            prerequisites:
-              - fnd.1.2.7
-              - fnd.1.2.8
           - id: fnd.1.2.13
             name: Capture-avoiding substitution
             description: Renaming bound variables so substitution doesn't bind a free occurrence.
             prerequisites:
               - fnd.1.2.5
-          - id: fnd.1.2.14
-            name: First-order vs higher-order logic
-            description: First-order quantifies over individuals; higher-order also over predicates / sets.
-            prerequisites:
-              - fnd.1.2.1
+              - fnd.1.2.6
       - id: fnd.1.3
         name: Proof techniques
         description: Patterns of valid mathematical argument.
@@ -315,22 +297,28 @@ children:
             description: "Assume the hypothesis, derive the conclusion via accepted rules."
             prerequisites:
               - fnd.1.3.1
+              - fnd.1.1.34
           - id: fnd.1.3.3
             name: Proof by contrapositive
             description: Prove ¬Q → ¬P instead of P → Q (logically equivalent).
             prerequisites:
               - fnd.1.1.29
               - fnd.1.3.2
+              - fnd.1.1.33
           - id: fnd.1.3.4
             name: Proof by contradiction
             description: "Assume ¬P, derive a contradiction, conclude P."
             prerequisites:
               - fnd.1.1.12
+              - fnd.1.1.15
+              - fnd.1.2.7
+              - fnd.1.2.8
           - id: fnd.1.3.5
             name: Proof by cases
             description: Split the hypothesis into exhaustive cases and prove each.
             prerequisites:
               - fnd.1.3.2
+              - fnd.1.1.35
           - id: fnd.1.3.6
             name: Constructive existence proof
             description: Exhibit an explicit example satisfying the existential claim.
@@ -368,12 +356,6 @@ children:
             description: Every non-empty subset of ℕ has a least element.
             prerequisites:
               - fnd.1.3.9
-          - id: fnd.1.3.13
-            name: Equivalence of induction and well-ordering
-            description: Each implies the other on ℕ.
-            prerequisites:
-              - fnd.1.3.12
-              - fnd.1.3.10
           - id: fnd.1.3.14
             name: Diagonalization argument
             description: Construct an object differing from each member of an enumeration in the n-th place.
@@ -391,31 +373,6 @@ children:
             description: Statement accepted without proof as a starting point.
             prerequisites:
               - fnd.1.4.1
-          - id: fnd.1.4.3
-            name: Theorem
-            description: "A proven, important statement."
-            prerequisites:
-              - fnd.1.3.1
-          - id: fnd.1.4.4
-            name: Lemma
-            description: Auxiliary proven statement used to support a theorem.
-            prerequisites:
-              - fnd.1.4.3
-          - id: fnd.1.4.5
-            name: Corollary
-            description: Statement that follows quickly from a theorem.
-            prerequisites:
-              - fnd.1.4.3
-          - id: fnd.1.4.6
-            name: Proposition (publishing sense)
-            description: Proven statement of intermediate importance — less central than a theorem.
-            prerequisites:
-              - fnd.1.4.3
-          - id: fnd.1.4.7
-            name: Conjecture
-            description: Statement believed true but not yet proven.
-            prerequisites:
-              - fnd.1.4.3
           - id: fnd.1.4.8
             name: Necessary condition
             description: Q is necessary for P if P → Q (P fails without Q).
@@ -432,11 +389,7 @@ children:
             prerequisites:
               - fnd.1.4.8
               - fnd.1.4.9
-          - id: fnd.1.4.11
-            name: Characterization
-            description: An iff statement that pins down a concept by an equivalent property.
-            prerequisites:
-              - fnd.1.4.10
+              - fnd.1.1.30
           - id: fnd.1.4.12
             name: Well-defined
             description: Definition does not depend on incidental representational choices.
@@ -451,22 +404,20 @@ children:
             description: "Set with two binary ops (∧, ∨), unary ¬, identities 0, 1, satisfying complement and distribution laws."
             prerequisites:
               - fnd.1.1.27
+              - fnd.1.1.18
+              - fnd.1.1.19
+              - fnd.1.1.20
+              - fnd.1.1.21
+              - fnd.1.1.24
+              - fnd.1.1.25
+              - fnd.1.1.26
+              - fnd.3.2.4
           - id: fnd.1.5.2
             name: Boolean function
             description: "Function {0,1}ⁿ → {0,1}; equivalently, a propositional formula."
             prerequisites:
               - fnd.1.5.1
-          - id: fnd.1.5.3
-            name: Boolean homomorphism
-            description: "Map preserving ∧, ∨, ¬, 0, 1."
-            prerequisites:
-              - fnd.1.5.1
-          - id: fnd.1.5.4
-            name: Lattice of propositions
-            description: "Propositions modulo equivalence form a Boolean (hence distributive, complemented) lattice."
-            prerequisites:
-              - fnd.1.5.1
-              - fnd.3.2.1
+              - fnd.1.1.37
   - id: fnd.2
     name: "Sets, relations, functions"
     description: Set theory primitives and the relations / functions built from them.
@@ -516,11 +467,13 @@ children:
             description: A = B iff A ⊆ B and B ⊆ A.
             prerequisites:
               - fnd.2.1.3
+              - fnd.1.4.10
           - id: fnd.2.1.6
             name: Empty set (∅)
             description: Unique set with no elements; subset of every set.
             prerequisites:
               - fnd.2.1.1
+              - fnd.1.1.14
           - id: fnd.2.1.7
             name: Universal set
             description: A fixed set U whose subsets are under discussion; relative to context.
@@ -541,11 +494,6 @@ children:
             description: Elements in A but not in B.
             prerequisites:
               - fnd.2.1.2
-          - id: fnd.2.1.11
-            name: Symmetric difference (A △ B)
-            description: "(A \\ B) ∪ (B \\ A); 'XOR' of sets."
-            prerequisites:
-              - fnd.2.1.10
           - id: fnd.2.1.12
             name: Complement (Aᶜ)
             description: "U \\ A, relative to a chosen universal set U."
@@ -568,12 +516,14 @@ children:
             description: A and B are disjoint iff A ∩ B = ∅.
             prerequisites:
               - fnd.2.1.9
+              - fnd.2.1.6
           - id: fnd.2.1.16
             name: Set-builder notation
             description: "{x ∈ U : φ(x)} — the subset of U satisfying φ."
             prerequisites:
               - fnd.2.1.7
               - fnd.1.2.1
+              - fnd.1.2.10
           - id: fnd.2.1.17
             name: Russell's paradox
             description: "{x : x ∉ x} cannot be a set; motivates restricted comprehension."
@@ -641,6 +591,7 @@ children:
               - fnd.2.2.2
               - fnd.2.2.3
               - fnd.2.2.5
+              - fnd.2.1.5
           - id: fnd.2.2.7
             name: Equivalence class
             description: "[a] = {x : x ~ a} — set of elements equivalent to a."
@@ -668,6 +619,7 @@ children:
             description: Partial order in which any two elements are comparable.
             prerequisites:
               - fnd.2.2.10
+              - fnd.1.3.5
           - id: fnd.2.2.12
             name: Strict vs non-strict order
             description: Strict (<) is irreflexive and transitive; non-strict (≤) adds reflexivity.
@@ -692,6 +644,8 @@ children:
             description: "A relation f ⊆ A × B such that each a ∈ A has exactly one b with (a, b) ∈ f."
             prerequisites:
               - fnd.2.2.1
+              - fnd.1.2.11
+              - fnd.1.4.12
             lesson: """
               A **function** $f$ from a set $A$ to a set $B$ is a binary relation that satisfies a very specific requirement: it must associate every element of $A$ with exactly one element of $B$. We denote this relationship as $f: A \\to B$ and write $f(a) = b$ to indicate that $(a, b)$ is the unique pair in the relation for a given $a$.
 
@@ -723,6 +677,7 @@ children:
             description: f(x₁) = f(x₂) → x₁ = x₂.
             prerequisites:
               - fnd.2.3.1
+              - fnd.1.3.3
           - id: fnd.2.3.4
             name: Surjection (onto)
             description: Every b ∈ B has some a with f(a) = b; range = codomain.
@@ -775,6 +730,7 @@ children:
             description: |A| = |B| iff there is a bijection A → B.
             prerequisites:
               - fnd.2.3.5
+              - fnd.1.2.9
           - id: fnd.2.4.2
             name: Finite set
             description: "Set in bijection with {1, …, n} for some n ∈ ℕ."
@@ -800,22 +756,26 @@ children:
             description: Standard pairing / enumeration arguments.
             prerequisites:
               - fnd.2.4.4
+              - fnd.1.3.6
           - id: fnd.2.4.7
             name: ℝ is uncountable
             description: Cantor's diagonal argument.
             prerequisites:
               - fnd.2.4.5
               - fnd.1.3.14
+              - fnd.1.3.8
           - id: fnd.2.4.8
             name: Cantor–Bernstein–Schroeder theorem
             description: Injections A → B and B → A imply |A| = |B|.
             prerequisites:
               - fnd.2.4.1
+              - fnd.2.4.7
           - id: fnd.2.4.9
             name: Aleph numbers (overview)
             description: "Hierarchy of infinite cardinals ℵ₀, ℵ₁, …"
             prerequisites:
               - fnd.2.4.5
+              - fnd.2.4.8
       - id: fnd.2.5
         name: Cartesian products and power sets
         description: Constructions producing larger sets from smaller ones.
@@ -882,6 +842,7 @@ children:
             description: Set of all subsets of A; |2^A| = 2^|A| for finite A.
             prerequisites:
               - fnd.2.1.3
+              - fnd.2.1.4
           - id: fnd.2.5.5
             name: Cantor's theorem
             description: |2^A| > |A| for every set A.
@@ -917,6 +878,7 @@ children:
             description: f⁻¹(A ∪ B) = f⁻¹(A) ∪ f⁻¹(B); same for ∩.
             prerequisites:
               - fnd.2.6.2
+              - fnd.2.1.14
           - id: fnd.2.6.6
             name: Preimage and complement
             description: f⁻¹(Bᶜ) = (f⁻¹(B))ᶜ.
@@ -947,11 +909,6 @@ children:
             description: Set with a partial order ≤.
             prerequisites:
               - fnd.2.2.10
-          - id: fnd.3.1.2
-            name: Hasse diagram
-            description: Graph of cover relations of a finite poset.
-            prerequisites:
-              - fnd.3.1.1
           - id: fnd.3.1.3
             name: Comparable / incomparable elements
             description: x and y are comparable iff x ≤ y or y ≤ x.
@@ -960,11 +917,6 @@ children:
           - id: fnd.3.1.4
             name: Chain
             description: A totally ordered subset.
-            prerequisites:
-              - fnd.3.1.3
-          - id: fnd.3.1.5
-            name: Antichain
-            description: A subset of pairwise incomparable elements.
             prerequisites:
               - fnd.3.1.3
           - id: fnd.3.1.6
@@ -1031,16 +983,7 @@ children:
             description: Every (possibly infinite) subset has a sup and an inf.
             prerequisites:
               - fnd.3.2.1
-          - id: fnd.3.2.6
-            name: Modular lattice
-            description: x ≤ z → x ∨ (y ∧ z) = (x ∨ y) ∧ z.
-            prerequisites:
-              - fnd.3.2.1
-          - id: fnd.3.2.7
-            name: Lattice morphism
-            description: Map preserving ∨ and ∧.
-            prerequisites:
-              - fnd.3.2.2
+              - fnd.3.2.3
       - id: fnd.3.3
         name: Axiom of choice and Zorn's lemma
         description: Choice principles equivalent over ZF.
@@ -1050,6 +993,9 @@ children:
             description: For any family of non-empty sets there is a function picking one element from each.
             prerequisites:
               - fnd.2.3.1
+              - fnd.1.3.7
+              - fnd.1.4.2
+              - fnd.2.1.18
           - id: fnd.3.3.2
             name: Zorn's lemma
             description: Every poset in which every chain has an upper bound has a maximal element.
@@ -1061,6 +1007,8 @@ children:
             description: Every set can be totally ordered so that every non-empty subset has a least element.
             prerequisites:
               - fnd.2.2.11
+              - fnd.1.3.12
+              - fnd.2.4.9
           - id: fnd.3.3.4
             name: AC ↔ Zorn ↔ well-ordering
             description: These three are equivalent over ZF.
@@ -1073,6 +1021,7 @@ children:
             description: "Existence of a basis for every vector space, Hahn–Banach, Tychonoff."
             prerequisites:
               - fnd.3.3.1
+              - fnd.3.3.4
   - id: fnd.4
     name: Combinatorial reasoning
     description: "Counting, pigeonhole, inclusion–exclusion, recurrences."
@@ -1126,6 +1075,7 @@ children:
             description: "C(n, k) = C(n−1, k−1) + C(n−1, k)."
             prerequisites:
               - fnd.4.2.3
+              - fnd.4.1.3
           - id: fnd.4.2.5
             name: Binomial theorem
             description: "(x + y)ⁿ = Σ C(n, k) xᵏ yⁿ⁻ᵏ."
@@ -1184,6 +1134,7 @@ children:
             description: |A ∪ B| = |A| + |B| − |A ∩ B|.
             prerequisites:
               - fnd.4.1.1
+              - fnd.4.1.4
           - id: fnd.4.4.2
             name: Three-set inclusion–exclusion
             description: "Add singletons, subtract pairwise, add triple intersection."
@@ -1261,6 +1212,7 @@ children:
             description: "TM that, given a description of any TM M and input x, simulates M on x."
             prerequisites:
               - fnd.5.1.1
+              - fnd.5.1.4
           - id: fnd.5.1.6
             name: Church–Turing thesis
             description: All reasonable models of effective computation are equivalent in computational power.
@@ -1291,6 +1243,7 @@ children:
             prerequisites:
               - fnd.5.2.3
               - fnd.1.3.14
+              - fnd.5.1.2
           - id: fnd.5.2.5
             name: Reduction to halting
             description: "If A reduces to HALT and HALT is undecidable, A is undecidable too."
@@ -1353,6 +1306,7 @@ children:
             description: Defines an object in terms of smaller instances of itself plus base cases.
             prerequisites:
               - fnd.1.3.9
+              - fnd.1.3.10
           - id: fnd.5.4.2
             name: Primitive recursion
             description: Schema with explicit base case and one-step recursion; total.
@@ -1391,6 +1345,8 @@ children:
           - id: fnd.5.5.1
             name: Lambda term
             description: "Variable, abstraction (λx.M), or application (M N)."
+            prerequisites:
+              - fnd.1.3.11
           - id: fnd.5.5.2
             name: α-equivalence
             description: Renaming bound variables yields equivalent terms.
@@ -1413,6 +1369,7 @@ children:
             description: Encode n as λf.λx. fⁿ x; arithmetic via composition.
             prerequisites:
               - fnd.5.5.3
+              - fnd.5.5.4
           - id: fnd.5.5.6
             name: Church–Turing equivalence
             description: λ-calculus and Turing machines compute the same functions.
