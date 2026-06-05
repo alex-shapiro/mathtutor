@@ -54,12 +54,6 @@ children:
             description: "ℝ, ℂ, ℚ, finite fields 𝔽_p; the scalars used throughout DL math are ℝ and ℂ."
             prerequisites:
               - la.1.1.1
-              - la.1.1.3
-          - id: la.1.1.3
-            name: Field characteristic
-            description: Smallest n with n·1 = 0; 0 if no such n. ℝ and ℂ have characteristic 0.
-            prerequisites:
-              - la.1.1.1
           - id: la.1.1.4
             name: Vector space axioms
             description: "Abelian group under +, compatible scalar action by a field, distributive over both sums."
@@ -130,17 +124,11 @@ children:
             description: Arbitrary intersection of subspaces is again a subspace.
             prerequisites:
               - la.1.2.2
-          - id: la.1.2.5
-            name: Union is generally not a subspace
-            description: U ∪ W is a subspace iff U ⊆ W or W ⊆ U.
-            prerequisites:
-              - la.1.2.2
           - id: la.1.2.6
             name: Sum of subspaces
             description: "U + W = {u + w : u ∈ U, w ∈ W}; the smallest subspace containing both."
             prerequisites:
               - la.1.2.4
-              - la.1.2.5
           - id: la.1.2.7
             name: Span as smallest subspace
             description: The intersection of all subspaces containing S equals span(S).
@@ -205,11 +193,6 @@ children:
             description: Concrete witness Σ cᵢ vᵢ = 0 with not all cᵢ = 0.
             prerequisites:
               - la.1.3.5
-          - id: la.1.3.7
-            name: Zero vector forces dependence
-            description: Any set containing 0 is linearly dependent.
-            prerequisites:
-              - la.1.3.5
           - id: la.1.3.8
             name: Steinitz exchange lemma
             description: Each vector of a spanning set can be exchanged for a vector of an LI set; LI ≤ spanning.
@@ -227,7 +210,6 @@ children:
             prerequisites:
               - la.1.3.4
               - la.1.3.3
-              - la.1.3.7
           - id: la.1.4.2
             name: Standard basis of ℝⁿ
             description: "{e₁, …, eₙ} with eᵢ having 1 in position i and 0 elsewhere."
@@ -288,11 +270,6 @@ children:
           - id: la.1.5.2
             name: Direct-sum criterion
             description: "V = U + W and U ∩ W = {0} iff V = U ⊕ W."
-            prerequisites:
-              - la.1.5.1
-          - id: la.1.5.3
-            name: External direct sum
-            description: U ⊕ W = U × W with componentwise operations.
             prerequisites:
               - la.1.5.1
           - id: la.1.5.4
@@ -569,7 +546,6 @@ children:
             description: Direct sum of square diagonal blocks.
             prerequisites:
               - la.2.5.3
-              - la.1.5.3
           - id: la.2.5.5
             name: Schur complement
             description: "S = D − CA⁻¹B in M = [[A, B],[C, D]]."
