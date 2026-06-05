@@ -12,7 +12,7 @@ use mathtutor::types::{Difficulty, Rating};
 
 mod common;
 
-use common::{atom, graph_of, path_with, quiz, taught};
+use common::{atom, cluster, graph_of, path_with, quiz, taught};
 
 /// Default empty due-quiz list for tests that don't exercise the FSRS
 /// scheduling path. `next_action` only inspects this slice for due cards.
@@ -388,6 +388,79 @@ fn finishes_prereq_quizzes_before_target_lesson() {
         ),
         "pre",
         "pre.q1",
+    );
+}
+
+// ── Cluster expansion ──────────────────────────────────────────────
+
+#[test]
+fn cluster_target_descends_to_first_atom() {
+    // A path target may be a cluster, not an atom. The walker must
+    // descend into its children and surface the first one's work.
+    let g = graph_of(vec![
+        cluster("c", &["c.1", "c.2"]),
+        atom("c.1", &[], None, vec![]),
+        atom("c.2", &[], None, vec![]),
+    ]);
+    let p = path_with(&["c"]);
+    assert_create_lesson(
+        &scheduler::next_action(
+            &g,
+            &p,
+            &PathProgress::default(),
+            NO_DUE,
+            scheduler::NextMode::Default,
+        ),
+        "c.1",
+    );
+}
+
+#[test]
+fn cluster_prereq_descends_before_target() {
+    // Prereqs may reference whole clusters (e.g. "this builds on
+    // la.5.3" — Cholesky). The walker must expand the cluster and
+    // finish its atoms before reaching the target. This mirrors the
+    // semantics the orphan check assumes when accepting cluster
+    // references as covering descendant atoms.
+    let g = graph_of(vec![
+        cluster("pre", &["pre.1", "pre.2"]),
+        atom("pre.1", &[], None, vec![]),
+        atom("pre.2", &[], None, vec![]),
+        atom("target", &["pre"], None, vec![]),
+    ]);
+    let p = path_with(&["target"]);
+    assert_create_lesson(
+        &scheduler::next_action(
+            &g,
+            &p,
+            &PathProgress::default(),
+            NO_DUE,
+            scheduler::NextMode::Default,
+        ),
+        "pre.1",
+    );
+}
+
+#[test]
+fn cluster_prereq_advances_to_target_when_complete() {
+    // Once every atom inside the cluster prereq is complete, the
+    // walker must stop descending into it and pick up the target.
+    let g = graph_of(vec![
+        cluster("pre", &["pre.1"]),
+        common::complete_atom("pre.1", &[]),
+        atom("target", &["pre"], None, vec![]),
+    ]);
+    let p = path_with(&["target"]);
+    let events = common::complete_events("pre.1");
+    assert_create_lesson(
+        &scheduler::next_action(
+            &g,
+            &p,
+            &common::progress_of(&events),
+            NO_DUE,
+            scheduler::NextMode::Default,
+        ),
+        "target",
     );
 }
 
