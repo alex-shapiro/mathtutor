@@ -83,7 +83,7 @@ topics:
       - id: ana.2.7
         name: "Line and surface integrals"
         description: "Integration along curves and over surfaces."
-        prerequisites: [ana.2.4]
+        prerequisites: [ana.1.5, ana.2.4]
       - id: ana.2.8
         name: "Stokes / Green / divergence theorems"
         description: "Generalized fundamental theorem of calculus."
@@ -116,18 +116,6 @@ topics:
         name: "Topological spaces"
         description: "Open sets as primitive structure."
         prerequisites: [ana.3.2]
-      - id: ana.3.6
-        name: "Continuity in topological terms"
-        description: "Preimage of opens is open."
-        prerequisites: [ana.3.5]
-      - id: ana.3.7
-        name: "Separation axioms"
-        description: "T0–T4 hierarchy; Hausdorff."
-        prerequisites: [ana.3.5]
-      - id: ana.3.8
-        name: "Convergence of sequences and nets"
-        description: "Generalizing limits to non-metrizable spaces."
-        prerequisites: [ana.3.5]
 
   - id: ana.4
     name: "Functional analysis"
@@ -148,14 +136,6 @@ topics:
         name: "Dual spaces and Riesz representation"
         description: "Bounded linear functionals; Hilbert duality."
         prerequisites: [ana.4.2]
-      - id: ana.4.5
-        name: "Hahn–Banach theorem"
-        description: "Extension and separation; convex separation."
-        prerequisites: [ana.4.3, fnd.3.3.5]
-      - id: ana.4.6
-        name: "Open mapping, closed graph, uniform boundedness"
-        description: "Three pillars built on Baire category."
-        prerequisites: [ana.4.3]
       - id: ana.4.7
         name: "Compact operators"
         description: "Limit of finite-rank; spectral structure."
@@ -167,7 +147,7 @@ topics:
       - id: ana.4.9
         name: "Reproducing kernel Hilbert spaces"
         description: "RKHS; positive-definite kernels; representer theorem."
-        prerequisites: [ana.4.2]
+        prerequisites: [ana.4.2, ana.4.4, ana.4.8]
       - id: ana.4.10
         name: "Sobolev spaces (light)"
         description: "Weak derivatives; embeddings; PDE solution spaces."
@@ -212,10 +192,6 @@ topics:
         name: "Pushforward measures"
         description: "Distribution of f(X) under a measure."
         prerequisites: [ana.5.4]
-      - id: ana.5.10
-        name: "Signed measures"
-        description: "Hahn–Jordan decomposition."
-        prerequisites: [ana.5.2]
 
   - id: ana.6
     name: "Fourier analysis"
@@ -228,29 +204,9 @@ topics:
         name: "Fourier transform on ℝᵈ"
         description: "Continuous spectral decomposition."
         prerequisites: [ana.5.6]
-      - id: ana.6.3
-        name: "Plancherel / Parseval identities"
-        description: "Energy preservation under Fourier transform."
-        prerequisites: [ana.6.2]
       - id: ana.6.4
         name: "Convolution theorem"
         description: "Convolution becomes pointwise multiplication."
-        prerequisites: [ana.6.2]
-      - id: ana.6.5
-        name: "Sampling theorem"
-        description: "Nyquist–Shannon reconstruction."
-        prerequisites: [ana.6.2]
-      - id: ana.6.6
-        name: "DFT and FFT"
-        description: "Discrete analogue; O(n log n) algorithm."
-        prerequisites: [ana.6.1]
-      - id: ana.6.7
-        name: "Wavelets"
-        description: "Multi-resolution analysis; localized basis."
-        prerequisites: [ana.6.1]
-      - id: ana.6.8
-        name: "Schwartz space and tempered distributions"
-        description: "Rapidly decaying functions; Fourier-stable."
         prerequisites: [ana.6.2]
 
   - id: ana.7
@@ -268,10 +224,6 @@ topics:
         name: "Weak derivatives"
         description: "Derivatives in the distributional sense."
         prerequisites: [ana.7.2]
-      - id: ana.7.4
-        name: "Dirac delta"
-        description: "Point evaluation as a distribution."
-        prerequisites: [ana.7.2]
 
   - id: ana.8
     name: "Calculus of variations"
@@ -284,14 +236,6 @@ topics:
         name: "Euler–Lagrange equations"
         description: "First-order conditions for variational problems."
         prerequisites: [ana.8.1]
-      - id: ana.8.3
-        name: "Constrained variations"
-        description: "Lagrange multipliers in infinite dimensions."
-        prerequisites: [ana.8.2]
-      - id: ana.8.4
-        name: "Hamilton's principle"
-        description: "Action principle (preview of `dyn.2`)."
-        prerequisites: [ana.8.2]
 
   - id: ana.9
     name: "Complex analysis (light)"
@@ -307,7 +251,7 @@ topics:
       - id: ana.9.3
         name: "Contour integration and residues"
         description: "Closed-curve integrals; pole contributions."
-        prerequisites: [ana.9.1]
+        prerequisites: [ana.9.2]
       - id: ana.9.4
         name: "Analytic continuation"
         description: "Uniqueness of extension; Riemann surfaces."
