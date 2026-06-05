@@ -119,7 +119,7 @@ topics:
       - id: nn.3.3
         name: "Hessian spectrum"
         description: "Bulk and outliers; bulk-spike phenomena."
-        prerequisites: [la.4.4, lt.5.8]
+        prerequisites: [la.4.4, lt.5.8, la.8.4]
       - id: nn.3.4
         name: "Sharpness and flatness"
         description: "Cross-link `lt.4.4`."

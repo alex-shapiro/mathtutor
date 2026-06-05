@@ -35,7 +35,7 @@ topics:
       - id: num.1.4
         name: "Backward and forward stability"
         description: "Algorithm output is the exact answer to a perturbed problem."
-        prerequisites: [num.1.2, la.8.1]
+        prerequisites: [num.1.2, la.8.1, la.8.2]
       - id: num.1.5
         name: "Mixed precision and loss scaling"
         description: "fp16/bf16 training; loss-scale to recover gradient range."

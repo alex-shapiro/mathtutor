@@ -184,7 +184,7 @@ topics:
       - id: opt.5.7
         name: "Hessian-free / CG-Newton"
         description: "Iterative inexact Newton via Krylov."
-        prerequisites: [opt.5.1, la.8.3]
+        prerequisites: [opt.5.1, la.8.3, la.8.6]
 
   - id: opt.6
     name: "Constrained and structured optimization"
