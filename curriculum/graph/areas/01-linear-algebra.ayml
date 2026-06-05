@@ -1040,6 +1040,7 @@ children:
             prerequisites:
               - la.4.2.1
               - la.2.6.1
+              - la.4.2
           - id: la.4.1.7
             name: Product of eigenvalues = determinant
             description: ∏ λᵢ (with algebraic multiplicities) = det A.
@@ -1121,6 +1122,7 @@ children:
             prerequisites:
               - la.4.1.1
               - la.2.2.3
+              - la.4.1
           - id: la.4.3.2
             name: Diagonalizability via n LI eigenvectors
             description: A is diagonalizable iff it has n LI eigenvectors.
@@ -1212,11 +1214,13 @@ children:
             description: The block sizes are determined by A up to ordering.
             prerequisites:
               - la.4.5.3
+            terminal: true
           - id: la.4.5.5
             name: Functions of non-diagonalizable matrices
             description: f(A) computed block-wise via Taylor expansion within each Jordan block.
             prerequisites:
               - la.4.5.3
+            terminal: true
       - id: la.4.6
         name: Schur decomposition
         description: Unitary triangularization.
@@ -1237,6 +1241,7 @@ children:
             description: Practical computation of Schur form by repeated QR factorizations.
             prerequisites:
               - la.5.2.1
+              - la.4.6.2
       - id: la.4.7
         name: Minimal polynomial
         description: Smallest annihilator polynomial.
@@ -1258,6 +1263,7 @@ children:
             prerequisites:
               - la.4.7.2
               - la.4.3.4
+            terminal: true
   - id: la.5
     name: Matrix factorizations
     description: Decomposing a matrix into simpler factors.
