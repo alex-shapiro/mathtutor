@@ -82,6 +82,8 @@ struct LeafRaw {
     status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     difficulty: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    terminal: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -106,6 +108,8 @@ struct NodeRaw {
     status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     difficulty: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    terminal: bool,
 }
 
 // ── Unified concept tree ────────────────────────────────────────────
@@ -120,6 +124,8 @@ struct Concept {
     children: Vec<Concept>,
     lesson: Option<String>,
     quizzes: Vec<Quiz>,
+    /// Terminal topic with no dependents
+    terminal: bool,
 }
 
 /// A single quiz card. Serializable for AYML round-trip (shipped
@@ -166,10 +172,12 @@ impl AreaFileRaw {
                             children: Vec::new(),
                             lesson: l.lesson,
                             quizzes: l.quizzes.unwrap_or_default(),
+                            terminal: l.terminal,
                         })
                         .collect(),
                     lesson: None,
                     quizzes: Vec::new(),
+                    terminal: false,
                 })
                 .collect(),
             2 => self
@@ -197,6 +205,7 @@ fn node_to_concept(n: NodeRaw) -> Concept {
             .collect(),
         lesson: n.lesson,
         quizzes: n.quizzes.unwrap_or_default(),
+        terminal: n.terminal,
     }
 }
 
@@ -627,8 +636,59 @@ pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport> {
         }
     }
     detect_cycles(&id_to_area, &adj, &mut report);
+    check_orphans(&area_trees, &adj, &id_to_area, &mut report);
 
     Ok(report)
+}
+
+/// Flag atoms that no other concept lists as a prerequisite. Atoms
+/// marked `terminal: true` opt out — they're declared culminating
+/// topics that intentionally don't feed anything else.
+fn check_orphans(
+    area_trees: &[(ManifestArea, u32, Vec<Concept>)],
+    adj: &HashMap<String, Vec<String>>,
+    id_to_area: &BTreeMap<String, String>,
+    report: &mut CheckReport,
+) {
+    let mut referenced: HashSet<&str> = HashSet::new();
+    for prereqs in adj.values() {
+        for p in prereqs {
+            referenced.insert(p.as_str());
+        }
+    }
+
+    let mut orphans: Vec<(String, String, String)> = Vec::new();
+    for (_entry, _sv, concepts) in area_trees {
+        for root in concepts {
+            collect_orphan_atoms(root, &referenced, id_to_area, &mut orphans);
+        }
+    }
+
+    orphans.sort_by(|a, b| a.0.cmp(&b.0));
+    for (id, name, area) in orphans {
+        report.issues.push(CheckIssue {
+            area: Some(area),
+            node: Some(id),
+            message: format!(
+                "orphan atom '{name}': not a prerequisite of any concept and not marked terminal"
+            ),
+        });
+    }
+}
+
+fn collect_orphan_atoms(
+    n: &Concept,
+    referenced: &HashSet<&str>,
+    id_to_area: &BTreeMap<String, String>,
+    out: &mut Vec<(String, String, String)>,
+) {
+    if n.is_atom() && !n.terminal && !referenced.contains(n.id.as_str()) {
+        let area = id_to_area.get(&n.id).cloned().unwrap_or_default();
+        out.push((n.id.clone(), n.name.clone(), area));
+    }
+    for c in &n.children {
+        collect_orphan_atoms(c, referenced, id_to_area, out);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
