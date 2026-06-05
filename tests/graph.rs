@@ -255,3 +255,35 @@ fn orphan_check_does_not_flag_clusters() {
     let report = graph::run_check(Some(dir.path())).expect("run_check");
     assert!(orphan_ids(&report).is_empty(), "{:?}", report.issues);
 }
+
+#[test]
+fn orphan_check_cluster_prereq_covers_descendant_atoms() {
+    // ta.2.1 depends on the cluster ta.1, not on its individual
+    // children. The orphan check must treat ta.1.1 and ta.1.2 as
+    // covered — same semantics as `Graph::reachable_atoms`, which
+    // expands cluster prereqs into their atoms for the scheduler.
+    let dir = write_graph(
+        "
+  - id: ta.1
+    name: covered cluster
+    children:
+      - id: ta.1.1
+        name: cluster child A
+        description: nothing cites this atom directly
+      - id: ta.1.2
+        name: cluster child B
+        description: nothing cites this atom directly
+  - id: ta.2
+    name: downstream cluster
+    children:
+      - id: ta.2.1
+        name: cites the cluster
+        description: pulls in the whole prereq topic at once
+        terminal: true
+        prerequisites:
+          - ta.1
+",
+    );
+    let report = graph::run_check(Some(dir.path())).expect("run_check");
+    assert!(orphan_ids(&report).is_empty(), "{:?}", report.issues);
+}
