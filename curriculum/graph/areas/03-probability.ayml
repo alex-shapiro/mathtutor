@@ -212,7 +212,7 @@ topics:
       - id: prob.7.2
         name: "Stationary distributions and ergodicity"
         description: "Time averages = space averages."
-        prerequisites: [prob.7.1]
+        prerequisites: [prob.7.1, la.5.6]
       - id: prob.7.3
         name: "MCMC"
         description: "Metropolis–Hastings, Gibbs sampling."

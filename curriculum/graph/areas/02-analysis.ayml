@@ -143,7 +143,7 @@ topics:
       - id: ana.4.3
         name: "Bounded linear operators"
         description: "Operator norm; B(X,Y) as a Banach space."
-        prerequisites: [ana.4.1, la.2.1]
+        prerequisites: [ana.4.1, la.2.1, la.9]
       - id: ana.4.4
         name: "Dual spaces and Riesz representation"
         description: "Bounded linear functionals; Hilbert duality."
@@ -151,7 +151,7 @@ topics:
       - id: ana.4.5
         name: "Hahn–Banach theorem"
         description: "Extension and separation; convex separation."
-        prerequisites: [ana.4.3]
+        prerequisites: [ana.4.3, fnd.3.3.5]
       - id: ana.4.6
         name: "Open mapping, closed graph, uniform boundedness"
         description: "Three pillars built on Baire category."
@@ -179,7 +179,7 @@ topics:
       - id: ana.5.1
         name: "σ-algebras and measurable spaces"
         description: "Closed under countable unions and complements."
-        prerequisites: [fnd.2.5]
+        prerequisites: [fnd.2.5, fnd.2.1.8, fnd.2.1.13, fnd.2.4.6]
       - id: ana.5.2
         name: "Measures and Lebesgue measure"
         description: "Countably additive set functions; Lebesgue on ℝᵈ."
@@ -187,7 +187,7 @@ topics:
       - id: ana.5.3
         name: "Measurable functions"
         description: "Preimage of Borel sets is measurable."
-        prerequisites: [ana.5.1]
+        prerequisites: [ana.5.1, fnd.2.6]
       - id: ana.5.4
         name: "Lebesgue integral"
         description: "Constructed via simple functions; integrability."
