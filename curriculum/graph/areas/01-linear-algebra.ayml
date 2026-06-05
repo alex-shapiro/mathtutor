@@ -1163,6 +1163,7 @@ children:
             description: "A Hermitian matrix is unitarily diagonalizable: A = U Λ U*."
             prerequisites:
               - la.3.5.1
+              - la.3.4
           - id: la.4.4.3
             name: Spectral decomposition
             description: A = Σ λᵢ Pᵢ where Pᵢ projects onto the eigenspace of λᵢ.
@@ -1371,7 +1372,7 @@ children:
             description: "Any complex m × n matrix has a factorization A = U Σ V* with U, V unitary and Σ diagonal nonneg."
             prerequisites:
               - la.4.4.2
-              - la.3.5.3
+              - la.3.5
           - id: la.5.4.2
             name: Singular value
             description: Diagonal entry of Σ; non-negative real number.
