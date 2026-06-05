@@ -1476,7 +1476,6 @@ children:
             description: Cross-link to `la.4.3.1`; appears as a factorization for diagonalizable A.
             prerequisites:
               - la.4.3.1
-            terminal: true
       - id: la.5.7
         name: Pseudoinverse
         description: Generalized inverse via SVD.
