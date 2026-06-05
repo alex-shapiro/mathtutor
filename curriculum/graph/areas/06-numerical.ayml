@@ -63,7 +63,7 @@ topics:
       - id: num.2.4
         name: "Randomized numerical linear algebra"
         description: "Sketching, leverage scores, randomized SVD."
-        prerequisites: [la.8.5]
+        prerequisites: [la.8.5, la.5.8]
       - id: num.2.5
         name: "Block algorithms and cache-aware design"
         description: "Tiling for memory-hierarchy efficiency."

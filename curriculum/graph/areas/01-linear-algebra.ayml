@@ -1214,13 +1214,11 @@ children:
             description: The block sizes are determined by A up to ordering.
             prerequisites:
               - la.4.5.3
-            terminal: true
           - id: la.4.5.5
             name: Functions of non-diagonalizable matrices
             description: f(A) computed block-wise via Taylor expansion within each Jordan block.
             prerequisites:
               - la.4.5.3
-            terminal: true
       - id: la.4.6
         name: Schur decomposition
         description: Unitary triangularization.
@@ -1263,7 +1261,6 @@ children:
             prerequisites:
               - la.4.7.2
               - la.4.3.4
-            terminal: true
   - id: la.5
     name: Matrix factorizations
     description: Decomposing a matrix into simpler factors.
@@ -1465,13 +1462,11 @@ children:
             description: "If A = UΣV*, then U_polar = U V* and P = V Σ V*."
             prerequisites:
               - la.5.5.1
-            terminal: true
           - id: la.5.5.3
             name: Closest orthogonal matrix
             description: Polar factor U_polar minimizes ‖A − Q‖_F over orthogonal Q (orthogonal Procrustes).
             prerequisites:
               - la.5.5.1
-            terminal: true
       - id: la.5.6
         name: Eigendecomposition (link)
         description: Spectral factorization for diagonalizable A; see also `la.4.3`.
@@ -1496,7 +1491,6 @@ children:
             description: "AA⁺A = A, A⁺AA⁺ = A⁺, (AA⁺)* = AA⁺, (A⁺A)* = A⁺A."
             prerequisites:
               - la.5.7.1
-            terminal: true
           - id: la.5.7.3
             name: Pseudoinverse from SVD
             description: "If A = U Σ V* then A⁺ = V Σ⁺ U*, where Σ⁺ inverts non-zero σᵢ."
@@ -1514,14 +1508,12 @@ children:
             description: "Among all least-squares solutions, A⁺ b has smallest ‖x‖₂."
             prerequisites:
               - la.5.7.4
-            terminal: true
           - id: la.5.7.6
             name: Pseudoinverse instability
             description: "Discontinuous in A: small singular values amplify perturbations."
             prerequisites:
               - la.5.7.3
               - la.5.4.12
-            terminal: true
       - id: la.5.8
         name: CUR / interpolative decomposition
         description: Factorizations preserving original entries / columns.
@@ -1536,13 +1528,11 @@ children:
             description: A ≈ C T with C subset of A's columns and T a 'small' coefficient matrix.
             prerequisites:
               - la.5.8.1
-            terminal: true
           - id: la.5.8.3
             name: Leverage scores
             description: Importance scores derived from singular vectors; basis of randomized CUR.
             prerequisites:
               - la.5.4.1
-            terminal: true
       - id: la.5.9
         name: Eckart–Young theorem
         description: Best low-rank approximation.

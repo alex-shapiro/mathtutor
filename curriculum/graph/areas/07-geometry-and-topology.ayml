@@ -73,7 +73,7 @@ topics:
       - id: geom.2.6
         name: "Stiefel and Grassmann manifolds"
         description: "Orthonormal frames; subspaces — natural for orthogonal weights."
-        prerequisites: [la.3.3, geom.1.1]
+        prerequisites: [la.3.3, geom.1.1, la.5.5]
       - id: geom.2.7
         name: "Hyperbolic space"
         description: "Constant negative curvature; Poincaré ball, Lorentz models."
