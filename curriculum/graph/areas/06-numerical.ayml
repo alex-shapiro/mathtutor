@@ -135,7 +135,7 @@ topics:
       - id: num.4.9
         name: "Implicit differentiation"
         description: "Differentiating through fixed points / argmin."
-        prerequisites: [num.4.6, ana.2.6]
+        prerequisites: [num.4.6, ana.2.6, la.7.6]
 
   - id: num.5
     name: "Quadrature and integration"
