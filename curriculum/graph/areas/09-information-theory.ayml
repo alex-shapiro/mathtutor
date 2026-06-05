@@ -35,7 +35,7 @@ topics:
       - id: inf.1.4
         name: "KL divergence"
         description: "D_KL(p‖q); relative entropy."
-        prerequisites: [inf.1.1, prob.3.1]
+        prerequisites: [inf.1.1, prob.3.1, prob.3.7]
       - id: inf.1.5
         name: "Cross-entropy"
         description: "H(p,q) = H(p) + D_KL(p‖q); training loss."
