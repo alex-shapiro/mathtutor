@@ -641,9 +641,10 @@ pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport> {
     Ok(report)
 }
 
-/// Flag atoms that no other concept lists as a prerequisite. Atoms
-/// marked `terminal: true` opt out — they're declared culminating
-/// topics that intentionally don't feed anything else.
+/// Flag atoms that no other concept lists as a prerequisite. A
+/// prerequisite reference to a cluster covers all its descendant
+/// atoms (mirroring how the scheduler expands cluster prereqs in
+/// `Graph::reachable_atoms`). Atoms marked `terminal: true` opt out.
 fn check_orphans(
     area_trees: &[(ManifestArea, u32, Vec<Concept>)],
     adj: &HashMap<String, Vec<String>>,
@@ -660,7 +661,7 @@ fn check_orphans(
     let mut orphans: Vec<(String, String, String)> = Vec::new();
     for (_entry, _sv, concepts) in area_trees {
         for root in concepts {
-            collect_orphan_atoms(root, &referenced, id_to_area, &mut orphans);
+            collect_orphan_atoms(root, &referenced, false, id_to_area, &mut orphans);
         }
     }
 
@@ -669,9 +670,7 @@ fn check_orphans(
         report.issues.push(CheckIssue {
             area: Some(area),
             node: Some(id),
-            message: format!(
-                "orphan atom '{name}': not a prerequisite of any concept and not marked terminal"
-            ),
+            message: format!("orphan atom '{name}'"),
         });
     }
 }
@@ -679,15 +678,17 @@ fn check_orphans(
 fn collect_orphan_atoms(
     n: &Concept,
     referenced: &HashSet<&str>,
+    ancestor_referenced: bool,
     id_to_area: &BTreeMap<String, String>,
     out: &mut Vec<(String, String, String)>,
 ) {
-    if n.is_atom() && !n.terminal && !referenced.contains(n.id.as_str()) {
+    let covered = ancestor_referenced || referenced.contains(n.id.as_str());
+    if n.is_atom() && !n.terminal && !covered {
         let area = id_to_area.get(&n.id).cloned().unwrap_or_default();
         out.push((n.id.clone(), n.name.clone(), area));
     }
     for c in &n.children {
-        collect_orphan_atoms(c, referenced, id_to_area, out);
+        collect_orphan_atoms(c, referenced, covered, id_to_area, out);
     }
 }
 
