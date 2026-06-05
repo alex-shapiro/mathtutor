@@ -1607,6 +1607,7 @@ children:
             description: "Q(v) = B(v, v) for a symmetric bilinear form B."
             prerequisites:
               - la.6.1.2
+              - la.6.1
           - id: la.6.2.2
             name: Matrix of a quadratic form
             description: Q(v) = vᵀ A v with A symmetric.
@@ -1722,6 +1723,7 @@ children:
             description: Function V₁ × … × V_k → W linear in each argument.
             prerequisites:
               - la.2.1.1
+              - la.6.4
           - id: la.6.5.2
             name: Tensor as multilinear map
             description: "A type-(p, q) tensor is a multilinear functional on p covectors and q vectors."
@@ -1973,6 +1975,7 @@ children:
             description: "Apply chain rule to differentials, then use the identification rule."
             prerequisites:
               - la.7.3.2
+              - la.6.9
           - id: la.7.5.8
             name: Matrix product rule
             description: d(A(t) B(t)) = A'(t) B(t) + A(t) B'(t).

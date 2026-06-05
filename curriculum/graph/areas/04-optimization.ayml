@@ -180,7 +180,7 @@ topics:
       - id: opt.5.6
         name: "K-FAC"
         description: "Kronecker-factored approximate Fisher."
-        prerequisites: [opt.5.5, la.6.7]
+        prerequisites: [opt.5.5, la.6.7, la.6.6, la.6.8]
       - id: opt.5.7
         name: "Hessian-free / CG-Newton"
         description: "Iterative inexact Newton via Krylov."
@@ -216,7 +216,7 @@ topics:
       - id: opt.7.1
         name: "Local minima and saddle points"
         description: "Critical-point taxonomy; second-order conditions."
-        prerequisites: [la.7.4]
+        prerequisites: [la.7.4, la.6.2]
       - id: opt.7.2
         name: "Strict-saddle property and escape"
         description: "When first-order methods avoid saddles."
