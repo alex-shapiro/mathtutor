@@ -125,29 +125,31 @@ fn reachable_handles_diamond_without_looping() {
 
 // ── graph check: orphan detection ───────────────────────────────────
 
-/// Write a minimal one-area graph dir with the given `area_body` (under
-/// `children:`) and return the tempdir to keep it alive for the test.
+/// Write a minimal one-area graph dir with the given `area_body` (the
+/// content of the area file's `children:` block) and return the
+/// tempdir to keep it alive for the test.
 fn write_graph(area_body: &str) -> TempDir {
     let dir = TempDir::new().expect("tempdir");
     let areas = dir.path().join("areas");
     fs::create_dir(&areas).expect("areas/");
-    fs::write(
-        dir.path().join("manifest.ayml"),
-        "schema_version: 1\n\
-         areas:\n  \
-           - prefix: ta\n    \
-             slug: test-area\n    \
-             file: areas/test.ayml\n    \
-             summary: \"t\"\n",
-    )
-    .expect("manifest");
+    let manifest = "
+schema_version: 1
+areas:
+  - prefix: ta
+    slug: test-area
+    file: areas/test.ayml
+    summary: \"t\"
+";
+    fs::write(dir.path().join("manifest.ayml"), manifest).expect("manifest");
     let area = format!(
-        "schema_version: 2\n\
-         area: test-area\n\
-         prefix: ta\n\
-         summary: \"t\"\n\
-         motivation: \"t\"\n\
-         children:\n{area_body}"
+        "
+schema_version: 2
+area: test-area
+prefix: ta
+summary: \"t\"
+motivation: \"t\"
+children:
+{area_body}"
     );
     fs::write(areas.join("test.ayml"), area).expect("area");
     dir
@@ -166,12 +168,14 @@ fn orphan_ids(report: &graph::CheckReport) -> Vec<String> {
 fn orphan_check_flags_unreferenced_atom() {
     // ta.1.1 is nobody's prerequisite — it must be reported.
     let dir = write_graph(
-        "  - id: ta.1\n    \
-              name: cluster\n    \
-              children:\n      \
-                - id: ta.1.1\n        \
-                  name: lonely atom\n        \
-                  description: nobody cites me\n",
+        "
+  - id: ta.1
+    name: cluster
+    children:
+      - id: ta.1.1
+        name: lonely atom
+        description: nobody cites me
+",
     );
     let report = graph::run_check(Some(dir.path())).expect("run_check");
     assert_eq!(orphan_ids(&report), vec!["ta.1.1".to_string()]);
@@ -190,13 +194,15 @@ fn orphan_check_flags_unreferenced_atom() {
 fn orphan_check_skips_terminal_atoms() {
     // Same shape as above but the atom opts out via `terminal: true`.
     let dir = write_graph(
-        "  - id: ta.1\n    \
-              name: cluster\n    \
-              children:\n      \
-                - id: ta.1.1\n        \
-                  name: culminating topic\n        \
-                  description: end of the line, by design\n        \
-                  terminal: true\n",
+        "
+  - id: ta.1
+    name: cluster
+    children:
+      - id: ta.1.1
+        name: culminating topic
+        description: end of the line, by design
+        terminal: true
+",
     );
     let report = graph::run_check(Some(dir.path())).expect("run_check");
     assert!(
@@ -212,17 +218,19 @@ fn orphan_check_clears_when_referenced_as_prereq() {
     // ta.1.2 itself has no downstream, so it WILL be an orphan; assert
     // that's the only one.
     let dir = write_graph(
-        "  - id: ta.1\n    \
-              name: cluster\n    \
-              children:\n      \
-                - id: ta.1.1\n        \
-                  name: foundational\n        \
-                  description: cited downstream\n      \
-                - id: ta.1.2\n        \
-                  name: builds on it\n        \
-                  description: top of the chain\n        \
-                  prerequisites:\n          \
-                    - ta.1.1\n",
+        "
+  - id: ta.1
+    name: cluster
+    children:
+      - id: ta.1.1
+        name: foundational
+        description: cited downstream
+      - id: ta.1.2
+        name: builds on it
+        description: top of the chain
+        prerequisites:
+          - ta.1.1
+",
     );
     let report = graph::run_check(Some(dir.path())).expect("run_check");
     assert_eq!(orphan_ids(&report), vec!["ta.1.2".to_string()]);
@@ -234,13 +242,15 @@ fn orphan_check_does_not_flag_clusters() {
     // ta.1 as a prerequisite, clusters must never be flagged — only
     // atoms (leaves of the concept tree) participate in the check.
     let dir = write_graph(
-        "  - id: ta.1\n    \
-              name: cluster\n    \
-              children:\n      \
-                - id: ta.1.1\n        \
-                  name: only atom\n        \
-                  description: keeps things minimal\n        \
-                  terminal: true\n",
+        "
+  - id: ta.1
+    name: cluster
+    children:
+      - id: ta.1.1
+        name: only atom
+        description: keeps things minimal
+        terminal: true
+",
     );
     let report = graph::run_check(Some(dir.path())).expect("run_check");
     assert!(orphan_ids(&report).is_empty(), "{:?}", report.issues);
