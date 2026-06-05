@@ -35,7 +35,7 @@ topics:
       - id: num.1.4
         name: "Backward and forward stability"
         description: "Algorithm output is the exact answer to a perturbed problem."
-        prerequisites: [num.1.2, la.8.1]
+        prerequisites: [num.1.2, la.8.1, la.8.2]
       - id: num.1.5
         name: "Mixed precision and loss scaling"
         description: "fp16/bf16 training; loss-scale to recover gradient range."
@@ -63,7 +63,7 @@ topics:
       - id: num.2.4
         name: "Randomized numerical linear algebra"
         description: "Sketching, leverage scores, randomized SVD."
-        prerequisites: [la.8.5]
+        prerequisites: [la.8.5, la.5.8]
       - id: num.2.5
         name: "Block algorithms and cache-aware design"
         description: "Tiling for memory-hierarchy efficiency."
@@ -135,7 +135,7 @@ topics:
       - id: num.4.9
         name: "Implicit differentiation"
         description: "Differentiating through fixed points / argmin."
-        prerequisites: [num.4.6, ana.2.6]
+        prerequisites: [num.4.6, ana.2.6, la.7.6]
 
   - id: num.5
     name: "Quadrature and integration"

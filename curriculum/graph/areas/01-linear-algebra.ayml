@@ -54,11 +54,6 @@ children:
             description: "ℝ, ℂ, ℚ, finite fields 𝔽_p; the scalars used throughout DL math are ℝ and ℂ."
             prerequisites:
               - la.1.1.1
-          - id: la.1.1.3
-            name: Field characteristic
-            description: Smallest n with n·1 = 0; 0 if no such n. ℝ and ℂ have characteristic 0.
-            prerequisites:
-              - la.1.1.1
           - id: la.1.1.4
             name: Vector space axioms
             description: "Abelian group under +, compatible scalar action by a field, distributive over both sums."
@@ -77,6 +72,7 @@ children:
             description: "𝔽ⁿ, polynomials of degree ≤ n, m×n matrices, continuous functions, sequences."
             prerequisites:
               - la.1.1.4
+              - la.1.1.2
           - id: la.1.1.6
             name: Zero vector uniqueness
             description: The additive identity in a vector space is unique.
@@ -87,6 +83,7 @@ children:
             description: Each vector has exactly one additive inverse.
             prerequisites:
               - la.1.1.4
+              - la.1.1.6
           - id: la.1.1.8
             name: 0 · v = 0
             description: Scalar zero annihilates any vector.
@@ -102,6 +99,7 @@ children:
             description: u + w = v + w → u = v in any vector space.
             prerequisites:
               - la.1.1.7
+              - la.1.1.9
       - id: la.1.2
         name: Subspaces
         description: Subsets closed under the vector-space operations.
@@ -124,11 +122,6 @@ children:
           - id: la.1.2.4
             name: Intersection of subspaces
             description: Arbitrary intersection of subspaces is again a subspace.
-            prerequisites:
-              - la.1.2.2
-          - id: la.1.2.5
-            name: Union is generally not a subspace
-            description: U ∪ W is a subspace iff U ⊆ W or W ⊆ U.
             prerequisites:
               - la.1.2.2
           - id: la.1.2.6
@@ -200,17 +193,13 @@ children:
             description: Concrete witness Σ cᵢ vᵢ = 0 with not all cᵢ = 0.
             prerequisites:
               - la.1.3.5
-          - id: la.1.3.7
-            name: Zero vector forces dependence
-            description: Any set containing 0 is linearly dependent.
-            prerequisites:
-              - la.1.3.5
           - id: la.1.3.8
             name: Steinitz exchange lemma
             description: Each vector of a spanning set can be exchanged for a vector of an LI set; LI ≤ spanning.
             prerequisites:
               - la.1.3.4
               - la.1.3.3
+              - la.1.3.6
       - id: la.1.4
         name: Basis and dimension
         description: Coordinates from independent spanning sets.
@@ -251,6 +240,7 @@ children:
             description: "dim 𝔽ⁿ = n, dim 𝒫_n = n+1, dim M_{m,n} = mn."
             prerequisites:
               - la.1.4.5
+              - la.1.1.5
           - id: la.1.4.8
             name: Extending an LI set to a basis
             description: Any LI set in a finite-dim V can be extended to a basis of V.
@@ -261,6 +251,7 @@ children:
             description: Any spanning set of a finite-dim V can be reduced to a basis.
             prerequisites:
               - la.1.4.4
+              - la.1.2.7
           - id: la.1.4.10
             name: n LI vectors in n-dim V form a basis
             description: "If dim V = n, any LI set of size n is automatically a basis."
@@ -275,14 +266,10 @@ children:
             description: "V = U ⊕ W iff every v ∈ V is uniquely u + w with u ∈ U, w ∈ W."
             prerequisites:
               - la.1.2.6
+              - la.1.1.10
           - id: la.1.5.2
             name: Direct-sum criterion
             description: "V = U + W and U ∩ W = {0} iff V = U ⊕ W."
-            prerequisites:
-              - la.1.5.1
-          - id: la.1.5.3
-            name: External direct sum
-            description: U ⊕ W = U × W with componentwise operations.
             prerequisites:
               - la.1.5.1
           - id: la.1.5.4
@@ -291,6 +278,8 @@ children:
             prerequisites:
               - la.1.5.2
               - la.1.4.8
+              - la.1.4.9
+              - la.1.2.3
           - id: la.1.5.5
             name: Dimension formula for sums
             description: dim(U + W) = dim U + dim W − dim(U ∩ W).
@@ -323,6 +312,7 @@ children:
             prerequisites:
               - la.1.6.2
               - la.1.4.5
+              - la.1.6.3
   - id: la.2
     name: Linear maps and matrices
     description: Maps that respect the vector-space structure.
@@ -369,6 +359,7 @@ children:
             description: "dim Hom(V, W) = (dim V)(dim W) for finite-dimensional V, W."
             prerequisites:
               - la.2.1.5
+              - la.1.4.7
       - id: la.2.2
         name: Matrix representation and change of basis
         description: Coordinate-dependent encoding of linear maps.
@@ -379,6 +370,7 @@ children:
             prerequisites:
               - la.2.1.4
               - la.1.4.3
+              - la.1.4.2
           - id: la.2.2.2
             name: Change-of-basis matrix
             description: "P_{B → B'} expresses each new basis vector in the old basis."
@@ -457,6 +449,8 @@ children:
             prerequisites:
               - la.2.3.4
               - la.2.3.5
+              - la.1.5.5
+              - la.1.6.4
           - id: la.2.3.7
             name: Row rank = column rank
             description: rank from rows equals rank from columns; both equal rank A.
@@ -506,6 +500,7 @@ children:
               - la.2.4.3
               - la.2.6.10
               - la.2.3.4
+              - la.1.4.10
           - id: la.2.4.5
             name: Inverse of a product
             description: (AB)⁻¹ = B⁻¹A⁻¹.
@@ -883,6 +878,7 @@ children:
             prerequisites:
               - la.3.3.8
               - la.1.5.1
+              - la.1.5.4
       - id: la.3.4
         name: Adjoint operators
         description: Matrix transpose / conjugate transpose at the operator level.
@@ -1044,6 +1040,7 @@ children:
             prerequisites:
               - la.4.2.1
               - la.2.6.1
+              - la.4.2
           - id: la.4.1.7
             name: Product of eigenvalues = determinant
             description: ∏ λᵢ (with algebraic multiplicities) = det A.
@@ -1125,6 +1122,7 @@ children:
             prerequisites:
               - la.4.1.1
               - la.2.2.3
+              - la.4.1
           - id: la.4.3.2
             name: Diagonalizability via n LI eigenvectors
             description: A is diagonalizable iff it has n LI eigenvectors.
@@ -1167,6 +1165,7 @@ children:
             description: "A Hermitian matrix is unitarily diagonalizable: A = U Λ U*."
             prerequisites:
               - la.3.5.1
+              - la.3.4
           - id: la.4.4.3
             name: Spectral decomposition
             description: A = Σ λᵢ Pᵢ where Pᵢ projects onto the eigenspace of λᵢ.
@@ -1240,6 +1239,7 @@ children:
             description: Practical computation of Schur form by repeated QR factorizations.
             prerequisites:
               - la.5.2.1
+              - la.4.6.2
       - id: la.4.7
         name: Minimal polynomial
         description: Smallest annihilator polynomial.
@@ -1279,7 +1279,7 @@ children:
             description: PA = LU with P a permutation matrix; required for numerical stability.
             prerequisites:
               - la.5.1.1
-              - la.2.7.1
+              - la.2.7
           - id: la.5.1.3
             name: LU existence
             description: Exists iff every leading principal minor of A is non-zero.
@@ -1375,7 +1375,7 @@ children:
             description: "Any complex m × n matrix has a factorization A = U Σ V* with U, V unitary and Σ diagonal nonneg."
             prerequisites:
               - la.4.4.2
-              - la.3.5.3
+              - la.3.5
           - id: la.5.4.2
             name: Singular value
             description: Diagonal entry of Σ; non-negative real number.
@@ -1429,6 +1429,7 @@ children:
             prerequisites:
               - la.5.4.1
               - la.3.4.5
+              - la.2.3
           - id: la.5.4.12
             name: Condition number from SVD
             description: κ₂(A) = σ_max / σ_min.
@@ -1605,6 +1606,7 @@ children:
             description: "Q(v) = B(v, v) for a symmetric bilinear form B."
             prerequisites:
               - la.6.1.2
+              - la.6.1
           - id: la.6.2.2
             name: Matrix of a quadratic form
             description: Q(v) = vᵀ A v with A symmetric.
@@ -1668,6 +1670,7 @@ children:
             description: Symmetric A is PD iff A = L Lᵀ for some L with positive diagonal.
             prerequisites:
               - la.5.3.3
+              - la.5.3
           - id: la.6.3.7
             name: Loewner order
             description: A ⪰ B iff A − B is PSD; partial order on symmetric matrices.
@@ -1678,7 +1681,7 @@ children:
             description: A symmetric block matrix is PSD iff its diagonal blocks and Schur complements are PSD.
             prerequisites:
               - la.6.3.2
-              - la.2.5.5
+              - la.2.5
       - id: la.6.4
         name: Tensor product
         description: Universal construction for multilinear maps.
@@ -1719,6 +1722,7 @@ children:
             description: Function V₁ × … × V_k → W linear in each argument.
             prerequisites:
               - la.2.1.1
+              - la.6.4
           - id: la.6.5.2
             name: Tensor as multilinear map
             description: "A type-(p, q) tensor is a multilinear functional on p covectors and q vectors."
@@ -1970,6 +1974,7 @@ children:
             description: "Apply chain rule to differentials, then use the identification rule."
             prerequisites:
               - la.7.3.2
+              - la.6.9
           - id: la.7.5.8
             name: Matrix product rule
             description: d(A(t) B(t)) = A'(t) B(t) + A(t) B'(t).
@@ -2054,6 +2059,7 @@ children:
             description: QR with Householder is unconditionally backward stable; LU needs partial pivoting.
             prerequisites:
               - la.8.2.3
+              - la.5.1
           - id: la.8.2.5
             name: Pivoting strategies
             description: "Partial, complete, rook pivoting; trade speed for stability."

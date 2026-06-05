@@ -143,7 +143,7 @@ topics:
       - id: ana.4.3
         name: "Bounded linear operators"
         description: "Operator norm; B(X,Y) as a Banach space."
-        prerequisites: [ana.4.1, la.2.1]
+        prerequisites: [ana.4.1, la.2.1, la.9]
       - id: ana.4.4
         name: "Dual spaces and Riesz representation"
         description: "Bounded linear functionals; Hilbert duality."
