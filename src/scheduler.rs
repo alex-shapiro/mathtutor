@@ -454,8 +454,6 @@ struct PrereqBrief {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    lesson: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -622,7 +620,6 @@ fn collect_prereqs(g: &Graph, c: &FlatConcept) -> Vec<PrereqBrief> {
                 id: pc.id.clone(),
                 name: pc.name.clone(),
                 description: pc.description.clone(),
-                lesson: pc.lesson.clone(),
             })
         })
         .collect()
