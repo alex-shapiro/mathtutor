@@ -105,18 +105,10 @@ topics:
         name: "Mirror descent"
         description: "Generalized GD using a Bregman divergence."
         prerequisites: [opt.1.8]
-      - id: opt.3.7
-        name: "Frank–Wolfe / conditional gradient"
-        description: "Constraint set queried via linear minimization oracles."
-        prerequisites: [opt.2.1]
-      - id: opt.3.8
-        name: "Coordinate descent"
-        description: "Update one (block of) coordinate(s) at a time."
-        prerequisites: [opt.3.1]
       - id: opt.3.9
         name: "ADMM"
         description: "Alternating direction method of multipliers."
-        prerequisites: [opt.2.4, opt.1.7]
+        prerequisites: [opt.2.4, opt.1.7, opt.6.3]
 
   - id: opt.4
     name: "Stochastic optimization"
@@ -136,11 +128,7 @@ topics:
       - id: opt.4.4
         name: "Adaptive methods"
         description: "AdaGrad, RMSProp, Adam, AdamW, Lion, Shampoo."
-        prerequisites: [opt.4.1]
-      - id: opt.4.5
-        name: "Sign-based methods"
-        description: "signSGD, Lion; sign as 1-bit gradient."
-        prerequisites: [opt.4.4]
+        prerequisites: [opt.4.1, opt.3.4, opt.3.5]
       - id: opt.4.6
         name: "Learning-rate schedules"
         description: "Warmup, cosine, linear; decoupled weight decay."
@@ -161,10 +149,6 @@ topics:
         name: "Newton's method"
         description: "Quadratic local convergence near minima."
         prerequisites: [opt.3.1, la.7.4]
-      - id: opt.5.2
-        name: "Quasi-Newton (BFGS, L-BFGS)"
-        description: "Approximating the Hessian incrementally."
-        prerequisites: [opt.5.1]
       - id: opt.5.3
         name: "Trust region methods"
         description: "Restrict step within a region of model fidelity."
@@ -180,11 +164,7 @@ topics:
       - id: opt.5.6
         name: "K-FAC"
         description: "Kronecker-factored approximate Fisher."
-        prerequisites: [opt.5.5, la.6.7, la.6.6, la.6.8]
-      - id: opt.5.7
-        name: "Hessian-free / CG-Newton"
-        description: "Iterative inexact Newton via Krylov."
-        prerequisites: [opt.5.1, la.8.3, la.8.6]
+        prerequisites: [opt.5.5, opt.5.4, la.6.7, la.6.6, la.6.8]
 
   - id: opt.6
     name: "Constrained and structured optimization"
@@ -205,10 +185,6 @@ topics:
         name: "Manifold optimization"
         description: "Riemannian gradient descent; retractions."
         prerequisites: [geom.2.5, geom.2.3]
-      - id: opt.6.5
-        name: "Combinatorial relaxations"
-        description: "LP / SDP relaxation of integer programs."
-        prerequisites: [opt.2.1]
 
   - id: opt.7
     name: "Non-convex optimization"
@@ -232,7 +208,7 @@ topics:
       - id: opt.7.5
         name: "Implicit regularization (preview)"
         description: "Algorithm-dependent inductive bias of the solution."
-        prerequisites: [opt.4.1]
+        prerequisites: [opt.4.1, opt.7.4]
 
   - id: opt.8
     name: "Min-max and game-theoretic optimization"
@@ -244,10 +220,6 @@ topics:
       - id: opt.8.2
         name: "Extragradient and optimistic methods"
         description: "Stable algorithms for monotone variational inequalities."
-        prerequisites: [opt.8.1]
-      - id: opt.8.3
-        name: "Fictitious play"
-        description: "Best-response dynamics in games."
         prerequisites: [opt.8.1]
       - id: opt.8.4
         name: "GAN training dynamics"
@@ -269,10 +241,6 @@ topics:
         name: "Multi-armed bandits"
         description: "UCB, Thompson sampling."
         prerequisites: [prob.9.4, prob.7.7]
-      - id: opt.9.4
-        name: "Adversarial bandits"
-        description: "Exp3; partial-information regret."
-        prerequisites: [opt.9.3]
 
   - id: opt.10
     name: "Optimal transport"
