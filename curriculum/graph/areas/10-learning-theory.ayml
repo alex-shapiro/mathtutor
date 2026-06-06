@@ -84,7 +84,7 @@ topics:
       - id: lt.3.1
         name: "Online regret bounds"
         description: "Sublinear regret as the criterion."
-        prerequisites: [opt.9.1]
+        prerequisites: [opt.9.1, opt.9.4]
       - id: lt.3.2
         name: "Mistake bounds"
         description: "Halving, perceptron, winnow."
@@ -100,7 +100,7 @@ topics:
       - id: lt.4.1
         name: "Implicit bias of GD / SGD"
         description: "Solution selection in over-parameterized models."
-        prerequisites: [opt.4.1]
+        prerequisites: [opt.4.1, opt.4.3, opt.7.5]
       - id: lt.4.2
         name: "Margin theory"
         description: "Generalization via large margins."
@@ -128,7 +128,7 @@ topics:
       - id: lt.5.3
         name: "Neural tangent kernel"
         description: "Lazy / kernel regime of wide networks."
-        prerequisites: [ana.4.9, opt.3.1]
+        prerequisites: [ana.4.9, opt.3.1, opt.7.3]
       - id: lt.5.4
         name: "Mean-field regime"
         description: "Wide one-hidden-layer training as a measure flow."
@@ -148,7 +148,7 @@ topics:
       - id: lt.5.8
         name: "Loss-landscape geometry"
         description: "Hessian spectrum, basins, plateaus."
-        prerequisites: [opt.7.1, la.4.4, prob.6.8]
+        prerequisites: [opt.7.1, la.4.4, prob.6.8, opt.7.2]
       - id: lt.5.9
         name: "Mode connectivity"
         description: "Low-loss paths between SGD solutions."
@@ -160,7 +160,7 @@ topics:
       - id: lt.6.1
         name: "Adversarial robustness"
         description: "Min-max formulation; certified defenses."
-        prerequisites: [opt.8.1]
+        prerequisites: [opt.8.1, opt.8.4, opt.3.7, opt.6.5]
       - id: lt.6.2
         name: "Distribution shift"
         description: "Covariate, label, concept shift; population analyses."

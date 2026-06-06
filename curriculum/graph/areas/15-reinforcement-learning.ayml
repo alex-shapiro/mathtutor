@@ -108,11 +108,11 @@ topics:
       - id: rl.4.4
         name: "Advantage estimation (GAE)"
         description: "Generalized advantage estimation; bias–variance tradeoff."
-        prerequisites: [rl.4.3]
+        prerequisites: [rl.4.3, opt.4.2]
       - id: rl.4.5
         name: "Trust region policy optimization (TRPO)"
         description: "Constrained policy update under KL trust region."
-        prerequisites: [rl.4.3, opt.2.4, inf.1.4]
+        prerequisites: [rl.4.3, opt.2.4, inf.1.4, opt.5.3]
       - id: rl.4.6
         name: "Proximal policy optimization (PPO)"
         description: "Clipped-objective approximation to TRPO."
@@ -120,7 +120,7 @@ topics:
       - id: rl.4.7
         name: "Natural policy gradient"
         description: "Policy gradient under Fisher metric (cross-link `opt.5.5`)."
-        prerequisites: [opt.5.5, rl.4.1]
+        prerequisites: [opt.5.5, rl.4.1, opt.3.6]
 
   - id: rl.5
     name: "KL-regularized RL and preference learning"

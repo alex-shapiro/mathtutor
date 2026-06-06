@@ -118,7 +118,7 @@ topics:
       - id: dif.4.4
         name: "Inpainting and inverse problems"
         description: "Guidance with measurement operators; DPS, ΠGDM."
-        prerequisites: [dif.4.1, opt.6.1]
+        prerequisites: [dif.4.1, opt.6.1, opt.3.9]
       - id: dif.4.5
         name: "Negative prompting (math)"
         description: "Subtractive guidance and its failure modes."
