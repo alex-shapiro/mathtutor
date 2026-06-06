@@ -13,6 +13,8 @@ use std::path::Path;
 
 use libsql::Connection;
 
+use std::collections::BTreeSet;
+
 use crate::event_log;
 use crate::graph::{self, Graph};
 use crate::overlay;
@@ -72,7 +74,9 @@ pub async fn cmd_quiz_create(
         return Err(Error::NoLesson(atom_id.to_string()));
     }
 
-    let new_id = next_quiz_id(atom_id, &c.quizzes);
+    let overlay = overlay::load(&tx).await?;
+    let tombstones = overlay.atoms.get(atom_id).map(|e| &e.removed);
+    let new_id = next_quiz_id(atom_id, &c.quizzes, tombstones);
     let kind = (quiz_type != QuizType::FreeText).then_some(quiz_type);
     overlay::add_quiz(
         &tx,
@@ -165,15 +169,23 @@ pub async fn cmd_quiz_delete(
 }
 
 /// Returns `<atom>.q<n>` where `n` is one greater than the highest
-/// existing n in the merged view. Stable: gaps from deletions are
-/// never reused.
-fn next_quiz_id(atom_id: &str, quizzes: &[graph::Quiz]) -> String {
+/// `n` ever assigned for this atom — across live merged quizzes and
+/// tombstones. Tombstoned ids are never recycled: the `overlay_quizzes`
+/// row survives a delete, and reusing the id would both collide with
+/// that row and conflate FSRS history across two logically distinct
+/// quizzes.
+fn next_quiz_id(
+    atom_id: &str,
+    quizzes: &[graph::Quiz],
+    tombstones: Option<&BTreeSet<String>>,
+) -> String {
     let prefix = format!("{atom_id}.q");
-    let max = quizzes
-        .iter()
-        .filter_map(|q| q.id.strip_prefix(&prefix))
-        .filter_map(|s| s.parse::<u32>().ok())
-        .max()
-        .unwrap_or(0);
+    let parse_n = |id: &str| id.strip_prefix(&prefix).and_then(|s| s.parse::<u32>().ok());
+    let live = quizzes.iter().filter_map(|q| parse_n(&q.id));
+    let dead = tombstones
+        .into_iter()
+        .flatten()
+        .filter_map(|id| parse_n(id));
+    let max = live.chain(dead).max().unwrap_or(0);
     format!("{prefix}{}", max + 1)
 }
