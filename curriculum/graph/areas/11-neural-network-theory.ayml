@@ -43,7 +43,7 @@ topics:
       - id: nn.1.6
         name: "Graph neural networks / message passing"
         description: "Permutation-equivariant aggregation on graphs."
-        prerequisites: [dis.2.8, geom.4.4, dis.2.3]
+        prerequisites: [dis.2.8, geom.4.4]
       - id: nn.1.7
         name: "Attention (cross-link)"
         description: "Cross-link `tx.1`."

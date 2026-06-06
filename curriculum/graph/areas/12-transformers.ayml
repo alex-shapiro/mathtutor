@@ -156,6 +156,7 @@ topics:
         description: "Longformer, BigBird; structured sparsity."
         prerequisites:
           - tx.1.1
+          - dis.2.6
       - id: tx.4.4
         name: FlashAttention
         description: I/O-aware tiled exact attention.
@@ -172,6 +173,7 @@ topics:
         prerequisites:
           - dis.3.4
           - tx.1.1
+          - dis.3.6
   - id: tx.5
     name: State-space and alternatives
     leaves:
@@ -226,7 +228,6 @@ topics:
         description: Vocab size vs perplexity vs sequence length.
         prerequisites:
           - tx.6.3
-          - dis.3.6
       - id: tx.6.5
         name: Embedding / unembedding tying
         description: Sharing input/output projection matrices.

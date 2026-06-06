@@ -208,7 +208,7 @@ topics:
       - id: prob.7.4
         name: "Mixing times and spectral gap"
         description: "Rate of convergence to equilibrium."
-        prerequisites: [prob.7.2, dis.2.4, dis.2.6]
+        prerequisites: [prob.7.2, dis.2.4]
       - id: prob.7.5
         name: "Continuous-time Markov chains"
         description: "Generators; transition semigroups."
