@@ -180,7 +180,7 @@ topics:
       - id: opt.5.6
         name: "K-FAC"
         description: "Kronecker-factored approximate Fisher."
-        prerequisites: [opt.5.5, opt.5.4, opt.5.2, la.6.7, la.6.6, la.6.8]
+        prerequisites: [opt.5.5, opt.5.4, opt.5.2, la.6.7, la.6.6, la.6.8, num.2.3]
       - id: opt.5.7
         name: "Hessian-free / CG-Newton"
         description: "Iterative inexact Newton via Krylov."

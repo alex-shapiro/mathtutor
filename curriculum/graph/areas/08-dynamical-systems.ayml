@@ -72,7 +72,7 @@ topics:
       - id: dyn.2.5
         name: "Hamiltonian neural networks"
         description: "Networks whose dynamics conserve a learned Hamiltonian."
-        prerequisites: [dyn.2.2]
+        prerequisites: [dyn.2.2, num.3.4]
 
   - id: dyn.3
     name: "PDE basics"
@@ -160,7 +160,7 @@ topics:
       - id: dyn.6.1
         name: "Neural ODE"
         description: "Hidden state as ODE solution; adjoint method."
-        prerequisites: [num.3.6, num.4.9]
+        prerequisites: [num.3.6, num.4.9, num.4.8]
       - id: dyn.6.2
         name: "Continuous normalizing flows"
         description: "ODE-defined invertible transforms; instantaneous change-of-variables."

@@ -39,7 +39,7 @@ topics:
       - id: num.1.5
         name: "Mixed precision and loss scaling"
         description: "fp16/bf16 training; loss-scale to recover gradient range."
-        prerequisites: [num.1.1]
+        prerequisites: [num.1.1, num.1.4]
       - id: num.1.6
         name: "Quantization"
         description: "int8 / int4 inference; PTQ vs QAT; outlier handling."
@@ -59,7 +59,7 @@ topics:
       - id: num.2.3
         name: "Preconditioning"
         description: "Spectral clustering of the operator for faster convergence."
-        prerequisites: [num.2.2]
+        prerequisites: [num.2.2, num.2.1]
       - id: num.2.4
         name: "Randomized numerical linear algebra"
         description: "Sketching, leverage scores, randomized SVD."
@@ -123,7 +123,7 @@ topics:
       - id: num.4.6
         name: "JVPs, VJPs, HVPs"
         description: "Matrix-free building blocks."
-        prerequisites: [num.4.5]
+        prerequisites: [num.4.5, num.4.2]
       - id: num.4.7
         name: "Checkpointing and gradient accumulation"
         description: "Memory–compute trade-offs in backprop."
@@ -140,10 +140,6 @@ topics:
   - id: num.5
     name: "Quadrature and integration"
     leaves:
-      - id: num.5.1
-        name: "Gaussian quadrature"
-        description: "Optimal nodes / weights; orthogonal polynomials."
-        prerequisites: [ana.4.2]
       - id: num.5.2
         name: "Monte Carlo integration"
         description: "Unbiased estimates; variance scales as 1/n."
