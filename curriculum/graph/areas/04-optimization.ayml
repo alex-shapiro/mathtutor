@@ -208,7 +208,7 @@ topics:
       - id: opt.6.5
         name: "Combinatorial relaxations"
         description: "LP / SDP relaxation of integer programs."
-        prerequisites: [opt.2.1]
+        prerequisites: [opt.2.1, dis.4.4]
 
   - id: opt.7
     name: "Non-convex optimization"

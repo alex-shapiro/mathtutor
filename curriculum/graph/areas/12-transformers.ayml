@@ -226,6 +226,7 @@ topics:
         description: Vocab size vs perplexity vs sequence length.
         prerequisites:
           - tx.6.3
+          - dis.3.6
       - id: tx.6.5
         name: Embedding / unembedding tying
         description: Sharing input/output projection matrices.
@@ -263,11 +264,13 @@ topics:
         description: Truncated / temperature-controlled categorical sampling.
         prerequisites:
           - prob.2.4
+          - dis.3.5
       - id: tx.8.2
         name: Beam search
         description: Approximate MAP via fixed-width search.
         prerequisites:
           - dis.3.2
+          - dis.2.2
       - id: tx.8.3
         name: Speculative decoding
         description: Draft / verify two-model decoding.

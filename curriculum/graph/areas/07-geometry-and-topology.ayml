@@ -125,7 +125,7 @@ topics:
       - id: geom.4.3
         name: "Symmetric / permutation group"
         description: "Sₙ; cycle structure; central in set / sequence symmetries."
-        prerequisites: [geom.4.1]
+        prerequisites: [geom.4.1, dis.1.1]
       - id: geom.4.4
         name: "Equivariance vs invariance"
         description: "f(gx)=g·f(x) vs f(gx)=f(x); formal definitions."
