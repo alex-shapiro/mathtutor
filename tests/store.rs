@@ -10,6 +10,7 @@ use mathtutor::db::{self, DbConfig};
 use mathtutor::event_log::{self, EventKind};
 use mathtutor::path::{self, PathFile};
 use mathtutor::store;
+use mathtutor::types::{Difficulty, QuizType};
 use tempfile::TempDir;
 
 /// Atom that ships *without* a lesson — exercises the
@@ -80,6 +81,52 @@ async fn second_store_on_same_atom_emits_amended_then_taught() {
             EventKind::LessonTaught,
         ],
     );
+}
+
+#[tokio::test]
+async fn quiz_create_after_delete_skips_tombstoned_id() {
+    // Regression: deleting a quiz tombstones it but leaves the
+    // `overlay_quizzes` row, so reusing the id would violate the
+    // UNIQUE constraint and wedge the atom.
+    let tmp = TempDir::new().unwrap();
+    let (conn, path_id) = fresh_db_with_path(&tmp).await;
+
+    store::cmd_lesson_upsert(&conn, NO_LESSON_ATOM, "body".into(), Some(&path_id), None)
+        .await
+        .unwrap();
+    let first = store::cmd_quiz_create(
+        &conn,
+        NO_LESSON_ATOM,
+        Difficulty::Easy,
+        "q1?".into(),
+        "a1".into(),
+        None,
+        QuizType::FreeText,
+        Some(&path_id),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first, format!("{NO_LESSON_ATOM}.q1"));
+
+    store::cmd_quiz_delete(&conn, &first, Some(&path_id), None)
+        .await
+        .unwrap();
+
+    let second = store::cmd_quiz_create(
+        &conn,
+        NO_LESSON_ATOM,
+        Difficulty::Easy,
+        "q2?".into(),
+        "a2".into(),
+        None,
+        QuizType::FreeText,
+        Some(&path_id),
+        None,
+    )
+    .await
+    .expect("create after delete must not recycle the tombstoned id");
+    assert_eq!(second, format!("{NO_LESSON_ATOM}.q2"));
 }
 
 #[tokio::test]
