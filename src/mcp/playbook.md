@@ -40,7 +40,7 @@ Stop when `action: done` or the user pauses.
 
 The next path-target atom has no stored lesson. Author one (1–2 paragraphs, ≤ 2 minutes reading, ≤ 1 theorem / rule / definition) building on the prereqs in the payload without restating them. Persist with `upsert_lesson { atom, body, path_id }`. Then present the lesson to the user and stop until they signal they're ready to continue.
 
-`upsert_lesson` is an upsert: calling it again for the same atom replaces the body (use this when the user asks for a different explanation of an already-taught lesson).
+`upsert_lesson` is an upsert. Call it again for the same atom to replace the lesson body. Use it when the user asks for a new explanation of an already-taught lesson.
 
 ### `present_lesson`
 
