@@ -73,10 +73,6 @@ topics:
         name: "Mixture distributions"
         description: "Latent-discrete distributions; identifiability issues."
         prerequisites: [prob.2.4]
-      - id: prob.2.8
-        name: "Copulas"
-        description: "Decoupling marginals from dependence structure."
-        prerequisites: [prob.2.5]
 
   - id: prob.3
     name: "Expectation and moments"
@@ -89,18 +85,10 @@ topics:
         name: "Variance, covariance, correlation"
         description: "Second-moment structure."
         prerequisites: [prob.3.1]
-      - id: prob.3.3
-        name: "Higher moments"
-        description: "Skewness, kurtosis; moment problem."
-        prerequisites: [prob.3.2]
       - id: prob.3.4
         name: "MGF and characteristic function"
         description: "Moment-generating; Fourier transform of the law."
         prerequisites: [prob.3.1, ana.6.2]
-      - id: prob.3.5
-        name: "Cumulants"
-        description: "Log of MGF; additivity under independence."
-        prerequisites: [prob.3.4]
       - id: prob.3.6
         name: "Conditional expectation"
         description: "E[X|G]; tower property; orthogonal projection in L²."
@@ -148,7 +136,7 @@ topics:
       - id: prob.5.3
         name: "Strong law of large numbers"
         description: "Almost-sure convergence under integrability."
-        prerequisites: [prob.5.2]
+        prerequisites: [prob.5.2, prob.1.5]
       - id: prob.5.4
         name: "Central limit theorem"
         description: "Properly normalized sums converge to Gaussian."
@@ -160,7 +148,7 @@ topics:
       - id: prob.5.6
         name: "Delta method"
         description: "Asymptotic distribution of smooth transforms."
-        prerequisites: [prob.5.4]
+        prerequisites: [prob.5.4, prob.5.5]
       - id: prob.5.7
         name: "Donsker / functional CLT"
         description: "Convergence to Brownian motion as a process."
@@ -176,7 +164,7 @@ topics:
       - id: prob.6.2
         name: "Chernoff bounds"
         description: "Exponential tails via MGF."
-        prerequisites: [prob.3.4]
+        prerequisites: [prob.3.4, prob.6.1]
       - id: prob.6.3
         name: "Hoeffding's inequality"
         description: "Bounded random variables; sub-Gaussian tail."
@@ -228,7 +216,7 @@ topics:
       - id: prob.7.6
         name: "Martingales"
         description: "Conditional expectation = present value."
-        prerequisites: [prob.3.6]
+        prerequisites: [prob.3.6, prob.1.2]
       - id: prob.7.7
         name: "Optional stopping theorem"
         description: "When stopping a martingale preserves expectation."
@@ -245,10 +233,6 @@ topics:
         name: "Gaussian processes"
         description: "Distributions over functions; covariance kernels."
         prerequisites: [prob.2.5, ana.4.9]
-      - id: prob.7.11
-        name: "Renewal theory"
-        description: "Inter-arrival times; renewal equation."
-        prerequisites: [prob.7.8]
 
   - id: prob.8
     name: "Stochastic calculus"

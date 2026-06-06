@@ -111,7 +111,7 @@ topics:
       - id: num.4.3
         name: "Reverse-mode AD (backprop)"
         description: "Adjoint accumulation; basis of NN training."
-        prerequisites: [num.4.1, la.7.5]
+        prerequisites: [num.4.1, la.7.5, ana.2.3]
       - id: num.4.4
         name: "Computational graphs"
         description: "DAGs of primitive operations."

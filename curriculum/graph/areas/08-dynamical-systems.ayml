@@ -120,7 +120,7 @@ topics:
       - id: dyn.4.4
         name: "Detailed balance and ergodicity"
         description: "Reversibility and convergence to equilibrium."
-        prerequisites: [dyn.4.3]
+        prerequisites: [dyn.4.3, prob.7.4]
       - id: dyn.4.5
         name: "Stationary distributions of SDEs"
         description: "Conditions for invariant measure existence."

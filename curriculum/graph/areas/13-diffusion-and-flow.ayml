@@ -34,7 +34,7 @@ topics:
       - id: dif.1.3
         name: "Denoising score matching"
         description: "Vincent's DSM; equivalence with explicit score matching."
-        prerequisites: [dif.1.2]
+        prerequisites: [dif.1.2, ana.7.4]
       - id: dif.1.4
         name: "Sliced score matching"
         description: "Random projections to avoid Hessian trace."
@@ -186,7 +186,7 @@ topics:
       - id: dif.7.3
         name: "U-Net design"
         description: "Encoder/decoder with skip connections; spectral view."
-        prerequisites: [nn.1.3, nn.1.8]
+        prerequisites: [nn.1.3, nn.1.8, ana.6.7]
       - id: dif.7.4
         name: "Cross-attention conditioning"
         description: "Inject conditioning tokens via cross-attention."
@@ -222,7 +222,7 @@ topics:
       - id: dif.9.2
         name: "Continuous-time discrete diffusion"
         description: "Continuous-time Markov chains for tokens."
-        prerequisites: [dif.9.1, prob.7.5]
+        prerequisites: [dif.9.1, prob.7.5, prob.7.8]
       - id: dif.9.3
         name: "Diffusion on manifolds"
         description: "Riemannian generalizations (e.g., SO(3))."
