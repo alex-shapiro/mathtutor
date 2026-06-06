@@ -164,7 +164,7 @@ topics:
       - id: dyn.6.2
         name: "Continuous normalizing flows"
         description: "ODE-defined invertible transforms; instantaneous change-of-variables."
-        prerequisites: [dyn.6.1, ana.2.9]
+        prerequisites: [dyn.6.1, ana.2.9, geom.1.5]
       - id: dyn.6.3
         name: "Gradient flow as a model of training"
         description: "ẋ = −∇L; ODE limit of GD as learning rate → 0."

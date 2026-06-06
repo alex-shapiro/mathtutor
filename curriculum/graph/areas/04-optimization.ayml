@@ -104,7 +104,7 @@ topics:
       - id: opt.3.6
         name: "Mirror descent"
         description: "Generalized GD using a Bregman divergence."
-        prerequisites: [opt.1.8]
+        prerequisites: [opt.1.8, geom.6.5]
       - id: opt.3.7
         name: "Frank–Wolfe / conditional gradient"
         description: "Constraint set queried via linear minimization oracles."
@@ -204,7 +204,7 @@ topics:
       - id: opt.6.4
         name: "Manifold optimization"
         description: "Riemannian gradient descent; retractions."
-        prerequisites: [geom.2.5, geom.2.3]
+        prerequisites: [geom.2.5, geom.2.3, geom.2.6]
       - id: opt.6.5
         name: "Combinatorial relaxations"
         description: "LP / SDP relaxation of integer programs."

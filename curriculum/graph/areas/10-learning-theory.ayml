@@ -132,7 +132,7 @@ topics:
       - id: lt.5.4
         name: "Mean-field regime"
         description: "Wide one-hidden-layer training as a measure flow."
-        prerequisites: [dyn.6.4]
+        prerequisites: [dyn.6.4, geom.7.4]
       - id: lt.5.5
         name: "Double descent and benign overfitting"
         description: "Test error U-shape and beyond."
@@ -144,7 +144,7 @@ topics:
       - id: lt.5.7
         name: "Feature learning vs lazy training"
         description: "Beyond NTK — when do features actually move?"
-        prerequisites: [lt.5.3]
+        prerequisites: [lt.5.3, geom.8.3]
       - id: lt.5.8
         name: "Loss-landscape geometry"
         description: "Hessian spectrum, basins, plateaus."
