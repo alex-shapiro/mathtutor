@@ -172,7 +172,7 @@ topics:
       - id: lt.6.4
         name: "Calibration and conformal prediction"
         description: "Reliable uncertainty under finite samples."
-        prerequisites: [prob.9.1]
+        prerequisites: [prob.9.1, prob.9.7, prob.9.8]
 
   - id: lt.7
     name: "Causality (light)"

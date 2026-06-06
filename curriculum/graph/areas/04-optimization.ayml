@@ -176,7 +176,7 @@ topics:
       - id: opt.5.5
         name: "Natural gradient"
         description: "Steepest descent in the Fisher metric."
-        prerequisites: [prob.9.5, geom.6.2]
+        prerequisites: [prob.9.5, prob.9.6, geom.6.2]
       - id: opt.5.6
         name: "K-FAC"
         description: "Kronecker-factored approximate Fisher."
@@ -268,7 +268,7 @@ topics:
       - id: opt.9.3
         name: "Multi-armed bandits"
         description: "UCB, Thompson sampling."
-        prerequisites: [prob.9.4]
+        prerequisites: [prob.9.4, prob.7.7]
       - id: opt.9.4
         name: "Adversarial bandits"
         description: "Exp3; partial-information regret."

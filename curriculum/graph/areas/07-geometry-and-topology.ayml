@@ -201,7 +201,7 @@ topics:
       - id: geom.7.5
         name: "Schrödinger bridge"
         description: "Entropic dynamic OT; relative entropy minimization."
-        prerequisites: [opt.10.3, prob.8.7]
+        prerequisites: [opt.10.3, prob.8.7, prob.8.8]
 
   - id: geom.8
     name: "Curvature and the manifold hypothesis"

@@ -149,7 +149,6 @@ topics:
         name: "Delta method"
         description: "Asymptotic distribution of smooth transforms."
         prerequisites: [prob.5.4, prob.5.5]
-        terminal: true
       - id: prob.5.7
         name: "Donsker / functional CLT"
         description: "Convergence to Brownian motion as a process."
@@ -222,12 +221,10 @@ topics:
         name: "Optional stopping theorem"
         description: "When stopping a martingale preserves expectation."
         prerequisites: [prob.7.6]
-        terminal: true
       - id: prob.7.8
         name: "Poisson processes"
         description: "Memoryless arrivals; spatial Poisson."
         prerequisites: [prob.7.5]
-        terminal: true
       - id: prob.7.9
         name: "Brownian motion / Wiener process"
         description: "Continuous Gaussian process with independent increments."
@@ -272,7 +269,6 @@ topics:
         name: "Feynman–Kac formula"
         description: "Solution of parabolic PDEs as expectations."
         prerequisites: [prob.8.5]
-        terminal: true
 
   - id: prob.9
     name: "Statistical inference"
@@ -301,17 +297,14 @@ topics:
         name: "Cramér–Rao bound"
         description: "Lower bound on unbiased estimator variance."
         prerequisites: [prob.9.5]
-        terminal: true
       - id: prob.9.7
         name: "Hypothesis testing"
         description: "Type I/II error; Neyman–Pearson; p-values."
         prerequisites: [prob.9.1]
-        terminal: true
       - id: prob.9.8
         name: "Bootstrap and resampling"
         description: "Empirical sampling for inference."
         prerequisites: [prob.5.3]
-        terminal: true
       - id: prob.9.9
         name: "Empirical processes"
         description: "Uniform laws of large numbers; entropy methods."

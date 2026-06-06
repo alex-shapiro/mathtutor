@@ -228,7 +228,6 @@ topics:
         name: "Wavelets"
         description: "Multi-resolution analysis; localized basis."
         prerequisites: [ana.6.1]
-        terminal: true
       - id: ana.6.8
         name: "Schwartz space and tempered distributions"
         description: "Rapidly decaying functions; Fourier-stable."
