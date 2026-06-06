@@ -98,7 +98,7 @@ topics:
       - id: dif.3.6
         name: "Numerical integrators for sampling"
         description: "DPM-Solver, Heun, DDIM, exponential integrators."
-        prerequisites: [num.3.6, dif.3.3]
+        prerequisites: [num.3.6, dif.3.3, num.3.3, num.3.5, num.5.4]
 
   - id: dif.4
     name: "Conditioning and guidance"

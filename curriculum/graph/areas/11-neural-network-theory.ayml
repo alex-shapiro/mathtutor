@@ -67,7 +67,7 @@ topics:
       - id: nn.2.1
         name: "Backpropagation algorithm"
         description: "Chain rule applied to layered computation graphs."
-        prerequisites: [num.4.3, la.7.5, la.7.1, la.7.2]
+        prerequisites: [num.4.3, la.7.5, la.7.1, la.7.2, num.4.4]
       - id: nn.2.2
         name: "Gradient flow"
         description: "Continuous-time limit of GD (cross-link `dyn.6.3`)."

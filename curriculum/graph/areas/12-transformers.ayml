@@ -151,6 +151,7 @@ topics:
           - tx.4.1
           - prob.7.10
           - ana.6.3
+          - num.2.4
       - id: tx.4.3
         name: Sparse attention
         description: "Longformer, BigBird; structured sparsity."
@@ -162,6 +163,7 @@ topics:
         description: I/O-aware tiled exact attention.
         prerequisites:
           - num.6.5
+          - num.2.5
       - id: tx.4.5
         name: Sliding-window attention
         description: Local-window approximation to full attention.

@@ -160,7 +160,7 @@ topics:
       - id: lt.6.1
         name: "Adversarial robustness"
         description: "Min-max formulation; certified defenses."
-        prerequisites: [opt.8.1, opt.8.4, opt.3.7, opt.6.5]
+        prerequisites: [opt.8.1, opt.8.4, opt.3.7, opt.6.5, num.6.4]
       - id: lt.6.2
         name: "Distribution shift"
         description: "Covariate, label, concept shift; population analyses."
