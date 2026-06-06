@@ -49,10 +49,6 @@ topics:
         name: "Trees"
         description: "Acyclic connected graphs; spanning trees."
         prerequisites: [dis.2.1]
-      - id: dis.2.3
-        name: "Planarity"
-        description: "Euler formula; Kuratowski's theorem."
-        prerequisites: [dis.2.1]
       - id: dis.2.4
         name: "Spectral graph theory"
         description: "Laplacian eigenvalues; Cheeger's inequality."
@@ -64,7 +60,7 @@ topics:
       - id: dis.2.6
         name: "Expander graphs"
         description: "High-connectivity sparse graphs."
-        prerequisites: [dis.2.4]
+        prerequisites: [dis.2.4, dis.1.4, dis.2.5]
       - id: dis.2.7
         name: "Graph algorithms"
         description: "BFS, DFS, MST, shortest path."
@@ -120,11 +116,7 @@ topics:
       - id: dis.4.4
         name: "Approximation algorithms"
         description: "Approximation ratios; PCP overview."
-        prerequisites: [dis.4.2]
-      - id: dis.4.5
-        name: "PSPACE, EXP, hierarchy theorems (overview)"
-        description: "Beyond NP; space and time hierarchies."
-        prerequisites: [dis.4.2]
+        prerequisites: [dis.4.2, dis.4.3]
       - id: dis.4.6
         name: "Communication and circuit complexity (light)"
         description: "Lower bounds on attention / network expressivity."
