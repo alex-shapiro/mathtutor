@@ -34,7 +34,7 @@ topics:
       - id: dif.1.3
         name: "Denoising score matching"
         description: "Vincent's DSM; equivalence with explicit score matching."
-        prerequisites: [dif.1.2]
+        prerequisites: [dif.1.2, ana.7.4]
       - id: dif.1.4
         name: "Sliced score matching"
         description: "Random projections to avoid Hessian trace."

@@ -150,6 +150,7 @@ topics:
         prerequisites:
           - tx.4.1
           - prob.7.10
+          - ana.6.3
       - id: tx.4.3
         name: Sparse attention
         description: "Longformer, BigBird; structured sparsity."
@@ -201,6 +202,7 @@ topics:
         description: Long-convolution-based sequence models.
         prerequisites:
           - ana.6.4
+          - ana.6.6
   - id: tx.6
     name: Tokenization and representations
     leaves:

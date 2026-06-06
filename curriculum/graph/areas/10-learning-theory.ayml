@@ -64,7 +64,7 @@ topics:
       - id: lt.2.5
         name: "Chaining and Dudley's inequality"
         description: "From covering numbers to expectation bounds."
-        prerequisites: [lt.2.4, prob.6.6]
+        prerequisites: [lt.2.4, prob.6.6, prob.6.7, prob.9.9]
       - id: lt.2.6
         name: "PAC-Bayes"
         description: "Posterior-dependent bounds; KL penalty."
@@ -148,7 +148,7 @@ topics:
       - id: lt.5.8
         name: "Loss-landscape geometry"
         description: "Hessian spectrum, basins, plateaus."
-        prerequisites: [opt.7.1, la.4.4]
+        prerequisites: [opt.7.1, la.4.4, prob.6.8]
       - id: lt.5.9
         name: "Mode connectivity"
         description: "Low-loss paths between SGD solutions."

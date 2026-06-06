@@ -25,6 +25,10 @@ topics:
         name: "Probability spaces"
         description: "(Ω, ℱ, P); axiomatic foundation."
         prerequisites: [ana.5.2]
+      - id: prob.1.2
+        name: "σ-algebras for events"
+        description: "Generated, Borel, product σ-algebras."
+        prerequisites: [ana.5.1]
       - id: prob.1.3
         name: "Conditional probability and Bayes' rule"
         description: "P(A|B), partition formula, Bayes inversion."
@@ -137,6 +141,15 @@ topics:
         name: "Central limit theorem"
         description: "Properly normalized sums converge to Gaussian."
         prerequisites: [prob.5.3, prob.3.4]
+      - id: prob.5.5
+        name: "Slutsky and continuous mapping"
+        description: "Algebra of convergence in distribution."
+        prerequisites: [prob.5.1]
+      - id: prob.5.6
+        name: "Delta method"
+        description: "Asymptotic distribution of smooth transforms."
+        prerequisites: [prob.5.4, prob.5.5]
+        terminal: true
       - id: prob.5.7
         name: "Donsker / functional CLT"
         description: "Convergence to Brownian motion as a process."
@@ -157,6 +170,10 @@ topics:
         name: "Hoeffding's inequality"
         description: "Bounded random variables; sub-Gaussian tail."
         prerequisites: [prob.6.2]
+      - id: prob.6.4
+        name: "Bernstein and Bennett inequalities"
+        description: "Variance-aware refinements."
+        prerequisites: [prob.6.3]
       - id: prob.6.5
         name: "McDiarmid's inequality"
         description: "Bounded-differences concentration."
@@ -165,6 +182,14 @@ topics:
         name: "Sub-Gaussian and sub-exponential variables"
         description: "Orlicz norms; tail-class characterizations."
         prerequisites: [prob.6.3]
+      - id: prob.6.7
+        name: "Talagrand's inequality"
+        description: "Concentration on product spaces."
+        prerequisites: [prob.6.5]
+      - id: prob.6.8
+        name: "Matrix concentration"
+        description: "Tropp-style matrix Bernstein / Chernoff."
+        prerequisites: [prob.6.4, la.4.4]
 
   - id: prob.7
     name: "Stochastic processes"
@@ -181,10 +206,28 @@ topics:
         name: "MCMC"
         description: "Metropolis–Hastings, Gibbs sampling."
         prerequisites: [prob.7.2]
+      - id: prob.7.4
+        name: "Mixing times and spectral gap"
+        description: "Rate of convergence to equilibrium."
+        prerequisites: [prob.7.2, dis.2.4]
+      - id: prob.7.5
+        name: "Continuous-time Markov chains"
+        description: "Generators; transition semigroups."
+        prerequisites: [prob.7.1]
       - id: prob.7.6
         name: "Martingales"
         description: "Conditional expectation = present value."
-        prerequisites: [prob.3.6]
+        prerequisites: [prob.3.6, prob.1.2]
+      - id: prob.7.7
+        name: "Optional stopping theorem"
+        description: "When stopping a martingale preserves expectation."
+        prerequisites: [prob.7.6]
+        terminal: true
+      - id: prob.7.8
+        name: "Poisson processes"
+        description: "Memoryless arrivals; spatial Poisson."
+        prerequisites: [prob.7.5]
+        terminal: true
       - id: prob.7.9
         name: "Brownian motion / Wiener process"
         description: "Continuous Gaussian process with independent increments."
@@ -213,6 +256,10 @@ topics:
         name: "Fokker–Planck / Kolmogorov forward"
         description: "PDE for evolving density of an SDE."
         prerequisites: [prob.8.3, dyn.3.1]
+      - id: prob.8.5
+        name: "Backward Kolmogorov equation"
+        description: "PDE for conditional expectations."
+        prerequisites: [prob.8.3]
       - id: prob.8.6
         name: "Time-reversal of diffusions"
         description: "Anderson's theorem; reverse-time SDE."
@@ -221,6 +268,11 @@ topics:
         name: "Girsanov's theorem"
         description: "Change of measure for SDEs."
         prerequisites: [prob.8.3, ana.5.8]
+      - id: prob.8.8
+        name: "Feynman–Kac formula"
+        description: "Solution of parabolic PDEs as expectations."
+        prerequisites: [prob.8.5]
+        terminal: true
 
   - id: prob.9
     name: "Statistical inference"
@@ -245,3 +297,22 @@ topics:
         name: "Sufficiency and Fisher information"
         description: "Sufficient statistics; Fisher info matrix."
         prerequisites: [prob.9.2, la.6.3]
+      - id: prob.9.6
+        name: "Cramér–Rao bound"
+        description: "Lower bound on unbiased estimator variance."
+        prerequisites: [prob.9.5]
+        terminal: true
+      - id: prob.9.7
+        name: "Hypothesis testing"
+        description: "Type I/II error; Neyman–Pearson; p-values."
+        prerequisites: [prob.9.1]
+        terminal: true
+      - id: prob.9.8
+        name: "Bootstrap and resampling"
+        description: "Empirical sampling for inference."
+        prerequisites: [prob.5.3]
+        terminal: true
+      - id: prob.9.9
+        name: "Empirical processes"
+        description: "Uniform laws of large numbers; entropy methods."
+        prerequisites: [prob.5.3, lt.2.4]

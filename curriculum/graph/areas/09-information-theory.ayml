@@ -51,7 +51,7 @@ topics:
       - id: inf.1.8
         name: "Total variation and Hellinger"
         description: "Other distances on probability measures."
-        prerequisites: [inf.1.6]
+        prerequisites: [inf.1.6, ana.5.10]
       - id: inf.1.9
         name: "Wasserstein vs KL"
         description: "Comparison and use cases."

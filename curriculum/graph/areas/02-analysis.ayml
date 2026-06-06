@@ -192,6 +192,10 @@ topics:
         name: "Pushforward measures"
         description: "Distribution of f(X) under a measure."
         prerequisites: [ana.5.4]
+      - id: ana.5.10
+        name: "Signed measures"
+        description: "Hahn–Jordan decomposition."
+        prerequisites: [ana.5.2]
 
   - id: ana.6
     name: "Fourier analysis"
@@ -204,9 +208,30 @@ topics:
         name: "Fourier transform on ℝᵈ"
         description: "Continuous spectral decomposition."
         prerequisites: [ana.5.6]
+      - id: ana.6.3
+        name: "Plancherel / Parseval identities"
+        description: "Energy preservation under Fourier transform."
+        prerequisites: [ana.6.2]
       - id: ana.6.4
         name: "Convolution theorem"
         description: "Convolution becomes pointwise multiplication."
+        prerequisites: [ana.6.2]
+      - id: ana.6.5
+        name: "Sampling theorem"
+        description: "Nyquist–Shannon reconstruction."
+        prerequisites: [ana.6.2]
+      - id: ana.6.6
+        name: "DFT and FFT"
+        description: "Discrete analogue; O(n log n) algorithm."
+        prerequisites: [ana.6.1, ana.6.5]
+      - id: ana.6.7
+        name: "Wavelets"
+        description: "Multi-resolution analysis; localized basis."
+        prerequisites: [ana.6.1]
+        terminal: true
+      - id: ana.6.8
+        name: "Schwartz space and tempered distributions"
+        description: "Rapidly decaying functions; Fourier-stable."
         prerequisites: [ana.6.2]
 
   - id: ana.7
@@ -224,6 +249,10 @@ topics:
         name: "Weak derivatives"
         description: "Derivatives in the distributional sense."
         prerequisites: [ana.7.2]
+      - id: ana.7.4
+        name: "Dirac delta"
+        description: "Point evaluation as a distribution."
+        prerequisites: [ana.7.2, ana.6.8]
 
   - id: ana.8
     name: "Calculus of variations"
