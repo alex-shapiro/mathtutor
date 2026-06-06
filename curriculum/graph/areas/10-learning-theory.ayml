@@ -84,7 +84,7 @@ topics:
       - id: lt.3.1
         name: "Online regret bounds"
         description: "Sublinear regret as the criterion."
-        prerequisites: [opt.9.1]
+        prerequisites: [opt.9.1, opt.9.4]
       - id: lt.3.2
         name: "Mistake bounds"
         description: "Halving, perceptron, winnow."
@@ -160,7 +160,7 @@ topics:
       - id: lt.6.1
         name: "Adversarial robustness"
         description: "Min-max formulation; certified defenses."
-        prerequisites: [opt.8.1, opt.8.4]
+        prerequisites: [opt.8.1, opt.8.4, opt.3.7, opt.6.5]
       - id: lt.6.2
         name: "Distribution shift"
         description: "Covariate, label, concept shift; population analyses."
