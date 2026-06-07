@@ -43,7 +43,7 @@ topics:
       - id: nn.1.6
         name: "Graph neural networks / message passing"
         description: "Permutation-equivariant aggregation on graphs."
-        prerequisites: [dis.2.8, geom.4.4]
+        prerequisites: [dis.2.8, geom.4.4, geom.4.3]
       - id: nn.1.7
         name: "Attention (cross-link)"
         description: "Cross-link `tx.1`."
@@ -163,7 +163,7 @@ topics:
       - id: nn.5.2
         name: "Data augmentation"
         description: "Group-equivariant noise injection."
-        prerequisites: [geom.4.4]
+        prerequisites: [geom.4.4, geom.3.5]
       - id: nn.5.3
         name: "Early stopping"
         description: "Implicit regularization via training time."

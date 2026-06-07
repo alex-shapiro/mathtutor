@@ -120,7 +120,7 @@ topics:
       - id: rl.4.7
         name: "Natural policy gradient"
         description: "Policy gradient under Fisher metric (cross-link `opt.5.5`)."
-        prerequisites: [opt.5.5, rl.4.1, opt.3.6]
+        prerequisites: [opt.5.5, rl.4.1, opt.3.6, geom.6.4]
 
   - id: rl.5
     name: "KL-regularized RL and preference learning"
