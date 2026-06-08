@@ -147,7 +147,7 @@ topics:
       - id: ssl.7.2
         name: "Contrastive divergence"
         description: "Approximate gradient of log Z via short MCMC."
-        prerequisites: [ssl.7.1, prob.7.3]
+        prerequisites: [ssl.7.1, prob.7.3, dyn.4.2]
       - id: ssl.7.3
         name: "Score matching for EBMs"
         description: "Cross-link `dif.1.2`; avoids Z."
@@ -223,7 +223,7 @@ topics:
       - id: ssl.10.3
         name: "World models"
         description: "Latent dynamics for planning (Dreamer-style)."
-        prerequisites: [ssl.6.1, dyn.6.1]
+        prerequisites: [ssl.6.1, dyn.6.1, dyn.2.5]
       - id: ssl.10.4
         name: "Latent dynamics learning"
         description: "Learning forward models over compact latents."

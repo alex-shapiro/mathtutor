@@ -72,7 +72,7 @@ topics:
       - id: dyn.2.5
         name: "Hamiltonian neural networks"
         description: "Networks whose dynamics conserve a learned Hamiltonian."
-        prerequisites: [dyn.2.2, num.3.4]
+        prerequisites: [dyn.2.2, num.3.4, dyn.2.4]
 
   - id: dyn.3
     name: "PDE basics"
@@ -81,14 +81,6 @@ topics:
         name: "Heat / diffusion equation"
         description: "∂ₜu = Δu; smoothing semigroup."
         prerequisites: [ana.2.4, ana.4.2]
-      - id: dyn.3.2
-        name: "Wave equation"
-        description: "Hyperbolic PDE; characteristics."
-        prerequisites: [ana.2.4]
-      - id: dyn.3.3
-        name: "Laplace and Poisson equations"
-        description: "Δu = 0 / Δu = f; harmonic functions."
-        prerequisites: [ana.2.4]
       - id: dyn.3.4
         name: "Continuity equation"
         description: "Conservation law for densities ∂ₜρ + ∇·(ρv) = 0."
@@ -97,10 +89,6 @@ topics:
         name: "Hamilton–Jacobi equations"
         description: "First-order PDE with deep optimization links."
         prerequisites: [dyn.2.2]
-      - id: dyn.3.6
-        name: "Reaction–diffusion (light)"
-        description: "Pattern-forming PDEs; ties to growth processes."
-        prerequisites: [dyn.3.1]
 
   - id: dyn.4
     name: "Stochastic dynamics"
@@ -125,10 +113,6 @@ topics:
         name: "Stationary distributions of SDEs"
         description: "Conditions for invariant measure existence."
         prerequisites: [dyn.4.3]
-      - id: dyn.4.6
-        name: "Reverse-time SDEs (cross-link)"
-        description: "Anderson's theorem (cross-link `prob.8.6`)."
-        prerequisites: [prob.8.6]
 
   - id: dyn.5
     name: "Statistical mechanics"

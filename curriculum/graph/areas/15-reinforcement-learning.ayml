@@ -176,7 +176,7 @@ topics:
       - id: rl.7.2
         name: "Model-predictive control"
         description: "Receding-horizon optimization."
-        prerequisites: [rl.7.1, opt.6.2]
+        prerequisites: [rl.7.1, opt.6.2, dyn.3.5]
       - id: rl.7.3
         name: "Dyna-style methods"
         description: "Mix of real and imagined experience."
