@@ -315,6 +315,7 @@ topics:
         description: Sharp emergence of capabilities; measurement caveats.
         prerequisites:
           - lt.5.6
+          - dyn.1.5
       - id: tx.9.5
         name: Circuits / superposition
         description: "Mechanistic-interpretability math: features as directions."

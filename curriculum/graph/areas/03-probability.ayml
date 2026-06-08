@@ -204,7 +204,7 @@ topics:
       - id: prob.7.3
         name: "MCMC"
         description: "Metropolis–Hastings, Gibbs sampling."
-        prerequisites: [prob.7.2]
+        prerequisites: [prob.7.2, dyn.4.4]
       - id: prob.7.4
         name: "Mixing times and spectral gap"
         description: "Rate of convergence to equilibrium."

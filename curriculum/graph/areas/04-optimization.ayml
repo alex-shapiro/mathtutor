@@ -132,7 +132,7 @@ topics:
       - id: opt.4.3
         name: "Mini-batching and gradient noise"
         description: "Effective batch size; SGD as SDE."
-        prerequisites: [opt.4.1]
+        prerequisites: [opt.4.1, dyn.4.5]
       - id: opt.4.4
         name: "Adaptive methods"
         description: "AdaGrad, RMSProp, Adam, AdamW, Lion, Shampoo."

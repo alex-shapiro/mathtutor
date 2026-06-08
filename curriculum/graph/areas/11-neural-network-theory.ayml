@@ -87,7 +87,7 @@ topics:
       - id: nn.2.6
         name: "Dynamical isometry"
         description: "Singular-value structure of Jacobian products."
-        prerequisites: [la.5.4, nn.2.4]
+        prerequisites: [la.5.4, nn.2.4, dyn.1.7]
       - id: nn.2.7
         name: "NTK / lazy regime"
         description: "Cross-link `lt.5.3`."
