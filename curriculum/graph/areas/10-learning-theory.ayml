@@ -168,7 +168,7 @@ topics:
       - id: lt.6.3
         name: "Domain adaptation theory"
         description: "Discrepancy bounds; Ben-David bound."
-        prerequisites: [lt.6.2, inf.1.8]
+        prerequisites: [lt.6.2, inf.1.8, inf.3.3]
       - id: lt.6.4
         name: "Calibration and conformal prediction"
         description: "Reliable uncertainty under finite samples."

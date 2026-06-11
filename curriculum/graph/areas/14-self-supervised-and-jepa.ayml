@@ -179,7 +179,7 @@ topics:
       - id: ssl.8.4
         name: "β-VAE and info-VAE"
         description: "ELBO reweightings; rate-distortion view."
-        prerequisites: [inf.2.6, ssl.8.1]
+        prerequisites: [inf.2.6, ssl.8.1, inf.5.2]
       - id: ssl.8.5
         name: "Normalizing flows"
         description: "Invertible neural maps; exact log-likelihood."

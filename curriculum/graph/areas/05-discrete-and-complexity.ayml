@@ -133,7 +133,3 @@ topics:
         name: "Minimum description length"
         description: "MDL principle; two-part codes."
         prerequisites: [dis.5.1, inf.2.2]
-      - id: dis.5.3
-        name: "Solomonoff induction (overview)"
-        description: "Universal prior; uncomputable but conceptually central."
-        prerequisites: [dis.5.1]
