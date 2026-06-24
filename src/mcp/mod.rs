@@ -72,7 +72,7 @@ const PLAYBOOK: &str = include_str!("playbook.md");
 /// Background sync cadence for the embedded Turso replica. State-modifying
 /// tools also fire a non-blocking sync immediately after success; this
 /// interval covers the idle path.
-const BACKGROUND_SYNC_INTERVAL: Duration = Duration::from_secs(300);
+const BACKGROUND_SYNC_INTERVAL: Duration = Duration::from_mins(5);
 
 // ───────────────────────────── server ─────────────────────────────
 
