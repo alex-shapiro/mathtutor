@@ -58,21 +58,29 @@ topics:
         description: "Distribution of f(X); change-of-variable formula."
         prerequisites: [prob.2.1, ana.5.9]
       - id: prob.2.4
-        name: "Standard distributions"
-        description: "Gaussian, exponential, gamma, beta, Dirichlet, Student-t, categorical, multinomial, Poisson, binomial, geometric."
+        name: "Common discrete distributions"
+        description: "Bernoulli, binomial, geometric, Poisson, categorical, multinomial."
         prerequisites: [prob.2.2]
       - id: prob.2.5
         name: "Multivariate Gaussian"
         description: "Mean, covariance; conditioning, marginalization."
-        prerequisites: [prob.2.4, la.6.3]
+        prerequisites: [prob.2.8, la.6.3]
       - id: prob.2.6
         name: "Exponential family"
         description: "Sufficient statistics, natural parameters, log-partition."
-        prerequisites: [prob.2.4]
+        prerequisites: [prob.2.8, prob.2.9]
       - id: prob.2.7
         name: "Mixture distributions"
         description: "Latent-discrete distributions; identifiability issues."
-        prerequisites: [prob.2.4]
+        prerequisites: [prob.2.8]
+      - id: prob.2.8
+        name: "Gaussian distribution"
+        description: "The normal density; standardization and the empirical rule."
+        prerequisites: [prob.2.2]
+      - id: prob.2.9
+        name: "Common continuous distributions"
+        description: "Exponential, gamma, beta, Dirichlet, Student-t."
+        prerequisites: [prob.2.2]
 
   - id: prob.3
     name: "Expectation and moments"

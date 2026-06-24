@@ -120,7 +120,7 @@ topics:
       - id: dyn.5.1
         name: "Boltzmann distribution"
         description: "p(x) ∝ e^{−E(x)/T}; canonical ensemble."
-        prerequisites: [prob.2.4]
+        prerequisites: [prob.2.8]
       - id: dyn.5.2
         name: "Partition function and free energy"
         description: "Z, F = −T log Z; thermodynamic potentials."

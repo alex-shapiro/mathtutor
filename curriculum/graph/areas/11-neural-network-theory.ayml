@@ -605,7 +605,7 @@ children:
             description: "Apply decay separately from the adaptive gradient step."
             prerequisites:
               - nn.5.1.1
-              - opt.4.5
+              - opt.4.9
             terminal: true
       - id: nn.5.2
         name: "Data augmentation"
