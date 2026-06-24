@@ -90,7 +90,7 @@ need history.
 Each `--targets` entry may be:
 
 - an **atom ID** is a leaf concept (e.g. `tx.1.1`)
-- a **non-leaf ID** — a cluster (`tx.1`) or an area root (`tx`) — expands to all its atomic descendants
+- a **cluster ID** is a non-leaf node (e.g. `tx.1`) and expands to all its atomic descendants
 
 Mixing forms is allowed. `mt path new` validates that each entry expands to
 at least one atom, then stores the entries **verbatim** (deduplicated,

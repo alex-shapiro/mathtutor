@@ -410,8 +410,7 @@ impl Graph {
     /// order (children before their cluster's later siblings):
     ///
     /// - an atom (leaf node) maps to itself
-    /// - a cluster, including an area root (non-leaf node), expands to all
-    ///   its atomic descendants
+    /// - a cluster (non-leaf node) expands to all its atomic descendants
     ///
     /// Errors if an ID maps to no atom (`UnknownId`) or names an empty
     /// cluster (`EmptyCluster`).

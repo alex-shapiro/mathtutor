@@ -16,10 +16,10 @@ use crate::{Error, Result};
 /// new`) plus the mutable navigation `strategy`. Learning history lives in
 /// the event log; the top-down subpath lives in the `path_subpath` table.
 ///
-/// `targets` holds the IDs the learner chose verbatim — atoms, clusters,
-/// or area roots. They are stored as given and expanded to atoms against
-/// the live graph by [`PathFile::resolve_targets`], so the resolved set
-/// tracks curriculum edits (e.g. an atom later split into a cluster).
+/// `targets` holds the IDs the learner chose verbatim (atoms or clusters).
+/// They are stored as given and expanded to atoms against the live graph
+/// by [`PathFile::resolve_targets`], so the resolved set tracks curriculum
+/// edits (e.g. an atom later split into a cluster).
 #[derive(Debug, Clone)]
 pub struct PathFile {
     pub id: String,
@@ -157,8 +157,8 @@ pub async fn cmd_path_new(
 ) -> Result<String> {
     let g = Graph::load_default(graph_dir)?;
     // Validate each ID resolves to at least one atom, but store the IDs
-    // verbatim — clusters and area roots are kept as-is and re-expanded on
-    // load so the target set tracks later curriculum edits.
+    // verbatim — clusters are kept as-is and re-expanded on load so the
+    // target set tracks later curriculum edits.
     g.expand_to_atoms(ids)?;
     let targets = dedup_preserving_order(ids);
 

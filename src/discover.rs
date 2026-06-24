@@ -57,8 +57,7 @@ pub async fn cmd_graph_list(
     emit(&view)
 }
 
-/// Build the `mt graph show` view for `id` (atom or cluster; area roots
-/// are clusters in the graph).
+/// Build the `mt graph show` view for `id` (an atom or cluster).
 pub fn show_view(g: &Graph, id: &str) -> Result<ShowView> {
     let c = g
         .by_id
@@ -68,7 +67,7 @@ pub fn show_view(g: &Graph, id: &str) -> Result<ShowView> {
 }
 
 /// Build the `mt graph list` view: the top-level area set for `None`, else
-/// the children of the cluster (or area root) `id`.
+/// the children of the cluster `id`.
 pub fn list_view(g: &Graph, manifest: &Manifest, id: Option<&str>) -> Result<ListView> {
     let Some(id) = id else {
         return Ok(ListView::Areas(areas_view(manifest)));

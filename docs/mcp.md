@@ -68,7 +68,7 @@ struct GetSyllabus {
     n: usize,
 }
 
-/// Show a detailed view of a curriculum node (atom, cluster, or area).
+/// Show a detailed view of a curriculum node (atom or cluster).
 struct GetItem {
     id: String,
     path_id: Option<String>,

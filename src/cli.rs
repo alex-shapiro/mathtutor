@@ -73,7 +73,7 @@ pub struct PathNewCmd {
     #[argh(positional)]
     pub goal: String,
 
-    /// targets — atom, cluster, or area IDs: a comma-separated list
+    /// targets — atom or cluster IDs: a comma-separated list
     /// and/or a repeated flag
     #[argh(option)]
     pub targets: Vec<String>,
@@ -227,11 +227,11 @@ pub enum GraphOp {
     Dump(GraphDumpCmd),
 }
 
-/// Look up a single curriculum entry (atom, cluster, or area).
+/// Look up a single curriculum node (atom or cluster).
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "show")]
 pub struct GraphShowCmd {
-    /// id to show (atom, cluster, or area prefix)
+    /// id to show: an atom or cluster
     #[argh(positional)]
     pub id: String,
 

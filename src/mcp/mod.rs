@@ -125,7 +125,7 @@ impl MathTutorServer {
 pub struct NewPathArgs {
     /// Free-text learning goal, e.g. "Understand SVD".
     pub goal: String,
-    /// Targets — atom, cluster, or area IDs (one or more).
+    /// Targets — atom or cluster IDs (one or more).
     pub targets: Vec<String>,
     /// Initial traversal strategy: `bottom_up` (default) or `top_down`.
     #[serde(default)]
@@ -372,7 +372,7 @@ impl MathTutorServer {
         )
     }
 
-    #[tool(description = "Detailed view of a curriculum node (atom, cluster, or area).")]
+    #[tool(description = "Detailed view of a curriculum node (atom or cluster).")]
     async fn get_item(
         &self,
         Parameters(args): Parameters<GetItemArgs>,
@@ -549,7 +549,7 @@ struct PathSummary {
     goal: String,
     strategy: Strategy,
     created_at: DateTime<Utc>,
-    /// Targets as the learner chose them — atoms, clusters, or area roots.
+    /// Targets as the learner chose them — atoms or clusters.
     targets: Vec<String>,
 }
 
