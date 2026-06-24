@@ -73,9 +73,10 @@ pub struct PathNewCmd {
     #[argh(positional)]
     pub goal: String,
 
-    /// target atoms: a comma-separated list and/or a repeated flag
+    /// targets — atom, cluster, or area IDs: a comma-separated list
+    /// and/or a repeated flag
     #[argh(option)]
-    pub atoms: Vec<String>,
+    pub targets: Vec<String>,
 
     /// initial traversal strategy: bottom-up (default) or top-down
     #[argh(option, default = "types::Strategy::BottomUp")]
@@ -521,10 +522,10 @@ fn default_mcp_addr() -> String {
     "127.0.0.1:8080".into()
 }
 
-/// Flatten the `--atoms` values into a single ordered list: split each
-/// value on commas so `--atoms a,b,c` and `--atoms a --atoms b` both work,
-/// trimming whitespace and dropping empty entries.
-pub fn flatten_atoms(raw: &[String]) -> Vec<String> {
+/// Flatten repeated/comma-separated ID values into one ordered list, so
+/// `--flag a,b,c` and `--flag a --flag b` both work; trims whitespace and
+/// drops empty entries. Shared by `--targets` and subpath `--atoms`.
+pub fn flatten_ids(raw: &[String]) -> Vec<String> {
     raw.iter()
         .flat_map(|s| s.split(','))
         .map(str::trim)

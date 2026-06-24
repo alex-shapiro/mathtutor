@@ -74,7 +74,7 @@ pub async fn compute_next(
     let p = path::load_path(&tx, &id).await?;
     let progress = PathProgress::load(&tx, &id).await?;
     let due = cards::due_quizzes(&tx, &id, Utc::now()).await?;
-    let subpath = subpath::load(&tx, &id).await?;
+    let subpath = subpath::load_resolved(&tx, &id, &g).await?;
     let targets = p.resolve_targets(&g)?;
 
     let action = next_action(&g, &p, &targets, &progress, &due, &subpath, mode);

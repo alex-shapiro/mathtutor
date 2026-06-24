@@ -67,7 +67,7 @@ pub async fn compute_syllabus(
     let upcoming = match p.strategy {
         Strategy::BottomUp => upcoming_atoms(&g, &targets, &events),
         Strategy::TopDown => {
-            let subpath = subpath::load(conn, &id).await?;
+            let subpath = subpath::load_resolved(conn, &id, &g).await?;
             upcoming_top_down(&g, &targets, &events, &subpath)
         }
     };

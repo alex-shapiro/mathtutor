@@ -125,8 +125,8 @@ impl MathTutorServer {
 pub struct NewPathArgs {
     /// Free-text learning goal, e.g. "Understand SVD".
     pub goal: String,
-    /// Target atom / cluster / area IDs (one or more).
-    pub atoms: Vec<String>,
+    /// Targets — atom, cluster, or area IDs (one or more).
+    pub targets: Vec<String>,
     /// Initial traversal strategy: `bottom_up` (default) or `top_down`.
     #[serde(default)]
     pub strategy: Strategy,
@@ -266,7 +266,7 @@ impl MathTutorServer {
         )
     }
 
-    #[tool(description = "Start a new learning path with a goal and target atoms.")]
+    #[tool(description = "Start a new learning path with a goal and targets.")]
     async fn new_path(
         &self,
         Parameters(args): Parameters<NewPathArgs>,
@@ -275,7 +275,7 @@ impl MathTutorServer {
         let result = path::cmd_path_new(
             &conn,
             &args.goal,
-            &args.atoms,
+            &args.targets,
             args.strategy,
             self.graph_path(),
         )

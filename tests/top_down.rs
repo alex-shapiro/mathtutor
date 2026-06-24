@@ -231,6 +231,38 @@ async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
     );
 }
 
+#[tokio::test]
+async fn subpath_cluster_atom_resolves_on_load() {
+    // Regression: a subpath atom that a later curriculum edit split into a
+    // cluster must expand on load — same as targets — rather than being
+    // served to the scheduler as a lesson-less cluster. Set-time validation
+    // forbids cluster atoms, so we store one directly to simulate the drift.
+    let tmp = TempDir::new().unwrap();
+    let conn = open_db(&tmp).await;
+    let id = save(&conn, &["tx.1.1.1"], Strategy::TopDown).await;
+    subpath::replace(&conn, &id, &["tx.1".into()])
+        .await
+        .unwrap();
+
+    let g = mathtutor::graph::Graph::load_for_path(&conn, None)
+        .await
+        .unwrap();
+    let resolved = subpath::load_resolved(&conn, &id, &g).await.unwrap();
+
+    assert!(
+        !resolved.contains(&"tx.1".to_string()),
+        "the cluster id itself drops out",
+    );
+    assert!(
+        resolved.contains(&"tx.1.1.1".to_string()),
+        "the cluster expands to its atomic descendants",
+    );
+    assert!(
+        resolved.iter().all(|a| g.by_id[a].children_ids.is_empty()),
+        "every resolved subpath entry is a leaf atom",
+    );
+}
+
 // ── strategy persistence ────────────────────────────────────────────
 
 async fn open_db(dir: &TempDir) -> Connection {

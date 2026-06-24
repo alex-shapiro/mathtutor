@@ -394,6 +394,87 @@ impl Graph {
         out
     }
 
+    /// Resolve each input ID to atoms, deduplicated and in first-seen
+    /// order (children before their cluster's later siblings). Used to
+    /// expand stored path targets and subpaths against the live graph, so
+    /// a cluster that was an atom at storage time still resolves correctly.
+    ///
+    /// - an atom (leaf node) maps to itself
+    /// - a cluster (non-leaf node) expands to all atomic descendants
+    /// - a bare prefix that isn't a node expands to every atom whose ID
+    ///   starts with `<prefix>.`
+    ///
+    /// Errors if an ID maps to no atom (`UnknownId`) or names an empty
+    /// cluster (`EmptyCluster`).
+    pub fn expand_to_atoms(&self, ids: &[String]) -> Result<Vec<String>> {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut out: Vec<String> = Vec::new();
+
+        for id in ids {
+            let before = out.len();
+            match self.by_id.get(id) {
+                Some(c) if c.children_ids.is_empty() => {
+                    if seen.insert(id.clone()) {
+                        out.push(id.clone());
+                    }
+                }
+                Some(_) => {
+                    self.collect_atomic_descendants(id, &mut seen, &mut out);
+                    if out.len() == before {
+                        return Err(Error::EmptyCluster(id.clone()));
+                    }
+                }
+                None if !id.contains('.') => {
+                    self.collect_atoms_by_prefix(id, &mut seen, &mut out);
+                    if out.len() == before {
+                        return Err(Error::UnknownId(id.clone()));
+                    }
+                }
+                None => return Err(Error::UnknownId(id.clone())),
+            }
+        }
+        Ok(out)
+    }
+
+    fn collect_atomic_descendants(
+        &self,
+        id: &str,
+        seen: &mut HashSet<String>,
+        out: &mut Vec<String>,
+    ) {
+        let Some(c) = self.by_id.get(id) else { return };
+        if c.children_ids.is_empty() {
+            if seen.insert(id.to_string()) {
+                out.push(id.to_string());
+            }
+        } else {
+            for child in &c.children_ids {
+                self.collect_atomic_descendants(child, seen, out);
+            }
+        }
+    }
+
+    fn collect_atoms_by_prefix(
+        &self,
+        prefix: &str,
+        seen: &mut HashSet<String>,
+        out: &mut Vec<String>,
+    ) {
+        let prefix_dot = format!("{prefix}.");
+        let mut matched: Vec<String> = self
+            .by_id
+            .iter()
+            .filter(|(id, c)| id.starts_with(&prefix_dot) && c.children_ids.is_empty())
+            .map(|(id, _)| id.clone())
+            .collect();
+        matched.sort();
+        for id in matched {
+            if seen.insert(id.clone()) {
+                out.push(id);
+            }
+        }
+    }
+
     /// Validate `id` resolves to an atom in the merged graph.
     /// Returns `AtomNotFound` if missing and `NotAtom` if id is a cluster.
     pub fn atom(&self, id: &str) -> Result<&FlatConcept> {

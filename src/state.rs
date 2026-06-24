@@ -132,7 +132,7 @@ pub async fn compute_state(
     let progress = PathProgress::load(conn, &id).await?;
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 
-    let subpath_ids = subpath::load(conn, &id).await?;
+    let subpath_ids = subpath::load_resolved(conn, &id, &g).await?;
     let target_atoms = p.resolve_targets(&g)?;
 
     let reachable = g.reachable_atoms(&target_atoms);

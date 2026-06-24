@@ -216,8 +216,8 @@ async fn dispatch_path(conn: &Connection, op: PathOp) -> (Result<()>, u8) {
     match op {
         PathOp::List(c) => (path::cmd_path_list(conn, c.graph.as_deref()).await, 1),
         PathOp::New(c) => {
-            let atoms = cli::flatten_atoms(&c.atoms);
-            let r = path::cmd_path_new(conn, &c.goal, &atoms, c.strategy, c.graph.as_deref())
+            let targets = cli::flatten_ids(&c.targets);
+            let r = path::cmd_path_new(conn, &c.goal, &targets, c.strategy, c.graph.as_deref())
                 .await
                 .map(|id| {
                     eprintln!("created path: {id}");
@@ -256,7 +256,7 @@ async fn dispatch_path(conn: &Connection, op: PathOp) -> (Result<()>, u8) {
 async fn dispatch_subpath(conn: &Connection, op: SubpathOp) -> (Result<()>, u8) {
     match op {
         SubpathOp::Set(c) => {
-            let atoms = cli::flatten_atoms(&c.atoms);
+            let atoms = cli::flatten_ids(&c.atoms);
             let r = subpath::cmd_subpath_set(conn, c.path.as_deref(), &atoms, c.graph.as_deref())
                 .await
                 .map(|id| eprintln!("path {id}: subpath set ({} atoms)", atoms.len()));

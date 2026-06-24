@@ -31,7 +31,7 @@ pub async fn cmd_path_tree(
     let manifest = graph::load_manifest_default(graph_dir)?;
     let progress = PathProgress::load(conn, &id).await?;
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
-    let subpath = crate::subpath::load(conn, &id).await?;
+    let subpath = crate::subpath::load_resolved(conn, &id, &g).await?;
     let target_atoms = p.resolve_targets(&g)?;
 
     let targets: HashSet<String> = target_atoms.iter().cloned().collect();

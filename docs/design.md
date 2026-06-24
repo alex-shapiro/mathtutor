@@ -44,7 +44,7 @@ Operator-only verbs (`graph check`, `graph dump`, `instruct`,
 ```bash
 # Path lifecycle
 mt path list                       # list all paths with goal / progress
-mt path new <GOAL> --atoms <ID>[,<ID>...]  # start a new learning path
+mt path new <GOAL> --targets <ID>[,<ID>...]  # start a new learning path
                    [--strategy {bottom-up,top-down}]  # initial traversal mode (default bottom-up)
 mt path state [--path P]           # one-screen status summary
 mt path next  [--path P]           # next scheduled action (AYML on stdout)
@@ -85,9 +85,9 @@ Every command that records learning activity appends a structured event
 to the per-path log (see "Event log" below); agents read the log if they
 need history.
 
-### `--atoms` ID resolution
+### `--targets` ID resolution
 
-Each `--atoms` entry may be:
+Each `--targets` entry may be:
 
 - an **atom ID** is a leaf concept (e.g. `tx.1.1`)
 - a **cluster ID** is a non-leaf node (e.g. `tx.1` or `tx.5`) and expands to all atomic descendants
@@ -100,6 +100,11 @@ deduplicated, topologically sorted set of atoms **on every load**, so the
 resolved target set tracks later curriculum edits — e.g. an atom that is
 split into a cluster keeps resolving to the right leaves without a data
 migration. Resolution errors only if an entry no longer maps to any atom.
+
+Subpaths get the same treatment: `mt path subpath set --atoms` requires
+leaf atoms at set time, but the stored sequence is re-expanded on load, so
+a subpath atom later split into a cluster resolves to its descendants
+(in order) rather than being skipped by the scheduler.
 
 ## Lifecycle of an atom (within a path)
 

@@ -35,7 +35,7 @@ impl PathFile {
     /// reflect the current curriculum. Errors if a target no longer
     /// resolves to any atom (unknown ID or empty cluster).
     pub fn resolve_targets(&self, g: &Graph) -> Result<Vec<String>> {
-        let atoms = expand_to_atoms(g, &self.targets)?;
+        let atoms = g.expand_to_atoms(&self.targets)?;
         topo_sort(g, &atoms)
     }
 }
@@ -159,7 +159,7 @@ pub async fn cmd_path_new(
     // Validate each ID resolves to at least one atom, but store the IDs
     // verbatim — clusters and area roots are kept as-is and re-expanded on
     // load so the target set tracks later curriculum edits.
-    expand_to_atoms(&g, ids)?;
+    g.expand_to_atoms(ids)?;
     let targets = dedup_preserving_order(ids);
 
     let now = Utc::now();
@@ -274,81 +274,6 @@ fn dedup_preserving_order(ids: &[String]) -> Vec<String> {
         .filter(|id| seen.insert((*id).clone()))
         .cloned()
         .collect()
-}
-
-/// Expand each input ID into a deduplicated set of atom IDs.
-///
-/// - An atom (leaf node) is included as-is.
-/// - A cluster (non-leaf node) is expanded to all atomic descendants.
-/// - A bare prefix that isn't a node (e.g. a partial area path) is
-///   expanded to all atoms whose ID starts with `<prefix>.`.
-fn expand_to_atoms(g: &Graph, ids: &[String]) -> Result<Vec<String>> {
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut out: Vec<String> = Vec::new();
-
-    for id in ids {
-        let before = out.len();
-        match g.by_id.get(id) {
-            Some(c) if c.children_ids.is_empty() => {
-                if seen.insert(id.clone()) {
-                    out.push(id.clone());
-                }
-            }
-            Some(_) => {
-                collect_atomic_descendants(g, id, &mut seen, &mut out);
-                if out.len() == before {
-                    return Err(Error::EmptyCluster(id.clone()));
-                }
-            }
-            None if !id.contains('.') => {
-                collect_atoms_by_prefix(g, id, &mut seen, &mut out);
-                if out.len() == before {
-                    return Err(Error::UnknownId(id.clone()));
-                }
-            }
-            None => return Err(Error::UnknownId(id.clone())),
-        }
-    }
-    Ok(out)
-}
-
-fn collect_atomic_descendants(
-    g: &Graph,
-    id: &str,
-    seen: &mut HashSet<String>,
-    out: &mut Vec<String>,
-) {
-    let Some(c) = g.by_id.get(id) else { return };
-    if c.children_ids.is_empty() {
-        if seen.insert(id.to_string()) {
-            out.push(id.to_string());
-        }
-    } else {
-        for child in &c.children_ids {
-            collect_atomic_descendants(g, child, seen, out);
-        }
-    }
-}
-
-fn collect_atoms_by_prefix(
-    g: &Graph,
-    prefix: &str,
-    seen: &mut HashSet<String>,
-    out: &mut Vec<String>,
-) {
-    let prefix_dot = format!("{prefix}.");
-    let mut matched: Vec<String> = g
-        .by_id
-        .iter()
-        .filter(|(id, c)| id.starts_with(&prefix_dot) && c.children_ids.is_empty())
-        .map(|(id, _)| id.clone())
-        .collect();
-    matched.sort();
-    for id in matched {
-        if seen.insert(id.clone()) {
-            out.push(id);
-        }
-    }
 }
 
 // ── Topological sort over the user-supplied target atoms ───────────
