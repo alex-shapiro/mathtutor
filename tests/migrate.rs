@@ -130,7 +130,7 @@ async fn imports_path_with_targets_in_order() {
     // by the `position` column — that order is what the scheduler walks.
     let mut rows = conn
         .query(
-            "SELECT atom_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
+            "SELECT target_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
             params!["p_test"],
         )
         .await

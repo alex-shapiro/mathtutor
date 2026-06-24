@@ -13,7 +13,7 @@ use serde::Serialize;
 
 use crate::event_log::{self, Event};
 use crate::graph::Graph;
-use crate::path::{PathFile, load_path, resolve_id};
+use crate::path::{load_path, resolve_id};
 use crate::scheduler;
 use crate::subpath;
 use crate::types::Strategy;
@@ -62,12 +62,13 @@ pub async fn compute_syllabus(
     let p = load_path(conn, &id).await?;
     let g = Graph::load_for_path(conn, graph_dir).await?;
     let events = event_log::load(conn, &id).await?;
+    let targets = p.resolve_targets(&g)?;
 
     let upcoming = match p.strategy {
-        Strategy::BottomUp => upcoming_atoms(&g, &p, &events),
+        Strategy::BottomUp => upcoming_atoms(&g, &targets, &events),
         Strategy::TopDown => {
             let subpath = subpath::load(conn, &id).await?;
-            upcoming_top_down(&g, &p, &events, &subpath)
+            upcoming_top_down(&g, &targets, &events, &subpath)
         }
     };
     let total_remaining = upcoming.len();
@@ -101,10 +102,10 @@ pub async fn compute_syllabus(
 /// `LessonAuthored` event suffices. Atoms whose lesson has been taught
 /// but whose quizzes are still pending fall out of the syllabus — they
 /// are in-progress, not upcoming.
-pub fn upcoming_atoms(g: &Graph, p: &PathFile, events: &[Event]) -> Vec<String> {
+pub fn upcoming_atoms(g: &Graph, targets: &[String], events: &[Event]) -> Vec<String> {
     let mut visited = HashSet::new();
     let mut out = Vec::new();
-    for target in &p.target_atoms {
+    for target in targets {
         collect_untaught(g, events, target, &mut visited, &mut out);
     }
     out
@@ -141,13 +142,13 @@ fn collect_untaught(
 /// are walked; the subpath is the only place they appear.
 pub fn upcoming_top_down(
     g: &Graph,
-    p: &PathFile,
+    targets: &[String],
     events: &[Event],
     subpath: &[String],
 ) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for id in subpath.iter().chain(&p.target_atoms) {
+    for id in subpath.iter().chain(targets) {
         push_upcoming_leaf(g, events, id, &mut seen, &mut out);
     }
     out

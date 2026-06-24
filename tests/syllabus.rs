@@ -50,7 +50,7 @@ fn path_with(targets: &[&str]) -> PathFile {
         id: PATH_ID.into(),
         goal: "test".into(),
         created_at: Utc::now(),
-        target_atoms: targets.iter().map(|s| (*s).to_string()).collect(),
+        targets: targets.iter().map(|s| (*s).to_string()).collect(),
         strategy: mathtutor::types::Strategy::BottomUp,
     }
 }
@@ -83,14 +83,17 @@ fn authored(atom_id: &str) -> Event {
 fn empty_targets_yield_empty_syllabus() {
     let g = graph_of(vec![]);
     let p = path_with(&[]);
-    assert!(syllabus::upcoming_atoms(&g, &p, &[]).is_empty());
+    assert!(syllabus::upcoming_atoms(&g, &p.targets, &[]).is_empty());
 }
 
 #[test]
 fn single_untaught_target_appears() {
     let g = graph_of(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
-    assert_eq!(syllabus::upcoming_atoms(&g, &p, &[]), vec!["a".to_string()]);
+    assert_eq!(
+        syllabus::upcoming_atoms(&g, &p.targets, &[]),
+        vec!["a".to_string()]
+    );
 }
 
 #[test]
@@ -100,7 +103,7 @@ fn taught_target_is_skipped() {
     let g = graph_of(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
-    assert!(syllabus::upcoming_atoms(&g, &p, &events).is_empty());
+    assert!(syllabus::upcoming_atoms(&g, &p.targets, &events).is_empty());
 }
 
 #[test]
@@ -110,7 +113,7 @@ fn lesson_authored_event_counts_as_taught() {
     let g = graph_of(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = vec![authored("a")];
-    assert!(syllabus::upcoming_atoms(&g, &p, &events).is_empty());
+    assert!(syllabus::upcoming_atoms(&g, &p.targets, &events).is_empty());
 }
 
 #[test]
@@ -118,7 +121,7 @@ fn prereq_appears_before_target() {
     let g = graph_of(vec![atom("pre", &[]), atom("target", &["pre"])]);
     let p = path_with(&["target"]);
     assert_eq!(
-        syllabus::upcoming_atoms(&g, &p, &[]),
+        syllabus::upcoming_atoms(&g, &p.targets, &[]),
         vec!["pre".to_string(), "target".to_string()],
     );
 }
@@ -129,7 +132,7 @@ fn taught_prereq_is_skipped_but_target_remains() {
     let p = path_with(&["target"]);
     let events = vec![taught("pre")];
     assert_eq!(
-        syllabus::upcoming_atoms(&g, &p, &events),
+        syllabus::upcoming_atoms(&g, &p.targets, &events),
         vec!["target".to_string()],
     );
 }
@@ -144,7 +147,7 @@ fn diamond_prereq_appears_once() {
         atom("c", &[]),
     ]);
     let p = path_with(&["tx.1"]);
-    let order = syllabus::upcoming_atoms(&g, &p, &[]);
+    let order = syllabus::upcoming_atoms(&g, &p.targets, &[]);
     assert_eq!(order.iter().filter(|x| *x == "c").count(), 1);
     // c precedes a and b, which precede tx.1.
     let pos = |id: &str| order.iter().position(|x| x == id).unwrap();
@@ -162,7 +165,7 @@ fn cluster_target_expands_to_atomic_children() {
         atom("la.2.2", &[]),
     ]);
     let p = path_with(&["la.2"]);
-    let order = syllabus::upcoming_atoms(&g, &p, &[]);
+    let order = syllabus::upcoming_atoms(&g, &p.targets, &[]);
     // Cluster itself doesn't appear; its leaves do.
     assert!(!order.contains(&"la.2".to_string()));
     assert!(order.contains(&"la.2.1".to_string()));
@@ -174,7 +177,7 @@ fn multiple_targets_walked_in_order() {
     let g = graph_of(vec![atom("a", &[]), atom("b", &[])]);
     let p = path_with(&["a", "b"]);
     assert_eq!(
-        syllabus::upcoming_atoms(&g, &p, &[]),
+        syllabus::upcoming_atoms(&g, &p.targets, &[]),
         vec!["a".to_string(), "b".to_string()],
     );
 }
@@ -185,7 +188,10 @@ fn missing_id_is_silently_skipped() {
     // that atom) shouldn't crash the walker — just drop out.
     let g = graph_of(vec![atom("a", &[])]);
     let p = path_with(&["a", "ghost"]);
-    assert_eq!(syllabus::upcoming_atoms(&g, &p, &[]), vec!["a".to_string()]);
+    assert_eq!(
+        syllabus::upcoming_atoms(&g, &p.targets, &[]),
+        vec!["a".to_string()]
+    );
 }
 
 // ── compute_syllabus view shape (without DB: spot-check truncation) ──
@@ -203,7 +209,7 @@ fn n_truncates_atoms_but_total_remaining_is_full_count() {
         atom("d", &[]),
     ]);
     let p = path_with(&["a", "b", "c", "d"]);
-    let upcoming = syllabus::upcoming_atoms(&g, &p, &[]);
+    let upcoming = syllabus::upcoming_atoms(&g, &p.targets, &[]);
     assert_eq!(upcoming.len(), 4);
     // The CLI/MCP layer truncates with `.take(n)`; verify the count
     // contract: total_remaining is the untruncated length.
@@ -228,7 +234,7 @@ fn top_down_lists_targets_not_prereqs() {
     let g = graph_of(vec![atom("p", &[]), atom("t", &["p"])]);
     let p = top_down(&["t"]);
     assert_eq!(
-        syllabus::upcoming_top_down(&g, &p, &[], &[]),
+        syllabus::upcoming_top_down(&g, &p.targets, &[], &[]),
         vec!["t".to_string()],
     );
 }
@@ -241,7 +247,7 @@ fn top_down_prefixes_subpath_before_targets() {
     // Subpath remaining atoms come first (q, then t); the target t is
     // deduped out of the trailing targets list.
     assert_eq!(
-        syllabus::upcoming_top_down(&g, &p, &[], &subpath),
+        syllabus::upcoming_top_down(&g, &p.targets, &[], &subpath),
         vec!["q".to_string(), "t".to_string()],
     );
 }
@@ -253,7 +259,7 @@ fn top_down_skips_taught_subpath_and_target_atoms() {
     let subpath = vec!["p".to_string(), "t".to_string()];
     // `p` already taught → drops out; only the remaining `t` is upcoming.
     assert_eq!(
-        syllabus::upcoming_top_down(&g, &p, &[taught("p")], &subpath),
+        syllabus::upcoming_top_down(&g, &p.targets, &[taught("p")], &subpath),
         vec!["t".to_string()],
     );
 }

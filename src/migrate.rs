@@ -210,7 +210,7 @@ async fn migrate_one_path(
         for (i, atom) in p.target_atoms.iter().enumerate() {
             let position = i64::try_from(i).expect("position fits in i64");
             conn.execute(
-                "INSERT OR IGNORE INTO path_targets(path_id, atom_id, position) \
+                "INSERT OR IGNORE INTO path_targets(path_id, target_id, position) \
                  VALUES (?, ?, ?)",
                 params![p.id.as_str(), atom.as_str(), position],
             )

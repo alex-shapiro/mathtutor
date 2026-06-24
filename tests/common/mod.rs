@@ -112,7 +112,7 @@ pub fn path_with_strategy(targets: &[&str], strategy: Strategy) -> PathFile {
         id: PATH_ID.into(),
         goal: "test".into(),
         created_at: Utc::now(),
-        target_atoms: targets.iter().map(|s| (*s).to_string()).collect(),
+        targets: targets.iter().map(|s| (*s).to_string()).collect(),
         strategy,
     }
 }

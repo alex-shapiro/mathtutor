@@ -155,7 +155,10 @@ async fn open_records_applied_migration() {
     let row = rows.next().await.unwrap().expect("v3 row");
     assert_eq!(row.get::<i64>(0).unwrap(), 3);
     assert_eq!(row.get::<String>(1).unwrap(), "strategy_subpath");
-    assert!(rows.next().await.unwrap().is_none(), "exactly three rows");
+    let row = rows.next().await.unwrap().expect("v4 row");
+    assert_eq!(row.get::<i64>(0).unwrap(), 4);
+    assert_eq!(row.get::<String>(1).unwrap(), "rename_target_column");
+    assert!(rows.next().await.unwrap().is_none(), "exactly four rows");
 }
 
 #[tokio::test]
@@ -174,8 +177,9 @@ async fn second_open_does_not_re_apply_migrations() {
     let row = rows.next().await.unwrap().unwrap();
     assert_eq!(
         row.get::<i64>(0).unwrap(),
-        3,
-        "init + oauth + strategy_subpath migrations should each be recorded exactly once"
+        4,
+        "init + oauth + strategy_subpath + rename_target_column \
+         migrations should each be recorded exactly once"
     );
 }
 
@@ -189,7 +193,7 @@ async fn foreign_keys_are_enforced() {
     // rejected because no parent exists.
     let res = conn
         .execute(
-            "INSERT INTO path_targets(path_id, atom_id) VALUES (?, ?)",
+            "INSERT INTO path_targets(path_id, target_id) VALUES (?, ?)",
             params!["does-not-exist", "tx.1.1"],
         )
         .await;

@@ -73,11 +73,12 @@ pub async fn cmd_subpath_set(
     if p.strategy != Strategy::TopDown {
         return Err(Error::SubpathNotTopDown);
     }
-    if !p.target_atoms.iter().any(|t| t == tail) {
+
+    let g = Graph::load_for_path(conn, graph_dir).await?;
+    if !p.resolve_targets(&g)?.iter().any(|t| t == tail) {
         return Err(Error::SubpathTailNotTarget(tail.clone()));
     }
 
-    let g = Graph::load_for_path(conn, graph_dir).await?;
     let mut seen = HashSet::with_capacity(atoms.len());
     for a in atoms {
         if !seen.insert(a.as_str()) {
