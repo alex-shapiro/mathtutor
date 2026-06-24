@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 area: discrete-and-complexity
 prefix: dis
 summary: "Combinatorics, graph theory, algorithms, computational complexity, descriptive complexity / MDL."
@@ -17,10 +17,11 @@ cross_references:
   - probability
   - information-theory
 
-topics:
+children:
   - id: dis.1
     name: "Combinatorics"
-    leaves:
+    description: "Counting and existence arguments."
+    children:
       - id: dis.1.1
         name: "Permutations and combinations"
         description: "Counting arrangements and selections."
@@ -40,7 +41,8 @@ topics:
 
   - id: dis.2
     name: "Graph theory"
-    leaves:
+    description: "Structure and spectra of graphs."
+    children:
       - id: dis.2.1
         name: "Graph basics"
         description: "Vertices, edges, degree, isomorphism."
@@ -63,8 +65,32 @@ topics:
         prerequisites: [dis.2.4, dis.1.4, dis.2.5]
       - id: dis.2.7
         name: "Graph algorithms"
-        description: "BFS, DFS, MST, shortest path."
-        prerequisites: [dis.2.1, dis.3.2]
+        description: "Core traversal, path, and tree algorithms."
+        children:
+          - id: dis.2.7.1
+            name: "Breadth-first search"
+            description: "Level-order exploration; shortest paths in unweighted graphs."
+            prerequisites: [dis.2.1]
+          - id: dis.2.7.2
+            name: "Depth-first search"
+            description: "Recursive exploration; topological sort and cycle detection."
+            prerequisites: [dis.2.1]
+          - id: dis.2.7.3
+            name: "Dijkstra's algorithm"
+            description: "Greedy shortest paths for non-negative edge weights."
+            prerequisites: [dis.2.7.1, dis.3.2]
+          - id: dis.2.7.4
+            name: "Bellman–Ford algorithm"
+            description: "Dynamic-programming shortest paths allowing negative weights."
+            prerequisites: [dis.2.7.3]
+          - id: dis.2.7.5
+            name: "Kruskal's algorithm"
+            description: "Build an MST by adding cheapest edges that avoid cycles (union–find)."
+            prerequisites: [dis.2.7.1]
+          - id: dis.2.7.6
+            name: "Prim's algorithm"
+            description: "Grow an MST from a seed vertex by cheapest crossing edge (priority queue)."
+            prerequisites: [dis.2.7.5]
       - id: dis.2.8
         name: "Message passing perspective"
         description: "Graph algorithms as iterative local updates; basis of GNNs."
@@ -72,7 +98,8 @@ topics:
 
   - id: dis.3
     name: "Algorithms"
-    leaves:
+    description: "Algorithm-design paradigms and data structures."
+    children:
       - id: dis.3.1
         name: "Divide and conquer"
         description: "Recurrences; master theorem."
@@ -95,12 +122,25 @@ topics:
         prerequisites: [dis.3.1]
       - id: dis.3.6
         name: "Streaming and sketches"
-        description: "Count-Min sketch, Bloom filters, HyperLogLog."
-        prerequisites: [dis.3.4, prob.6.3]
+        description: "Sublinear-space summaries of large streams."
+        children:
+          - id: dis.3.6.1
+            name: "Bloom filters"
+            description: "Probabilistic set membership with one-sided error."
+            prerequisites: [dis.3.4]
+          - id: dis.3.6.2
+            name: "Count-Min sketch"
+            description: "Hash-based frequency estimation with bounded over-count."
+            prerequisites: [dis.3.6.1, prob.6.3]
+          - id: dis.3.6.3
+            name: "HyperLogLog"
+            description: "Cardinality estimation from leading-zero statistics."
+            prerequisites: [dis.3.6.1]
 
   - id: dis.4
     name: "Computational complexity"
-    leaves:
+    description: "What computation can achieve under resource bounds."
+    children:
       - id: dis.4.1
         name: "Turing machines and decidability"
         description: "(Cross-link to `fnd.5.1`/`fnd.5.2` with complexity flavor.)"
@@ -124,7 +164,8 @@ topics:
 
   - id: dis.5
     name: "Descriptive / algorithmic complexity"
-    leaves:
+    description: "Description length and Kolmogorov complexity."
+    children:
       - id: dis.5.1
         name: "Kolmogorov complexity"
         description: "Length of the shortest program producing a string."

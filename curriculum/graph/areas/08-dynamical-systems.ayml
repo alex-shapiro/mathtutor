@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 area: dynamical-systems
 prefix: dyn
 summary: "ODE theory, Hamiltonian / Lagrangian mechanics, PDE basics, stochastic dynamics, statistical mechanics, continuous-time deep learning."
@@ -17,10 +17,11 @@ cross_references:
   - geometry-and-topology
   - numerical
 
-topics:
+children:
   - id: dyn.1
     name: "ODE theory"
-    leaves:
+    description: "Existence, stability, and qualitative behavior of ODEs."
+    children:
       - id: dyn.1.1
         name: "Existence and uniqueness"
         description: "Picard–Lindelöf theorem; Lipschitz fields."
@@ -52,7 +53,8 @@ topics:
 
   - id: dyn.2
     name: "Hamiltonian and Lagrangian mechanics"
-    leaves:
+    description: "Variational and energy-based formulations of dynamics."
+    children:
       - id: dyn.2.1
         name: "Lagrangian formulation"
         description: "L = T − V; principle of stationary action."
@@ -76,7 +78,8 @@ topics:
 
   - id: dyn.3
     name: "PDE basics"
-    leaves:
+    description: "Core partial differential equations."
+    children:
       - id: dyn.3.1
         name: "Heat / diffusion equation"
         description: "∂ₜu = Δu; smoothing semigroup."
@@ -92,7 +95,8 @@ topics:
 
   - id: dyn.4
     name: "Stochastic dynamics"
-    leaves:
+    description: "Noise-driven differential equations."
+    children:
       - id: dyn.4.1
         name: "Langevin dynamics"
         description: "ẋ = −∇U + √(2T) ξ; sampling Gibbs distributions."
@@ -116,7 +120,8 @@ topics:
 
   - id: dyn.5
     name: "Statistical mechanics"
-    leaves:
+    description: "Energy, entropy, and thermodynamic ensembles."
+    children:
       - id: dyn.5.1
         name: "Boltzmann distribution"
         description: "p(x) ∝ e^{−E(x)/T}; canonical ensemble."
@@ -140,7 +145,8 @@ topics:
 
   - id: dyn.6
     name: "Continuous-time deep learning"
-    leaves:
+    description: "Networks and training viewed as dynamical systems."
+    children:
       - id: dyn.6.1
         name: "Neural ODE"
         description: "Hidden state as ODE solution; adjoint method."
