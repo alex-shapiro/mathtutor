@@ -1,85 +1,78 @@
 # Math Tutor Curriculum Graph
 
-A hierarchical, prerequisite-aware concept graph covering the mathematical
-foundations needed to deeply understand contemporary deep-learning research,
-with a focus on:
-
-- Large transformer language models
-- Diffusion / flow-matching generative models
-- Joint-embedding predictive architectures (JEPA) and self-supervised learning
+A hierarchical, prerequisite-aware concept graph. Its center of gravity is
+the mathematics needed to deeply understand contemporary deep-learning
+research — large transformer language models, diffusion / flow-matching
+generative models, and self-supervised / JEPA architectures — but it also
+covers adjacent computer science where that understanding bottoms out in
+systems (e.g. GPU programming).
 
 ## Layout
 
 ```
 curriculum/
 ├── README.md            (this file)
-├── SCHEMA.md            (YAML schema spec)
+├── SCHEMA.md            (authoritative schema spec)
 └── graph/
-    ├── manifest.yaml    (top-level area registry)
+    ├── manifest.ayml    (top-level area registry)
     └── areas/
-        ├── 00-foundations.yaml
-        ├── 01-linear-algebra.yaml
+        ├── 00-foundations.ayml
+        ├── 01-linear-algebra.ayml
         ├── ...
-        └── 15-reinforcement-learning.yaml
+        └── 16-gpu-programming.ayml
 ```
 
-The graph is machine-readable: every node lives in YAML and the whole
-thing loads with any standard YAML library (e.g. `serde_yaml` for the
-existing Rust crate at `src/main.rs`).
-
-## Two-pass build
-
-- **Pass 1 — skeleton (current):** every area, topic, and leaf is
-  enumerated in `graph/areas/*.yaml` with stable IDs, one-line
-  descriptions, and direct prerequisites. No prose bodies yet.
-  The shape of the graph is auditable; reorganize / add / cut here
-  before fleshing out.
-- **Pass 2 — leaves:** each leaf gets a body — either inline in the YAML
-  under a `body:` key, or as a sibling Markdown file referenced by a
-  `body_path:` key. See `SCHEMA.md`.
-
-## ID conventions
-
-- Each area has a short prefix: `fnd`, `la`, `ana`, `prob`, `opt`, `dis`,
-  `num`, `geom`, `dyn`, `inf`, `lt`, `nn`, `tx`, `dif`, `ssl`, `rl`.
-- Topic ID: `<prefix>.<topic-num>` (e.g. `la.5` = matrix factorizations).
-- Leaf ID: `<prefix>.<topic-num>.<leaf-num>` (e.g. `la.5.4` = SVD).
-- IDs are **stable** — if a concept is renamed or relocated, keep its ID.
-- New leaves get fresh trailing numbers; deleted IDs are not reused.
+Source is [AYML](https://crates.io/crates/ayml), a safe serde-compatible
+variant of YAML (triple-quoted multiline strings, no YAML footguns). The
+loader is `src/graph.rs`, which compiles the whole graph into the binary at
+build time via `include_dir!`. Point `--graph DIR` or `MT_GRAPH` at this
+tree to run against a working copy instead of the embedded snapshot.
 
 ## Hierarchy vs prerequisites
 
 Two distinct DAGs share the same nodes:
 
-- **Taxonomic hierarchy** — leaves belong to topics, topics belong to
-  areas. Implicit in the YAML's nesting. Used for navigation, grouping,
-  file layout.
-- **Prerequisite graph** — "you should understand X before Y." Encoded
-  via the `prerequisites:` list on each leaf. Crosses topic and area
-  boundaries freely. Used for ordering and reading-path generation.
+- **Taxonomic hierarchy** — atoms nest under clusters, clusters under
+  areas. Implicit in the file's `children:` nesting. Used for navigation,
+  grouping, and file layout.
+- **Prerequisite graph** — "understand X before Y," encoded by each node's
+  `prerequisites:` list. Crosses cluster and area boundaries freely. Used
+  for ordering and reading-path generation. A prerequisite may point at a
+  cluster, meaning "the whole cluster."
 
-A loader (e.g. `src/main.rs`) can parse this into a queryable graph:
-topo-sort, "what do I need before X", "shortest path to understand
-paper Y", coverage-vs-target analysis, etc.
+`mt graph check` validates both: id/prefix shape, prerequisite resolution,
+cycles, and orphan atoms (a leaf nothing depends on must be marked
+`terminal: true`).
 
-## Schema versions
+## Lessons and quizzes
 
-The graph is migrating from v1 (fixed 3-level: area → topic → leaf) to
-v2 (recursive `children:` at any depth, with atomic mini-lesson nodes).
+A node is **atomic** iff it has no `children`; atoms are mini-lessons (1–2
+paragraphs, ≤ 2 minutes, ≤ 1 theorem / rule / definition). Nodes with
+children are organizational **clusters**.
 
-- **v2 (atomized):** `00-foundations.yaml`, `01-linear-algebra.yaml`.
-  Atomic nodes follow "one rule / theorem / definition per lesson,
-  ≤ 2 minutes reading."
-- **v1 (legacy):** `02-analysis.yaml` … `15-reinforcement-learning.yaml`.
-  Will be migrated incrementally once the `fnd` / `la` granularity is
-  validated.
+Most atoms ship as metadata only — `id`, `name`, `description`,
+`prerequisites`. Lesson and quiz bodies are authored lazily at runtime: the
+agent writes them on first presentation (`mt lesson upsert`, `mt quiz
+create`) into the per-user overlay, after which they are deterministic. An
+atom may also ship an inline `lesson:` body (and `quizzes:`) when it is
+worth fixing canonically; the overlay overrides it. See the top-level
+`docs/design.md` for the authoring lifecycle and `SCHEMA.md` for the field
+reference.
 
-A loader should dispatch on the file's `schema_version` field. See
-`SCHEMA.md` for both formats.
+## ID conventions
+
+- Each area has a short prefix: `fnd`, `la`, `ana`, `prob`, `opt`, `dis`,
+  `num`, `geom`, `dyn`, `inf`, `lt`, `nn`, `tx`, `dif`, `ssl`, `rl`, `gpu`.
+- Node ID extends its parent by one positive-integer segment
+  (`gpu` → `gpu.6` → `gpu.6.7`). Depth is unlimited; a 4-level path is
+  normal.
+- IDs are **stable** — renaming or relocating a concept keeps its ID.
+- Deleted IDs are not reused.
 
 ## Status
 
-Pass 1 skeleton is complete in v1 form across all 16 areas. v2
-atomization is underway (`fnd` + `la` first); audit those for
-granularity, naming, and prerequisite density before the other 14 areas
-are migrated.
+Fully migrated to `schema_version: 2` (recursive `children:`, atomized
+nodes) across every area, with descriptions and prerequisites filled out
+throughout. Lesson/quiz bodies are filled in on demand at runtime rather
+than shipped. New areas should be authored directly in v2 and validated
+with `mt graph check`.

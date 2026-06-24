@@ -1,33 +1,41 @@
-# YAML schema
+# AYML schema
 
-The curriculum graph lives entirely in YAML under `graph/`. This document
-is human-readable; the YAML files are authoritative.
+The curriculum graph lives entirely in [AYML](https://crates.io/crates/ayml)
+under `graph/` — a safe serde-compatible variant of YAML with Swift-style
+triple-quoted multiline strings (`"""…"""`) and none of YAML's fringe
+features. This document is human-readable; the files, and the loader in
+`src/graph.rs`, are authoritative. `mt graph check` validates the whole
+graph.
 
 ## Versioning
 
-- **`schema_version: 2`** — current. Recursive `children:` at any depth.
-  Each atomic node is one mini-lesson: 1–2 paragraphs, ≤ 2 minutes
-  reading, ≤ 1 theorem / rule / definition.
-- **`schema_version: 1`** — legacy. Fixed depth (area → topic → leaf)
-  with `topics:` / `leaves:` keys. Areas not yet migrated to v2 still
-  use v1; loaders should dispatch on `schema_version`.
+- **`schema_version: 2`** — current; every shipped area uses it. Recursive
+  `children:` at any depth. Each atomic node is one mini-lesson: 1–2
+  paragraphs, ≤ 2 minutes reading, ≤ 1 theorem / rule / definition.
+- **`schema_version: 1`** — legacy. Fixed depth (area → topic → leaf) with
+  `topics:` / `leaves:` keys. The loader still dispatches on
+  `schema_version`, but no shipped area uses v1 any more.
 
 ## Files
 
-- `graph/manifest.yaml` — top-level area registry.
-- `graph/areas/<NN>-<slug>.yaml` — one file per top-level area.
+- `graph/manifest.ayml` — top-level area registry.
+- `graph/areas/<NN>-<slug>.ayml` — one file per top-level area.
 
-## `manifest.yaml`
+## `manifest.ayml`
 
 ```yaml
 schema_version: 1
 areas:
   - prefix: fnd
     slug: foundations
-    file: areas/00-foundations.yaml
+    file: areas/00-foundations.ayml
     summary: "Logic, sets, proof, basic combinatorics, computation models."
   # ...
 ```
+
+The manifest's own `schema_version` is independent of the per-area schema
+version. `slug` and `prefix` must match the `area` and `prefix` fields
+inside the referenced file.
 
 ## Per-area file (v2)
 
@@ -36,8 +44,9 @@ schema_version: 2
 area: foundations
 prefix: fnd
 summary: "One-line area summary."
-motivation: |
-  Multi-line motivation, Markdown allowed.
+motivation: """
+  Multi-line motivation, why this area matters.
+  """
 cross_references:
   - linear-algebra
   - analysis
@@ -65,12 +74,11 @@ nodes are mini-lessons:
 
 - 1–2 paragraphs of reading (~1–2 minutes).
 - At most one theorem, rule, or definition.
-- Optional small quiz (2–4 short Q/A pairs) for spaced repetition.
 
 A node *with* `children` is a **cluster** — purely organizational. A
 cluster may still have a `description` (one-line summary of what its
 descendants cover) and `prerequisites` (coarse ordering hints), but no
-`lesson` body. Clusters can be nested arbitrarily deep.
+`lesson` body. Clusters nest arbitrarily deep.
 
 ## Field reference
 
@@ -80,11 +88,12 @@ descendants cover) and `prerequisites` (coarse ordering hints), but no
 |---|---|---|
 | `schema_version` | yes | `2` |
 | `area` | yes | slug; matches manifest |
-| `prefix` | yes | short ID prefix |
+| `prefix` | yes | short ID prefix; matches manifest |
 | `summary` | yes | one-line area description |
 | `motivation` | yes | multi-line motivation |
-| `cross_references` | no | list of adjacent area slugs |
-| `children` | yes | top-level concept tree |
+| `cross_references` | no | list of adjacent area slugs (documentation only) |
+| `children` | yes (v2) | top-level concept tree |
+| `topics` | yes (v1) | legacy three-level tree; v1 only |
 
 ### Node-level (any depth)
 
@@ -93,44 +102,67 @@ descendants cover) and `prerequisites` (coarse ordering hints), but no
 | `id` | yes | dotted path, e.g. `fnd.1.1.5` |
 | `name` | yes | human-readable name |
 | `description` | recommended | one-line scope (cluster) or hook (atom) |
-| `children` | no | sub-nodes; omit or `[]` for atom |
-| `prerequisites` | no | direct prereq IDs (any depth) |
-| `relevant_for` | no | downstream area slugs |
-| `tags` | no | free-form tags |
-| `status` | no | `stub` (default) / `drafted` / `reviewed` |
+| `prerequisites` | no | direct prereq IDs; may target atoms or clusters |
+| `children` | no | sub-nodes; omit or `[]` for an atom |
+| `terminal` | no | `true` marks a leaf that intentionally has no dependents (see below) |
 
-### Atom-only fields (filled in pass 2)
+The loader also accepts `relevant_for`, `tags`, `status`, and a node-level
+`difficulty` for forward compatibility, but no shipped area uses them and
+nothing reads them; prefer `prerequisites` and `cross_references`.
 
-| field | required | description |
-|---|---|---|
-| `lesson` | no | inline Markdown body, 1–2 paragraphs |
-| `lesson_path` | no | external Markdown file with the body |
-| `quiz` | no | list of `{q, a}` pairs for spaced repetition |
-| `estimated_minutes` | no | typically 1–2 |
-| `references` | no | citation strings |
+### Atom content (optional; usually authored at runtime)
+
+Most atoms ship as metadata only. Lesson and quiz bodies are normally
+authored lazily by the agent on first presentation and stored in the
+per-user overlay (see `docs/design.md`). An atom may instead ship them
+inline when worth fixing canonically; the overlay overrides inline content.
+
+| field | description |
+|---|---|
+| `lesson` | triple-quoted Markdown body, 1–2 paragraphs |
+| `quizzes` | list of quiz cards (shape below) |
+
+A quiz card:
+
+```yaml
+quizzes:
+  - id: fnd.1.1.1.q1        # <atom-id>.q<n>
+    difficulty: easy        # easy | medium | hard
+    type: free_text         # free_text (default) | multiple_choice
+    question: "…"
+    answer: "…"             # reference answer for grading
+    rubric: "…"             # optional grading guidance
+```
+
+## `terminal`
+
+The orphan check in `mt graph check` flags any atom that no other node
+lists as a prerequisite — usually a sign of a forgotten edge. A genuine
+leaf with no dependents (a capstone application atom, a dead-end fact) sets
+`terminal: true` to opt out. A prerequisite reference to a *cluster* covers
+all its descendant atoms, so those need no `terminal` flag.
 
 ## ID rules
 
-- IDs are **stable**. Renaming or relocating a concept never changes
-  its ID; the slug, file path, and `name` may change but the ID may not.
+Enforced by `mt graph check`:
+
+- Every ID starts with its area `prefix`; each further segment is a
+  positive integer with no leading zeros (`la.5.4.7`).
+- A node's ID extends its parent's by exactly one segment.
+- IDs are **globally unique** and **stable**: renaming or relocating a
+  concept never changes its ID; the slug, file path, and `name` may change.
 - Deleted IDs are **never reused**.
 - Nesting depth is unlimited; atomicity is a content choice, not a depth
   choice. A 4-level path like `la.5.4.7` is normal.
-- v1 leaf IDs (e.g. `la.5.4` for SVD) remain valid in v2 — they become
-  cluster nodes whose `children` list contains the atomic decomposition.
-- Cross-area prerequisites use the full ID (e.g. `prob.8.4` from inside
-  a `dif.x.y.z` atom).
+- Cross-area prerequisites use the full ID (e.g. `prob.8.4` from inside a
+  `dif.x.y.z` atom). The prerequisite graph is acyclic and crosses area
+  boundaries freely.
 
 ## Conventions
 
-- One canonical home per atom; cross-link via `prerequisites` /
-  `relevant_for` rather than duplicating leaves.
-- `prerequisites:` lists **direct** dependencies. The loader computes
-  transitive closure.
-- An atom's `prerequisites` may point to other atoms or to cluster IDs;
-  pointing at a cluster means "you need that whole cluster."
-- Pass 1 fills `id`, `name`, `description`, `prerequisites`, and the
-  depth structure. Pass 2 fills `lesson`, `quiz`, `estimated_minutes`,
-  `references`.
-- One rule / theorem / definition per atom. If you find yourself
-  describing two unrelated rules in one atom, split it.
+- One canonical home per atom; cross-link via `prerequisites` rather than
+  duplicating a concept.
+- `prerequisites:` lists **direct** dependencies only; the loader computes
+  the transitive closure.
+- One rule / theorem / definition per atom. If you are describing two
+  unrelated rules in one atom, split it.

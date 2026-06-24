@@ -80,3 +80,8 @@ areas:
     slug: reinforcement-learning
     file: areas/15-reinforcement-learning.ayml
     summary: "MDPs, dynamic programming, model-free / policy gradient, KL-regularized RL, RLHF / DPO, exploration, model-based, offline."
+
+  - prefix: gpu
+    slug: gpu-programming
+    file: areas/16-gpu-programming.ayml
+    summary: "Parallel hardware, SIMT execution, CUDA model, memory hierarchy, parallel primitives, performance engineering, multi-GPU, DL kernels."
