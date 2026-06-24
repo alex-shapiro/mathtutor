@@ -1,0 +1,372 @@
+schema_version: 2
+area: gpu-programming
+prefix: gpu
+summary: "Parallel hardware, SIMT execution, CUDA model, memory hierarchy, parallel primitives, performance engineering, multi-GPU, DL kernels."
+motivation: """
+  Modern machine learning is bottlenecked by hardware, not theory: the
+  difference between a usable and an unusable model is often a single
+  well-written kernel. GPU programming is the systems counterpart to the
+  rest of this curriculum — it explains why attention was reformulated to
+  be I/O-aware, why training runs in mixed precision, and why matrix
+  multiply is the unit of account for cost. It is also a clean, self-
+  contained trial of teaching non-mathematical computer science here:
+  the concepts (latency hiding, coalescing, occupancy, reductions) are
+  concrete, build on each other, and reward the same spaced, bottom-up
+  mastery the math areas do.
+  """
+cross_references:
+  - numerical
+  - linear-algebra
+  - discrete-and-complexity
+  - transformers
+  - neural-network-theory
+
+children:
+  - id: gpu.1
+    name: "Parallel computing foundations"
+    description: "Why throughput hardware exists and how to reason about its limits."
+    children:
+      - id: gpu.1.1
+        name: "Latency vs throughput"
+        description: "Time-to-first-result vs results-per-second; GPUs optimize the latter."
+        prerequisites: [fnd.5.3.1]
+      - id: gpu.1.2
+        name: "Data vs task parallelism"
+        description: "Same op over many elements vs different ops concurrently."
+        prerequisites: [gpu.1.1]
+      - id: gpu.1.3
+        name: "SIMD and vectorization"
+        description: "One instruction drives a vector lane of ALUs in lockstep."
+        prerequisites: [gpu.1.2]
+      - id: gpu.1.4
+        name: "SIMT execution"
+        description: "Threads share an instruction stream but keep private state and addresses."
+        prerequisites: [gpu.1.3]
+      - id: gpu.1.5
+        name: "Amdahl's law"
+        description: "Speedup ≤ 1/(s + (1−s)/p); the serial fraction caps it."
+        prerequisites: [gpu.1.2]
+      - id: gpu.1.6
+        name: "Gustafson's law"
+        description: "Scale the problem with the machine; speedup grows with size."
+        prerequisites: [gpu.1.5]
+        terminal: true
+      - id: gpu.1.7
+        name: "Arithmetic intensity"
+        description: "FLOPs per byte of memory traffic; the kernel's key ratio."
+        prerequisites: [gpu.1.1, num.2.5]
+      - id: gpu.1.8
+        name: "Roofline model"
+        description: "Attainable FLOP/s = min(peak compute, intensity × bandwidth)."
+        prerequisites: [gpu.1.7]
+
+  - id: gpu.2
+    name: "GPU hardware architecture"
+    description: "The physical resources a kernel competes for."
+    children:
+      - id: gpu.2.1
+        name: "Streaming multiprocessor"
+        description: "The independent core that executes blocks; the unit of scaling."
+        prerequisites: [gpu.1.4]
+      - id: gpu.2.2
+        name: "CUDA cores and warp schedulers"
+        description: "ALU lanes fed by schedulers that issue one warp per cycle."
+        prerequisites: [gpu.2.1]
+      - id: gpu.2.3
+        name: "Warps and wavefronts"
+        description: "The 32-lane (or 64) SIMT group that executes together."
+        prerequisites: [gpu.2.1]
+      - id: gpu.2.4
+        name: "Memory hierarchy overview"
+        description: "Registers → shared/L1 → L2 → global, by speed and scope."
+        prerequisites: [gpu.2.1, num.2.5]
+      - id: gpu.2.5
+        name: "Registers and the register file"
+        description: "Fastest, per-thread storage; a hard per-SM budget."
+        prerequisites: [gpu.2.4]
+      - id: gpu.2.6
+        name: "Shared memory / scratchpad"
+        description: "Programmer-managed per-block on-chip memory for reuse."
+        prerequisites: [gpu.2.4]
+      - id: gpu.2.7
+        name: "L1/L2 cache"
+        description: "Hardware-managed caches backing shared and global memory."
+        prerequisites: [gpu.2.4]
+      - id: gpu.2.8
+        name: "Global device memory (HBM)"
+        description: "Large high-bandwidth DRAM; the slow, abundant tier."
+        prerequisites: [gpu.2.4]
+      - id: gpu.2.9
+        name: "Tensor cores"
+        description: "Fixed-function units doing small matrix multiply-accumulate per cycle."
+        prerequisites: [gpu.2.2, la.2.2.4]
+
+  - id: gpu.3
+    name: "Execution and threading model"
+    description: "How work is expressed as threads and mapped onto the machine."
+    children:
+      - id: gpu.3.1
+        name: "Kernel"
+        description: "A function launched once and run by many threads in parallel."
+        prerequisites: [gpu.2.2]
+      - id: gpu.3.2
+        name: "Thread, block, grid hierarchy"
+        description: "Threads group into blocks; blocks tile the grid over the data."
+        prerequisites: [gpu.3.1, gpu.2.3]
+      - id: gpu.3.3
+        name: "Thread indexing"
+        description: "Global index from block and thread coordinates maps threads to data."
+        prerequisites: [gpu.3.2]
+      - id: gpu.3.4
+        name: "Warp scheduling and latency hiding"
+        description: "Switch to a ready warp on a stall; many warps hide memory latency."
+        prerequisites: [gpu.2.3, gpu.1.1]
+      - id: gpu.3.5
+        name: "Occupancy"
+        description: "Active warps per SM vs the maximum; register/shared-memory limited."
+        prerequisites: [gpu.3.4, gpu.2.5]
+      - id: gpu.3.6
+        name: "Warp divergence"
+        description: "Branches split a warp; paths serialize, lanes idle."
+        prerequisites: [gpu.2.3, gpu.3.3]
+        terminal: true
+      - id: gpu.3.7
+        name: "Block scheduling"
+        description: "Blocks run in any order on available SMs; no inter-block ordering."
+        prerequisites: [gpu.3.2]
+
+  - id: gpu.4
+    name: "Memory access optimization"
+    description: "Earning the memory bandwidth a kernel is entitled to."
+    children:
+      - id: gpu.4.1
+        name: "Global memory coalescing"
+        description: "Adjacent threads touching adjacent addresses merge into one transaction."
+        prerequisites: [gpu.2.8, gpu.3.3]
+      - id: gpu.4.2
+        name: "Memory alignment"
+        description: "Aligned, vectorized loads cut the number of transactions."
+        prerequisites: [gpu.4.1]
+        terminal: true
+      - id: gpu.4.3
+        name: "Shared-memory tiling"
+        description: "Stage a reused block in shared memory to cut global traffic."
+        prerequisites: [gpu.2.6, gpu.4.1]
+      - id: gpu.4.4
+        name: "Bank conflicts"
+        description: "Same-bank shared accesses serialize; pad to avoid them."
+        prerequisites: [gpu.4.3]
+      - id: gpu.4.5
+        name: "Register blocking"
+        description: "Hold a sub-tile in registers so each thread reuses loaded data."
+        prerequisites: [gpu.2.5, gpu.4.3]
+      - id: gpu.4.6
+        name: "Constant and read-only memory"
+        description: "Broadcast paths for values all threads read; cached separately."
+        prerequisites: [gpu.2.7]
+        terminal: true
+      - id: gpu.4.7
+        name: "Unified / managed memory"
+        description: "One address space migrated on demand between host and device."
+        prerequisites: [gpu.2.8]
+        terminal: true
+      - id: gpu.4.8
+        name: "Memory-bound vs compute-bound"
+        description: "Roofline placement decides whether to cut traffic or add work."
+        prerequisites: [gpu.1.8, gpu.4.1]
+
+  - id: gpu.5
+    name: "CUDA programming model"
+    description: "The concrete API that exposes the execution model."
+    children:
+      - id: gpu.5.1
+        name: "Host vs device"
+        description: "CPU orchestrates; GPU executes kernels in its own memory."
+        prerequisites: [gpu.3.1]
+      - id: gpu.5.2
+        name: "Kernel launch and configuration"
+        description: "`kernel<<<grid, block>>>` sets the thread geometry per call."
+        prerequisites: [gpu.5.1, gpu.3.2]
+      - id: gpu.5.3
+        name: "Device allocation and transfer"
+        description: "Allocate device buffers and copy across the host-device boundary."
+        prerequisites: [gpu.5.1, gpu.2.8]
+      - id: gpu.5.4
+        name: "Streams and asynchronous execution"
+        description: "Independent streams overlap copies and kernels concurrently."
+        prerequisites: [gpu.5.3]
+      - id: gpu.5.5
+        name: "Events and timing"
+        description: "Stream markers for measuring elapsed device time and dependencies."
+        prerequisites: [gpu.5.4]
+      - id: gpu.5.6
+        name: "Error handling"
+        description: "Async launches fail later; check return codes and synchronize."
+        prerequisites: [gpu.5.2]
+        terminal: true
+      - id: gpu.5.7
+        name: "Compilation model"
+        description: "Source → PTX → SASS; JIT and architecture targeting."
+        prerequisites: [gpu.5.2]
+        terminal: true
+
+  - id: gpu.6
+    name: "Parallel primitives and patterns"
+    description: "The reusable building blocks of GPU algorithms."
+    children:
+      - id: gpu.6.1
+        name: "Map"
+        description: "Independent per-element work; the embarrassingly parallel base case."
+        prerequisites: [gpu.5.2, gpu.3.3]
+      - id: gpu.6.2
+        name: "Parallel reduction"
+        description: "Tree-combine many values to one in O(log n) steps."
+        prerequisites: [gpu.6.1, gpu.2.6]
+      - id: gpu.6.3
+        name: "Prefix sum (scan)"
+        description: "All running aggregates; work-efficient up/down sweep."
+        prerequisites: [gpu.6.2]
+      - id: gpu.6.4
+        name: "Stencil"
+        description: "Each output reads a neighborhood; shared-memory halo reuse."
+        prerequisites: [gpu.6.1, gpu.4.3]
+        terminal: true
+      - id: gpu.6.5
+        name: "Gather and scatter"
+        description: "Indirect reads and writes; the irregular-access primitives."
+        prerequisites: [gpu.6.1, gpu.4.1]
+      - id: gpu.6.6
+        name: "Histogram and binning"
+        description: "Concurrent counting into shared bins via atomics."
+        prerequisites: [gpu.6.5, gpu.7.2]
+        terminal: true
+      - id: gpu.6.7
+        name: "Tiled matrix multiplication"
+        description: "Block GEMM staging tiles through shared memory and registers."
+        prerequisites: [gpu.4.3, gpu.4.4, gpu.4.5, la.2.2.4]
+      - id: gpu.6.8
+        name: "Parallel sort"
+        description: "Radix / merge sort built from scan and scatter."
+        prerequisites: [gpu.6.3]
+        terminal: true
+
+  - id: gpu.7
+    name: "Synchronization and correctness"
+    description: "Coordinating threads without data races."
+    children:
+      - id: gpu.7.1
+        name: "Block barrier"
+        description: "`__syncthreads()` makes shared writes visible across a block."
+        prerequisites: [gpu.3.2, gpu.2.6]
+      - id: gpu.7.2
+        name: "Atomic operations"
+        description: "Read-modify-write that serializes concurrent updates to one address."
+        prerequisites: [gpu.3.3]
+      - id: gpu.7.3
+        name: "Race conditions"
+        description: "Unordered shared accesses give nondeterministic results."
+        prerequisites: [gpu.7.1, gpu.7.2]
+      - id: gpu.7.4
+        name: "Memory consistency and fences"
+        description: "Fences order otherwise-relaxed memory operations."
+        prerequisites: [gpu.7.3]
+        terminal: true
+      - id: gpu.7.5
+        name: "Warp-level primitives"
+        description: "Shuffle and vote exchange registers within a warp, no shared memory."
+        prerequisites: [gpu.2.3, gpu.7.1]
+        terminal: true
+      - id: gpu.7.6
+        name: "Cooperative groups and grid sync"
+        description: "Explicit thread groups, including grid-wide synchronization."
+        prerequisites: [gpu.7.1, gpu.3.7]
+        terminal: true
+
+  - id: gpu.8
+    name: "Performance engineering"
+    description: "Measuring and removing the dominant bottleneck."
+    children:
+      - id: gpu.8.1
+        name: "Profiling and bottleneck analysis"
+        description: "Find whether compute, memory, or latency dominates before tuning."
+        prerequisites: [gpu.4.8, gpu.5.5]
+      - id: gpu.8.2
+        name: "Occupancy tuning"
+        description: "Trade registers and shared memory for more resident warps."
+        prerequisites: [gpu.3.5, gpu.8.1]
+        terminal: true
+      - id: gpu.8.3
+        name: "Instruction-level parallelism"
+        description: "Independent work per thread hides latency at low occupancy."
+        prerequisites: [gpu.3.4, gpu.8.1]
+      - id: gpu.8.4
+        name: "Kernel fusion"
+        description: "Merge passes to keep intermediates on chip and cut launches."
+        prerequisites: [gpu.4.8, gpu.6.1]
+      - id: gpu.8.5
+        name: "Mixed-precision computation"
+        description: "Low-precision math with higher-precision accumulation for speed."
+        prerequisites: [gpu.8.1, num.1.5]
+      - id: gpu.8.6
+        name: "Tensor-core programming"
+        description: "Warp-level matrix multiply-accumulate over register fragments."
+        prerequisites: [gpu.2.9, gpu.6.7]
+      - id: gpu.8.7
+        name: "Loop unrolling and launch bounds"
+        description: "Compiler hints that raise ILP and cap register use."
+        prerequisites: [gpu.8.3]
+        terminal: true
+
+  - id: gpu.9
+    name: "Multi-GPU and scaling"
+    description: "Moving past a single device's compute and memory."
+    children:
+      - id: gpu.9.1
+        name: "Host-device interconnect"
+        description: "PCIe vs NVLink bandwidth shapes what is worth offloading."
+        prerequisites: [gpu.5.3]
+      - id: gpu.9.2
+        name: "Peer-to-peer access"
+        description: "Direct GPU-to-GPU transfers bypassing host memory."
+        prerequisites: [gpu.9.1]
+      - id: gpu.9.3
+        name: "Collective communication"
+        description: "All-reduce / all-gather as a distributed parallel reduction."
+        prerequisites: [gpu.9.2, gpu.6.2]
+      - id: gpu.9.4
+        name: "Compute-communication overlap"
+        description: "Hide collectives behind compute using separate streams."
+        prerequisites: [gpu.9.3, gpu.5.4]
+      - id: gpu.9.5
+        name: "Data vs model parallelism"
+        description: "Replicate-and-sync vs shard-the-model; a systems trade-off."
+        prerequisites: [gpu.9.4]
+        terminal: true
+
+  - id: gpu.10
+    name: "GPU computing for deep learning"
+    description: "Where these techniques meet the rest of the curriculum."
+    children:
+      - id: gpu.10.1
+        name: "GEMM as the workhorse"
+        description: "Most DL FLOPs are matrix multiply; everything reduces to it."
+        prerequisites: [gpu.6.7, gpu.8.6]
+      - id: gpu.10.2
+        name: "Memory-bound DL kernels"
+        description: "Elementwise, normalization, softmax are bandwidth-limited, not FLOP-limited."
+        prerequisites: [gpu.4.8, gpu.8.4]
+      - id: gpu.10.3
+        name: "Kernel fusion in DL compilers"
+        description: "Fuse elementwise chains automatically to cut memory round-trips."
+        prerequisites: [gpu.8.4, gpu.10.2]
+        terminal: true
+      - id: gpu.10.4
+        name: "I/O-aware attention kernels"
+        description: "Tiled online-softmax attention avoids materializing the score matrix (see `tx.4.4`)."
+        prerequisites: [gpu.4.3, gpu.6.2, gpu.10.1]
+        terminal: true
+      - id: gpu.10.5
+        name: "Low-precision inference"
+        description: "Quantized weights and activations for throughput and memory (see `num.1.6`)."
+        prerequisites: [gpu.8.5, num.1.6]
+        terminal: true
