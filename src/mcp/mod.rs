@@ -547,6 +547,7 @@ impl ServerHandler for MathTutorServer {
 struct PathSummary {
     id: String,
     goal: String,
+    strategy: Strategy,
     created_at: DateTime<Utc>,
     target_atoms: Vec<String>,
 }
@@ -554,7 +555,7 @@ struct PathSummary {
 async fn list_paths(conn: &Connection) -> CrateResult<Vec<PathSummary>> {
     let mut rows = conn
         .query(
-            "SELECT id, goal, created_at FROM paths ORDER BY created_at ASC",
+            "SELECT id, goal, created_at, strategy FROM paths ORDER BY created_at ASC",
             (),
         )
         .await?;
@@ -564,6 +565,7 @@ async fn list_paths(conn: &Connection) -> CrateResult<Vec<PathSummary>> {
         let goal: String = row.get(1)?;
         let created_str: String = row.get(2)?;
         let created_at = db::parse_ts(&created_str)?;
+        let strategy: Strategy = row.get::<String>(3)?.parse()?;
         let mut t_rows = conn
             .query(
                 "SELECT atom_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
@@ -577,6 +579,7 @@ async fn list_paths(conn: &Connection) -> CrateResult<Vec<PathSummary>> {
         out.push(PathSummary {
             id,
             goal,
+            strategy,
             created_at,
             target_atoms,
         });

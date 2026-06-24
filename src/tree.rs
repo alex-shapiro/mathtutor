@@ -34,6 +34,7 @@ pub async fn cmd_path_tree(
     let subpath = crate::subpath::load(conn, &id).await?;
 
     let targets: HashSet<String> = p.target_atoms.iter().cloned().collect();
+    let subpath_set: HashSet<String> = subpath.iter().cloned().collect();
     let reachable = g.reachable_atoms(&p.target_atoms);
     let spine = build_spine(&g, &reachable);
     let next_atom = scheduler::next_action(
@@ -69,14 +70,23 @@ pub async fn cmd_path_tree(
         .count();
     println!("path:        {}", p.id);
     println!("goal:        {}", p.goal);
+    println!("strategy:    {}", p.strategy);
     println!("targets:     {target_learned} / {total} learned ({pct}%)");
     println!(
         "reachable:   {reach_total} atoms ({reach_taught} with lesson, {reach_learned} learned)"
     );
+    if !subpath.is_empty() {
+        println!("subpath:     {}", subpath.join(" → "));
+    }
     println!();
+    let sub_legend = if subpath.is_empty() {
+        ""
+    } else {
+        "  ~=on subpath"
+    };
     println!("legend: [LEMH]  L=lesson  E/M/H=easy/medium/hard quiz");
     println!("        UPPER=correct  lower=authored,not-yet-correct  ·=none");
-    println!("        *=path target  ← NEXT=scheduler's next action");
+    println!("        *=path target{sub_legend}  ← NEXT=scheduler's next action");
     println!();
 
     for area in &manifest.areas {
@@ -95,6 +105,7 @@ pub async fn cmd_path_tree(
                 &progress,
                 &spine,
                 &targets,
+                &subpath_set,
                 root,
                 "",
                 i == last,
@@ -158,6 +169,7 @@ fn render_node(
     progress: &PathProgress,
     spine: &HashSet<String>,
     targets: &HashSet<String>,
+    subpath: &HashSet<String>,
     c: &FlatConcept,
     prefix: &str,
     is_last: bool,
@@ -168,7 +180,15 @@ fn render_node(
 
     if c.children_ids.is_empty() {
         let badge = state_badge(progress, c);
-        let star = if targets.contains(&c.id) { " *" } else { "" };
+        // A target outranks the subpath marker (the subpath's tail is a
+        // target, and `*` is the more important flag there).
+        let star = if targets.contains(&c.id) {
+            " *"
+        } else if subpath.contains(&c.id) {
+            " ~"
+        } else {
+            ""
+        };
         let mark = if next_atom == Some(c.id.as_str()) {
             "  ← NEXT"
         } else {
@@ -192,6 +212,7 @@ fn render_node(
             progress,
             spine,
             targets,
+            subpath,
             kid,
             &child_prefix,
             i == last,

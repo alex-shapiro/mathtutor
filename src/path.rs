@@ -190,6 +190,7 @@ pub async fn cmd_path_strategy(
 pub struct PathSummary {
     pub id: String,
     pub goal: String,
+    pub strategy: Strategy,
     pub created_at: chrono::DateTime<Utc>,
     pub targets: usize,
     pub learned: usize,
@@ -241,6 +242,7 @@ async fn list_summaries(conn: &Connection, graph_dir: Option<&Path>) -> Result<V
         out.push(PathSummary {
             id,
             goal,
+            strategy: p.strategy,
             created_at,
             targets,
             learned,

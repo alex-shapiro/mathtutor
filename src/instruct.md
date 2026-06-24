@@ -31,9 +31,10 @@ If the user wants a new path, ask what they want to learn, translate
 the goal into a list of target IDs from the curriculum (use the
 browsing commands below to find them), and run:
 
-    mt path new "Understand SVD" --atom la.5.4
+    mt path new "Understand SVD" --atoms la.5.4
 
-Each `--atom` argument can be:
+`--atoms` takes a comma-separated list (or repeat the flag). Each entry
+can be:
 
 - an **atom ID** (leaf concept, e.g. `fnd.1.1.5`, `la.5.4.7`)
 - a **cluster ID** (e.g. `la.5.4` "SVD", `tx.5` "state-space models")
@@ -43,6 +44,24 @@ Each `--atom` argument can be:
 
 `mt path new` returns a path ID on stdout and that path becomes the
 default for subsequent commands.
+
+### Choosing a strategy
+
+A path is taught **bottom-up** (the default) or **top-down**; pass
+`--strategy top-down` to `mt path new`, or switch an existing path any
+time with `mt path strategy <bottom-up|top-down>`. Switching never loses
+progress.
+
+- **bottom-up** teaches foundations first: every prerequisite of a target
+  is taught before the target itself. Best when the learner is starting
+  cold and wants the full ladder.
+- **top-down** teaches the next target directly and only drops down to
+  prerequisites when the learner gets stuck (see **Subpaths** below).
+  Best when the learner already has background and wants to get to the
+  goal quickly, learning foundations only as needed.
+
+Ask the learner which fits, or infer from the goal. When unsure, default
+to bottom-up.
 
 ## Browsing the curriculum
 
@@ -72,9 +91,9 @@ Pass `--path P` to either to also surface per-atom progress (`status:
 
 Use these to:
 
-- pick `--atom` arguments for `mt path new` when the user gives a
+- pick `--atoms` arguments for `mt path new` when the user gives a
   high-level goal ("teach me linear algebra" → `mt graph list` →
-  `mt graph list la` → choose `--atom la` or pick specific topics)
+  `mt graph list la` → choose `--atoms la` or pick specific topics)
 - look up a prerequisite's name while authoring a lesson
 - check whether a concept exists before referencing it
 
@@ -87,6 +106,35 @@ Each turn:
 3. Act, then call `mt path next` again.
 
 Stop when `action: done` or the user pauses.
+
+## Subpaths (top-down)
+
+On a top-down path, `mt path next` presents the next target directly,
+without first teaching its prerequisites. When the learner is stuck —
+they can't follow the lesson, keep missing the quizzes, or ask to go
+deeper — scaffold a path back to the target with a **subpath**.
+
+1.  Find the relevant prerequisites: `mt graph show <target>` lists them.
+    Pick the one(s) the learner is missing, deepest first.
+2.  Set the subpath — an ordered list of atoms ending in the target:
+
+        mt path subpath set --atoms <prereq>,<...>,<target>
+
+    The last atom must be one of the path's targets. `mt path next` then
+    teaches the subpath in order and finally re-presents the target.
+
+3.  If the learner is still stuck on a prerequisite, recompose the
+    subpath to insert _its_ prerequisites — just call `mt path subpath
+set` again; it replaces the whole subpath. Discuss with the learner
+    and adjust freely.
+
+The subpath clears itself once the target is complete, returning `next`
+to the remaining targets. To abandon a detour early, run
+`mt path subpath clear`. `mt path state` shows the subpath's remaining
+atoms so you can see where the learner is on the detour.
+
+Subpaths apply only to top-down paths. On a bottom-up path prerequisites
+are already taught in order, so no subpath is needed.
 
 ## Action playbook
 
@@ -264,8 +312,8 @@ teaching. There is no separate `mt lesson amend` command.
 
 ### Amend an existing quiz
 
-Use when the question is _mostly right_ and just needs an edit. The
-quiz id stays the same, so the FSRS schedule continues uninterrupted —
+Use when the question is mostly right and needs an edit. The
+quiz id stays the same and FSRS schedule continues uninterrupted —
 prior `again`/`good`/`easy` ratings still inform the next review.
 
     mt quiz update <quiz-id> \
@@ -279,19 +327,16 @@ only on the atom's lesson and previously-taught prerequisites.
 
 ### Remove a quiz
 
-Use when the question is _fundamentally broken_ and shouldn't exist.
+Use when the question is fundamentally broken and shouldn't exist.
 
     mt quiz delete <quiz-id>
 
-This tombstones the quiz for this path. The `quiz_answered` events
-stay in the log for audit, but the scheduler stops surfacing it. On
-the next `mt path next`, if the atom now has a missing difficulty slot,
-the scheduler will return `create_quiz` so you can author a fresh
-replacement.
+This tombstones the quiz for this path. Quiz events stay in the event log
+but the quiz will not be surfaced again. On the next `mt path next`, if
+the atom now has a missing difficulty slot, the scheduler will return
+`create_quiz` so you can author a fresh replacement.
 
-**When in doubt, prefer update.** Deletion forfeits the
-spaced-repetition state — useful when the question was misleading,
-wasteful when it just needed a wording fix.
+Quiz deletion forfeits spaced-repetition state; prefer updates for wording fixes.
 
 ## Inspecting progress
 
@@ -304,19 +349,11 @@ stretch of work.
 
 `mt` ships with a copy of the curriculum baked into the binary. When you
 call `mt lesson upsert`, `mt quiz create`, `mt quiz update`, or
-`mt quiz delete`, the new content is written to the **user overlay** in
-the user's database, not back into the shipped curriculum. The shipped
-graph is read-only; the overlay is "what this user authored on top of
-it" and is shared across every learning path on the same database.
+`mt quiz delete`, the content is written to a user-wide overlay in the database.
 
-This is transparent to you for normal authoring: `mt path next` returns
-the overlay-merged view, so subsequent reads see whatever you've
-stored. Overlay entries always override the shipped curriculum for
-items with the same id.
-
-Operator-only: `mt graph dump` prints the overlay as AYML suitable for
-review and eventual merge into the canonical curriculum repo. Don't
-run it during a session unless asked.
+The overlay is transparent to you for normal authoring: `mt path next` returns
+the overlay-merged view, so subsequent reads see whatever you've stored.
+Overlay entries always override the shipped curriculum for items with the same id.
 
 ## Errors
 
