@@ -45,8 +45,12 @@ Operator-only verbs (`graph check`, `graph dump`, `instruct`,
 # Path lifecycle
 mt path list                       # list all paths with goal / progress
 mt path new <GOAL> --atom <ID>...  # start a new learning path
+                   [--strategy {bottom-up,top-down}]  # initial traversal mode (default bottom-up)
 mt path state [--path P]           # one-screen status summary
 mt path next  [--path P]           # next scheduled action (AYML on stdout)
+mt path strategy {bottom-up,top-down} [--path P]      # switch traversal mode
+mt path subpath set --atoms <ID>,... [--path P]       # top-down detour ending in a target
+mt path subpath clear [--path P]                      # drop the detour
 mt path syllabus [--path P] [-n N] # upcoming lesson topics (no bodies; default N=10)
 mt path tree  [--path P]           # full reachable-graph progress view
 
@@ -134,10 +138,11 @@ Conventions for every payload:
 - IDs are stable curriculum-graph identifiers (`la.5.4.7`, `la.5.4.7.q2`).
 - Multi-paragraph fields (`lesson`, `question`, `answer`, `rubric`) are
   AYML triple-quoted strings.
-- `next_step` is tells the agent the canonical command to call after acting on this output.
-- All atoms `mt path next` returns satisfy the prerequisite invariant:
-  every direct prerequisite already has a stored lesson in the merged
-  view.
+- `next_step` tells the agent the canonical command to call after acting on this output.
+- Under the bottom-up strategy, all atoms `mt path next` returns satisfy
+  the prerequisite invariant: every direct prerequisite already has a
+  stored lesson in the merged view. Top-down relaxes this by design,
+  presenting a target before its prerequisites (see "Teaching strategy).
 
 ### `create_lesson`
 
@@ -429,6 +434,74 @@ performed. FSRS state is derived from a rebuildable cache of the log.
   "Correct" is any answer with a rating `Hard`, `Good`, or `Easy`.
   `Hard` is "got it right, with effort"; FSRS handles its shorter follow-up interval.
   The per-atom walker presents again immediately on rating `Again`.
+
+## Teaching strategy: bottom-up and top-down
+
+Every path has a strategy that controls how `mt path next` walks toward
+the target atoms. It is a traversal mode, not part of the path's intent:
+`mt path new --strategy` sets the initial value (default bottom-up), and
+`mt path strategy <bottom-up|top-down>` switches it at any point. Atom
+completeness is computed identically in both modes, so a learner can dive
+at the target top-down, hit a wall, and flip to bottom-up to build foundations,
+or the reverse. A bottom-up strategy ignores any subpath; switching back
+to top-down resumes it.
+
+**Bottom-up** (default) teaches foundations first: the post-order DFS
+over the prerequisite DAG, which never reaches an atom until all prerequisites
+are complete. Good when the learner is starting cold and wants the full mastery ladder.
+
+**Top-down** teaches the target first and descends only when the learner
+needs it. `mt path next` presents the next incomplete target directly,
+without walking its prerequisites. A target is completed by its own lesson
+and quizzes; prerequisites are not required or presented by default.
+A top-down path is considered done when all target nodes are complete.
+
+### Subpaths
+
+If a top-down learner finds themselves stuck on a target, the agent may
+compose a subpath: an ordered sequence of atoms ending in the target.
+The sequence is chosen to unblock the learner and return back to the goal
+(all missing prerequisites that are most relevant to the target).
+A subpath is the only way prerequisites are learned a top-down path.
+
+- `mt path subpath set --atoms a,b,…,<target>` replaces a path's subpath.
+  The agent recomputes the subpath after discussion with the learner;
+  the last atom must be the target the subpath drives toward.
+- `mt path subpath clear` removes the subpath.
+
+If a subpath is set, `mt path next` serves the first incomplete atom in
+subpath order through the usual per-atom sequence (`create_lesson` →
+`present_lesson` → `create_quiz` → `present_quiz`). Completed atoms are
+skipped, never mutated. Completion is derived from the log exactly as
+elsewhere, so `next` never edits the subpath. The route drains into the
+target on its own; once the target (the tail) completes, the subpath is
+cleared and `next` returns to the remaining targets.
+
+Between edits the subpath is a deterministic on-rails iterator just like
+the bottom-up DFS, but the agent and learner can rewrite or clear it on
+any turn.
+
+### `mt path next` priority (top-down)
+
+1. Earliest-due quiz card whose atom is in the merged view → `present_quiz`
+   (skipped under `--new`, as in bottom-up).
+2. If a subpath is set, the first incomplete atom in subpath order.
+3. Else the next incomplete target, in target order.
+4. Else `done`.
+
+### Persisted state
+
+The feature adds two pieces of per-path state, both recorded in the event
+log as latest-wins settings rather than as table columns:
+
+- **Strategy** — a `strategy_set` event carries the mode; the live value
+  is the latest one, defaulting to bottom-up when absent (so paths created
+  before this feature keep today's behavior with no migration).
+- **Subpath** — a `subpath_set` event carries the ordered atom list in its
+  payload, `subpath_cleared` drops it, and the live subpath is the latest
+  `subpath_set` not followed by a `subpath_cleared`.
+
+Everything else `next` derives from the existing log.
 
 ## Tool I/O
 
