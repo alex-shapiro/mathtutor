@@ -134,13 +134,14 @@ topics:
         description: "Effective batch size; SGD as SDE."
         prerequisites: [opt.4.1, dyn.4.5]
       - id: opt.4.4
-        name: "Adaptive methods"
-        description: "AdaGrad, RMSProp, Adam, AdamW, Lion, Shampoo."
-        prerequisites: [opt.4.1, opt.3.4, opt.3.5]
+        name: "AdaGrad and RMSProp"
+        description: "Per-coordinate adaptive learning rates from gradient history."
+        prerequisites: [opt.4.1]
       - id: opt.4.5
         name: "Sign-based methods"
         description: "signSGD, Lion; sign as 1-bit gradient."
         prerequisites: [opt.4.4]
+        terminal: true
       - id: opt.4.6
         name: "Learning-rate schedules"
         description: "Warmup, cosine, linear; decoupled weight decay."
@@ -153,6 +154,15 @@ topics:
         name: "Polyak averaging and EMA"
         description: "Iterate / parameter averaging; teacher networks."
         prerequisites: [opt.4.1]
+      - id: opt.4.9
+        name: "Adam and AdamW"
+        description: "Adaptive moments with bias correction; decoupled weight decay."
+        prerequisites: [opt.4.4, opt.3.4, opt.3.5]
+      - id: opt.4.10
+        name: "Shampoo"
+        description: "Kronecker-factored full-matrix adaptive preconditioning."
+        prerequisites: [opt.4.9]
+        terminal: true
 
   - id: opt.5
     name: "Second-order and curvature methods"
