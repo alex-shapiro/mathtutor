@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 area: probability
 prefix: prob
 summary: "Probability theory, random variables, concentration, stochastic processes, stochastic calculus, statistical inference."
@@ -17,10 +17,11 @@ cross_references:
   - learning-theory
   - dynamical-systems
 
-topics:
+children:
   - id: prob.1
     name: "Foundations"
-    leaves:
+    description: "Probability spaces, events, and independence."
+    children:
       - id: prob.1.1
         name: "Probability spaces"
         description: "(Ω, ℱ, P); axiomatic foundation."
@@ -44,7 +45,8 @@ topics:
 
   - id: prob.2
     name: "Random variables and distributions"
-    leaves:
+    description: "Random variables and the common distribution families."
+    children:
       - id: prob.2.1
         name: "Random variables"
         description: "Measurable functions; discrete and continuous."
@@ -59,8 +61,24 @@ topics:
         prerequisites: [prob.2.1, ana.5.9]
       - id: prob.2.4
         name: "Common discrete distributions"
-        description: "Bernoulli, binomial, geometric, Poisson, categorical, multinomial."
-        prerequisites: [prob.2.2]
+        description: "The standard discrete distribution families."
+        children:
+          - id: prob.2.4.1
+            name: "Bernoulli and binomial"
+            description: "A single binary trial and the count of successes over n trials."
+            prerequisites: [prob.2.2]
+          - id: prob.2.4.2
+            name: "Geometric distribution"
+            description: "Number of trials until the first success; memorylessness."
+            prerequisites: [prob.2.4.1]
+          - id: prob.2.4.3
+            name: "Poisson distribution"
+            description: "Counts of rare events; the large-n limit of the binomial."
+            prerequisites: [prob.2.4.1]
+          - id: prob.2.4.4
+            name: "Categorical and multinomial"
+            description: "A single k-outcome trial and the counts over n such trials."
+            prerequisites: [prob.2.4.1]
       - id: prob.2.5
         name: "Multivariate Gaussian"
         description: "Mean, covariance; conditioning, marginalization."
@@ -79,12 +97,25 @@ topics:
         prerequisites: [prob.2.2]
       - id: prob.2.9
         name: "Common continuous distributions"
-        description: "Exponential, gamma, beta, Dirichlet, Student-t."
-        prerequisites: [prob.2.2]
+        description: "The standard continuous distribution families."
+        children:
+          - id: prob.2.9.1
+            name: "Exponential and gamma"
+            description: "Waiting time for one event and for the k-th event."
+            prerequisites: [prob.2.2]
+          - id: prob.2.9.2
+            name: "Beta and Dirichlet"
+            description: "Distributions on the unit interval and the simplex; conjugate priors."
+            prerequisites: [prob.2.9.1]
+          - id: prob.2.9.3
+            name: "Student-t distribution"
+            description: "Heavy-tailed bell curve; Gaussian limit as degrees of freedom grow."
+            prerequisites: [prob.2.9.1]
 
   - id: prob.3
     name: "Expectation and moments"
-    leaves:
+    description: "Averages, spread, and higher moments."
+    children:
       - id: prob.3.1
         name: "Expectation"
         description: "Lebesgue integral against probability measure."
@@ -108,7 +139,8 @@ topics:
 
   - id: prob.4
     name: "Joint, conditional, marginal"
-    leaves:
+    description: "Multivariate distributions and conditioning."
+    children:
       - id: prob.4.1
         name: "Joint distributions"
         description: "Distribution of (X, Y); product measures."
@@ -132,7 +164,8 @@ topics:
 
   - id: prob.5
     name: "Convergence and limit theorems"
-    leaves:
+    description: "Asymptotic behavior of sequences of random variables."
+    children:
       - id: prob.5.1
         name: "Modes of convergence"
         description: "a.s., in probability, in Lᵖ, in distribution."
@@ -164,7 +197,8 @@ topics:
 
   - id: prob.6
     name: "Concentration inequalities"
-    leaves:
+    description: "Tail bounds controlling deviation from the mean."
+    children:
       - id: prob.6.1
         name: "Markov and Chebyshev"
         description: "First / second-moment tail bounds."
@@ -200,7 +234,8 @@ topics:
 
   - id: prob.7
     name: "Stochastic processes"
-    leaves:
+    description: "Random processes evolving in time."
+    children:
       - id: prob.7.1
         name: "Discrete-time Markov chains"
         description: "Memoryless transitions; stationary distributions."
@@ -244,7 +279,8 @@ topics:
 
   - id: prob.8
     name: "Stochastic calculus"
-    leaves:
+    description: "Calculus for Brownian motion and stochastic differential equations."
+    children:
       - id: prob.8.1
         name: "Itô integral"
         description: "Integral against Brownian motion."
@@ -280,7 +316,8 @@ topics:
 
   - id: prob.9
     name: "Statistical inference"
-    leaves:
+    description: "Estimating and testing from data."
+    children:
       - id: prob.9.1
         name: "Estimators: bias, variance, MSE"
         description: "Decomposition and trade-offs."

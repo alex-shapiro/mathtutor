@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 area: numerical
 prefix: num
 summary: "Floating point, numerical stability, ODE/SDE solvers, automatic differentiation, quadrature, hardware-aware numerics."
@@ -16,10 +16,11 @@ cross_references:
   - probability
   - dynamical-systems
 
-topics:
+children:
   - id: num.1
     name: "Floating point and numerical stability"
-    leaves:
+    description: "Finite-precision arithmetic and its pitfalls."
+    children:
       - id: num.1.1
         name: "IEEE 754 floats"
         description: "Single, double, fp16, bf16, fp8 formats."
@@ -47,7 +48,8 @@ topics:
 
   - id: num.2
     name: "Numerical linear algebra in practice"
-    leaves:
+    description: "Conditioning, iterative solvers, and randomization in practice."
+    children:
       - id: num.2.1
         name: "Conditioning revisited"
         description: "Numerical effects of ill-conditioning; preconditioning."
@@ -71,19 +73,40 @@ topics:
 
   - id: num.3
     name: "Numerical ODE and SDE"
-    leaves:
+    description: "Discretizing differential equations."
+    children:
       - id: num.3.1
         name: "Euler, Heun, Runge–Kutta"
         description: "Explicit single-step integrators; order vs stability."
-        prerequisites: [dyn.1.1]
+        children:
+          - id: num.3.1.1
+            name: "Euler's method"
+            description: "The first-order explicit step; local vs global error."
+            prerequisites: [dyn.1.1]
+          - id: num.3.1.2
+            name: "Runge–Kutta methods"
+            description: "Higher-order multi-stage steps (Heun, RK4); order vs stability."
+            prerequisites: [num.3.1.1]
       - id: num.3.2
         name: "Adaptive step size"
         description: "Embedded RK; error estimation."
         prerequisites: [num.3.1]
       - id: num.3.3
         name: "Stiff equations and implicit methods"
-        description: "Backward Euler, BDF, Rosenbrock."
-        prerequisites: [num.3.1]
+        description: "Integrators for stiff systems."
+        children:
+          - id: num.3.3.1
+            name: "Stiffness and A-stability"
+            description: "When explicit step size is limited by stability, not accuracy."
+            prerequisites: [num.3.1]
+          - id: num.3.3.2
+            name: "Backward Euler and BDF"
+            description: "Backward-difference implicit methods (backward Euler is first-order BDF)."
+            prerequisites: [num.3.3.1]
+          - id: num.3.3.3
+            name: "Rosenbrock methods"
+            description: "Linearly-implicit schemes using the Jacobian to avoid a nonlinear solve."
+            prerequisites: [num.3.3.2]
       - id: num.3.4
         name: "Symplectic integrators"
         description: "Preserving Hamiltonian structure."
@@ -99,7 +122,8 @@ topics:
 
   - id: num.4
     name: "Automatic differentiation"
-    leaves:
+    description: "Computing derivatives of programs."
+    children:
       - id: num.4.1
         name: "Symbolic vs numeric vs algorithmic differentiation"
         description: "Distinctions and trade-offs."
@@ -139,7 +163,8 @@ topics:
 
   - id: num.5
     name: "Quadrature and integration"
-    leaves:
+    description: "Numerical estimation of integrals."
+    children:
       - id: num.5.2
         name: "Monte Carlo integration"
         description: "Unbiased estimates; variance scales as 1/n."
@@ -155,7 +180,8 @@ topics:
 
   - id: num.6
     name: "Hardware-aware numerics"
-    leaves:
+    description: "Memory hierarchy and throughput considerations."
+    children:
       - id: num.6.1
         name: "Memory hierarchy"
         description: "Registers / cache / DRAM / disk; access cost gradients."

@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 area: geometry-and-topology
 prefix: geom
 summary: "Differential manifolds, Riemannian geometry, Lie groups, group equivariance, algebraic topology, information geometry, optimal-transport geometry."
@@ -18,10 +18,11 @@ cross_references:
   - optimization
   - dynamical-systems
 
-topics:
+children:
   - id: geom.1
     name: "Differential manifolds"
-    leaves:
+    description: "Spaces that are locally Euclidean."
+    children:
       - id: geom.1.1
         name: "Manifolds, charts, atlases"
         description: "Locally Euclidean spaces with smooth transitions."
@@ -49,7 +50,8 @@ topics:
 
   - id: geom.2
     name: "Riemannian geometry"
-    leaves:
+    description: "Manifolds with a notion of length and angle."
+    children:
       - id: geom.2.1
         name: "Riemannian metrics"
         description: "Inner product on each tangent space, smoothly varying."
@@ -64,8 +66,20 @@ topics:
         prerequisites: [geom.2.2]
       - id: geom.2.4
         name: "Curvature"
-        description: "Riemann, Ricci, sectional, scalar curvature."
-        prerequisites: [geom.2.2]
+        description: "Measures of how a manifold bends."
+        children:
+          - id: geom.2.4.1
+            name: "Riemann curvature tensor"
+            description: "Failure of parallel transport to commute around a loop."
+            prerequisites: [geom.2.2]
+          - id: geom.2.4.2
+            name: "Sectional curvature"
+            description: "Curvature of two-dimensional tangent sections."
+            prerequisites: [geom.2.4.1]
+          - id: geom.2.4.3
+            name: "Ricci and scalar curvature"
+            description: "Traces of the Riemann tensor; averaged curvature."
+            prerequisites: [geom.2.4.1]
       - id: geom.2.5
         name: "Exponential and log maps"
         description: "Local diffeomorphism between tangent space and manifold."
@@ -85,7 +99,8 @@ topics:
 
   - id: geom.3
     name: "Lie groups and Lie algebras"
-    leaves:
+    description: "Continuous symmetry groups and their tangent algebras."
+    children:
       - id: geom.3.1
         name: "Lie groups"
         description: "Smooth manifolds with compatible group structure."
@@ -113,7 +128,8 @@ topics:
 
   - id: geom.4
     name: "Group theory and equivariance"
-    leaves:
+    description: "Symmetry groups and equivariant maps."
+    children:
       - id: geom.4.1
         name: "Groups, subgroups, cosets"
         description: "Algebraic structure of symmetries."
@@ -137,7 +153,8 @@ topics:
 
   - id: geom.5
     name: "Algebraic topology (light)"
-    leaves:
+    description: "Invariants distinguishing topological spaces."
+    children:
       - id: geom.5.1
         name: "Simplicial complexes"
         description: "Combinatorial models of topological spaces."
@@ -157,7 +174,8 @@ topics:
 
   - id: geom.6
     name: "Information geometry"
-    leaves:
+    description: "The differential geometry of statistical models."
+    children:
       - id: geom.6.1
         name: "Statistical manifolds"
         description: "Parameter space of distributions as a manifold."
@@ -181,7 +199,8 @@ topics:
 
   - id: geom.7
     name: "Optimal transport geometry"
-    leaves:
+    description: "The geometry of the space of probability measures."
+    children:
       - id: geom.7.1
         name: "Wasserstein space"
         description: "Space of probability measures with W₂ distance."
@@ -205,15 +224,28 @@ topics:
 
   - id: geom.8
     name: "Curvature and the manifold hypothesis"
-    leaves:
+    description: "The geometry of data manifolds."
+    children:
       - id: geom.8.1
         name: "Manifold hypothesis"
         description: "High-dim data concentrating on lower-dim manifolds."
         prerequisites: [geom.1.1, geom.1.6]
       - id: geom.8.2
         name: "Intrinsic dimension estimation"
-        description: "TwoNN, MLE, persistent-homology estimators."
-        prerequisites: [geom.5.4, prob.9.2]
+        description: "Recovering the dimension of a data manifold."
+        children:
+          - id: geom.8.2.1
+            name: "Intrinsic dimension"
+            description: "The local dimension of the manifold underlying the data."
+            prerequisites: [prob.9.2]
+          - id: geom.8.2.2
+            name: "Neighbor-distance estimators"
+            description: "Estimate dimension from local nearest-neighbor distances (TwoNN, MLE)."
+            prerequisites: [geom.8.2.1, prob.9.2]
+          - id: geom.8.2.3
+            name: "Topological estimators"
+            description: "Estimate dimension from persistent-homology scaling."
+            prerequisites: [geom.8.2.1, geom.5.4]
       - id: geom.8.3
         name: "Latent-manifold geometry of neural nets"
         description: "Curvature, geodesics, and visualization in learned latents."
