@@ -234,11 +234,7 @@ async fn list_summaries(conn: &Connection, graph_dir: Option<&Path>) -> Result<V
             .iter()
             .filter(|a| crate::scheduler::is_atom_complete(&g, &progress, a))
             .count();
-        let learned_pct = if targets > 0 {
-            learned * 100 / targets
-        } else {
-            0
-        };
+        let learned_pct = (learned * 100).checked_div(targets).unwrap_or(0);
         out.push(PathSummary {
             id,
             goal,

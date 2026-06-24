@@ -1,10 +1,8 @@
 //! `mt path syllabus`: forward-looking preview of upcoming lesson topics.
 //!
-//! Unlike `mt path next` (the do-iterator that returns the single next
-//! action — lesson, quiz, or FSRS review), `syllabus` lists the atoms
-//! whose lessons haven't been taught yet, in the order the scheduler would
-//! teach them. Bottom-up walks the prerequisite graph; top-down lists the
-//! subpath's remaining atoms then the targets, mirroring `mt path next`.
+//! `syllabus` lists atoms whose lessons haven't been taught yet, in the order
+//! the scheduler will teach them. Bottom-up walks the prerequisite graph;
+//! top-down lists the subpath's remaining atoms then the targets.
 //! Lesson bodies are deliberately omitted: this is a roadmap, not a reader.
 
 use std::collections::HashSet;

@@ -770,11 +770,9 @@ async fn compute_tree(
         .iter()
         .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
         .count();
-    let targets_pct = if targets_total > 0 {
-        targets_learned * 100 / targets_total
-    } else {
-        0
-    };
+    let targets_pct = (targets_learned * 100)
+        .checked_div(targets_total)
+        .unwrap_or(0);
     let reach_total = reachable.len();
     let reach_taught = reachable
         .iter()

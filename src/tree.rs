@@ -54,11 +54,7 @@ pub async fn cmd_path_tree(
         .iter()
         .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
         .count();
-    let pct = if total > 0 {
-        target_learned * 100 / total
-    } else {
-        0
-    };
+    let pct = (target_learned * 100).checked_div(total).unwrap_or(0);
     let reach_total = reachable.len();
     let reach_taught = reachable
         .iter()

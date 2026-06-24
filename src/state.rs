@@ -217,7 +217,7 @@ fn counters(
         .iter()
         .filter(|a| complete.contains(a.as_str()))
         .count();
-    let learned_pct = if total > 0 { learned * 100 / total } else { 0 };
+    let learned_pct = (learned * 100).checked_div(total).unwrap_or(0);
     let reach_taught = reachable
         .iter()
         .filter(|a| progress.lesson_taught(a))
