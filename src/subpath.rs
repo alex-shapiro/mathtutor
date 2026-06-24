@@ -28,10 +28,8 @@ pub async fn load(conn: &Connection, path_id: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
-/// Load a path's subpath and expand it to atoms against `g`, preserving
-/// order. Mirrors target resolution: an atom stored at `subpath set` time
-/// that a later curriculum edit split into a cluster still resolves to its
-/// atomic descendants instead of being silently skipped by the scheduler.
+/// Load a path's subpath, expanded to atoms against `g` and kept in
+/// order, mirroring how path targets are resolved.
 pub async fn load_resolved(conn: &Connection, path_id: &str, g: &Graph) -> Result<Vec<String>> {
     g.expand_to_atoms(&load(conn, path_id).await?)
 }

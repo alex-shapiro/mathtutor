@@ -395,9 +395,7 @@ impl Graph {
     }
 
     /// Resolve each input ID to atoms, deduplicated and in first-seen
-    /// order (children before their cluster's later siblings). Used to
-    /// expand stored path targets and subpaths against the live graph, so
-    /// a cluster that was an atom at storage time still resolves correctly.
+    /// order (children before their cluster's later siblings):
     ///
     /// - an atom (leaf node) maps to itself
     /// - a cluster (non-leaf node) expands to all atomic descendants

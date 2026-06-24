@@ -202,8 +202,7 @@ fn top_down_cluster_target_resolves_to_atomic_children() {
 async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
     // End-to-end against the embedded curriculum: a path targeting an area
     // root stores the root verbatim, and `syllabus` expands it to the
-    // area's upcoming atoms. Before targets were expanded on load, a
-    // top-down cluster target produced an empty syllabus.
+    // area's upcoming atoms.
     let tmp = TempDir::new().unwrap();
     let conn = open_db(&tmp).await;
     let id = path::cmd_path_new(
