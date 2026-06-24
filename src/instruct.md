@@ -76,34 +76,22 @@ Each turn:
 
 Stop when `action: done` or the user pauses.
 
-## Subpaths (top-down)
+## Subpaths
 
-On a top-down path, `mt path next` presents the next target directly,
-without first teaching its prerequisites. When the learner is stuck —
-they can't follow the lesson, keep missing the quizzes, or ask to go
-deeper — scaffold a path back to the target with a **subpath**.
+On a top-down path, `mt path next` presents the next target without first teaching its prerequisites. When the learner is stuck or asks to learn prerequisites, offer to scaffold a path back to the target with a subpath.
 
-1.  Find the relevant prerequisites: `mt graph show <target>` lists them.
-    Pick the one(s) the learner is missing, deepest first.
+1.  Find the relevant prerequisites: `mt graph show <target>` lists them. Pick the ones the learner is missing, deepest first.
 2.  Set the subpath — an ordered list of atoms ending in the target:
 
         mt path subpath set --atoms <prereq>,<...>,<target>
 
-    The last atom must be one of the path's targets. `mt path next` then
-    teaches the subpath in order and finally re-presents the target.
+    The last atom must be a target atom. `mt path next` then teaches the subpath in order, ending with the target.
 
-3.  If the learner is still stuck on a prerequisite, recompose the
-    subpath to insert _its_ prerequisites — just call `mt path subpath
-set` again; it replaces the whole subpath. Discuss with the learner
-    and adjust freely.
+3.  If the learner is still stuck on a prerequisite, recompose the subpath to insert _its_ prerequisites. Just call `mt path subpath set` again; it replaces the whole subpath. Discuss with the learner and adjust freely.
 
-The subpath clears itself once the target is complete, returning `next`
-to the remaining targets. To abandon a detour early, run
-`mt path subpath clear`. `mt path state` shows the subpath's remaining
-atoms so you can see where the learner is on the detour.
+The subpath clears itself once the target is complete, returning `next` to the remaining targets. To abandon a subpath early, run `mt path subpath clear`. `mt path state` shows the subpath's remaining atoms so you can see where the learner is on the detour.
 
-Subpaths apply only to top-down paths. On a bottom-up path prerequisites
-are already taught in order, so no subpath is needed.
+Bottom-up paths teach prerequisites in order and thus do not use subpaths.
 
 ## Action playbook
 
@@ -127,41 +115,28 @@ You:
    BODY
    )"
 
-   `mt lesson upsert` is, as the name says, an upsert: calling it again
-   for the same atom replaces the body. Use that when the user asks for
-   a different explanation of an already-taught lesson (see **Amend an
-   existing lesson** below).
+   `mt lesson upsert` is, as the name says, an upsert: calling it again for the same atom replaces the body. Use that when the user asks for a different explanation of an already-taught lesson (see **Amend an existing lesson** below).
 
 3. Present the lesson to the user in conversation.
 4. Stop. Let the user read, ask questions, request examples, or ask for clarification. Do not call `mt path next` until the user explicitly signals they are ready to continue.
 
 ### `present_lesson`
 
-A lesson body is already stored for this atom (probably authored under a
-previous learning path), but the current path has never taught it. The
-scheduler re-surfaces the stored body so the user gets the lesson
-in-context before any quiz.
+A lesson body is already stored for this atom, but the current path has never shown it to the user. The scheduler re-surfaces the stored body so you can present it.
 
 Payload:
 
 - `atom` — id, name, description, and the stored lesson body
-- `reason` — currently always `not_taught` (the user hasn't seen this
-  lesson in this path yet); future reasons may include `relearn_requested`
-- `history` — `repetitions` and `last_presented_at` for past presentations
-  of this lesson within this path (zero / absent on the first showing)
-- `next_step` — the command to call back
+- `reason` — currently always `not_taught`
+- `history` — `repetitions` and `last_presented_at` currently always zero or absent
+- `next_step` — the command to call next
 
 You:
 
-1. Show the stored `atom.lesson` body to the user **verbatim** — do not
-   re-author or paraphrase. The canonical content is locked in.
-2. Stop. Let the user read, ask questions, request examples, or ask for
-   clarification. Do not call `mt path next` until the user explicitly
-   signals they are ready to continue.
+1. Show the stored `atom.lesson` body to the user verbatim. DO NOT re-author or paraphrase. The canonical content is locked in.
+2. Stop. Let the user read, ask questions, request examples, or ask for clarification. Do not call `mt path next` until the user explicitly signals they are ready to continue.
 
-`mt path next` auto-logs `lesson_taught` when it returns this action, so
-you do not need to call any "I taught it" command — moving on to the
-next `mt path next` is enough.
+`mt path next` auto-logs `lesson_taught` when it returns this action, so you do not need to call any "I taught it" command. Simply call `mt path next`.
 
 ### `create_quiz`
 
@@ -171,14 +146,14 @@ Payload:
 
 - `atom` — id, name, description, and the stored lesson body
 - `target_difficulty` — `easy` | `medium` | `hard`
-- `existing_quizzes` — quizzes already on this atom (for dedup)
+- `existing_quizzes` — quizzes already on this atom (to avoid dedup)
 - `prerequisites` — prereq atoms with their lessons
 - `next_step` — the command to call back
 
 You:
 
-1. Author a free-text question, a concise reference answer, and (only if the answer is subjective) a rubric. The question must depend only on this atom's lesson and previously-taught lessons — no lookahead — and must not duplicate `existing_quizzes`.
-2. Persist _before_ presenting, so the canonical reference answer is locked in before the user's reply can contaminate it:
+1. Author a free-text question, a concise reference answer, and (iff the answer is subjective) a rubric. The question must depend only on this atom's lesson and previously-taught lessons — no lookahead — and must not duplicate existing quizzes.
+2. Persist before presenting so the canonical reference answer is locked in before the user's reply can contaminate it:
 
    mt quiz create <atom-id> \
     --difficulty <easy|medium|hard> \
@@ -186,16 +161,14 @@ You:
     --answer "…the reference answer you just wrote…" \
     [--rubric "…"]
 
-3. Present the question to the user. Do **not** show the reference answer.
+3. Present the question to the user. DO NOT show the reference answer.
 4. Capture their reply. Grade per the **Rating rubric** below, then call:
 
    mt quiz answer <quiz-id> \
     --rating <again|hard|good|easy> \
     --user-answer "…the user's reply, verbatim…"
 
-Default quiz type is free-text. Use `--type multiple_choice` only
-when the concept is genuinely best taught as
-"distinguish from look-alikes."
+Default to free-text. Use `--type multiple_choice` iff the concept is genuinely best taught as "distinguish from look-alikes."
 
 ### `present_quiz`
 
@@ -206,11 +179,11 @@ Payload:
 - `atom` — id, name, description, stored lesson body
 - `quiz` — id, difficulty, type, question, reference answer, rubric
 - `history` — past presentations, accuracy, recent ratings
-- `next_step` — the command to call back
+- `next_step` — the command to call next
 
 You:
 
-1. Show the question to the user. Do **not** show the reference answer.
+1. Show the question to the user. DO NOT show the reference answer.
 2. Wait for their reply.
 3. Grade against the reference answer and rubric per the **Rating rubric** below, then call:
 
@@ -218,9 +191,7 @@ You:
     --user-answer "…the user's reply, verbatim…" \
     --rating <again|hard|good|easy>
 
-Use `history` to calibrate tone — a card on its 6th rep with 100%
-correct gets a lighter intro than a card the user has been
-struggling with.
+Use `history` to calibrate tone. A card on its 6th rep with 100% correct gets a lighter intro than a card the user has been struggling with.
 
 ### Rating rubric
 
