@@ -313,17 +313,15 @@ teaching. There is no separate `mt lesson amend` command.
 ### Amend an existing quiz
 
 Use when the question is mostly right and needs an edit. The
-quiz id stays the same and FSRS schedule continues uninterrupted —
-prior `again`/`good`/`easy` ratings still inform the next review.
+quiz id stays the same and FSRS schedule continues uninterrupted.
+Only the fields you pass change; everything else is preserved.
 
     mt quiz update <quiz-id> \
         [--question TEXT] [--answer TEXT] [--rubric TEXT] \
         [--difficulty easy|medium|hard] [--type free_text|multiple_choice]
 
-Only the fields you pass change; everything else is preserved.
-
-Author the new content carefully; like the original, it must depend
-only on the atom's lesson and previously-taught prerequisites.
+Author new content carefully: remember that a quiz must depend
+only on the atom's lesson and prerequisites.
 
 ### Remove a quiz
 
