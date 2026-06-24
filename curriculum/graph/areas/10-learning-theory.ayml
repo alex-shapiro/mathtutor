@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 area: learning-theory
 prefix: lt
 summary: "Statistical learning framework, generalization bounds, online learning, implicit bias, modern deep-net theory, robustness, causality."
@@ -14,182 +14,987 @@ motivation: """
 cross_references:
   - probability
   - optimization
+  - linear-algebra
+  - analysis
   - information-theory
+  - discrete-and-complexity
+  - dynamical-systems
   - neural-network-theory
-
-topics:
+children:
   - id: lt.1
     name: "Statistical learning framework"
-    leaves:
+    description: "Loss, risk, and the decompositions that define the learning problem."
+    children:
       - id: lt.1.1
         name: "Loss, risk, empirical risk minimization"
-        description: "Population vs empirical risk; ERM principle."
-        prerequisites: [prob.3.1]
+        description: "Population vs empirical risk; the ERM principle."
+        children:
+          - id: lt.1.1.1
+            name: "Loss function"
+            description: "Per-example penalty ℓ(ŷ, y) scoring a prediction against a target."
+            prerequisites:
+              - prob.3.1
+          - id: lt.1.1.2
+            name: "Population risk"
+            description: "Expected loss R(h) = E[ℓ(h(x), y)] under the data distribution."
+            prerequisites:
+              - lt.1.1.1
+          - id: lt.1.1.3
+            name: "Empirical risk"
+            description: "Average loss R̂(h) over a finite training sample; a plug-in estimate of population risk."
+            prerequisites:
+              - lt.1.1.1
+          - id: lt.1.1.4
+            name: "Empirical risk minimization"
+            description: "ERM: choose the hypothesis minimizing empirical risk."
+            prerequisites:
+              - lt.1.1.2
+              - lt.1.1.3
+          - id: lt.1.1.5
+            name: "Hypothesis class"
+            description: "Restricting ERM to a class H trades expressivity against learnability."
+            prerequisites:
+              - lt.1.1.4
       - id: lt.1.2
-        name: "Bias–variance decomposition"
-        description: "Excess risk = bias² + variance + irreducible noise."
-        prerequisites: [prob.9.1]
-      - id: lt.1.3
         name: "Bayes-optimal predictor"
-        description: "Lower bound on risk; conditional-expectation form."
-        prerequisites: [prob.3.6]
+        description: "The risk-minimizing predictor and the floor it sets."
+        children:
+          - id: lt.1.2.1
+            name: "Bayes risk"
+            description: "Smallest achievable population risk over all measurable predictors."
+            prerequisites:
+              - prob.3.6
+              - lt.1.1.2
+          - id: lt.1.2.2
+            name: "Bayes classifier"
+            description: "Under 0–1 loss, predict the most probable label argmaxᵧ P(y | x)."
+            prerequisites:
+              - lt.1.2.1
+          - id: lt.1.2.3
+            name: "Regression function"
+            description: "Under squared loss, the Bayes predictor is the conditional mean E[y | x]."
+            prerequisites:
+              - lt.1.2.1
+      - id: lt.1.3
+        name: "Bias–variance decomposition"
+        description: "Excess risk as bias² + variance + irreducible noise."
+        children:
+          - id: lt.1.3.1
+            name: "Bias of an estimator"
+            description: "Systematic error: deviation of the average prediction from the target function."
+            prerequisites:
+              - prob.9.1
+          - id: lt.1.3.2
+            name: "Variance of an estimator"
+            description: "Sensitivity of the learned predictor to the random training sample."
+            prerequisites:
+              - prob.9.1
+          - id: lt.1.3.3
+            name: "Irreducible noise"
+            description: "Bayes-level error floor independent of the estimator."
+            prerequisites:
+              - lt.1.1.2
+              - lt.1.2.3
+          - id: lt.1.3.4
+            name: "Bias–variance decomposition of squared error"
+            description: "Expected squared error = bias² + variance + noise."
+            prerequisites:
+              - lt.1.3.1
+              - lt.1.3.2
+              - lt.1.3.3
       - id: lt.1.4
         name: "Surrogate losses and calibration"
-        description: "Cross-entropy / hinge as proxies for 0–1 loss."
-        prerequisites: [opt.1.2, lt.1.1]
+        description: "Tractable convex proxies for the 0–1 loss."
+        children:
+          - id: lt.1.4.1
+            name: "0–1 loss and its nonconvexity"
+            description: "Classification error is discontinuous and NP-hard to minimize directly."
+            prerequisites:
+              - lt.1.1.1
+              - lt.1.2.2
+          - id: lt.1.4.2
+            name: "Convex surrogate losses"
+            description: "Hinge, logistic, and exponential losses upper-bound the 0–1 loss convexly."
+            prerequisites:
+              - opt.1.2
+              - lt.1.4.1
+          - id: lt.1.4.3
+            name: "Classification calibration"
+            description: "A surrogate is calibrated when its minimizer recovers the Bayes classifier's sign."
+            prerequisites:
+              - lt.1.4.2
+              - lt.1.2.2
+          - id: lt.1.4.4
+            name: "Surrogate excess-risk transfer"
+            description: "Calibration bounds translate surrogate excess risk into 0–1 excess risk."
+            prerequisites:
+              - lt.1.4.3
+            terminal: true
       - id: lt.1.5
         name: "Excess risk decomposition"
-        description: "Approximation, estimation, optimization errors."
-        prerequisites: [lt.1.1]
+        description: "Approximation, estimation, and optimization error."
+        children:
+          - id: lt.1.5.1
+            name: "Approximation error"
+            description: "Gap between the best-in-class risk and the Bayes risk."
+            prerequisites:
+              - lt.1.1.5
+              - lt.1.2.1
+          - id: lt.1.5.2
+            name: "Estimation error"
+            description: "Gap between the ERM risk and the best-in-class risk, from finite data."
+            prerequisites:
+              - lt.1.1.4
+              - lt.1.1.5
+          - id: lt.1.5.3
+            name: "Optimization error"
+            description: "Gap from not solving ERM exactly."
+            prerequisites:
+              - lt.1.1.4
+          - id: lt.1.5.4
+            name: "Approximation–estimation tradeoff"
+            description: "Larger classes lower approximation error but raise estimation error."
+            prerequisites:
+              - lt.1.5.1
+              - lt.1.5.2
+              - lt.1.5.3
 
   - id: lt.2
     name: "Generalization bounds"
-    leaves:
+    description: "Capacity measures controlling the gap between empirical and population risk."
+    children:
       - id: lt.2.1
         name: "Uniform convergence"
-        description: "sup-norm bounds on empirical vs population risk."
-        prerequisites: [prob.5.3, prob.6.5]
+        description: "Sup-norm control of empirical vs population risk over a class."
+        children:
+          - id: lt.2.1.1
+            name: "Generalization gap"
+            description: "Difference between population and empirical risk of a hypothesis."
+            prerequisites:
+              - lt.1.1.2
+              - lt.1.1.3
+          - id: lt.2.1.2
+            name: "Finite-class bound"
+            description: "Union bound gives a √(log|H| / n) gap for finite hypothesis classes."
+            prerequisites:
+              - lt.2.1.1
+              - prob.5.3
+          - id: lt.2.1.3
+            name: "Uniform convergence over a class"
+            description: "Bounding sup over H of the generalization gap certifies ERM."
+            prerequisites:
+              - lt.2.1.2
+              - prob.6.5
+          - id: lt.2.1.4
+            name: "PAC learnability"
+            description: "A class is PAC-learnable if sample complexity is polynomial in 1/ε, 1/δ."
+            prerequisites:
+              - lt.2.1.3
       - id: lt.2.2
         name: "VC dimension"
-        description: "Combinatorial capacity for binary classes."
-        prerequisites: [lt.2.1, dis.1.3]
+        description: "Combinatorial capacity of binary function classes."
+        children:
+          - id: lt.2.2.1
+            name: "Shattering"
+            description: "A class shatters a set if it realizes all 2ᵏ label patterns on it."
+            prerequisites:
+              - lt.2.1.3
+          - id: lt.2.2.2
+            name: "VC dimension"
+            description: "Size of the largest shattered set."
+            prerequisites:
+              - lt.2.2.1
+          - id: lt.2.2.3
+            name: "Growth function"
+            description: "Maximum number of label patterns realized on n points."
+            prerequisites:
+              - lt.2.2.1
+          - id: lt.2.2.4
+            name: "Sauer–Shelah lemma"
+            description: "Growth function is polynomial of degree ≤ VC dimension."
+            prerequisites:
+              - lt.2.2.2
+              - lt.2.2.3
+              - dis.1.3
+          - id: lt.2.2.5
+            name: "VC generalization bound"
+            description: "Generalization gap is O(√(d log n / n)) for VC dimension d."
+            prerequisites:
+              - lt.2.2.4
+              - lt.2.1.3
+          - id: lt.2.2.6
+            name: "Fundamental theorem of PAC learning"
+            description: "Finite VC dimension is equivalent to PAC learnability."
+            prerequisites:
+              - lt.2.2.5
+              - lt.2.1.4
+            terminal: true
       - id: lt.2.3
-        name: "Rademacher / Gaussian complexity"
+        name: "Rademacher and Gaussian complexity"
         description: "Data-dependent complexity measures."
-        prerequisites: [lt.2.1]
+        children:
+          - id: lt.2.3.1
+            name: "Empirical Rademacher complexity"
+            description: "Expected best correlation of a class with random ±1 sign noise."
+            prerequisites:
+              - lt.2.1.3
+          - id: lt.2.3.2
+            name: "Massart's finite-class lemma"
+            description: "Bounds Rademacher complexity of a finite class by √(2 log N) / √n."
+            prerequisites:
+              - lt.2.3.1
+          - id: lt.2.3.3
+            name: "Rademacher generalization bound"
+            description: "Generalization gap controlled by Rademacher complexity plus a confidence term."
+            prerequisites:
+              - lt.2.3.1
+              - lt.2.3.2
+          - id: lt.2.3.4
+            name: "Contraction lemma"
+            description: "Talagrand: composing with an L-Lipschitz map scales complexity by L."
+            prerequisites:
+              - lt.2.3.3
+          - id: lt.2.3.5
+            name: "Gaussian complexity"
+            description: "Variant using Gaussian rather than Rademacher weights; equivalent up to logs."
+            prerequisites:
+              - lt.2.3.1
       - id: lt.2.4
         name: "Covering numbers and metric entropy"
-        description: "Combinatorial / metric capacity of function classes."
-        prerequisites: [ana.3.3]
+        description: "Metric capacity of function classes."
+        children:
+          - id: lt.2.4.1
+            name: "ε-cover and covering number"
+            description: "Fewest ε-balls needed to cover a set in a metric."
+            prerequisites:
+              - ana.3.3
+          - id: lt.2.4.2
+            name: "Packing number and duality"
+            description: "Maximal ε-separated set; sandwiches the covering number."
+            prerequisites:
+              - lt.2.4.1
+          - id: lt.2.4.3
+            name: "Metric entropy"
+            description: "Log covering number as a function of scale ε."
+            prerequisites:
+              - lt.2.4.1
+          - id: lt.2.4.4
+            name: "Covering-number generalization bound"
+            description: "Discretize the class at scale ε, then union-bound over the cover."
+            prerequisites:
+              - lt.2.4.3
+              - lt.2.3.3
       - id: lt.2.5
         name: "Chaining and Dudley's inequality"
         description: "From covering numbers to expectation bounds."
-        prerequisites: [lt.2.4, prob.6.6, prob.6.7, prob.9.9]
+        children:
+          - id: lt.2.5.1
+            name: "Sub-Gaussian process"
+            description: "Increments with sub-Gaussian tails indexed by a metric space."
+            prerequisites:
+              - lt.2.4.1
+              - prob.6.6
+          - id: lt.2.5.2
+            name: "One-step discretization bound"
+            description: "Single-scale cover plus a maximal inequality bounds the supremum."
+            prerequisites:
+              - lt.2.5.1
+              - prob.6.7
+          - id: lt.2.5.3
+            name: "Chaining"
+            description: "Telescoping across a geometric sequence of covers tightens the bound."
+            prerequisites:
+              - lt.2.5.2
+              - lt.2.4.3
+          - id: lt.2.5.4
+            name: "Dudley's entropy integral"
+            description: "Expected supremum bounded by ∫ √(log N(ε)) dε."
+            prerequisites:
+              - lt.2.5.3
+              - prob.9.9
+            terminal: true
       - id: lt.2.6
         name: "PAC-Bayes"
-        description: "Posterior-dependent bounds; KL penalty."
-        prerequisites: [inf.1.4, prob.9.4]
+        description: "Posterior-dependent generalization bounds."
+        children:
+          - id: lt.2.6.1
+            name: "Prior and posterior over hypotheses"
+            description: "Data-free prior P and data-dependent posterior Q over the class."
+            prerequisites:
+              - lt.2.1.1
+              - prob.9.4
+          - id: lt.2.6.2
+            name: "KL penalty"
+            description: "Generalization is charged the KL divergence from posterior to prior."
+            prerequisites:
+              - lt.2.6.1
+              - inf.1.4
+          - id: lt.2.6.3
+            name: "McAllester bound"
+            description: "Expected risk under Q bounded by empirical risk plus √(KL(Q‖P) / 2n)."
+            prerequisites:
+              - lt.2.6.2
+          - id: lt.2.6.4
+            name: "Catoni / linear PAC-Bayes bound"
+            description: "A tighter linear-form bound with a tunable temperature."
+            prerequisites:
+              - lt.2.6.3
+            terminal: true
       - id: lt.2.7
         name: "Algorithmic stability bounds"
         description: "Generalization via output stability under data perturbation."
-        prerequisites: [lt.2.1]
+        children:
+          - id: lt.2.7.1
+            name: "Uniform stability"
+            description: "Bounded change in loss when one training example is replaced."
+            prerequisites:
+              - lt.1.1.4
+          - id: lt.2.7.2
+            name: "Stability implies generalization"
+            description: "β-uniform stability bounds the expected generalization gap by β."
+            prerequisites:
+              - lt.2.7.1
+              - lt.2.1.1
+          - id: lt.2.7.3
+            name: "Stability of regularized ERM"
+            description: "Strongly convex regularization yields O(1/n) stability."
+            prerequisites:
+              - lt.2.7.2
+            terminal: true
       - id: lt.2.8
         name: "Compression bounds"
-        description: "Generalization via short certificate of the learner."
-        prerequisites: [dis.5.2]
+        description: "Generalization via a short certificate of the learner."
+        children:
+          - id: lt.2.8.1
+            name: "Sample compression scheme"
+            description: "Reconstruct the hypothesis from a small subset of training examples."
+            prerequisites:
+              - lt.2.1.1
+              - dis.5.2
+          - id: lt.2.8.2
+            name: "Compression generalization bound"
+            description: "Generalization controlled by the compression-set size."
+            prerequisites:
+              - lt.2.8.1
+            terminal: true
+          - id: lt.2.8.3
+            name: "Occam / MDL bound"
+            description: "Short description length of the learner implies generalization."
+            prerequisites:
+              - lt.2.8.1
+            terminal: true
 
   - id: lt.3
     name: "Online and adversarial learning"
-    leaves:
+    description: "Sequential prediction against worst-case data."
+    children:
       - id: lt.3.1
         name: "Online regret bounds"
-        description: "Sublinear regret as the criterion."
-        prerequisites: [opt.9.1, opt.9.4]
+        description: "Sublinear regret as the learning criterion."
+        children:
+          - id: lt.3.1.1
+            name: "Online learning protocol"
+            description: "Predict, then receive loss, repeatedly against an adaptive adversary."
+            prerequisites:
+              - opt.9.1
+          - id: lt.3.1.2
+            name: "Regret"
+            description: "Cumulative loss minus that of the best fixed comparator in hindsight."
+            prerequisites:
+              - lt.3.1.1
+          - id: lt.3.1.3
+            name: "Follow-the-regularized-leader"
+            description: "FTRL achieves O(√T) regret; recovers OGD and exponential weights."
+            prerequisites:
+              - lt.3.1.2
+              - opt.9.4
+            terminal: true
+          - id: lt.3.1.4
+            name: "Online-to-batch conversion"
+            description: "Averaging an online learner's iterates yields a population-risk bound."
+            prerequisites:
+              - lt.3.1.2
+              - lt.1.1.2
+            terminal: true
       - id: lt.3.2
         name: "Mistake bounds"
-        description: "Halving, perceptron, winnow."
-        prerequisites: [opt.9.2]
+        description: "Worst-case mistake counts for online classifiers."
+        children:
+          - id: lt.3.2.1
+            name: "Mistake-bound model"
+            description: "Count total mistakes in the realizable online setting."
+            prerequisites:
+              - lt.3.1.1
+              - opt.9.2
+          - id: lt.3.2.2
+            name: "Halving algorithm"
+            description: "Majority vote over the version space; ≤ log₂|H| mistakes."
+            prerequisites:
+              - lt.3.2.1
+            terminal: true
+          - id: lt.3.2.3
+            name: "Perceptron mistake bound"
+            description: "≤ (R/γ)² mistakes on γ-margin separable data of radius R."
+            prerequisites:
+              - lt.3.2.1
+            terminal: true
+          - id: lt.3.2.4
+            name: "Winnow"
+            description: "Multiplicative-weights learner with a log-dependence on dimension."
+            prerequisites:
+              - lt.3.2.1
+            terminal: true
       - id: lt.3.3
         name: "Boosting analysis"
         description: "Margin-based generalization for ensembles."
-        prerequisites: [lt.2.3]
+        children:
+          - id: lt.3.3.1
+            name: "Weak vs strong learning"
+            description: "A weak learner beats chance; boosting amplifies it to arbitrary accuracy."
+            prerequisites:
+              - lt.2.1.4
+          - id: lt.3.3.2
+            name: "AdaBoost"
+            description: "Reweight examples toward current errors; combine weak learners additively."
+            prerequisites:
+              - lt.3.3.1
+          - id: lt.3.3.3
+            name: "Training-error decay"
+            description: "AdaBoost drives training error down exponentially in rounds."
+            prerequisites:
+              - lt.3.3.2
+            terminal: true
+          - id: lt.3.3.4
+            name: "Margin theory of boosting"
+            description: "Continued boosting enlarges margins, explaining resistance to overfitting."
+            prerequisites:
+              - lt.3.3.2
+              - lt.2.3.3
+            terminal: true
 
   - id: lt.4
     name: "Implicit and inductive bias"
-    leaves:
+    description: "What over-parameterized training selects, beyond fitting the data."
+    children:
       - id: lt.4.1
         name: "Implicit bias of GD / SGD"
-        description: "Solution selection in over-parameterized models."
-        prerequisites: [opt.4.1, opt.4.3, opt.7.5]
+        description: "Solution selection among many global minima."
+        children:
+          - id: lt.4.1.1
+            name: "Implicit regularization"
+            description: "The optimizer, not an explicit penalty, biases which interpolator is found."
+            prerequisites:
+              - opt.4.1
+          - id: lt.4.1.2
+            name: "Gradient descent to max-margin"
+            description: "On separable data, GD on logistic loss converges in direction to the max-margin solution."
+            prerequisites:
+              - lt.4.1.1
+              - opt.4.3
+            terminal: true
+          - id: lt.4.1.3
+            name: "Min-norm interpolation"
+            description: "GD from zero on least squares finds the minimum-ℓ₂-norm interpolant."
+            prerequisites:
+              - lt.4.1.1
+              - la.5.7
+            terminal: true
+          - id: lt.4.1.4
+            name: "SGD noise and implicit bias"
+            description: "Mini-batch noise adds an implicit bias toward flatter solutions."
+            prerequisites:
+              - lt.4.1.1
+              - opt.7.5
+            terminal: true
       - id: lt.4.2
         name: "Margin theory"
-        description: "Generalization via large margins."
-        prerequisites: [lt.2.2]
+        description: "Generalization controlled by classification margins."
+        children:
+          - id: lt.4.2.1
+            name: "Geometric margin"
+            description: "Signed distance of points from the decision boundary."
+            prerequisites:
+              - la.3.2.4
+              - lt.1.1.5
+          - id: lt.4.2.2
+            name: "Margin-based generalization bound"
+            description: "Large margins shrink the effective complexity of linear and deep classifiers."
+            prerequisites:
+              - lt.4.2.1
+              - lt.2.3.3
+              - lt.2.3.4
+            terminal: true
+          - id: lt.4.2.3
+            name: "Margin / ramp loss"
+            description: "Margin-sensitive surrogate enabling margin generalization bounds."
+            prerequisites:
+              - lt.4.2.1
+            terminal: true
       - id: lt.4.3
         name: "Norm-based capacity"
-        description: "Path / spectral / Frobenius norm complexity."
-        prerequisites: [lt.2.3]
+        description: "Path, spectral, and Frobenius norm complexity."
+        children:
+          - id: lt.4.3.1
+            name: "Norm-based complexity"
+            description: "Weight norms, not parameter counts, control deep-net capacity."
+            prerequisites:
+              - lt.2.3.1
+          - id: lt.4.3.2
+            name: "Spectral-norm bound"
+            description: "Generalization scaling with the product of layer spectral norms."
+            prerequisites:
+              - lt.4.3.1
+              - lt.2.3.5
+            terminal: true
+          - id: lt.4.3.3
+            name: "Path norm"
+            description: "Sum over input-output paths of weight-magnitude products."
+            prerequisites:
+              - lt.4.3.1
+            terminal: true
       - id: lt.4.4
         name: "Flatness and generalization"
-        description: "Sharpness measures and SAM."
-        prerequisites: [opt.7.1, lt.4.3]
+        description: "Sharpness measures and sharpness-aware minimization."
+        children:
+          - id: lt.4.4.1
+            name: "Sharpness of minima"
+            description: "Sensitivity of the loss to parameter perturbations around a minimum."
+            prerequisites:
+              - opt.7.1
+          - id: lt.4.4.2
+            name: "Hessian-based sharpness"
+            description: "Eigenvalues and trace of the loss Hessian quantify sharpness."
+            prerequisites:
+              - lt.4.4.1
+              - lt.4.3.1
+          - id: lt.4.4.3
+            name: "Sharpness-aware minimization"
+            description: "SAM minimizes worst-case loss in a neighborhood to seek flat minima."
+            prerequisites:
+              - lt.4.4.1
+          - id: lt.4.4.4
+            name: "PAC-Bayes view of flatness"
+            description: "Flatness gives a small KL term, linking sharpness to generalization."
+            prerequisites:
+              - lt.4.4.1
+              - lt.2.6.3
 
   - id: lt.5
     name: "Modern deep-net theory"
-    leaves:
+    description: "Wide-network limits, double descent, scaling, and landscape geometry."
+    children:
       - id: lt.5.1
         name: "Universal approximation"
-        description: "Density of NN function classes."
-        prerequisites: [ana.3.5]
+        description: "Density of neural-network function classes."
+        children:
+          - id: lt.5.1.1
+            name: "Universal approximation theorem"
+            description: "One hidden layer with a non-polynomial activation is dense in C(K)."
+            prerequisites:
+              - ana.3.5
+          - id: lt.5.1.2
+            name: "Width vs approximation rate"
+            description: "How many units are needed to reach an ε-approximation."
+            prerequisites:
+              - lt.5.1.1
+          - id: lt.5.1.3
+            name: "Barron's theorem"
+            description: "Functions with bounded Fourier moment are approximated at an O(1/√m) rate, dimension-free."
+            prerequisites:
+              - lt.5.1.1
       - id: lt.5.2
         name: "Depth separation"
         description: "Depth-vs-width expressivity gaps."
-        prerequisites: [lt.5.1, dis.4.6]
+        children:
+          - id: lt.5.2.1
+            name: "Expressivity and depth"
+            description: "Depth can represent functions far more compactly than width."
+            prerequisites:
+              - lt.5.1.1
+          - id: lt.5.2.2
+            name: "Depth-separation results"
+            description: "Functions efficiently realized by depth-k but not depth-(k−1) networks."
+            prerequisites:
+              - lt.5.2.1
+              - dis.4.6
+          - id: lt.5.2.3
+            name: "Number of linear regions"
+            description: "Deep ReLU nets partition input space into exponentially many regions."
+            prerequisites:
+              - lt.5.2.1
       - id: lt.5.3
         name: "Neural tangent kernel"
         description: "Lazy / kernel regime of wide networks."
-        prerequisites: [ana.4.9, opt.3.1, opt.7.3]
+        children:
+          - id: lt.5.3.1
+            name: "Linearization around initialization"
+            description: "First-order Taylor expansion of the network in its parameters."
+            prerequisites:
+              - ana.4.9
+              - opt.3.1
+          - id: lt.5.3.2
+            name: "The neural tangent kernel"
+            description: "Inner product of parameter gradients; governs training dynamics."
+            prerequisites:
+              - lt.5.3.1
+          - id: lt.5.3.3
+            name: "NTK constancy at infinite width"
+            description: "As width → ∞ the NTK is fixed at initialization throughout training."
+            prerequisites:
+              - lt.5.3.2
+              - opt.7.3
+          - id: lt.5.3.4
+            name: "Convergence and generalization in the NTK regime"
+            description: "Training reduces to kernel regression with the NTK."
+            prerequisites:
+              - lt.5.3.3
       - id: lt.5.4
         name: "Mean-field regime"
         description: "Wide one-hidden-layer training as a measure flow."
-        prerequisites: [dyn.6.4, geom.7.4]
+        children:
+          - id: lt.5.4.1
+            name: "Parameters as a probability measure"
+            description: "Represent a wide layer by the empirical distribution of its neurons."
+            prerequisites:
+              - dyn.6.4
+          - id: lt.5.4.2
+            name: "Mean-field gradient flow"
+            description: "Training becomes a Wasserstein gradient flow on the neuron measure."
+            prerequisites:
+              - lt.5.4.1
+              - geom.7.4
+          - id: lt.5.4.3
+            name: "Global convergence in the mean-field limit"
+            description: "Under conditions the flow converges to a global minimizer."
+            prerequisites:
+              - lt.5.4.2
       - id: lt.5.5
         name: "Double descent and benign overfitting"
-        description: "Test error U-shape and beyond."
-        prerequisites: [lt.1.2, la.5.7]
+        description: "Test-error behavior past the interpolation threshold."
+        children:
+          - id: lt.5.5.1
+            name: "Classical U-shaped risk"
+            description: "Under-fit to over-fit as model complexity grows in the classical regime."
+            prerequisites:
+              - lt.1.3.4
+          - id: lt.5.5.2
+            name: "Double descent curve"
+            description: "A second descent in test error beyond the interpolation point."
+            prerequisites:
+              - lt.5.5.1
+          - id: lt.5.5.3
+            name: "Interpolation threshold"
+            description: "Peak risk where model capacity first fits the data exactly."
+            prerequisites:
+              - lt.5.5.2
+              - la.5.7
+          - id: lt.5.5.4
+            name: "Benign overfitting"
+            description: "Interpolating noisy data while still generalizing in high dimension."
+            prerequisites:
+              - lt.5.5.3
       - id: lt.5.6
         name: "Scaling laws"
-        description: "Power-law dependence on data, params, compute (Chinchilla)."
-        prerequisites: [lt.1.5, dyn.5.5]
+        description: "Power-law dependence on data, parameters, and compute."
+        children:
+          - id: lt.5.6.1
+            name: "Power-law scaling of loss"
+            description: "Test loss falls as a power law in the limiting resource."
+            prerequisites:
+              - lt.1.5.4
+              - dyn.5.5
+          - id: lt.5.6.2
+            name: "Data, parameter, and compute scaling"
+            description: "Separate power-law exponents for each axis and their interaction."
+            prerequisites:
+              - lt.5.6.1
+          - id: lt.5.6.3
+            name: "Compute-optimal scaling"
+            description: "Chinchilla: balance parameters and tokens for a compute budget."
+            prerequisites:
+              - lt.5.6.2
+          - id: lt.5.6.4
+            name: "Emergent abilities"
+            description: "Debated sharp capability jumps with scale, sensitive to the metric."
+            prerequisites:
+              - lt.5.6.1
       - id: lt.5.7
         name: "Feature learning vs lazy training"
         description: "Beyond NTK — when do features actually move?"
-        prerequisites: [lt.5.3, geom.8.3]
+        children:
+          - id: lt.5.7.1
+            name: "Lazy vs rich regimes"
+            description: "Whether internal features stay frozen or adapt during training."
+            prerequisites:
+              - lt.5.3.2
+              - geom.8.3
+          - id: lt.5.7.2
+            name: "Maximal-update parameterization"
+            description: "μP scaling keeps features learning as width grows."
+            prerequisites:
+              - lt.5.7.1
+          - id: lt.5.7.3
+            name: "Limitations of the NTK"
+            description: "Where the kernel regime fails to explain trained-network behavior."
+            prerequisites:
+              - lt.5.7.1
       - id: lt.5.8
         name: "Loss-landscape geometry"
         description: "Hessian spectrum, basins, plateaus."
-        prerequisites: [opt.7.1, la.4.4, prob.6.8, opt.7.2, dyn.5.4]
+        children:
+          - id: lt.5.8.1
+            name: "Hessian spectrum of the loss"
+            description: "Bulk-plus-outliers structure of the loss Hessian's eigenvalues."
+            prerequisites:
+              - opt.7.1
+              - la.4.4
+          - id: lt.5.8.2
+            name: "Saddle points and plateaus"
+            description: "High-dimensional landscapes are dominated by saddles, not local minima."
+            prerequisites:
+              - opt.7.2
+              - prob.6.8
+              - dyn.5.4
+          - id: lt.5.8.3
+            name: "Basins of attraction"
+            description: "Wide low-loss basins and how initialization selects among them."
+            prerequisites:
+              - lt.5.8.1
       - id: lt.5.9
         name: "Mode connectivity"
         description: "Low-loss paths between SGD solutions."
-        prerequisites: [lt.5.8]
+        children:
+          - id: lt.5.9.1
+            name: "Low-loss paths between solutions"
+            description: "Distinct minima are joined by curves of near-constant low loss."
+            prerequisites:
+              - lt.5.8.3
+          - id: lt.5.9.2
+            name: "Linear mode connectivity"
+            description: "When solutions are connected by a straight low-loss segment."
+            prerequisites:
+              - lt.5.9.1
+          - id: lt.5.9.3
+            name: "Permutation symmetry and connectivity"
+            description: "Accounting for neuron permutations makes solutions linearly connected."
+            prerequisites:
+              - lt.5.9.2
 
   - id: lt.6
     name: "Robustness and out-of-distribution"
-    leaves:
+    description: "Behavior under adversarial perturbation and distribution shift."
+    children:
       - id: lt.6.1
         name: "Adversarial robustness"
-        description: "Min-max formulation; certified defenses."
-        prerequisites: [opt.8.1, opt.8.4, opt.3.7, opt.6.5, num.6.4]
+        description: "Min-max formulation and certified defenses."
+        children:
+          - id: lt.6.1.1
+            name: "Adversarial examples"
+            description: "Small input perturbations that flip a model's prediction."
+            prerequisites:
+              - opt.3.7
+              - num.6.4
+          - id: lt.6.1.2
+            name: "Robust risk"
+            description: "Worst-case loss over a perturbation set; an inner-max objective."
+            prerequisites:
+              - lt.6.1.1
+              - opt.8.1
+          - id: lt.6.1.3
+            name: "Adversarial training"
+            description: "Minimize robust risk by training on inner-max adversarial inputs."
+            prerequisites:
+              - lt.6.1.2
+              - opt.8.4
+          - id: lt.6.1.4
+            name: "Certified defenses"
+            description: "Randomized smoothing gives provable ℓ₂ robustness radii."
+            prerequisites:
+              - lt.6.1.2
+              - opt.6.5
+            terminal: true
+          - id: lt.6.1.5
+            name: "Robustness–accuracy tradeoff"
+            description: "Robustness can come at a measurable cost to clean accuracy."
+            prerequisites:
+              - lt.6.1.3
+            terminal: true
       - id: lt.6.2
         name: "Distribution shift"
-        description: "Covariate, label, concept shift; population analyses."
-        prerequisites: [prob.5.1]
+        description: "Covariate, label, and concept shift."
+        children:
+          - id: lt.6.2.1
+            name: "Covariate shift"
+            description: "Input distribution changes while P(y | x) is fixed."
+            prerequisites:
+              - prob.5.1
+          - id: lt.6.2.2
+            name: "Label shift"
+            description: "Class priors change while P(x | y) is fixed."
+            prerequisites:
+              - prob.5.1
+          - id: lt.6.2.3
+            name: "Concept shift"
+            description: "The conditional P(y | x) itself changes across domains."
+            prerequisites:
+              - lt.6.2.1
+          - id: lt.6.2.4
+            name: "Importance-weighting correction"
+            description: "Reweight by the density ratio to correct covariate shift."
+            prerequisites:
+              - lt.6.2.1
       - id: lt.6.3
         name: "Domain adaptation theory"
-        description: "Discrepancy bounds; Ben-David bound."
-        prerequisites: [lt.6.2, inf.1.8, inf.3.3]
+        description: "Discrepancy bounds across source and target."
+        children:
+          - id: lt.6.3.1
+            name: "Source vs target risk"
+            description: "Generalizing from a labeled source to an unlabeled target domain."
+            prerequisites:
+              - lt.6.2.1
+          - id: lt.6.3.2
+            name: "H-divergence"
+            description: "Distribution distance measurable by the hypothesis class itself."
+            prerequisites:
+              - lt.6.3.1
+              - inf.1.8
+              - inf.3.3
+          - id: lt.6.3.3
+            name: "Ben-David bound"
+            description: "Target risk ≤ source risk + H-divergence + joint-optimal error."
+            prerequisites:
+              - lt.6.3.2
+            terminal: true
       - id: lt.6.4
         name: "Calibration and conformal prediction"
         description: "Reliable uncertainty under finite samples."
-        prerequisites: [prob.9.1, prob.9.7, prob.9.8]
+        children:
+          - id: lt.6.4.1
+            name: "Calibration"
+            description: "Predicted probabilities match empirical frequencies."
+            prerequisites:
+              - prob.9.1
+          - id: lt.6.4.2
+            name: "Expected calibration error"
+            description: "Binned gap between confidence and accuracy; reliability diagrams."
+            prerequisites:
+              - lt.6.4.1
+            terminal: true
+          - id: lt.6.4.3
+            name: "Post-hoc calibration"
+            description: "Platt scaling and temperature scaling recalibrate a trained model."
+            prerequisites:
+              - lt.6.4.1
+            terminal: true
+          - id: lt.6.4.4
+            name: "Conformal prediction"
+            description: "Prediction sets with finite-sample coverage from exchangeability."
+            prerequisites:
+              - prob.9.7
+              - prob.9.8
+          - id: lt.6.4.5
+            name: "Coverage guarantee"
+            description: "Conformal sets contain the truth with probability ≥ 1 − α, distribution-free."
+            prerequisites:
+              - lt.6.4.4
+            terminal: true
 
   - id: lt.7
     name: "Causality (light)"
-    leaves:
+    description: "Interventions, counterfactuals, and invariance."
+    children:
       - id: lt.7.1
         name: "Causal DAGs"
         description: "Directed graphs encoding interventional structure."
-        prerequisites: [prob.4.4]
+        children:
+          - id: lt.7.1.1
+            name: "Structural causal model"
+            description: "Variables as deterministic functions of parents plus exogenous noise."
+            prerequisites:
+              - prob.4.4
+          - id: lt.7.1.2
+            name: "Causal DAG"
+            description: "Directed acyclic graph whose edges denote direct causes."
+            prerequisites:
+              - lt.7.1.1
+          - id: lt.7.1.3
+            name: "d-separation"
+            description: "Graphical criterion reading conditional independence off the DAG."
+            prerequisites:
+              - lt.7.1.2
+          - id: lt.7.1.4
+            name: "Markov condition and faithfulness"
+            description: "Linking graph separations to the distribution's independencies."
+            prerequisites:
+              - lt.7.1.3
       - id: lt.7.2
         name: "Do-calculus"
         description: "Pearl's calculus for interventions."
-        prerequisites: [lt.7.1]
+        children:
+          - id: lt.7.2.1
+            name: "Intervention and the do-operator"
+            description: "do(x) sets a variable, severing its incoming edges."
+            prerequisites:
+              - lt.7.1.2
+          - id: lt.7.2.2
+            name: "Back-door criterion"
+            description: "Adjustment set blocking confounding paths identifies an effect."
+            prerequisites:
+              - lt.7.2.1
+              - lt.7.1.3
+          - id: lt.7.2.3
+            name: "Front-door criterion"
+            description: "Identify an effect through a fully mediating variable."
+            prerequisites:
+              - lt.7.2.1
+              - lt.7.1.3
+          - id: lt.7.2.4
+            name: "Do-calculus rules"
+            description: "Three rules reducing interventional to observational distributions."
+            prerequisites:
+              - lt.7.2.2
+              - lt.7.2.3
       - id: lt.7.3
         name: "Counterfactuals"
-        description: "Structural causal models; potential outcomes."
-        prerequisites: [lt.7.2]
+        description: "Structural causal models and potential outcomes."
+        children:
+          - id: lt.7.3.1
+            name: "Potential outcomes"
+            description: "Per-unit outcomes under each treatment; the fundamental problem of causal inference."
+            prerequisites:
+              - lt.7.2.1
+          - id: lt.7.3.2
+            name: "Counterfactual queries"
+            description: "Abduction–action–prediction over a structural model."
+            prerequisites:
+              - lt.7.3.1
+              - lt.7.1.1
+          - id: lt.7.3.3
+            name: "Ladder of causation"
+            description: "Association, intervention, and counterfactual rungs."
+            prerequisites:
+              - lt.7.3.2
+              - lt.7.2.4
+            terminal: true
       - id: lt.7.4
         name: "Invariance and causality"
-        description: "ICP, IRM, invariance-based generalization."
-        prerequisites: [lt.7.1, lt.6.2]
+        description: "Invariance-based generalization."
+        children:
+          - id: lt.7.4.1
+            name: "Invariant causal prediction"
+            description: "ICP: causal parents give conditionals invariant across environments."
+            prerequisites:
+              - lt.7.1.4
+              - lt.6.2.1
+          - id: lt.7.4.2
+            name: "Invariant risk minimization"
+            description: "IRM seeks a representation whose optimal predictor is shared across environments."
+            prerequisites:
+              - lt.7.4.1
+          - id: lt.7.4.3
+            name: "Causality and OOD generalization"
+            description: "Invariance as a route to out-of-distribution robustness."
+            prerequisites:
+              - lt.7.4.2
+              - lt.6.2.3
+            terminal: true
