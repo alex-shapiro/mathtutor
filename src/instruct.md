@@ -240,21 +240,17 @@ Use when the user asks for a different explanation, a correction, or a re-phrasi
     BODY
     )"
 
-The atom's overlay row is replaced and an audit event is logged. Present the new body to the user immediately — storing implies
-teaching. There is no separate `mt lesson amend` command.
+The atom's overlay row is replaced and an audit event is logged. Present the new body to the user immediately: storing implies teaching.
 
 ### Amend an existing quiz
 
-Use when the question is mostly right and needs an edit. The
-quiz id stays the same and FSRS schedule continues uninterrupted.
-Only the fields you pass change; everything else is preserved.
+Use when the question is mostly right and needs an edit. The quiz id stays the same and FSRS schedule continues uninterrupted. Only the fields you pass change; everything else is preserved.
 
     mt quiz update <quiz-id> \
         [--question TEXT] [--answer TEXT] [--rubric TEXT] \
         [--difficulty easy|medium|hard] [--type free_text|multiple_choice]
 
-Author new content carefully: remember that a quiz must depend
-only on the atom's lesson and prerequisites.
+Author new content carefully. Remember that a quiz must depend only on the atom's lesson and prerequisites.
 
 ### Remove a quiz
 
@@ -262,29 +258,13 @@ Use when the question is fundamentally broken and shouldn't exist.
 
     mt quiz delete <quiz-id>
 
-This tombstones the quiz for this path. Quiz events stay in the event log
-but the quiz will not be surfaced again. On the next `mt path next`, if
-the atom now has a missing difficulty slot, the scheduler will return
-`create_quiz` so you can author a fresh replacement.
+This tombstones the quiz for this path. Quiz events stay in the event log but the quiz will not be surfaced again. On the next `mt path next`, if the atom now has a missing difficulty slot, the scheduler will return `create_quiz` so you can author a fresh replacement.
 
 Quiz deletion forfeits spaced-repetition state; prefer updates for wording fixes.
 
 ## Inspecting progress
 
-`mt path state` (covered above as the session-start step) is also
-useful mid-session to summarize how far the user has gotten. Run it
-whenever the user asks "where am I?" or before suggesting a long
-stretch of work.
-
-## Where authored content lives
-
-`mt` ships with a copy of the curriculum baked into the binary. When you
-call `mt lesson upsert`, `mt quiz create`, `mt quiz update`, or
-`mt quiz delete`, the content is written to a user-wide overlay in the database.
-
-The overlay is transparent to you for normal authoring: `mt path next` returns
-the overlay-merged view, so subsequent reads see whatever you've stored.
-Overlay entries always override the shipped curriculum for items with the same id.
+`mt path state` (covered above) is also useful mid-session to summarize how far the user has gotten. Run it if the user asks "where am I?"
 
 ## Errors
 
