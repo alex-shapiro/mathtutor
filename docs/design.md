@@ -312,7 +312,7 @@ The curriculum graph is compiled into the binary at build time via
 against a working tree, use the `--graph DIR` CLI option or the
 `MT_GRAPH` env variable.
 
-All per-user state lives in a libSQL database at `$MATHTUTOR_HOME/mt.db`.
+All user state lives in a libSQL database at `$MATHTUTOR_HOME/mt.db`.
 The default path is `~/.mathtutor/mt.db`). When `TURSO_URL` and `TURSO_AUTH_TOKEN`
 are set, the file is an embedded replica synced to a Turso server; otherwise
 it is a plain local SQLite file. The schema is versioned by numbered, immutable
