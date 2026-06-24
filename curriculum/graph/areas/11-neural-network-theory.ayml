@@ -195,7 +195,7 @@ topics:
       - id: nn.6.3
         name: "μP / unit scaling"
         description: "Width-stable parameterizations enabling HP transfer."
-        prerequisites: [nn.2.3, nn.2.4]
+        prerequisites: [nn.2.3, nn.2.4, lt.5.7.2]
       - id: nn.6.4
         name: "Hyperparameter transfer across scales"
         description: "Enabled by μP and scaling exponents."
