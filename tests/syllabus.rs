@@ -51,6 +51,7 @@ fn path_with(targets: &[&str]) -> PathFile {
         goal: "test".into(),
         created_at: Utc::now(),
         target_atoms: targets.iter().map(|s| (*s).to_string()).collect(),
+        strategy: mathtutor::types::Strategy::BottomUp,
     }
 }
 
@@ -209,4 +210,50 @@ fn n_truncates_atoms_but_total_remaining_is_full_count() {
     let n = 2;
     let truncated: Vec<_> = upcoming.iter().take(n).cloned().collect();
     assert_eq!(truncated, vec!["a".to_string(), "b".to_string()]);
+}
+
+// ── top-down: targets, with the subpath as a prefix ────────────────
+
+fn top_down(targets: &[&str]) -> PathFile {
+    PathFile {
+        strategy: mathtutor::types::Strategy::TopDown,
+        ..path_with(targets)
+    }
+}
+
+#[test]
+fn top_down_lists_targets_not_prereqs() {
+    // `t` depends on `p`; bottom-up would surface `p` first, top-down
+    // lists only the untaught target.
+    let g = graph_of(vec![atom("p", &[]), atom("t", &["p"])]);
+    let p = top_down(&["t"]);
+    assert_eq!(
+        syllabus::upcoming_top_down(&g, &p, &[], &[]),
+        vec!["t".to_string()],
+    );
+}
+
+#[test]
+fn top_down_prefixes_subpath_before_targets() {
+    let g = graph_of(vec![atom("p", &[]), atom("q", &[]), atom("t", &["p", "q"])]);
+    let p = top_down(&["t"]);
+    let subpath = vec!["q".to_string(), "t".to_string()];
+    // Subpath remaining atoms come first (q, then t); the target t is
+    // deduped out of the trailing targets list.
+    assert_eq!(
+        syllabus::upcoming_top_down(&g, &p, &[], &subpath),
+        vec!["q".to_string(), "t".to_string()],
+    );
+}
+
+#[test]
+fn top_down_skips_taught_subpath_and_target_atoms() {
+    let g = graph_of(vec![atom("p", &[]), atom("t", &["p"])]);
+    let p = top_down(&["t"]);
+    let subpath = vec!["p".to_string(), "t".to_string()];
+    // `p` already taught → drops out; only the remaining `t` is upcoming.
+    assert_eq!(
+        syllabus::upcoming_top_down(&g, &p, &[taught("p")], &subpath),
+        vec!["t".to_string()],
+    );
 }

@@ -57,8 +57,8 @@ use crate::Error;
 use crate::db::{self, DbConfig};
 use crate::graph::Graph;
 use crate::progress::PathProgress;
-use crate::types::{Difficulty, QuizType, Rating};
-use crate::{answer, discover, graph, path, scheduler, state, store, syllabus, tree};
+use crate::types::{Difficulty, QuizType, Rating, Strategy};
+use crate::{answer, discover, graph, path, scheduler, state, store, subpath, syllabus, tree};
 
 /// Local alias kept distinct from `std::result::Result` so the rmcp tool /
 /// prompt macros (which expand to bare `Result<…, ErrorData>`) don't pick
@@ -72,7 +72,7 @@ const PLAYBOOK: &str = include_str!("playbook.md");
 /// Background sync cadence for the embedded Turso replica. State-modifying
 /// tools also fire a non-blocking sync immediately after success; this
 /// interval covers the idle path.
-const BACKGROUND_SYNC_INTERVAL: Duration = Duration::from_secs(300);
+const BACKGROUND_SYNC_INTERVAL: Duration = Duration::from_mins(5);
 
 // ───────────────────────────── server ─────────────────────────────
 
@@ -127,11 +127,28 @@ pub struct NewPathArgs {
     pub goal: String,
     /// Target atom / cluster / area IDs (one or more).
     pub atoms: Vec<String>,
+    /// Initial traversal strategy: `bottom_up` (default) or `top_down`.
+    #[serde(default)]
+    pub strategy: Strategy,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct PathOnlyArgs {
     pub path_id: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct SetStrategyArgs {
+    pub path_id: String,
+    /// New traversal strategy: `bottom_up` or `top_down`.
+    pub strategy: Strategy,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct SubpathSetArgs {
+    pub path_id: String,
+    /// Atoms in teaching order; the last must be a path target.
+    pub atoms: Vec<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -255,7 +272,57 @@ impl MathTutorServer {
         Parameters(args): Parameters<NewPathArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let conn = self.conn().await?;
-        let result = path::cmd_path_new(&conn, &args.goal, &args.atoms, self.graph_path()).await;
+        let result = path::cmd_path_new(
+            &conn,
+            &args.goal,
+            &args.atoms,
+            args.strategy,
+            self.graph_path(),
+        )
+        .await;
+        if result.is_ok() {
+            self.spawn_sync();
+        }
+        encode(result.map(|id| json!({ "path_id": id })))
+    }
+
+    #[tool(description = "Switch a path's traversal strategy (bottom_up or top_down).")]
+    async fn set_strategy(
+        &self,
+        Parameters(args): Parameters<SetStrategyArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        let conn = self.conn().await?;
+        let result = path::cmd_path_strategy(&conn, Some(&args.path_id), args.strategy).await;
+        if result.is_ok() {
+            self.spawn_sync();
+        }
+        encode(result.map(|id| json!({ "path_id": id, "strategy": args.strategy })))
+    }
+
+    #[tool(
+        description = "Set a top-down path's subpath: an ordered detour of atoms ending in a target."
+    )]
+    async fn subpath_set(
+        &self,
+        Parameters(args): Parameters<SubpathSetArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        let conn = self.conn().await?;
+        let result =
+            subpath::cmd_subpath_set(&conn, Some(&args.path_id), &args.atoms, self.graph_path())
+                .await;
+        if result.is_ok() {
+            self.spawn_sync();
+        }
+        encode(result.map(|id| json!({ "path_id": id })))
+    }
+
+    #[tool(description = "Clear a path's subpath.")]
+    async fn subpath_clear(
+        &self,
+        Parameters(args): Parameters<PathOnlyArgs>,
+    ) -> std::result::Result<CallToolResult, McpError> {
+        let conn = self.conn().await?;
+        let result = subpath::cmd_subpath_clear(&conn, Some(&args.path_id)).await;
         if result.is_ok() {
             self.spawn_sync();
         }
@@ -480,6 +547,7 @@ impl ServerHandler for MathTutorServer {
 struct PathSummary {
     id: String,
     goal: String,
+    strategy: Strategy,
     created_at: DateTime<Utc>,
     target_atoms: Vec<String>,
 }
@@ -487,7 +555,7 @@ struct PathSummary {
 async fn list_paths(conn: &Connection) -> CrateResult<Vec<PathSummary>> {
     let mut rows = conn
         .query(
-            "SELECT id, goal, created_at FROM paths ORDER BY created_at ASC",
+            "SELECT id, goal, created_at, strategy FROM paths ORDER BY created_at ASC",
             (),
         )
         .await?;
@@ -497,6 +565,7 @@ async fn list_paths(conn: &Connection) -> CrateResult<Vec<PathSummary>> {
         let goal: String = row.get(1)?;
         let created_str: String = row.get(2)?;
         let created_at = db::parse_ts(&created_str)?;
+        let strategy: Strategy = row.get::<String>(3)?.parse()?;
         let mut t_rows = conn
             .query(
                 "SELECT atom_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
@@ -510,6 +579,7 @@ async fn list_paths(conn: &Connection) -> CrateResult<Vec<PathSummary>> {
         out.push(PathSummary {
             id,
             goal,
+            strategy,
             created_at,
             target_atoms,
         });
@@ -700,11 +770,9 @@ async fn compute_tree(
         .iter()
         .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
         .count();
-    let targets_pct = if targets_total > 0 {
-        targets_learned * 100 / targets_total
-    } else {
-        0
-    };
+    let targets_pct = (targets_learned * 100)
+        .checked_div(targets_total)
+        .unwrap_or(0);
     let reach_total = reachable.len();
     let reach_taught = reachable
         .iter()
@@ -844,6 +912,11 @@ fn error_kind(e: &Error) -> &'static str {
         Error::InvalidRating(_) => "invalid_rating",
         Error::InvalidDifficulty(_) => "invalid_difficulty",
         Error::InvalidQuizType(_) => "invalid_quiz_type",
+        Error::InvalidStrategy(_) => "invalid_strategy",
+        Error::SubpathNotTopDown => "subpath_not_top_down",
+        Error::SubpathEmpty => "subpath_empty",
+        Error::SubpathTailNotTarget(_) => "subpath_tail_not_target",
+        Error::SubpathDuplicateAtom(_) => "subpath_duplicate_atom",
         Error::BadTimestamp(_) => "bad_timestamp",
         Error::UnknownEventKind(_) => "unknown_event_kind",
         Error::CardsCorrupt(_) => "cards_corrupt",

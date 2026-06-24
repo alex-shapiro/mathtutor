@@ -14,7 +14,8 @@ use crate::event_log::{self, Event, EventKind};
 use crate::graph::{FlatConcept, Graph};
 use crate::path::{self, PathFile};
 use crate::progress::PathProgress;
-use crate::types::{Difficulty, QuizType, Rating};
+use crate::subpath;
+use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{Error, Result};
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
@@ -73,8 +74,9 @@ pub async fn compute_next(
     let p = path::load_path(&tx, &id).await?;
     let progress = PathProgress::load(&tx, &id).await?;
     let due = cards::due_quizzes(&tx, &id, Utc::now()).await?;
+    let subpath = subpath::load(&tx, &id).await?;
 
-    let action = next_action(&g, &p, &progress, &due, mode);
+    let action = next_action(&g, &p, &progress, &due, &subpath, mode);
     // Build the envelope first — its history aggregates count past
     // presentations only, not the `quiz_presented` / `lesson_taught`
     // we are about to log below.
@@ -97,6 +99,17 @@ pub async fn compute_next(
         }
         _ => {}
     }
+
+    // Auto-clear a fully-drained subpath: once every atom on it (the
+    // target included) is complete, the detour is spent and `next` has
+    // already moved on to the remaining targets.
+    if p.strategy == Strategy::TopDown
+        && !subpath.is_empty()
+        && subpath.iter().all(|a| is_atom_complete(&g, &progress, a))
+    {
+        subpath::clear(&tx, &id).await?;
+    }
+
     tx.commit().await?;
 
     Ok(envelope)
@@ -135,10 +148,12 @@ impl Action {
 
 /// Action priority (see `DESIGN.md`):
 ///   1. earliest-due quiz card → `present_quiz`
-///   2. for each path target (and its prereqs), in topo order:
-///      a. no lesson yet → `create_lesson`
-///      b. missing difficulty slot → `create_quiz`
-///      c. quiz never answered correctly → `present_quiz`
+///   2. the next incomplete atom, per the path's strategy. Bottom-up walks
+///      each target and its prereqs in topo order; top-down takes the first
+///      incomplete atom of `subpath` if set, else the next incomplete
+///      target (neither top-down case descends into prereqs). For that
+///      atom: `create_lesson` → `present_lesson` → `create_quiz` →
+///      `present_quiz`.
 ///   3. otherwise → `done`
 ///
 /// The `mode` param lets the caller filter items:
@@ -154,6 +169,7 @@ pub fn next_action(
     p: &PathFile,
     progress: &PathProgress,
     due_quizzes: &[(String, DateTime<Utc>)],
+    subpath: &[String],
     mode: NextMode,
 ) -> Action {
     if mode != NextMode::New
@@ -165,13 +181,27 @@ pub fn next_action(
         return Action::Done;
     }
 
-    let mut visited = HashSet::new();
-    for target in &p.target_atoms {
-        if let Some(action) = next_atom_action(g, progress, target, &mut visited) {
-            return action;
+    match p.strategy {
+        Strategy::BottomUp => {
+            let mut visited = HashSet::new();
+            for target in &p.target_atoms {
+                if let Some(action) = next_atom_action(g, progress, target, &mut visited) {
+                    return action;
+                }
+            }
+            Action::Done
+        }
+        Strategy::TopDown => {
+            // A set subpath takes priority; once it drains (all complete)
+            // fall through to the targets it was driving toward.
+            for atom in subpath.iter().chain(&p.target_atoms) {
+                if let Some(action) = atom_action(g, progress, atom) {
+                    return action;
+                }
+            }
+            Action::Done
         }
     }
-    Action::Done
 }
 
 /// Walk the graph starting at `id` and return the first incomplete action.
@@ -202,7 +232,15 @@ fn next_atom_action(
         return None;
     }
 
-    // Atom: lesson, then easy → medium → hard (each authored and answered correctly).
+    atom_action(g, progress, id)
+}
+
+/// The per-atom action sequence: author the lesson, teach it, then author
+/// and answer each difficulty quiz (easy → medium → hard). Returns `None`
+/// when the atom is complete. Unlike [`next_atom_action`], this never
+/// recurses into prerequisites — it acts on `id` alone.
+fn atom_action(g: &Graph, progress: &PathProgress, id: &str) -> Option<Action> {
+    let c = g.by_id.get(id)?;
     if c.lesson.is_none() {
         return Some(Action::CreateLesson {
             atom_id: id.to_string(),

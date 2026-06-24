@@ -15,16 +15,26 @@ use crate::graph::{FlatConcept, Graph};
 use crate::path::{PathFile, load_path, resolve_id};
 use crate::progress::PathProgress;
 use crate::scheduler;
+use crate::subpath;
+use crate::types::Strategy;
 
 /// Per-path progress snapshot returned by `compute_state`.
 #[derive(Debug, Serialize)]
 pub struct StateSummary {
     pub path: String,
     pub goal: String,
+    pub strategy: Strategy,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub targets: TargetProgress,
-    pub reachable: ReachProgress,
+    /// Prerequisite-graph coverage. Omitted under the top-down strategy,
+    /// where prerequisites are not required and the count would mislead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reachable: Option<ReachProgress>,
+    /// The active top-down subpath's remaining (incomplete) atoms, in
+    /// order. Empty when none is set or all are complete.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub subpath: Vec<AtomRef>,
     pub past_due: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub most_recent: Option<AtomRef>,
@@ -71,6 +81,7 @@ pub async fn cmd_path_state(
 pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
     writeln!(w, "{:13}{}", "path:", s.path)?;
     writeln!(w, "{:13}{}", "goal:", s.goal)?;
+    writeln!(w, "{:13}{}", "strategy:", s.strategy)?;
     writeln!(
         w,
         "{:13}{}",
@@ -88,11 +99,22 @@ pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
         "{:13}{} / {} learned ({}%)",
         "targets:", s.targets.learned, s.targets.total, s.targets.learned_pct
     )?;
-    writeln!(
-        w,
-        "{:13}{} atoms ({} with lesson, {} learned)",
-        "reachable:", s.reachable.total, s.reachable.taught, s.reachable.learned
-    )?;
+    if let Some(reach) = &s.reachable {
+        writeln!(
+            w,
+            "{:13}{} atoms ({} with lesson, {} learned)",
+            "reachable:", reach.total, reach.taught, reach.learned
+        )?;
+    }
+    if !s.subpath.is_empty() {
+        let route = s
+            .subpath
+            .iter()
+            .map(|a| a.id.as_str())
+            .collect::<Vec<_>>()
+            .join(" → ");
+        writeln!(w, "{:13}{route}", "subpath:")?;
+    }
     writeln!(w, "{:13}{}", "past due:", s.past_due)?;
     write_atom_line(w, "most recent:", s.most_recent.as_ref())?;
     write_atom_line(w, "next:", s.next.as_ref())?;
@@ -110,25 +132,50 @@ pub async fn compute_state(
     let progress = PathProgress::load(conn, &id).await?;
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 
+    let subpath_ids = subpath::load(conn, &id).await?;
+
     let reachable = g.reachable_atoms(&p.target_atoms);
     let complete = complete_set(&g, &reachable, &progress);
     let (targets, reach) = counters(&p, &reachable, &complete, &progress);
 
     let updated_at = latest_event_ts(conn, &id).await?.unwrap_or(p.created_at);
-    let next = scheduler::next_action(&g, &p, &progress, &due, scheduler::NextMode::Default)
-        .atom_id()
-        .and_then(|id| atom_ref(&g, id));
+    let next = scheduler::next_action(
+        &g,
+        &p,
+        &progress,
+        &due,
+        &subpath_ids,
+        scheduler::NextMode::Default,
+    )
+    .atom_id()
+    .and_then(|id| atom_ref(&g, id));
     let most_recent = most_recent_completed_target(conn, &id, &g, &p, &complete)
         .await?
         .map(atom_ref_of);
 
+    // Prerequisites aren't required under top-down, so the reachable-graph
+    // denominator would mislead; report the subpath instead.
+    let reachable = match p.strategy {
+        Strategy::BottomUp => Some(reach),
+        Strategy::TopDown => None,
+    };
+    // Only the atoms still to teach on the subpath — completed ones have
+    // already drained out of the route.
+    let subpath = subpath_ids
+        .iter()
+        .filter(|a| !scheduler::is_atom_complete(&g, &progress, a))
+        .filter_map(|a| atom_ref(&g, a))
+        .collect();
+
     Ok(StateSummary {
         path: p.id.clone(),
         goal: p.goal,
+        strategy: p.strategy,
         created_at: p.created_at,
         updated_at,
         targets,
-        reachable: reach,
+        reachable,
+        subpath,
         past_due: due.len(),
         most_recent,
         next,
@@ -170,7 +217,7 @@ fn counters(
         .iter()
         .filter(|a| complete.contains(a.as_str()))
         .count();
-    let learned_pct = if total > 0 { learned * 100 / total } else { 0 };
+    let learned_pct = (learned * 100).checked_div(total).unwrap_or(0);
     let reach_taught = reachable
         .iter()
         .filter(|a| progress.lesson_taught(a))

@@ -119,6 +119,51 @@ impl std::str::FromStr for Difficulty {
     }
 }
 
+/// How `mt path next` walks toward a path's targets. A mutable
+/// per-path navigation setting, not part of the path's intent.
+///
+/// - `BottomUp` (default): post-order DFS over prerequisites; never
+///   reaches an atom until all its prerequisites are complete.
+/// - `TopDown`: presents the next incomplete target directly, descending
+///   into prerequisites only via an explicit subpath.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
+#[serde(rename_all = "snake_case")]
+pub enum Strategy {
+    #[default]
+    BottomUp,
+    TopDown,
+}
+
+impl Strategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Strategy::BottomUp => "bottom_up",
+            Strategy::TopDown => "top_down",
+        }
+    }
+}
+
+impl std::fmt::Display for Strategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+// Accepts both the storage form (`bottom_up`) and the friendlier CLI
+// spelling (`bottom-up`). `argh::FromArgValue` picks this up via the
+// blanket `FromStr` impl.
+impl std::str::FromStr for Strategy {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Error> {
+        match s {
+            "bottom_up" | "bottom-up" => Ok(Strategy::BottomUp),
+            "top_down" | "top-down" => Ok(Strategy::TopDown),
+            other => Err(Error::InvalidStrategy(other.to_string())),
+        }
+    }
+}
+
 /// Quiz answer mode. Defaults to free-text; multiple-choice is
 /// reserved for the rare case where a definition is best taught as a
 /// distinguish-this-from-look-alikes.

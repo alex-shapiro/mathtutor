@@ -57,6 +57,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "oauth",
         sql: include_str!("migrations/002_oauth.sql"),
     },
+    Migration {
+        version: 3,
+        name: "strategy_subpath",
+        sql: include_str!("migrations/003_strategy_subpath.sql"),
+    },
 ];
 
 /// Schema migrations bookkeeping table

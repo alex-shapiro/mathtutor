@@ -9,18 +9,19 @@ use libsql::{Connection, params};
 use crate::db;
 use crate::event_log;
 use crate::graph::Graph;
+use crate::types::Strategy;
 use crate::{Error, Result};
 
-/// Immutable record of the learner's goal for a path. Written once at
-/// `mt path new`; never updated. All mutable per-path state lives in the
-/// event log; FSRS state is the cards table maintained as a write-through
-/// cache by `event_log::append`.
+/// Per-path record: the learner's goal and targets (fixed at `mt path
+/// new`) plus the mutable navigation `strategy`. Learning history lives in
+/// the event log; the top-down subpath lives in the `path_subpath` table.
 #[derive(Debug, Clone)]
 pub struct PathFile {
     pub id: String,
     pub goal: String,
     pub created_at: DateTime<Utc>,
     pub target_atoms: Vec<String>,
+    pub strategy: Strategy,
 }
 
 // ── Storage layout ──────────────────────────────────────────────────
@@ -43,8 +44,13 @@ pub fn generate_path_id(now: DateTime<Utc>) -> String {
 /// Panics if `target_atoms.len()` doesn't fit in `i64` (≈9e18 targets).
 pub async fn save_path(conn: &Connection, p: &PathFile) -> Result<()> {
     conn.execute(
-        "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
-        params![p.id.as_str(), p.goal.as_str(), db::format_ts(p.created_at)],
+        "INSERT INTO paths(id, goal, created_at, strategy) VALUES (?, ?, ?, ?)",
+        params![
+            p.id.as_str(),
+            p.goal.as_str(),
+            db::format_ts(p.created_at),
+            p.strategy.as_str(),
+        ],
     )
     .await?;
     for (i, atom) in p.target_atoms.iter().enumerate() {
@@ -61,7 +67,7 @@ pub async fn save_path(conn: &Connection, p: &PathFile) -> Result<()> {
 pub async fn load_path(conn: &Connection, id: &str) -> Result<PathFile> {
     let mut rows = conn
         .query(
-            "SELECT goal, created_at FROM paths WHERE id = ?",
+            "SELECT goal, created_at, strategy FROM paths WHERE id = ?",
             params![id],
         )
         .await?;
@@ -69,6 +75,7 @@ pub async fn load_path(conn: &Connection, id: &str) -> Result<PathFile> {
     let goal: String = row.get(0)?;
     let created_str: String = row.get(1)?;
     let created_at = db::parse_ts(&created_str)?;
+    let strategy: Strategy = row.get::<String>(2)?.parse()?;
 
     let mut rows = conn
         .query(
@@ -86,6 +93,7 @@ pub async fn load_path(conn: &Connection, id: &str) -> Result<PathFile> {
         goal,
         created_at,
         target_atoms: targets,
+        strategy,
     })
 }
 
@@ -128,6 +136,7 @@ pub async fn cmd_path_new(
     conn: &Connection,
     goal: &str,
     ids: &[String],
+    strategy: Strategy,
     graph_dir: Option<&Path>,
 ) -> Result<String> {
     let g = Graph::load_default(graph_dir)?;
@@ -142,6 +151,7 @@ pub async fn cmd_path_new(
         goal: goal.to_string(),
         created_at: now,
         target_atoms: sorted,
+        strategy,
     };
 
     let tx = conn.transaction().await?;
@@ -152,12 +162,35 @@ pub async fn cmd_path_new(
     Ok(id)
 }
 
+/// Switch a path's traversal strategy. Mutates the `paths.strategy`
+/// column directly — strategy is navigation config, not learning history,
+/// so no event is logged. Switching to bottom-up leaves any stored
+/// subpath inert (the DFS ignores it) rather than clearing it.
+pub async fn cmd_path_strategy(
+    conn: &Connection,
+    explicit_id: Option<&str>,
+    strategy: Strategy,
+) -> Result<String> {
+    let id = resolve_id(conn, explicit_id).await?;
+    let changed = conn
+        .execute(
+            "UPDATE paths SET strategy = ? WHERE id = ?",
+            params![strategy.as_str(), id.as_str()],
+        )
+        .await?;
+    if changed == 0 {
+        return Err(Error::NoPath);
+    }
+    Ok(id)
+}
+
 /// Compact summary of one path. Same fields as `mt path state` shows
 /// for a single path, so callers can format both with the same logic.
 #[derive(Debug, serde::Serialize)]
 pub struct PathSummary {
     pub id: String,
     pub goal: String,
+    pub strategy: Strategy,
     pub created_at: chrono::DateTime<Utc>,
     pub targets: usize,
     pub learned: usize,
@@ -201,14 +234,11 @@ async fn list_summaries(conn: &Connection, graph_dir: Option<&Path>) -> Result<V
             .iter()
             .filter(|a| crate::scheduler::is_atom_complete(&g, &progress, a))
             .count();
-        let learned_pct = if targets > 0 {
-            learned * 100 / targets
-        } else {
-            0
-        };
+        let learned_pct = (learned * 100).checked_div(targets).unwrap_or(0);
         out.push(PathSummary {
             id,
             goal,
+            strategy: p.strategy,
             created_at,
             targets,
             learned,

@@ -66,6 +66,7 @@ async fn schema_creates_all_expected_tables() {
         "overlay_lessons",
         "overlay_quizzes",
         "overlay_removed_quizzes",
+        "path_subpath",
         "path_targets",
         "paths",
         "schema_migrations",
@@ -151,7 +152,10 @@ async fn open_records_applied_migration() {
     let row = rows.next().await.unwrap().expect("v2 row");
     assert_eq!(row.get::<i64>(0).unwrap(), 2);
     assert_eq!(row.get::<String>(1).unwrap(), "oauth");
-    assert!(rows.next().await.unwrap().is_none(), "exactly two rows");
+    let row = rows.next().await.unwrap().expect("v3 row");
+    assert_eq!(row.get::<i64>(0).unwrap(), 3);
+    assert_eq!(row.get::<String>(1).unwrap(), "strategy_subpath");
+    assert!(rows.next().await.unwrap().is_none(), "exactly three rows");
 }
 
 #[tokio::test]
@@ -170,8 +174,8 @@ async fn second_open_does_not_re_apply_migrations() {
     let row = rows.next().await.unwrap().unwrap();
     assert_eq!(
         row.get::<i64>(0).unwrap(),
-        2,
-        "init + oauth migrations should each be recorded exactly once"
+        3,
+        "init + oauth + strategy_subpath migrations should each be recorded exactly once"
     );
 }
 
