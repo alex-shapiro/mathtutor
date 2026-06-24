@@ -19,7 +19,7 @@ To start a new path, ask what the user wants to learn, translate the goal into t
 
     mt path new "Understand SVD" --atoms la.5.4
 
-`--atoms` is a comma-separated list (or repeat the flag). Each entry is an atom ID (leaf), a cluster ID (expands to its atomic descendants), or an area prefix like `la` (expands to the whole area). The command prints the new path id, which becomes the default.
+`--atoms` is a comma-separated list (or repeat the flag). Each entry is an atom ID (leaf), a cluster ID (expands to its atomic descendants), or an area prefix like `la` (expands to the whole area). Entries are stored as given and re-expanded on every load, so a cluster or area target keeps tracking the curriculum as it grows. The command prints the new path id, which becomes the default.
 
 ### Choosing a strategy
 
