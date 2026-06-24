@@ -135,6 +135,7 @@ children:
             description: "Multiplicative gates regulating memory and forgetting."
             prerequisites:
               - nn.1.5.1
+              - nn.1.2.2
           - id: nn.1.5.4
             name: "Long-range dependencies"
             description: "Gating mitigates gradient decay over long sequences."

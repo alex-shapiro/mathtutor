@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 area: transformers
 prefix: tx
 summary: "Attention mechanism, positional encoding, transformer blocks, efficient attention, state-space models, tokenization, decoding, in-context-learning theory, RLHF / alignment math."
@@ -15,340 +15,930 @@ cross_references:
   - linear-algebra
   - probability
   - analysis
+  - discrete-and-complexity
+  - numerical
+  - optimization
+  - information-theory
+  - learning-theory
+  - dynamical-systems
+  - geometry-and-topology
   - neural-network-theory
   - reinforcement-learning
-topics:
+children:
   - id: tx.1
-    name: Attention mechanism
-    leaves:
+    name: "Attention mechanism"
+    description: "The query-key-value operation at the core of transformers."
+    children:
       - id: tx.1.1
-        name: Scaled dot-product attention
-        description: softmax(QKᵀ/√d) V; query-key-value formulation.
-        prerequisites:
-          - la.2.2
-          - nn.1.2
-        lesson: ...
+        name: "Scaled dot-product attention"
+        description: "softmax(QKᵀ/√d) V; query-key-value formulation."
+        children:
+          - id: tx.1.1.1
+            name: "Query, key, value"
+            description: "Three learned projections of the input tokens."
+            prerequisites:
+              - la.2.2
+          - id: tx.1.1.2
+            name: "Dot-product scores"
+            description: "Query-key inner products measure relevance."
+            prerequisites:
+              - tx.1.1.1
+          - id: tx.1.1.3
+            name: "Scaling by √d"
+            description: "Divide scores by √d to control variance before softmax."
+            prerequisites:
+              - tx.1.1.2
+          - id: tx.1.1.4
+            name: "Softmax weighting and value aggregation"
+            description: "Normalize scores and take the weighted sum of values."
+            prerequisites:
+              - tx.1.1.3
+              - nn.1.2.5
       - id: tx.1.2
-        name: Multi-head attention
-        description: Independent attention heads concatenated.
-        prerequisites:
-          - tx.1.1
-        lesson: ...
+        name: "Multi-head attention"
+        description: "Independent attention heads concatenated."
+        children:
+          - id: tx.1.2.1
+            name: "Attention heads"
+            description: "Parallel attention in lower-dimensional subspaces."
+            prerequisites:
+              - tx.1.1.4
+          - id: tx.1.2.2
+            name: "Head concatenation and projection"
+            description: "Concatenate head outputs and project back."
+            prerequisites:
+              - tx.1.2.1
+            terminal: true
       - id: tx.1.3
-        name: Self vs cross attention
-        description: Same vs different sequences for QKV.
-        prerequisites:
-          - tx.1.1
+        name: "Self vs cross attention"
+        description: "Same vs different sequences for QKV."
+        children:
+          - id: tx.1.3.1
+            name: "Self-attention"
+            description: "Queries, keys, and values from one sequence."
+            prerequisites:
+              - tx.1.1.4
+          - id: tx.1.3.2
+            name: "Cross-attention"
+            description: "Queries from one sequence attend to another."
+            prerequisites:
+              - tx.1.3.1
       - id: tx.1.4
-        name: Causal masking
-        description: Triangular mask for autoregressive models.
-        prerequisites:
-          - tx.1.1
+        name: "Causal masking"
+        description: "Triangular mask for autoregressive models."
+        children:
+          - id: tx.1.4.1
+            name: "Autoregressive masking"
+            description: "Forbid attending to future positions."
+            prerequisites:
+              - tx.1.1.4
+          - id: tx.1.4.2
+            name: "Triangular mask"
+            description: "Lower-triangular −∞ mask added before softmax."
+            prerequisites:
+              - tx.1.4.1
+            terminal: true
       - id: tx.1.5
-        name: Attention as kernel smoothing
-        description: Nadaraya–Watson view; soft kNN.
-        prerequisites:
-          - ana.4.9
-          - tx.1.1
+        name: "Attention as kernel smoothing"
+        description: "Nadaraya–Watson view; soft kNN."
+        children:
+          - id: tx.1.5.1
+            name: "Nadaraya–Watson view"
+            description: "Attention as kernel-weighted regression over values."
+            prerequisites:
+              - ana.4.9
+              - tx.1.1.4
+          - id: tx.1.5.2
+            name: "Soft k-nearest-neighbors"
+            description: "Softmax weights as a differentiable kNN lookup."
+            prerequisites:
+              - tx.1.5.1
+            terminal: true
       - id: tx.1.6
-        name: Softmax and log-sum-exp
-        description: Numerical stability; gradients.
-        prerequisites:
-          - num.1.3
-          - nn.1.2
+        name: "Softmax and log-sum-exp"
+        description: "Numerical stability; gradients."
+        children:
+          - id: tx.1.6.1
+            name: "Log-sum-exp"
+            description: "The smooth maximum underlying softmax."
+            prerequisites:
+              - num.1.3
+              - nn.1.2.5
+          - id: tx.1.6.2
+            name: "Numerically stable softmax"
+            description: "Subtract the max before exponentiating."
+            prerequisites:
+              - tx.1.6.1
       - id: tx.1.7
-        name: Attention sinks and outliers
-        description: Empirically observed structure with mathematical consequences.
-        prerequisites:
-          - tx.1.1
+        name: "Attention sinks and outliers"
+        description: "Empirically observed structure with mathematical consequences."
+        children:
+          - id: tx.1.7.1
+            name: "Attention sinks"
+            description: "Mass parked on a few tokens regardless of content."
+            prerequisites:
+              - tx.1.1.4
+          - id: tx.1.7.2
+            name: "Activation outliers"
+            description: "Large-magnitude features that complicate quantization."
+            prerequisites:
+              - tx.1.7.1
+            terminal: true
       - id: tx.1.8
-        name: KV-cache
-        description: Reuse of past keys / values for autoregressive inference.
-        prerequisites:
-          - tx.1.4
+        name: "KV-cache"
+        description: "Reuse of past keys / values for autoregressive inference."
+        children:
+          - id: tx.1.8.1
+            name: "KV-cache"
+            description: "Store past keys and values to avoid recomputation."
+            prerequisites:
+              - tx.1.4.1
+          - id: tx.1.8.2
+            name: "Cache memory and bandwidth"
+            description: "Cache size grows with sequence length and limits throughput."
+            prerequisites:
+              - tx.1.8.1
+            terminal: true
+
   - id: tx.2
-    name: Positional encoding
-    leaves:
+    name: "Positional encoding"
+    description: "Injecting order information into a permutation-equivariant model."
+    children:
       - id: tx.2.1
-        name: Sinusoidal / absolute encodings
-        description: Original transformer positional embeddings.
-        prerequisites:
-          - ana.6.1
+        name: "Sinusoidal / absolute encodings"
+        description: "Original transformer positional embeddings."
+        children:
+          - id: tx.2.1.1
+            name: "Position embeddings"
+            description: "Add a position-dependent vector to token embeddings."
+            prerequisites:
+              - ana.6.1
+          - id: tx.2.1.2
+            name: "Sinusoidal encoding"
+            description: "Fixed multi-frequency sinusoids encode absolute position."
+            prerequisites:
+              - tx.2.1.1
+            terminal: true
       - id: tx.2.2
-        name: Learned positional embeddings
-        description: Lookup tables for positions.
-        prerequisites:
-          - tx.2.1
+        name: "Learned positional embeddings"
+        description: "Lookup tables for positions."
+        children:
+          - id: tx.2.2.1
+            name: "Learned position table"
+            description: "A trainable embedding per absolute position."
+            prerequisites:
+              - tx.2.1.1
+          - id: tx.2.2.2
+            name: "Absolute vs learned tradeoffs"
+            description: "Fixed extrapolation vs flexible but bounded length."
+            prerequisites:
+              - tx.2.2.1
+            terminal: true
       - id: tx.2.3
-        name: Relative position bias
-        description: Position-difference biases (T5 style).
-        prerequisites:
-          - tx.2.1
+        name: "Relative position bias"
+        description: "Position-difference biases (T5 style)."
+        children:
+          - id: tx.2.3.1
+            name: "Relative positions"
+            description: "Encode the offset between query and key, not absolute index."
+            prerequisites:
+              - tx.2.1.1
+          - id: tx.2.3.2
+            name: "Position-difference bias"
+            description: "Add a learned bias indexed by relative distance (T5)."
+            prerequisites:
+              - tx.2.3.1
       - id: tx.2.4
-        name: Rotary position embedding (RoPE)
+        name: "Rotary position embedding (RoPE)"
         description: "Rotation in frequency basis applied to Q,K."
-        prerequisites:
-          - la.4.4
-          - ana.6.2
+        children:
+          - id: tx.2.4.1
+            name: "Rotary embedding"
+            description: "Rotate feature pairs by a position-dependent angle."
+            prerequisites:
+              - la.4.4
+              - ana.6.2
+          - id: tx.2.4.2
+            name: "RoPE applied to Q and K"
+            description: "Relative position emerges from the dot product of rotated queries/keys."
+            prerequisites:
+              - tx.2.4.1
       - id: tx.2.5
-        name: ALiBi
-        description: Linear decay bias on attention scores.
-        prerequisites:
-          - tx.2.3
+        name: "ALiBi"
+        description: "Linear decay bias on attention scores."
+        children:
+          - id: tx.2.5.1
+            name: "Linear attention bias"
+            description: "Subtract a slope × distance penalty from scores."
+            prerequisites:
+              - tx.2.3.2
+          - id: tx.2.5.2
+            name: "ALiBi and extrapolation"
+            description: "Distance penalty enables longer test-time contexts."
+            prerequisites:
+              - tx.2.5.1
+            terminal: true
       - id: tx.2.6
-        name: Fourier positional features
-        description: Coordinate inputs via Fourier basis.
-        prerequisites:
-          - ana.6.2
-          - nn.4.5.2
+        name: "Fourier positional features"
+        description: "Coordinate inputs via Fourier basis."
+        children:
+          - id: tx.2.6.1
+            name: "Fourier feature encoding"
+            description: "Map positions through sinusoids of many frequencies."
+            prerequisites:
+              - ana.6.2
+              - nn.4.5.2
+          - id: tx.2.6.2
+            name: "Multi-frequency position features"
+            description: "Frequency choice trades resolution against range."
+            prerequisites:
+              - tx.2.6.1
+            terminal: true
       - id: tx.2.7
-        name: Length generalization (NoPE etc.)
-        description: Behavior when sequences exceed training length.
-        prerequisites:
-          - tx.2.4
+        name: "Length generalization (NoPE etc.)"
+        description: "Behavior when sequences exceed training length."
+        children:
+          - id: tx.2.7.1
+            name: "Length extrapolation"
+            description: "Performance as context grows past the training length."
+            prerequisites:
+              - tx.2.4.2
+          - id: tx.2.7.2
+            name: "NoPE and position-free generalization"
+            description: "Decoder-only models can extrapolate without explicit encodings."
+            prerequisites:
+              - tx.2.7.1
+            terminal: true
+
   - id: tx.3
-    name: Transformer blocks
-    leaves:
+    name: "Transformer blocks"
+    description: "Assembling attention and feed-forward sublayers into a block."
+    children:
       - id: tx.3.1
-        name: LayerNorm placement (pre / post)
-        description: Effect on stability and signal propagation.
-        prerequisites:
-          - nn.1.9
-          - nn.2.4
+        name: "LayerNorm placement (pre / post)"
+        description: "Effect on stability and signal propagation."
+        children:
+          - id: tx.3.1.1
+            name: "Pre-norm vs post-norm"
+            description: "Where normalization sits relative to the residual add."
+            prerequisites:
+              - nn.1.9.2
+              - nn.1.9.3
+              - nn.2.4.1
+          - id: tx.3.1.2
+            name: "Stability and signal propagation"
+            description: "Pre-norm eases optimization of deep stacks."
+            prerequisites:
+              - tx.3.1.1
+            terminal: true
       - id: tx.3.2
-        name: RMSNorm
-        description: Mean-free normalization variant.
-        prerequisites:
-          - tx.3.1
+        name: "RMSNorm"
+        description: "Mean-free normalization variant."
+        children:
+          - id: tx.3.2.1
+            name: "RMSNorm"
+            description: "Normalize by root-mean-square without centering."
+            prerequisites:
+              - tx.3.1.1
+          - id: tx.3.2.2
+            name: "RMSNorm vs LayerNorm"
+            description: "Cheaper, no mean subtraction, similar quality."
+            prerequisites:
+              - tx.3.2.1
+            terminal: true
       - id: tx.3.3
-        name: FFN / MLP block and GLU variants
+        name: "FFN / MLP block and GLU variants"
         description: "Feed-forward block; SwiGLU, GeGLU."
-        prerequisites:
-          - nn.1.1
-          - nn.1.2
+        children:
+          - id: tx.3.3.1
+            name: "Position-wise FFN"
+            description: "Two linear layers with a nonlinearity, applied per token."
+            prerequisites:
+              - nn.1.1.1
+              - nn.1.2.3
+          - id: tx.3.3.2
+            name: "GLU variants"
+            description: "Gated linear units: SwiGLU, GeGLU."
+            prerequisites:
+              - tx.3.3.1
+              - nn.1.2.4
+            terminal: true
       - id: tx.3.4
-        name: Residual stream
-        description: Identity backbone with additive contributions.
-        prerequisites:
-          - nn.1.8
+        name: "Residual stream"
+        description: "Identity backbone with additive contributions."
+        children:
+          - id: tx.3.4.1
+            name: "Residual stream"
+            description: "A shared additive channel each sublayer reads and writes."
+            prerequisites:
+              - nn.1.8.1
+          - id: tx.3.4.2
+            name: "Reading and writing the stream"
+            description: "Sublayers communicate by adding into the residual."
+            prerequisites:
+              - tx.3.4.1
+            terminal: true
       - id: tx.3.5
-        name: Mixture of experts
-        description: Top-k routing; load-balancing losses; capacity.
-        prerequisites:
-          - prob.2.7
-          - opt.4.1
+        name: "Mixture of experts"
+        description: "Top-k routing; load-balancing losses; capacity."
+        children:
+          - id: tx.3.5.1
+            name: "Expert routing"
+            description: "A gate sends each token to a subset of experts."
+            prerequisites:
+              - prob.2.7
+          - id: tx.3.5.2
+            name: "Top-k gating"
+            description: "Route each token to its k highest-scoring experts."
+            prerequisites:
+              - tx.3.5.1
+          - id: tx.3.5.3
+            name: "Load-balancing loss"
+            description: "Auxiliary loss spreading tokens evenly across experts."
+            prerequisites:
+              - tx.3.5.2
+              - opt.4.1
+            terminal: true
+
   - id: tx.4
-    name: Efficient attention
-    leaves:
+    name: "Efficient attention"
+    description: "Reducing the quadratic cost of full attention."
+    children:
       - id: tx.4.1
-        name: Linear attention
-        description: Kernel-feature factorization removes quadratic cost.
-        prerequisites:
-          - tx.1.5
+        name: "Linear attention"
+        description: "Kernel-feature factorization removes quadratic cost."
+        children:
+          - id: tx.4.1.1
+            name: "Kernel-feature factorization"
+            description: "Replace softmax with a feature-map inner product."
+            prerequisites:
+              - tx.1.5.1
+          - id: tx.4.1.2
+            name: "Linear-time attention"
+            description: "Associativity yields O(n) cost via a running summary."
+            prerequisites:
+              - tx.4.1.1
+            terminal: true
       - id: tx.4.2
-        name: Performer / random features
-        description: Random Fourier / positive features for softmax.
-        prerequisites:
-          - tx.4.1
-          - prob.7.10
-          - ana.6.3
-          - num.2.4
+        name: "Performer / random features"
+        description: "Random Fourier / positive features for softmax."
+        children:
+          - id: tx.4.2.1
+            name: "Random-feature softmax approximation"
+            description: "Approximate the softmax kernel with random features."
+            prerequisites:
+              - tx.4.1.1
+              - prob.7.10
+              - ana.6.3
+          - id: tx.4.2.2
+            name: "Positive random features (Performer)"
+            description: "Positive features give a stable unbiased estimate."
+            prerequisites:
+              - tx.4.2.1
+              - num.2.4
+            terminal: true
       - id: tx.4.3
-        name: Sparse attention
+        name: "Sparse attention"
         description: "Longformer, BigBird; structured sparsity."
-        prerequisites:
-          - tx.1.1
-          - dis.2.6
+        children:
+          - id: tx.4.3.1
+            name: "Structured sparse attention"
+            description: "Restrict each query to a fixed pattern of keys."
+            prerequisites:
+              - tx.1.1.4
+              - dis.2.6
+          - id: tx.4.3.2
+            name: "Longformer / BigBird patterns"
+            description: "Local + global + random patterns approximating full attention."
+            prerequisites:
+              - tx.4.3.1
+            terminal: true
       - id: tx.4.4
-        name: FlashAttention
-        description: I/O-aware tiled exact attention.
-        prerequisites:
-          - num.6.5
-          - num.2.5
+        name: "FlashAttention"
+        description: "I/O-aware tiled exact attention."
+        children:
+          - id: tx.4.4.1
+            name: "I/O-aware attention"
+            description: "Memory traffic, not flops, dominates attention cost."
+            prerequisites:
+              - num.6.5
+          - id: tx.4.4.2
+            name: "Tiled online-softmax attention"
+            description: "Stream tiles with running softmax statistics; exact result."
+            prerequisites:
+              - tx.4.4.1
+              - tx.1.6.2
+              - num.2.5
+            terminal: true
       - id: tx.4.5
-        name: Sliding-window attention
-        description: Local-window approximation to full attention.
-        prerequisites:
-          - tx.4.3
+        name: "Sliding-window attention"
+        description: "Local-window approximation to full attention."
+        children:
+          - id: tx.4.5.1
+            name: "Local-window attention"
+            description: "Each token attends to a fixed neighborhood."
+            prerequisites:
+              - tx.4.3.1
+          - id: tx.4.5.2
+            name: "Receptive field over layers"
+            description: "Stacked local windows grow the effective context."
+            prerequisites:
+              - tx.4.5.1
+            terminal: true
       - id: tx.4.6
-        name: Approximate / nearest-neighbor attention
-        description: Reformer / kNN attention via LSH.
-        prerequisites:
-          - dis.3.4
-          - tx.1.1
-          - dis.3.6
+        name: "Approximate / nearest-neighbor attention"
+        description: "Reformer / kNN attention via LSH."
+        children:
+          - id: tx.4.6.1
+            name: "LSH attention"
+            description: "Bucket similar queries/keys with locality-sensitive hashing."
+            prerequisites:
+              - dis.3.4
+              - dis.3.6
+              - tx.1.1.4
+          - id: tx.4.6.2
+            name: "k-nearest-neighbor attention"
+            description: "Attend only to retrieved nearest keys."
+            prerequisites:
+              - tx.4.6.1
+            terminal: true
+
   - id: tx.5
-    name: State-space and alternatives
-    leaves:
+    name: "State-space and alternatives"
+    description: "Sub-quadratic sequence models beyond attention."
+    children:
       - id: tx.5.1
-        name: Linear RNNs as state-space models
+        name: "Linear RNNs as state-space models"
         description: "y = Cx, ẋ = Ax + Bu in continuous time."
-        prerequisites:
-          - dyn.1.2
+        children:
+          - id: tx.5.1.1
+            name: "Continuous-time state space"
+            description: "A linear ODE mapping an input signal to outputs."
+            prerequisites:
+              - dyn.1.2
+          - id: tx.5.1.2
+            name: "Discretization to a linear RNN"
+            description: "Discretize the ODE into a recurrent linear update."
+            prerequisites:
+              - tx.5.1.1
       - id: tx.5.2
-        name: S4 / S5
-        description: HiPPO-initialized SSMs with fast convolution.
-        prerequisites:
-          - tx.5.1
-          - ana.6.4
+        name: "S4 / S5"
+        description: "HiPPO-initialized SSMs with fast convolution."
+        children:
+          - id: tx.5.2.1
+            name: "HiPPO initialization"
+            description: "State matrices that optimally memorize history."
+            prerequisites:
+              - tx.5.1.2
+          - id: tx.5.2.2
+            name: "Fast convolutional SSM"
+            description: "Run the SSM as a long convolution via its kernel."
+            prerequisites:
+              - tx.5.2.1
+              - ana.6.4
       - id: tx.5.3
-        name: Mamba / selective SSMs
-        description: Input-dependent state-space matrices.
-        prerequisites:
-          - tx.5.2
+        name: "Mamba / selective SSMs"
+        description: "Input-dependent state-space matrices."
+        children:
+          - id: tx.5.3.1
+            name: "Selective state space"
+            description: "Make the SSM parameters depend on the input."
+            prerequisites:
+              - tx.5.2.2
+          - id: tx.5.3.2
+            name: "Hardware-aware scan"
+            description: "A parallel associative scan for the selective recurrence."
+            prerequisites:
+              - tx.5.3.1
+            terminal: true
       - id: tx.5.4
-        name: RWKV / RetNet
-        description: Linear-attention / SSM hybrids.
-        prerequisites:
-          - tx.4.1
-          - tx.5.1
+        name: "RWKV / RetNet"
+        description: "Linear-attention / SSM hybrids."
+        children:
+          - id: tx.5.4.1
+            name: "Linear-attention / SSM hybrids"
+            description: "Recurrent forms blending attention and state space."
+            prerequisites:
+              - tx.4.1.1
+              - tx.5.1.2
+          - id: tx.5.4.2
+            name: "Recurrent vs parallel form"
+            description: "Train in parallel, infer as a recurrence."
+            prerequisites:
+              - tx.5.4.1
+            terminal: true
       - id: tx.5.5
-        name: Hyena / convolutional alternatives
-        description: Long-convolution-based sequence models.
-        prerequisites:
-          - ana.6.4
-          - ana.6.6
+        name: "Hyena / convolutional alternatives"
+        description: "Long-convolution-based sequence models."
+        children:
+          - id: tx.5.5.1
+            name: "Long convolution models"
+            description: "Replace attention with implicitly-parameterized long filters."
+            prerequisites:
+              - ana.6.4
+              - ana.6.6
+          - id: tx.5.5.2
+            name: "Gated long convolutions"
+            description: "Interleave long convolutions with elementwise gating."
+            prerequisites:
+              - tx.5.5.1
+            terminal: true
+
   - id: tx.6
-    name: Tokenization and representations
-    leaves:
+    name: "Tokenization and representations"
+    description: "Turning text into model-readable token sequences."
+    children:
       - id: tx.6.1
-        name: Byte-pair encoding
-        description: Greedy merge-based subword tokenization.
-        prerequisites:
-          - dis.3.3
+        name: "Byte-pair encoding"
+        description: "Greedy merge-based subword tokenization."
+        children:
+          - id: tx.6.1.1
+            name: "Subword tokenization"
+            description: "Segment text into reusable subword units."
+            prerequisites:
+              - dis.3.3
+          - id: tx.6.1.2
+            name: "Byte-pair merges"
+            description: "Greedily merge the most frequent adjacent pair."
+            prerequisites:
+              - tx.6.1.1
+            terminal: true
       - id: tx.6.2
-        name: Unigram language-model tokenization
-        description: Probabilistic subword segmentation (SentencePiece).
-        prerequisites:
-          - prob.9.2
+        name: "Unigram language-model tokenization"
+        description: "Probabilistic subword segmentation (SentencePiece)."
+        children:
+          - id: tx.6.2.1
+            name: "Probabilistic segmentation"
+            description: "Score segmentations under a unigram token model."
+            prerequisites:
+              - tx.6.1.1
+              - prob.9.2
+          - id: tx.6.2.2
+            name: "Unigram / SentencePiece"
+            description: "Prune a vocabulary by marginal likelihood."
+            prerequisites:
+              - tx.6.2.1
+            terminal: true
       - id: tx.6.3
-        name: Byte-level / character-level tokenization
-        description: Trade-off vocab size vs sequence length.
-        prerequisites:
-          - tx.6.1
+        name: "Byte-level / character-level tokenization"
+        description: "Trade-off vocab size vs sequence length."
+        children:
+          - id: tx.6.3.1
+            name: "Byte-level tokenization"
+            description: "Tokenize raw bytes for a universal vocabulary."
+            prerequisites:
+              - tx.6.1.1
+          - id: tx.6.3.2
+            name: "Vocab size vs sequence length"
+            description: "Smaller vocabularies lengthen sequences."
+            prerequisites:
+              - tx.6.3.1
       - id: tx.6.4
-        name: Vocabulary scaling
-        description: Vocab size vs perplexity vs sequence length.
-        prerequisites:
-          - tx.6.3
+        name: "Vocabulary scaling"
+        description: "Vocab size vs perplexity vs sequence length."
+        children:
+          - id: tx.6.4.1
+            name: "Vocabulary size and perplexity"
+            description: "Larger vocabularies shorten sequences but dilute counts."
+            prerequisites:
+              - tx.6.3.2
+          - id: tx.6.4.2
+            name: "Compute and perplexity tradeoff"
+            description: "Choosing vocabulary size under a compute budget."
+            prerequisites:
+              - tx.6.4.1
+            terminal: true
       - id: tx.6.5
-        name: Embedding / unembedding tying
-        description: Sharing input/output projection matrices.
-        prerequisites:
-          - la.2.2
+        name: "Embedding / unembedding tying"
+        description: "Sharing input/output projection matrices."
+        children:
+          - id: tx.6.5.1
+            name: "Input and output embeddings"
+            description: "Token-to-vector and vector-to-logit projections."
+            prerequisites:
+              - la.2.2
+          - id: tx.6.5.2
+            name: "Weight tying"
+            description: "Share one matrix for embedding and unembedding."
+            prerequisites:
+              - tx.6.5.1
+            terminal: true
+
   - id: tx.7
-    name: Training objectives
-    leaves:
+    name: "Training objectives"
+    description: "Self-supervised pretraining losses."
+    children:
       - id: tx.7.1
-        name: Causal language modeling
-        description: Next-token prediction; cross-entropy.
-        prerequisites:
-          - inf.1.5
+        name: "Causal language modeling"
+        description: "Next-token prediction; cross-entropy."
+        children:
+          - id: tx.7.1.1
+            name: "Next-token prediction"
+            description: "Predict each token from its predecessors under cross-entropy."
+            prerequisites:
+              - inf.1.5
+          - id: tx.7.1.2
+            name: "Autoregressive factorization"
+            description: "Factor the sequence likelihood into conditionals."
+            prerequisites:
+              - tx.7.1.1
+            terminal: true
       - id: tx.7.2
-        name: Masked language modeling
-        description: BERT-style fill-in-the-blanks.
-        prerequisites:
-          - tx.7.1
+        name: "Masked language modeling"
+        description: "BERT-style fill-in-the-blanks."
+        children:
+          - id: tx.7.2.1
+            name: "Masked token prediction"
+            description: "Predict held-out tokens from bidirectional context."
+            prerequisites:
+              - tx.7.1.1
+          - id: tx.7.2.2
+            name: "Bidirectional objective"
+            description: "Encoder pretraining over corrupted inputs (BERT)."
+            prerequisites:
+              - tx.7.2.1
+            terminal: true
       - id: tx.7.3
-        name: Span and prefix LM
-        description: T5 / GLM-style objectives.
-        prerequisites:
-          - tx.7.1
+        name: "Span and prefix LM"
+        description: "T5 / GLM-style objectives."
+        children:
+          - id: tx.7.3.1
+            name: "Span corruption"
+            description: "Mask and regenerate contiguous spans (T5)."
+            prerequisites:
+              - tx.7.1.1
+          - id: tx.7.3.2
+            name: "Prefix LM"
+            description: "Bidirectional prefix, autoregressive continuation."
+            prerequisites:
+              - tx.7.3.1
+            terminal: true
       - id: tx.7.4
-        name: Mixture of denoisers (UL2)
-        description: Combined denoising / causal objectives.
-        prerequisites:
-          - tx.7.1
-          - tx.7.2
+        name: "Mixture of denoisers (UL2)"
+        description: "Combined denoising / causal objectives."
+        children:
+          - id: tx.7.4.1
+            name: "Combined objectives"
+            description: "Mix causal, prefix, and span tasks during pretraining."
+            prerequisites:
+              - tx.7.1.1
+              - tx.7.2.1
+          - id: tx.7.4.2
+            name: "Mode switching"
+            description: "Task tokens select the denoising mode (UL2)."
+            prerequisites:
+              - tx.7.4.1
+            terminal: true
+
   - id: tx.8
-    name: Inference and decoding
-    leaves:
+    name: "Inference and decoding"
+    description: "Turning logits into generated sequences."
+    children:
       - id: tx.8.1
         name: "Sampling: top-k, top-p, temperature"
-        description: Truncated / temperature-controlled categorical sampling.
-        prerequisites:
-          - prob.2.4
-          - dis.3.5
+        description: "Truncated / temperature-controlled categorical sampling."
+        children:
+          - id: tx.8.1.1
+            name: "Temperature sampling"
+            description: "Scale logits to control output randomness."
+            prerequisites:
+              - prob.2.4
+          - id: tx.8.1.2
+            name: "Top-k and top-p truncation"
+            description: "Restrict sampling to the most probable tokens."
+            prerequisites:
+              - tx.8.1.1
+              - dis.3.5
+            terminal: true
       - id: tx.8.2
-        name: Beam search
-        description: Approximate MAP via fixed-width search.
-        prerequisites:
-          - dis.3.2
-          - dis.2.2
+        name: "Beam search"
+        description: "Approximate MAP via fixed-width search."
+        children:
+          - id: tx.8.2.1
+            name: "Beam search"
+            description: "Keep the top-w partial sequences at each step."
+            prerequisites:
+              - dis.3.2
+              - dis.2.2
+          - id: tx.8.2.2
+            name: "Length normalization"
+            description: "Correct beam scores for sequence length."
+            prerequisites:
+              - tx.8.2.1
+            terminal: true
       - id: tx.8.3
-        name: Speculative decoding
-        description: Draft / verify two-model decoding.
-        prerequisites:
-          - tx.8.1
-          - prob.1.3
+        name: "Speculative decoding"
+        description: "Draft / verify two-model decoding."
+        children:
+          - id: tx.8.3.1
+            name: "Draft-and-verify"
+            description: "A small model proposes; the large model verifies in parallel."
+            prerequisites:
+              - tx.8.1.1
+              - prob.1.3
+          - id: tx.8.3.2
+            name: "Acceptance and speedup"
+            description: "Accept a prefix matching the target distribution exactly."
+            prerequisites:
+              - tx.8.3.1
+            terminal: true
       - id: tx.8.4
-        name: Constrained decoding
-        description: Decoding under regular / context-free constraints.
-        prerequisites:
-          - dis.4.1
+        name: "Constrained decoding"
+        description: "Decoding under regular / context-free constraints."
+        children:
+          - id: tx.8.4.1
+            name: "Grammar-constrained decoding"
+            description: "Mask logits to satisfy a formal grammar."
+            prerequisites:
+              - dis.4.1
+          - id: tx.8.4.2
+            name: "Regex and CFG constraints"
+            description: "Compile constraints to a per-step token mask."
+            prerequisites:
+              - tx.8.4.1
+            terminal: true
       - id: tx.8.5
-        name: Logit lens and interpretability tools
-        description: Mid-layer projection to vocabulary; mathematical view.
-        prerequisites:
-          - la.5.4
-          - tx.3.4
+        name: "Logit lens and interpretability tools"
+        description: "Mid-layer projection to vocabulary; mathematical view."
+        children:
+          - id: tx.8.5.1
+            name: "Logit lens"
+            description: "Project intermediate residual states through the unembedding."
+            prerequisites:
+              - la.5.4
+              - tx.3.4.1
+          - id: tx.8.5.2
+            name: "Mid-layer vocabulary projection"
+            description: "Track how predictions form across depth."
+            prerequisites:
+              - tx.8.5.1
+            terminal: true
+
   - id: tx.9
-    name: Emergent and scaling phenomena
-    leaves:
+    name: "Emergent and scaling phenomena"
+    description: "Behaviors that appear with scale and training."
+    children:
       - id: tx.9.1
-        name: In-context learning theory
-        description: Implicit gradient-descent / Bayesian-mixture views.
-        prerequisites:
-          - tx.7.1
-          - prob.9.4
+        name: "In-context learning theory"
+        description: "Implicit gradient-descent / Bayesian-mixture views."
+        children:
+          - id: tx.9.1.1
+            name: "In-context learning"
+            description: "Learning from examples in the prompt without weight updates."
+            prerequisites:
+              - tx.7.1.1
+              - prob.9.4
+          - id: tx.9.1.2
+            name: "Implicit-GD and Bayesian views"
+            description: "Theories casting ICL as inner optimization or posterior inference."
+            prerequisites:
+              - tx.9.1.1
+            terminal: true
       - id: tx.9.2
-        name: Induction heads
-        description: Two-head circuit implementing pattern continuation.
-        prerequisites:
-          - tx.1.2
+        name: "Induction heads"
+        description: "Two-head circuit implementing pattern continuation."
+        children:
+          - id: tx.9.2.1
+            name: "Induction-head circuit"
+            description: "A previous-token head feeding a copy head."
+            prerequisites:
+              - tx.1.2.1
+          - id: tx.9.2.2
+            name: "Pattern continuation"
+            description: "Induction heads complete repeated subsequences in-context."
+            prerequisites:
+              - tx.9.2.1
+            terminal: true
       - id: tx.9.3
-        name: Grokking
-        description: Late-onset generalization after memorization.
-        prerequisites:
-          - lt.5.5
+        name: "Grokking"
+        description: "Late-onset generalization after memorization."
+        children:
+          - id: tx.9.3.1
+            name: "Grokking"
+            description: "Generalization appearing long after fitting the training set."
+            prerequisites:
+              - lt.5.5
+          - id: tx.9.3.2
+            name: "Delayed-generalization dynamics"
+            description: "Weight-norm and representation changes preceding the jump."
+            prerequisites:
+              - tx.9.3.1
+            terminal: true
       - id: tx.9.4
-        name: Phase transitions in scaling
-        description: Sharp emergence of capabilities; measurement caveats.
-        prerequisites:
-          - lt.5.6
-          - dyn.1.5
+        name: "Phase transitions in scaling"
+        description: "Sharp emergence of capabilities; measurement caveats."
+        children:
+          - id: tx.9.4.1
+            name: "Emergent capabilities"
+            description: "Abilities that appear abruptly with scale."
+            prerequisites:
+              - lt.5.6
+              - dyn.1.5
+          - id: tx.9.4.2
+            name: "Measurement caveats"
+            description: "Apparent sharpness can be an artifact of the metric."
+            prerequisites:
+              - tx.9.4.1
+            terminal: true
       - id: tx.9.5
-        name: Circuits / superposition
+        name: "Circuits / superposition"
         description: "Mechanistic-interpretability math: features as directions."
-        prerequisites:
-          - la.5.4
-          - geom.4.5
+        children:
+          - id: tx.9.5.1
+            name: "Features as directions"
+            description: "Interpretable features correspond to directions in activation space."
+            prerequisites:
+              - la.5.4
+          - id: tx.9.5.2
+            name: "Superposition"
+            description: "More features than dimensions, stored near-orthogonally."
+            prerequisites:
+              - tx.9.5.1
+              - geom.4.5
+            terminal: true
+          - id: tx.9.5.3
+            name: "Circuits"
+            description: "Subgraphs of attention/MLP computation implementing a behavior."
+            prerequisites:
+              - tx.9.5.1
+            terminal: true
+
   - id: tx.10
-    name: RLHF and alignment math
-    leaves:
+    name: "RLHF and alignment math"
+    description: "Preference-based fine-tuning of transformer LMs (cross-link `rl`)."
+    children:
       - id: tx.10.1
-        name: Reward modeling (Bradley–Terry)
-        description: Pairwise-preference logistic model.
-        prerequisites:
-          - prob.9.2
+        name: "Reward modeling (Bradley–Terry)"
+        description: "Pairwise-preference logistic model."
+        children:
+          - id: tx.10.1.1
+            name: "Bradley–Terry model"
+            description: "Preference probability as a logistic of reward differences."
+            prerequisites:
+              - prob.9.2
+          - id: tx.10.1.2
+            name: "Reward-model training"
+            description: "Fit a scalar reward head on preference pairs."
+            prerequisites:
+              - tx.10.1.1
       - id: tx.10.2
-        name: PPO for language models
-        description: Cross-link `rl.4.6`; LM-specific concerns (KL penalty).
-        prerequisites:
-          - rl.4.6
+        name: "PPO for language models"
+        description: "Cross-link `rl.4.6`; LM-specific concerns (KL penalty)."
+        children:
+          - id: tx.10.2.1
+            name: "PPO for language models"
+            description: "Treat generation as a policy optimized by PPO."
+            prerequisites:
+              - rl.4.6
+          - id: tx.10.2.2
+            name: "KL penalty to a reference"
+            description: "Penalize divergence from the pretrained policy."
+            prerequisites:
+              - tx.10.2.1
+            terminal: true
       - id: tx.10.3
-        name: Direct preference optimization (DPO)
-        description: Closed-form RL-free preference fine-tuning.
-        prerequisites:
-          - tx.10.1
-          - rl.5.3
+        name: "Direct preference optimization (DPO)"
+        description: "Closed-form RL-free preference fine-tuning."
+        children:
+          - id: tx.10.3.1
+            name: "Direct preference optimization"
+            description: "A classification loss equivalent to KL-regularized RL."
+            prerequisites:
+              - tx.10.1.1
+              - rl.5.3
+          - id: tx.10.3.2
+            name: "RL-free preference objective"
+            description: "Optimize the policy directly from preference pairs."
+            prerequisites:
+              - tx.10.3.1
+            terminal: true
       - id: tx.10.4
-        name: KL-constrained RL
-        description: Cross-link `rl.5.3`.
-        prerequisites:
-          - rl.5.3
+        name: "KL-constrained RL"
+        description: "Cross-link `rl.5.3`."
+        children:
+          - id: tx.10.4.1
+            name: "KL-constrained policy"
+            description: "Maximize reward subject to a KL budget from the reference."
+            prerequisites:
+              - rl.5.3
+          - id: tx.10.4.2
+            name: "Reference-policy regularization"
+            description: "The KL term keeps the policy close to pretraining."
+            prerequisites:
+              - tx.10.4.1
+            terminal: true
       - id: tx.10.5
-        name: Best-of-N math
-        description: KL ↔ N relationship; reward hacking analysis.
-        prerequisites:
-          - inf.1.4
+        name: "Best-of-N math"
+        description: "KL ↔ N relationship; reward hacking analysis."
+        children:
+          - id: tx.10.5.1
+            name: "Best-of-N sampling"
+            description: "Draw N samples and keep the highest-reward one."
+            prerequisites:
+              - inf.1.4
+          - id: tx.10.5.2
+            name: "KL ↔ N and reward hacking"
+            description: "Best-of-N's KL cost grows like log N; over-optimization risk."
+            prerequisites:
+              - tx.10.5.1
+            terminal: true
