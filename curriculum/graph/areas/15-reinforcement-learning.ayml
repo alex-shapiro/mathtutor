@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 area: reinforcement-learning
 prefix: rl
 summary: "Markov decision processes, dynamic programming, model-free / policy-gradient methods, KL-regularized RL (RLHF / DPO / KTO), exploration, model-based RL, offline RL."
@@ -14,190 +14,673 @@ cross_references:
   - probability
   - optimization
   - information-theory
+  - numerical
+  - dynamical-systems
+  - geometry-and-topology
+  - learning-theory
+  - neural-network-theory
   - self-supervised-and-jepa
   - transformers
-
-topics:
+children:
   - id: rl.1
     name: "Markov decision processes"
-    leaves:
+    description: "The formal model of sequential decision-making."
+    children:
       - id: rl.1.1
         name: "MDP definition"
         description: "(S, A, P, R, γ); policies and trajectories."
-        prerequisites: [prob.7.1]
+        children:
+          - id: rl.1.1.1
+            name: "Markov decision process"
+            description: "States, actions, transitions, rewards, and a discount."
+            prerequisites:
+              - prob.7.1
+          - id: rl.1.1.2
+            name: "Policies and trajectories"
+            description: "A policy induces a distribution over trajectories."
+            prerequisites:
+              - rl.1.1.1
       - id: rl.1.2
         name: "Value functions"
         description: "Vπ and Qπ; expected discounted return."
-        prerequisites: [rl.1.1, prob.3.6]
+        children:
+          - id: rl.1.2.1
+            name: "State-value function"
+            description: "Expected discounted return from a state under a policy."
+            prerequisites:
+              - rl.1.1.2
+              - prob.3.6
+          - id: rl.1.2.2
+            name: "Action-value function"
+            description: "Expected return after taking an action, then following π."
+            prerequisites:
+              - rl.1.2.1
       - id: rl.1.3
         name: "Bellman equations"
         description: "Recursive consistency for value functions."
-        prerequisites: [rl.1.2]
+        children:
+          - id: rl.1.3.1
+            name: "Bellman expectation equation"
+            description: "Values satisfy a one-step recursive consistency."
+            prerequisites:
+              - rl.1.2.1
+          - id: rl.1.3.2
+            name: "Bellman operator"
+            description: "A γ-contraction whose fixed point is the value function."
+            prerequisites:
+              - rl.1.3.1
       - id: rl.1.4
         name: "Optimality"
         description: "V* and Q*; existence of optimal policies."
-        prerequisites: [rl.1.3]
+        children:
+          - id: rl.1.4.1
+            name: "Optimal value functions"
+            description: "The best achievable value at each state/action."
+            prerequisites:
+              - rl.1.3.1
+          - id: rl.1.4.2
+            name: "Existence of optimal policies"
+            description: "A deterministic optimal policy always exists."
+            prerequisites:
+              - rl.1.4.1
+            terminal: true
       - id: rl.1.5
         name: "Discount factor and horizon types"
         description: "Episodic, infinite-horizon discounted, average reward."
-        prerequisites: [rl.1.1]
+        children:
+          - id: rl.1.5.1
+            name: "Discount factor"
+            description: "γ trades immediate against future reward."
+            prerequisites:
+              - rl.1.1.1
+          - id: rl.1.5.2
+            name: "Horizon types"
+            description: "Episodic, discounted, and average-reward settings."
+            prerequisites:
+              - rl.1.5.1
+            terminal: true
 
   - id: rl.2
     name: "Dynamic programming"
-    leaves:
+    description: "Exact solution methods given the model."
+    children:
       - id: rl.2.1
         name: "Policy evaluation"
         description: "Iterative solution of the Bellman expectation equation."
-        prerequisites: [rl.1.3]
+        children:
+          - id: rl.2.1.1
+            name: "Iterative policy evaluation"
+            description: "Repeatedly apply the Bellman expectation operator."
+            prerequisites:
+              - rl.1.3.2
+          - id: rl.2.1.2
+            name: "Convergence of evaluation"
+            description: "The contraction guarantees convergence to Vπ."
+            prerequisites:
+              - rl.2.1.1
+            terminal: true
       - id: rl.2.2
         name: "Policy iteration"
         description: "Alternate evaluation and improvement."
-        prerequisites: [rl.2.1]
+        children:
+          - id: rl.2.2.1
+            name: "Policy improvement"
+            description: "Act greedily with respect to the current value."
+            prerequisites:
+              - rl.2.1.1
+          - id: rl.2.2.2
+            name: "Policy iteration"
+            description: "Alternate evaluation and greedy improvement to optimality."
+            prerequisites:
+              - rl.2.2.1
+            terminal: true
       - id: rl.2.3
         name: "Value iteration"
         description: "Bellman-optimality fixed-point iteration."
-        prerequisites: [rl.1.4]
+        children:
+          - id: rl.2.3.1
+            name: "Value iteration"
+            description: "Iterate the Bellman optimality operator."
+            prerequisites:
+              - rl.1.4.1
+          - id: rl.2.3.2
+            name: "Contraction and convergence"
+            description: "The optimality operator is a γ-contraction."
+            prerequisites:
+              - rl.2.3.1
+            terminal: true
       - id: rl.2.4
         name: "Generalized policy iteration"
         description: "Unifying view of evaluation / improvement schemes."
-        prerequisites: [rl.2.2]
+        children:
+          - id: rl.2.4.1
+            name: "Generalized policy iteration"
+            description: "Interleave partial evaluation and improvement."
+            prerequisites:
+              - rl.2.2.1
+          - id: rl.2.4.2
+            name: "Evaluation/improvement interplay"
+            description: "Most RL methods are instances of this pattern."
+            prerequisites:
+              - rl.2.4.1
+            terminal: true
 
   - id: rl.3
     name: "Model-free value methods"
-    leaves:
+    description: "Learning values from sampled experience."
+    children:
       - id: rl.3.1
         name: "Monte Carlo methods"
         description: "Episode-based value estimation."
-        prerequisites: [num.5.2, rl.1.2]
+        children:
+          - id: rl.3.1.1
+            name: "Monte Carlo value estimation"
+            description: "Average returns over sampled episodes."
+            prerequisites:
+              - num.5.2
+              - rl.1.2.1
+          - id: rl.3.1.2
+            name: "First-visit vs every-visit"
+            description: "Two estimators of the same expected return."
+            prerequisites:
+              - rl.3.1.1
+            terminal: true
       - id: rl.3.2
         name: "TD(0) and TD(λ)"
         description: "Bootstrapped value updates; eligibility traces."
-        prerequisites: [rl.1.3]
+        children:
+          - id: rl.3.2.1
+            name: "Temporal-difference learning"
+            description: "Bootstrap value estimates from successor estimates."
+            prerequisites:
+              - rl.1.3.1
+          - id: rl.3.2.2
+            name: "TD(λ) and eligibility traces"
+            description: "Interpolate between TD and Monte Carlo."
+            prerequisites:
+              - rl.3.2.1
+            terminal: true
       - id: rl.3.3
         name: "SARSA"
         description: "On-policy TD control."
-        prerequisites: [rl.3.2]
+        children:
+          - id: rl.3.3.1
+            name: "SARSA update"
+            description: "TD control using the action actually taken."
+            prerequisites:
+              - rl.3.2.1
+          - id: rl.3.3.2
+            name: "On-policy control"
+            description: "Improve the same policy that generates data."
+            prerequisites:
+              - rl.3.3.1
+            terminal: true
       - id: rl.3.4
         name: "Q-learning"
         description: "Off-policy TD control on Q*."
-        prerequisites: [rl.3.2]
+        children:
+          - id: rl.3.4.1
+            name: "Q-learning update"
+            description: "Bootstrap toward the max over next actions."
+            prerequisites:
+              - rl.3.2.1
+          - id: rl.3.4.2
+            name: "Off-policy control"
+            description: "Learn Q* while following an exploratory policy."
+            prerequisites:
+              - rl.3.4.1
+            terminal: true
       - id: rl.3.5
         name: "Function approximation and the deadly triad"
         description: "Off-policy + bootstrap + approximation = instability."
-        prerequisites: [rl.3.4, opt.4.1]
+        children:
+          - id: rl.3.5.1
+            name: "Value function approximation"
+            description: "Represent values with parametric function approximators."
+            prerequisites:
+              - rl.3.4.1
+              - opt.4.1
+          - id: rl.3.5.2
+            name: "The deadly triad"
+            description: "Off-policy, bootstrapping, and approximation can diverge."
+            prerequisites:
+              - rl.3.5.1
+            terminal: true
       - id: rl.3.6
         name: "DQN"
         description: "Deep Q-learning with replay and target networks."
-        prerequisites: [rl.3.5, nn.1.1]
+        children:
+          - id: rl.3.6.1
+            name: "Deep Q-network"
+            description: "Approximate Q with a neural network."
+            prerequisites:
+              - rl.3.5.1
+              - nn.1.1
+          - id: rl.3.6.2
+            name: "Replay and target networks"
+            description: "Stabilizers addressing the deadly triad."
+            prerequisites:
+              - rl.3.6.1
+            terminal: true
 
   - id: rl.4
     name: "Policy gradient methods"
-    leaves:
+    description: "Optimize a parametric policy directly."
+    children:
       - id: rl.4.1
         name: "Policy gradient theorem"
         description: "∇J = E[∇log π · Q]; score-function estimator."
-        prerequisites: [prob.4.5, rl.1.2]
+        children:
+          - id: rl.4.1.1
+            name: "Policy gradient theorem"
+            description: "The return's gradient as an expectation over trajectories."
+            prerequisites:
+              - prob.4.5
+              - rl.1.2.2
+          - id: rl.4.1.2
+            name: "Score-function estimator"
+            description: "Estimate the gradient via the log-policy score."
+            prerequisites:
+              - rl.4.1.1
+            terminal: true
       - id: rl.4.2
         name: "REINFORCE"
         description: "Monte-Carlo policy gradient; baseline subtraction."
-        prerequisites: [rl.4.1]
+        children:
+          - id: rl.4.2.1
+            name: "REINFORCE"
+            description: "Monte-Carlo estimate of the policy gradient."
+            prerequisites:
+              - rl.4.1.1
+          - id: rl.4.2.2
+            name: "Baseline subtraction"
+            description: "Subtract a baseline to reduce variance without bias."
+            prerequisites:
+              - rl.4.2.1
+            terminal: true
       - id: rl.4.3
         name: "Actor–critic"
         description: "Value function as variance-reducing baseline / critic."
-        prerequisites: [rl.4.2, rl.3.2]
+        children:
+          - id: rl.4.3.1
+            name: "Actor–critic"
+            description: "A learned critic supplies the policy-gradient signal."
+            prerequisites:
+              - rl.4.2.1
+              - rl.3.2.1
+          - id: rl.4.3.2
+            name: "Critic as baseline"
+            description: "The critic reduces variance of the actor's updates."
+            prerequisites:
+              - rl.4.3.1
+            terminal: true
       - id: rl.4.4
         name: "Advantage estimation (GAE)"
         description: "Generalized advantage estimation; bias–variance tradeoff."
-        prerequisites: [rl.4.3, opt.4.2]
+        children:
+          - id: rl.4.4.1
+            name: "Advantage function"
+            description: "How much better an action is than the policy's average."
+            prerequisites:
+              - rl.4.3.1
+          - id: rl.4.4.2
+            name: "Generalized advantage estimation"
+            description: "A λ-weighted advantage trading bias against variance."
+            prerequisites:
+              - rl.4.4.1
+              - opt.4.2
+            terminal: true
       - id: rl.4.5
         name: "Trust region policy optimization (TRPO)"
         description: "Constrained policy update under KL trust region."
-        prerequisites: [rl.4.3, opt.2.4, inf.1.4, opt.5.3, num.5.3]
+        children:
+          - id: rl.4.5.1
+            name: "KL trust region"
+            description: "Bound the policy change by a KL constraint."
+            prerequisites:
+              - rl.4.3.1
+              - opt.2.4
+              - inf.1.4
+          - id: rl.4.5.2
+            name: "TRPO update"
+            description: "A natural-gradient step within the trust region."
+            prerequisites:
+              - rl.4.5.1
+              - opt.5.3
+              - num.5.3
+            terminal: true
       - id: rl.4.6
         name: "Proximal policy optimization (PPO)"
         description: "Clipped-objective approximation to TRPO."
-        prerequisites: [rl.4.5]
+        children:
+          - id: rl.4.6.1
+            name: "Clipped surrogate objective"
+            description: "Clip the importance ratio to limit the update."
+            prerequisites:
+              - rl.4.5.1
+          - id: rl.4.6.2
+            name: "PPO"
+            description: "A simple first-order approximation to TRPO."
+            prerequisites:
+              - rl.4.6.1
       - id: rl.4.7
         name: "Natural policy gradient"
         description: "Policy gradient under Fisher metric (cross-link `opt.5.5`)."
-        prerequisites: [opt.5.5, rl.4.1, opt.3.6, geom.6.4]
+        children:
+          - id: rl.4.7.1
+            name: "Fisher metric and natural gradient"
+            description: "Precondition the gradient by the Fisher information."
+            prerequisites:
+              - opt.5.5
+              - rl.4.1.1
+          - id: rl.4.7.2
+            name: "Natural policy gradient"
+            description: "Steepest ascent in the policy's information geometry."
+            prerequisites:
+              - rl.4.7.1
+              - opt.3.6
+              - geom.6.4
+            terminal: true
 
   - id: rl.5
     name: "KL-regularized RL and preference learning"
-    leaves:
+    description: "Entropy/KL control and preference-based fine-tuning."
+    children:
       - id: rl.5.1
         name: "Entropy regularization"
         description: "Maximum-entropy RL; soft Bellman backups."
-        prerequisites: [rl.1.3, inf.1.1]
+        children:
+          - id: rl.5.1.1
+            name: "Maximum-entropy RL"
+            description: "Add a policy-entropy bonus to the objective."
+            prerequisites:
+              - rl.1.3.1
+              - inf.1.1
+          - id: rl.5.1.2
+            name: "Soft Bellman backup"
+            description: "Entropy turns the max into a log-sum-exp."
+            prerequisites:
+              - rl.5.1.1
+            terminal: true
       - id: rl.5.2
         name: "Soft actor-critic (SAC)"
         description: "Off-policy max-ent actor-critic."
-        prerequisites: [rl.5.1, rl.4.3]
+        children:
+          - id: rl.5.2.1
+            name: "Soft actor-critic"
+            description: "Max-entropy actor-critic with a soft value function."
+            prerequisites:
+              - rl.5.1.1
+              - rl.4.3.1
+          - id: rl.5.2.2
+            name: "Off-policy max-entropy learning"
+            description: "Reuse replay data under the entropy objective."
+            prerequisites:
+              - rl.5.2.1
+            terminal: true
       - id: rl.5.3
         name: "KL-controlled policies"
         description: "RL fine-tuning under KL to a reference policy."
-        prerequisites: [rl.5.1, inf.1.4]
+        children:
+          - id: rl.5.3.1
+            name: "KL to a reference policy"
+            description: "Penalize divergence from a fixed reference."
+            prerequisites:
+              - rl.5.1.1
+              - inf.1.4
+          - id: rl.5.3.2
+            name: "RL fine-tuning objective"
+            description: "Maximize reward minus a KL penalty (RLHF)."
+            prerequisites:
+              - rl.5.3.1
       - id: rl.5.4
         name: "Reward modeling (cross-link)"
-        description: "Cross-link `tx.10.1`."
-        prerequisites: [tx.10.1]
+        description: "Learn a reward from preferences (cross-link `tx.10.1`)."
+        children:
+          - id: rl.5.4.1
+            name: "Reward model"
+            description: "Fit a scalar reward from human preference data."
+            prerequisites:
+              - tx.10.1
+          - id: rl.5.4.2
+            name: "Preference data collection"
+            description: "Pairwise comparisons as the training signal."
+            prerequisites:
+              - rl.5.4.1
+            terminal: true
       - id: rl.5.5
         name: "DPO / IPO / KTO"
         description: "Closed-form preference fine-tuning derivations."
-        prerequisites: [rl.5.3, tx.10.1]
+        children:
+          - id: rl.5.5.1
+            name: "Direct preference optimization"
+            description: "A loss equivalent to KL-regularized reward maximization."
+            prerequisites:
+              - rl.5.3.1
+              - tx.10.1
+          - id: rl.5.5.2
+            name: "IPO and KTO variants"
+            description: "Alternative preference objectives and their assumptions."
+            prerequisites:
+              - rl.5.5.1
+            terminal: true
       - id: rl.5.6
         name: "RLAIF and constitutional methods (math)"
         description: "AI-generated preferences as a stand-in for human labels."
-        prerequisites: [rl.5.4]
+        children:
+          - id: rl.5.6.1
+            name: "RLAIF"
+            description: "Use a model's judgments as the preference signal."
+            prerequisites:
+              - rl.5.4.1
+          - id: rl.5.6.2
+            name: "Constitutional methods"
+            description: "Principle-guided self-critique and revision."
+            prerequisites:
+              - rl.5.6.1
+            terminal: true
 
   - id: rl.6
     name: "Exploration"
-    leaves:
+    description: "Balancing information-gathering against reward."
+    children:
       - id: rl.6.1
         name: "ε-greedy and Boltzmann exploration"
         description: "Simple stochastic policies for exploration."
-        prerequisites: [rl.3.4]
+        children:
+          - id: rl.6.1.1
+            name: "ε-greedy exploration"
+            description: "Act greedily but randomize with probability ε."
+            prerequisites:
+              - rl.3.4.1
+          - id: rl.6.1.2
+            name: "Boltzmann exploration"
+            description: "Sample actions softmax-weighted by value."
+            prerequisites:
+              - rl.6.1.1
+            terminal: true
       - id: rl.6.2
         name: "UCB and Thompson sampling"
         description: "Cross-link `opt.9.3`."
-        prerequisites: [opt.9.3]
+        children:
+          - id: rl.6.2.1
+            name: "Upper confidence bounds"
+            description: "Optimism: add a confidence bonus to value estimates."
+            prerequisites:
+              - opt.9.3
+          - id: rl.6.2.2
+            name: "Thompson sampling"
+            description: "Sample from a posterior over models and act greedily."
+            prerequisites:
+              - rl.6.2.1
+            terminal: true
       - id: rl.6.3
         name: "Intrinsic motivation / curiosity"
         description: "Prediction-error / information-gain bonuses."
-        prerequisites: [inf.1.3]
+        children:
+          - id: rl.6.3.1
+            name: "Intrinsic motivation"
+            description: "Reward novelty when extrinsic reward is sparse."
+            prerequisites:
+              - inf.1.3
+          - id: rl.6.3.2
+            name: "Curiosity and information gain"
+            description: "Prediction-error or information-gain bonuses."
+            prerequisites:
+              - rl.6.3.1
+            terminal: true
 
   - id: rl.7
     name: "Model-based RL"
-    leaves:
+    description: "Learn and plan with a dynamics model."
+    children:
       - id: rl.7.1
         name: "Planning with learned models"
         description: "Search / rollout in a learned dynamics model."
-        prerequisites: [rl.1.1]
+        children:
+          - id: rl.7.1.1
+            name: "Learned dynamics model"
+            description: "Approximate the transition and reward functions."
+            prerequisites:
+              - rl.1.1.1
+          - id: rl.7.1.2
+            name: "Search and rollout"
+            description: "Plan by simulating trajectories in the model."
+            prerequisites:
+              - rl.7.1.1
+            terminal: true
       - id: rl.7.2
         name: "Model-predictive control"
         description: "Receding-horizon optimization."
-        prerequisites: [rl.7.1, opt.6.2, dyn.3.5]
+        children:
+          - id: rl.7.2.1
+            name: "Model-predictive control"
+            description: "Optimize a short action sequence, execute the first."
+            prerequisites:
+              - rl.7.1.1
+              - opt.6.2
+          - id: rl.7.2.2
+            name: "Receding horizon"
+            description: "Re-plan each step over a sliding window."
+            prerequisites:
+              - rl.7.2.1
+              - dyn.3.5
+            terminal: true
       - id: rl.7.3
         name: "Dyna-style methods"
         description: "Mix of real and imagined experience."
-        prerequisites: [rl.7.1]
+        children:
+          - id: rl.7.3.1
+            name: "Dyna"
+            description: "Update values from both real and model-generated data."
+            prerequisites:
+              - rl.7.1.1
+          - id: rl.7.3.2
+            name: "Real and imagined experience"
+            description: "Blend environment and model rollouts."
+            prerequisites:
+              - rl.7.3.1
+            terminal: true
       - id: rl.7.4
         name: "World-model RL"
-        description: "Cross-link `ssl.10.3` (Dreamer-style agents)."
-        prerequisites: [ssl.10.3]
+        description: "Dreamer-style agents (cross-link `ssl.10.3`)."
+        children:
+          - id: rl.7.4.1
+            name: "World-model agents"
+            description: "Learn a latent world model and act within it."
+            prerequisites:
+              - ssl.10.3
+          - id: rl.7.4.2
+            name: "Learning in imagination"
+            description: "Train the policy on imagined latent rollouts."
+            prerequisites:
+              - rl.7.4.1
+            terminal: true
 
   - id: rl.8
     name: "Offline RL"
-    leaves:
+    description: "Learning from a fixed dataset without interaction."
+    children:
       - id: rl.8.1
         name: "Distributional shift in offline data"
         description: "Action coverage and bootstrapping pathologies."
-        prerequisites: [rl.3.5, lt.6.2]
+        children:
+          - id: rl.8.1.1
+            name: "Offline distribution shift"
+            description: "The learned policy queries unseen actions."
+            prerequisites:
+              - rl.3.5.1
+              - lt.6.2
+          - id: rl.8.1.2
+            name: "Action coverage and bootstrapping"
+            description: "Out-of-distribution actions inflate bootstrapped values."
+            prerequisites:
+              - rl.8.1.1
+            terminal: true
       - id: rl.8.2
         name: "Conservative methods (CQL, IQL)"
         description: "Pessimistic value learning under coverage uncertainty."
-        prerequisites: [rl.8.1]
+        children:
+          - id: rl.8.2.1
+            name: "Conservative Q-learning"
+            description: "Penalize values of out-of-distribution actions."
+            prerequisites:
+              - rl.8.1.1
+          - id: rl.8.2.2
+            name: "Implicit Q-learning"
+            description: "Avoid querying unseen actions via expectile regression."
+            prerequisites:
+              - rl.8.2.1
+            terminal: true
       - id: rl.8.3
         name: "Behavior cloning vs RL"
         description: "Imitation as a special case; when each wins."
-        prerequisites: [rl.4.1]
+        children:
+          - id: rl.8.3.1
+            name: "Behavior cloning"
+            description: "Supervised imitation of dataset actions."
+            prerequisites:
+              - rl.4.1.1
+          - id: rl.8.3.2
+            name: "Imitation vs RL tradeoffs"
+            description: "When cloning beats value-based offline RL."
+            prerequisites:
+              - rl.8.3.1
+            terminal: true
+
+  - id: rl.9
+    name: "Training diagnostics"
+    description: "Quantities derived from the theory that signal whether training is healthy."
+    children:
+      - id: rl.9.1
+        name: "Policy diagnostics"
+        description: "Health signals read off the policy."
+        children:
+          - id: rl.9.1.1
+            name: "Relative policy entropy"
+            description: "Policy entropy over its maximum; staying near 1 means no learning, near 0 means collapse."
+            prerequisites:
+              - rl.5.1.1
+            terminal: true
+          - id: rl.9.1.2
+            name: "Policy KL as a staleness measure"
+            description: "KL between the behavior and learner policies on a batch; large values flag stale off-policy experience."
+            prerequisites:
+              - rl.4.5.1
+            terminal: true
+      - id: rl.9.2
+        name: "Value diagnostics"
+        description: "Health signals read off the value estimate."
+        children:
+          - id: rl.9.2.1
+            name: "Value-function explained variance"
+            description: "1 − Var(target − V)/Var(target); near 1 means the critic predicts returns well."
+            prerequisites:
+              - rl.4.4.1
+            terminal: true
+          - id: rl.9.2.2
+            name: "Terminal correlation"
+            description: "Correlation of the final-state value with the final reward; checks return-to-go propagation near termination."
+            prerequisites:
+              - rl.4.4.1
+            terminal: true
