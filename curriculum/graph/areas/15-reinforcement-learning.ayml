@@ -647,3 +647,40 @@ children:
             prerequisites:
               - rl.8.3.1
             terminal: true
+
+  - id: rl.9
+    name: "Training diagnostics"
+    description: "Quantities derived from the theory that signal whether training is healthy."
+    children:
+      - id: rl.9.1
+        name: "Policy diagnostics"
+        description: "Health signals read off the policy."
+        children:
+          - id: rl.9.1.1
+            name: "Relative policy entropy"
+            description: "Policy entropy over its maximum; staying near 1 means no learning, near 0 means collapse."
+            prerequisites:
+              - rl.5.1.1
+            terminal: true
+          - id: rl.9.1.2
+            name: "Policy KL as a staleness measure"
+            description: "KL between the behavior and learner policies on a batch; large values flag stale off-policy experience."
+            prerequisites:
+              - rl.4.5.1
+            terminal: true
+      - id: rl.9.2
+        name: "Value diagnostics"
+        description: "Health signals read off the value estimate."
+        children:
+          - id: rl.9.2.1
+            name: "Value-function explained variance"
+            description: "1 − Var(target − V)/Var(target); near 1 means the critic predicts returns well."
+            prerequisites:
+              - rl.4.4.1
+            terminal: true
+          - id: rl.9.2.2
+            name: "Terminal correlation"
+            description: "Correlation of the final-state value with the final reward; checks return-to-go propagation near termination."
+            prerequisites:
+              - rl.4.4.1
+            terminal: true
