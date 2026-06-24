@@ -198,7 +198,7 @@ rating from:
 - `hard` — answer correct, but the user asked for ≥ 1 hint along the way
 - `again` — answer incorrect, or the user asked you to give them the solution
 
-Default to `good` when the user gets it right without comment.
+Default to `good`.
 
 Always pass `--user-answer` with the user's reply verbatim. It's logged with the rating so you (or a future review pass) can audit the call.
 

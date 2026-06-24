@@ -80,12 +80,12 @@ A previously-authored quiz is due for spaced repetition. Show the question, wait
 
 ### Rating rubric
 
-- **`easy`** — answer correct and the user explicitly says it felt easy
-- **`good`** — answer correct, no hints needed
-- **`hard`** — answer correct, but the user asked for ≥ 1 hint
-- **`again`** — answer incorrect or the user asked for the solution
+- `easy` — answer correct and the user explicitly says it felt easy (do not infer)
+- `good` — answer correct, no hints needed
+- `hard` — answer correct, but the user asked for ≥ 1 hint
+- `again` — answer incorrect or the user asked for the solution
 
-An `easy` rating is opt-in and should not be inferred. Default to `good`.
+Default to `good`.
 
 ### `done`
 
