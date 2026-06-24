@@ -69,9 +69,9 @@ fn badge_uppercase_when_quiz_answered_correctly() {
 
 #[test]
 fn spine_includes_atoms_and_existing_ancestors() {
-    // Cluster `la.5` exists; the bare prefix `la` does not (it's an
-    // area root, only in the manifest). Spine should include the
-    // cluster but stop at the missing bare prefix.
+    // Cluster `la.5` exists but the bare prefix `la` is absent from this
+    // graph. Spine should include the existing ancestors and stop at the
+    // missing one.
     let g = graph_of(vec![
         cluster("la.5", &["la.5.4"]),
         cluster("la.5.4", &["la.5.4.7"]),

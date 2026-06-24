@@ -19,7 +19,7 @@ To start a new path, ask what the user wants to learn, translate the goal into t
 
     mt path new "Understand SVD" --targets la.5.4
 
-`--targets` is a comma-separated list (or repeat the flag). Each entry is an atom ID (leaf), a cluster ID (expands to its atomic descendants), or an area prefix like `la` (expands to the whole area). The command prints the new path id, which becomes the default.
+`--targets` is a comma-separated list (or repeat the flag). Each entry is a node ID at any level (e.g. `tx`, `tx.3`, `tx.3.2`) and expands to its atomic descendants. The command prints the new path id, which becomes the default.
 
 ### Choosing a strategy
 
@@ -33,7 +33,7 @@ Ask the learner which fits if they have not stated a preference.
 ## Browsing the curriculum
 
     mt graph list            # all areas; `mt graph list <id>` lists a node's children
-    mt graph show <id>       # details of an atom, cluster, or area
+    mt graph show <id>       # details of an atom or cluster
 
 Drill down `mt graph list` → `mt graph list la` → `mt graph list la.5` until you reach atom IDs (`is_atom: true`). `mt graph show <id>` gives an atom's prerequisites, whether a lesson is stored, and quiz count. Pass `--path P` to either to add per-atom progress (`lesson_taught`, `complete`).
 

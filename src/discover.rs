@@ -7,7 +7,7 @@ use std::path::Path;
 use libsql::Connection;
 use serde::Serialize;
 
-use crate::graph::{self, FlatConcept, Graph, Manifest, ManifestArea};
+use crate::graph::{self, FlatConcept, Graph, Manifest};
 use crate::progress::PathProgress;
 use crate::scheduler;
 use crate::{Error, Result};
@@ -22,13 +22,12 @@ pub async fn cmd_graph_show(
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let manifest = graph::load_manifest_default(graph_dir)?;
     let g = if path_id.is_some() {
         Graph::load_for_path(conn, graph_dir).await?
     } else {
         Graph::load_default(graph_dir)?
     };
-    let mut view = show_view(&g, &manifest, id)?;
+    let mut view = show_view(&g, id)?;
     if let Some(pid) = path_id {
         let progress = PathProgress::load(conn, pid).await?;
         enrich_show_view(&mut view, &g, &progress, id);
@@ -58,31 +57,26 @@ pub async fn cmd_graph_list(
     emit(&view)
 }
 
-/// Build the `mt graph show` view (atom / cluster / area) for `id`
-/// against the provided graph and manifest.
-pub fn show_view(g: &Graph, manifest: &Manifest, id: &str) -> Result<ShowView> {
-    if let Some(c) = g.by_id.get(id) {
-        return Ok(ShowView::Concept(concept_view(g, c)));
-    }
-    if let Some(area) = manifest.areas.iter().find(|a| a.prefix == id) {
-        return Ok(ShowView::Concept(area_cluster_view(g, area)));
-    }
-    Err(Error::UnknownId(id.to_string()))
+/// Build the `mt graph show` view for `id` (an atom or cluster).
+pub fn show_view(g: &Graph, id: &str) -> Result<ShowView> {
+    let c = g
+        .by_id
+        .get(id)
+        .ok_or_else(|| Error::UnknownId(id.to_string()))?;
+    Ok(ShowView::Concept(concept_view(g, c)))
 }
 
-/// Build the `mt graph list` view (areas, area, or cluster) for `id`
-/// (or `None` for the top-level area set).
+/// Build the `mt graph list` view: the top-level area set for `None`, else
+/// the children of the cluster `id`.
 pub fn list_view(g: &Graph, manifest: &Manifest, id: Option<&str>) -> Result<ListView> {
     let Some(id) = id else {
         return Ok(ListView::Areas(areas_view(manifest)));
     };
-    if let Some(c) = g.by_id.get(id) {
-        return Ok(ListView::Children(children_list_view(g, c)));
-    }
-    if let Some(area) = manifest.areas.iter().find(|a| a.prefix == id) {
-        return Ok(ListView::Children(area_list_view(g, area)));
-    }
-    Err(Error::UnknownId(id.to_string()))
+    let c = g
+        .by_id
+        .get(id)
+        .ok_or_else(|| Error::UnknownId(id.to_string()))?;
+    Ok(ListView::Children(children_list_view(g, c)))
 }
 
 /// Output of [`show_view`]. AYML serialization stays flat (one record per
@@ -194,26 +188,6 @@ fn areas_view(manifest: &Manifest) -> AreasView {
     }
 }
 
-fn area_list_view(g: &Graph, area: &ManifestArea) -> ChildrenListView {
-    ChildrenListView {
-        id: area.prefix.clone(),
-        name: area.slug.clone(),
-        children: area_top_level_children(g, &area.prefix),
-    }
-}
-
-fn area_cluster_view(g: &Graph, area: &ManifestArea) -> ConceptView {
-    ConceptView::Cluster(ClusterView {
-        id: area.prefix.clone(),
-        name: area.slug.clone(),
-        description: Some(area.summary.clone()),
-        is_atom: false,
-        prerequisites: Vec::new(),
-        children: area_top_level_children(g, &area.prefix),
-        atomic_descendants: count_atoms_under_prefix(g, &area.prefix),
-    })
-}
-
 fn children_list_view(g: &Graph, c: &FlatConcept) -> ChildrenListView {
     ChildrenListView {
         id: c.id.clone(),
@@ -302,28 +276,6 @@ fn enrich_list_view(view: &mut ListView, g: &Graph, progress: &PathProgress) {
             child.status = atom_status(g, progress, &child.id);
         }
     }
-}
-
-fn area_top_level_children(g: &Graph, prefix: &str) -> Vec<ChildBrief> {
-    let mut out: Vec<ChildBrief> = g
-        .by_id
-        .values()
-        .filter(|c| {
-            let parts: Vec<&str> = c.id.split('.').collect();
-            parts.len() == 2 && parts[0] == prefix
-        })
-        .map(child_brief)
-        .collect();
-    out.sort_by(|a, b| a.id.cmp(&b.id));
-    out
-}
-
-fn count_atoms_under_prefix(g: &Graph, prefix: &str) -> usize {
-    let prefix_dot = format!("{prefix}.");
-    g.by_id
-        .iter()
-        .filter(|(id, c)| id.starts_with(&prefix_dot) && c.children_ids.is_empty())
-        .count()
 }
 
 fn count_atomic_descendants(g: &Graph, id: &str) -> usize {

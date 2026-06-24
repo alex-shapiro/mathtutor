@@ -155,6 +155,35 @@ children:
     dir
 }
 
+#[test]
+fn area_root_is_a_cluster_node_that_expands_to_atoms() {
+    // The area prefix is a first-class non-leaf node in the loaded graph,
+    // so it resolves through the same cluster path as any other node.
+    let dir = write_graph(
+        "
+  - id: ta.1
+    name: topic
+    children:
+      - id: ta.1.1
+        name: atom one
+        description: d
+        terminal: true
+      - id: ta.1.2
+        name: atom two
+        description: d
+        terminal: true
+",
+    );
+    let g = graph::Graph::load(dir.path()).expect("load");
+
+    let area = g.by_id.get("ta").expect("area root is a node");
+    assert_eq!(area.children_ids, vec!["ta.1".to_string()]);
+    assert_eq!(
+        g.expand_to_atoms(&["ta".to_string()]).unwrap(),
+        vec!["ta.1.1".to_string(), "ta.1.2".to_string()],
+    );
+}
+
 fn orphan_ids(report: &graph::CheckReport) -> Vec<String> {
     report
         .issues
