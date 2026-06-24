@@ -19,7 +19,7 @@ To start a new path, ask what the user wants to learn, translate the goal into t
 
     mt path new "Understand SVD" --targets la.5.4
 
-`--targets` is a comma-separated list (or repeat the flag). Each entry is an atom ID (a leaf) or a cluster ID (a non-leaf node) that expands to its atomic descendants. The command prints the new path id, which becomes the default.
+`--targets` is a comma-separated list (or repeat the flag). Each entry is a node ID at any level (e.g. `tx`, `tx.3`, `tx.3.2`) and expands to its atomic descendants. The command prints the new path id, which becomes the default.
 
 ### Choosing a strategy
 
