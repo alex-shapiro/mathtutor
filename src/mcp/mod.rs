@@ -607,8 +607,8 @@ async fn compute_item(
     path_id: Option<&str>,
     graph_dir: Option<&std::path::Path>,
 ) -> CrateResult<ItemView> {
-    let (g, manifest) = load_graph_and_manifest(conn, path_id, graph_dir).await?;
-    let item = discover::show_view(&g, &manifest, id)?;
+    let (g, _) = load_graph_and_manifest(conn, path_id, graph_dir).await?;
+    let item = discover::show_view(&g, id)?;
     let status = if let Some(pid) = path_id {
         status_for(conn, &g, id, pid).await?
     } else {

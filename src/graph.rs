@@ -209,6 +209,22 @@ fn node_to_concept(n: NodeRaw) -> Concept {
     }
 }
 
+/// Synthetic area-root node (keyed by the area prefix) wrapping the area's
+/// top-level concepts, so an area resolves and is looked up like any other
+/// cluster. Identity comes from the manifest entry, children from the file.
+fn area_root_concept(entry: &ManifestArea, children: Vec<Concept>) -> Concept {
+    Concept {
+        id: entry.prefix.clone(),
+        name: entry.slug.clone(),
+        description: Some(entry.summary.clone()),
+        prerequisites: Vec::new(),
+        children,
+        lesson: None,
+        quizzes: Vec::new(),
+        terminal: false,
+    }
+}
+
 // ── Loaders ─────────────────────────────────────────────────────────
 
 fn load_manifest(path: &Path) -> Result<Manifest> {
@@ -323,9 +339,7 @@ impl Graph {
         let mut by_id = HashMap::new();
         for entry in &manifest.areas {
             let raw = load_area(&graph_dir.join(&entry.file))?;
-            for c in raw.into_concepts() {
-                flatten(c, &mut by_id);
-            }
+            flatten(area_root_concept(entry, raw.into_concepts()), &mut by_id);
         }
         Ok(Self { by_id })
     }
@@ -336,9 +350,7 @@ impl Graph {
         let mut by_id = HashMap::new();
         for entry in &manifest.areas {
             let raw = load_area_embedded(&entry.file)?;
-            for c in raw.into_concepts() {
-                flatten(c, &mut by_id);
-            }
+            flatten(area_root_concept(entry, raw.into_concepts()), &mut by_id);
         }
         Ok(Self { by_id })
     }
@@ -398,9 +410,8 @@ impl Graph {
     /// order (children before their cluster's later siblings):
     ///
     /// - an atom (leaf node) maps to itself
-    /// - a cluster (non-leaf node) expands to all atomic descendants
-    /// - a bare prefix that isn't a node expands to every atom whose ID
-    ///   starts with `<prefix>.`
+    /// - a cluster, including an area root (non-leaf node), expands to all
+    ///   its atomic descendants
     ///
     /// Errors if an ID maps to no atom (`UnknownId`) or names an empty
     /// cluster (`EmptyCluster`).
@@ -420,12 +431,6 @@ impl Graph {
                     self.collect_atomic_descendants(id, &mut seen, &mut out);
                     if out.len() == before {
                         return Err(Error::EmptyCluster(id.clone()));
-                    }
-                }
-                None if !id.contains('.') => {
-                    self.collect_atoms_by_prefix(id, &mut seen, &mut out);
-                    if out.len() == before {
-                        return Err(Error::UnknownId(id.clone()));
                     }
                 }
                 None => return Err(Error::UnknownId(id.clone())),
@@ -448,27 +453,6 @@ impl Graph {
         } else {
             for child in &c.children_ids {
                 self.collect_atomic_descendants(child, seen, out);
-            }
-        }
-    }
-
-    fn collect_atoms_by_prefix(
-        &self,
-        prefix: &str,
-        seen: &mut HashSet<String>,
-        out: &mut Vec<String>,
-    ) {
-        let prefix_dot = format!("{prefix}.");
-        let mut matched: Vec<String> = self
-            .by_id
-            .iter()
-            .filter(|(id, c)| id.starts_with(&prefix_dot) && c.children_ids.is_empty())
-            .map(|(id, _)| id.clone())
-            .collect();
-        matched.sort();
-        for id in matched {
-            if seen.insert(id.clone()) {
-                out.push(id);
             }
         }
     }
