@@ -925,8 +925,17 @@ children:
           - id: lt.7.1.4
             name: "Markov condition and faithfulness"
             description: "Linking graph separations to the distribution's independencies."
-            prerequisites:
-              - lt.7.1.3
+            children:
+              - id: lt.7.1.4.1
+                name: "Causal Markov condition"
+                description: "Every d-separation in the DAG implies a conditional independence."
+                prerequisites:
+                  - lt.7.1.3
+              - id: lt.7.1.4.2
+                name: "Faithfulness"
+                description: "The converse assumption: every independence comes from a d-separation."
+                prerequisites:
+                  - lt.7.1.4.1
       - id: lt.7.2
         name: "Do-calculus"
         description: "Pearl's calculus for interventions."

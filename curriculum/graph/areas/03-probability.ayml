@@ -126,8 +126,16 @@ children:
         prerequisites: [prob.3.1]
       - id: prob.3.4
         name: "MGF and characteristic function"
-        description: "Moment-generating; Fourier transform of the law."
-        prerequisites: [prob.3.1, ana.6.2]
+        description: "Transform representations of a distribution."
+        children:
+          - id: prob.3.4.1
+            name: "Moment-generating function"
+            description: "E[e^{tX}]; generates moments but need not exist."
+            prerequisites: [prob.3.1]
+          - id: prob.3.4.2
+            name: "Characteristic function"
+            description: "E[e^{itX}]; the Fourier transform of the law, always exists."
+            prerequisites: [prob.3.4.1, ana.6.2]
       - id: prob.3.6
         name: "Conditional expectation"
         description: "E[X|G]; tower property; orthogonal projection in L²."
@@ -155,8 +163,16 @@ children:
         prerequisites: [prob.4.2]
       - id: prob.4.4
         name: "Graphical models"
-        description: "Bayes nets and Markov random fields."
-        prerequisites: [prob.4.3, dis.2.1]
+        description: "Encoding conditional independence in a graph."
+        children:
+          - id: prob.4.4.1
+            name: "Bayesian networks"
+            description: "Directed acyclic graphs factorizing a joint into conditionals."
+            prerequisites: [prob.4.3, dis.2.1]
+          - id: prob.4.4.2
+            name: "Markov random fields"
+            description: "Undirected graphs factorizing via clique potentials."
+            prerequisites: [prob.4.4.1]
       - id: prob.4.5
         name: "Reparameterization"
         description: "Expressing X = g(ε); enables low-variance gradients."
@@ -246,8 +262,16 @@ children:
         prerequisites: [prob.7.1, la.5.6]
       - id: prob.7.3
         name: "MCMC"
-        description: "Metropolis–Hastings, Gibbs sampling."
-        prerequisites: [prob.7.2, dyn.4.4]
+        description: "Sampling by constructing a Markov chain with the target stationary law."
+        children:
+          - id: prob.7.3.1
+            name: "Metropolis–Hastings"
+            description: "Propose-and-accept moves satisfying detailed balance."
+            prerequisites: [prob.7.2, dyn.4.4]
+          - id: prob.7.3.2
+            name: "Gibbs sampling"
+            description: "Cycle through full-conditional updates of each coordinate."
+            prerequisites: [prob.7.3.1]
       - id: prob.7.4
         name: "Mixing times and spectral gap"
         description: "Rate of convergence to equilibrium."
@@ -336,8 +360,16 @@ children:
         prerequisites: [prob.9.3]
       - id: prob.9.5
         name: "Sufficiency and Fisher information"
-        description: "Sufficient statistics; Fisher info matrix."
-        prerequisites: [prob.9.2, la.6.3]
+        description: "What a sample tells you about a parameter."
+        children:
+          - id: prob.9.5.1
+            name: "Sufficient statistics"
+            description: "A statistic carrying all the sample's information about the parameter."
+            prerequisites: [prob.9.2]
+          - id: prob.9.5.2
+            name: "Fisher information"
+            description: "Curvature of the log-likelihood; how sharply data pin down the parameter."
+            prerequisites: [prob.9.5.1, la.6.3]
       - id: prob.9.6
         name: "Cramér–Rao bound"
         description: "Lower bound on unbiased estimator variance."

@@ -32,8 +32,16 @@ children:
         prerequisites: [ana.1.8]
       - id: dis.1.3
         name: "Asymptotics of combinatorial sums"
-        description: "Stirling, saddle-point methods, singularity analysis."
-        prerequisites: [dis.1.2, ana.9.4]
+        description: "Estimating the growth of counting sequences."
+        children:
+          - id: dis.1.3.1
+            name: "Stirling's approximation"
+            description: "n! ~ √(2πn)(n/e)ⁿ; the workhorse factorial estimate."
+            prerequisites: [dis.1.2]
+          - id: dis.1.3.2
+            name: "Saddle-point and singularity analysis"
+            description: "Complex-analytic asymptotics from a generating function's singularities."
+            prerequisites: [dis.1.3.1, ana.9.4]
       - id: dis.1.4
         name: "Probabilistic method"
         description: "Existence proofs via random construction."
@@ -118,8 +126,16 @@ children:
         prerequisites: [prob.1.4]
       - id: dis.3.5
         name: "Sorting and order statistics"
-        description: "Comparison-based lower bounds; selection algorithms."
-        prerequisites: [dis.3.1]
+        description: "Ordering data and finding ranks."
+        children:
+          - id: dis.3.5.1
+            name: "Comparison sorting and lower bounds"
+            description: "Mergesort / quicksort and the Ω(n log n) comparison lower bound."
+            prerequisites: [dis.3.1]
+          - id: dis.3.5.2
+            name: "Order statistics and selection"
+            description: "Find the k-th smallest in linear expected time (quickselect)."
+            prerequisites: [dis.3.5.1]
       - id: dis.3.6
         name: "Streaming and sketches"
         description: "Sublinear-space summaries of large streams."

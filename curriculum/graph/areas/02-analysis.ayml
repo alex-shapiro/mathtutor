@@ -27,8 +27,20 @@ children:
         prerequisites: [fnd.2.3]
       - id: ana.1.2
         name: "Series and convergence tests"
-        description: "Absolute vs conditional; comparison, ratio, root tests."
-        prerequisites: [ana.1.1]
+        description: "Convergence of infinite series."
+        children:
+          - id: ana.1.2.1
+            name: "Absolute vs conditional convergence"
+            description: "Absolute convergence implies convergence; conditional does not rearrange freely."
+            prerequisites: [ana.1.1]
+          - id: ana.1.2.2
+            name: "Comparison test"
+            description: "Bound a series term-by-term against a known convergent / divergent one."
+            prerequisites: [ana.1.2.1]
+          - id: ana.1.2.3
+            name: "Ratio and root tests"
+            description: "Limit of successive-term ratios / n-th roots decides convergence."
+            prerequisites: [ana.1.2.1]
       - id: ana.1.3
         name: "Continuity"
         description: "Pointwise, uniform, Lipschitz; ε-δ formulations."
@@ -84,16 +96,36 @@ children:
         prerequisites: [ana.2.2]
       - id: ana.2.4
         name: "Gradient, divergence, curl"
-        description: "Vector calculus operators in ℝ³ / ℝᵈ."
-        prerequisites: [ana.2.2]
+        description: "The first-order vector calculus operators."
+        children:
+          - id: ana.2.4.1
+            name: "Gradient"
+            description: "Vector of partial derivatives; direction of steepest ascent."
+            prerequisites: [ana.2.2]
+          - id: ana.2.4.2
+            name: "Divergence"
+            description: "Net outflow rate of a vector field at a point."
+            prerequisites: [ana.2.4.1]
+          - id: ana.2.4.3
+            name: "Curl"
+            description: "Infinitesimal rotation of a vector field."
+            prerequisites: [ana.2.4.1]
       - id: ana.2.5
         name: "Multivariable Taylor expansion"
         description: "Hessian and higher-order tensors."
         prerequisites: [ana.1.7, ana.2.2]
       - id: ana.2.6
         name: "Inverse and implicit function theorems"
-        description: "Local invertibility under regularity."
-        prerequisites: [ana.2.2]
+        description: "Local solvability under a non-degenerate derivative."
+        children:
+          - id: ana.2.6.1
+            name: "Inverse function theorem"
+            description: "A map with invertible Jacobian is locally invertible."
+            prerequisites: [ana.2.2]
+          - id: ana.2.6.2
+            name: "Implicit function theorem"
+            description: "Solve F(x, y) = 0 locally for y(x) when ∂F/∂y is invertible."
+            prerequisites: [ana.2.6.1]
       - id: ana.2.7
         name: "Line and surface integrals"
         description: "Integration along curves and over surfaces."
@@ -219,8 +251,16 @@ children:
             prerequisites: [ana.5.5.1]
       - id: ana.5.6
         name: "Lᵖ spaces"
-        description: "Hölder, Minkowski; Lᵖ as Banach (Hilbert if p=2)."
-        prerequisites: [ana.5.4]
+        description: "Integrable-function spaces and their norms."
+        children:
+          - id: ana.5.6.1
+            name: "Lᵖ spaces"
+            description: "‖f‖_p = (∫|f|ᵖ)^{1/p}; complete (Banach), Hilbert when p=2."
+            prerequisites: [ana.5.4]
+          - id: ana.5.6.2
+            name: "Hölder and Minkowski inequalities"
+            description: "Hölder bounds products of Lᵖ functions; Minkowski is the Lᵖ triangle inequality."
+            prerequisites: [ana.5.6.1]
       - id: ana.5.7
         name: "Product measures and Fubini–Tonelli"
         description: "Iterated vs joint integrals."
@@ -264,8 +304,16 @@ children:
         prerequisites: [ana.6.2]
       - id: ana.6.6
         name: "DFT and FFT"
-        description: "Discrete analogue; O(n log n) algorithm."
-        prerequisites: [ana.6.1, ana.6.5]
+        description: "Discrete Fourier analysis and its fast computation."
+        children:
+          - id: ana.6.6.1
+            name: "Discrete Fourier transform"
+            description: "Fourier transform of a finite sequence; a unitary change of basis."
+            prerequisites: [ana.6.1, ana.6.5]
+          - id: ana.6.6.2
+            name: "Fast Fourier transform"
+            description: "Divide-and-conquer algorithm computing the DFT in O(n log n)."
+            prerequisites: [ana.6.6.1]
       - id: ana.6.7
         name: "Wavelets"
         description: "Multi-resolution analysis; localized basis."

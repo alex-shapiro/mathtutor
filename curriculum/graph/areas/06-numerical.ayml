@@ -113,8 +113,16 @@ children:
         prerequisites: [dyn.2.3]
       - id: num.3.5
         name: "Euler–Maruyama and Milstein"
-        description: "Discretizations for SDEs."
-        prerequisites: [prob.8.3, num.3.1]
+        description: "Numerical integrators for stochastic differential equations."
+        children:
+          - id: num.3.5.1
+            name: "Euler–Maruyama method"
+            description: "The stochastic analogue of explicit Euler; strong order 1/2."
+            prerequisites: [prob.8.3, num.3.1]
+          - id: num.3.5.2
+            name: "Milstein method"
+            description: "Adds the Itô correction term to reach strong order 1."
+            prerequisites: [num.3.5.1]
       - id: num.3.6
         name: "ODE solvers in deep learning"
         description: "Neural ODEs, DPM-Solver, Heun's solver in diffusion."
@@ -150,8 +158,16 @@ children:
         prerequisites: [num.4.5, num.4.2]
       - id: num.4.7
         name: "Checkpointing and gradient accumulation"
-        description: "Memory–compute trade-offs in backprop."
-        prerequisites: [num.4.3]
+        description: "Two ways to fit large training steps in limited memory."
+        children:
+          - id: num.4.7.1
+            name: "Gradient checkpointing"
+            description: "Discard and recompute activations in the backward pass to save memory."
+            prerequisites: [num.4.3]
+          - id: num.4.7.2
+            name: "Gradient accumulation"
+            description: "Sum gradients over micro-batches before an update to emulate a large batch."
+            prerequisites: [num.4.3]
       - id: num.4.8
         name: "Differentiable programming"
         description: "Custom VJPs, control flow, stateful ops."

@@ -86,8 +86,16 @@ children:
         prerequisites: [geom.2.3]
       - id: geom.2.6
         name: "Stiefel and Grassmann manifolds"
-        description: "Orthonormal frames; subspaces — natural for orthogonal weights."
-        prerequisites: [la.3.3, geom.1.1, la.5.5]
+        description: "Matrix manifolds of frames and subspaces."
+        children:
+          - id: geom.2.6.1
+            name: "Stiefel manifold"
+            description: "The manifold of orthonormal k-frames; natural for orthogonal weights."
+            prerequisites: [la.3.3, geom.1.1]
+          - id: geom.2.6.2
+            name: "Grassmann manifold"
+            description: "The manifold of k-dimensional subspaces; Stiefel modulo rotations."
+            prerequisites: [geom.2.6.1, la.5.5]
       - id: geom.2.7
         name: "Hyperbolic space"
         description: "Constant negative curvature; Poincaré ball, Lorentz models."
