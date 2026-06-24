@@ -15,7 +15,10 @@ files:
     operations:
     - read
 network:
-  rules: []
+  rules:
+  - host: andyljones.com
+    ports:
+    - 443
 exec:
   rules:
   - path: /opt/homebrew/Cellar/ripgrep/*/bin/rg
