@@ -47,8 +47,16 @@ children:
         prerequisites: [inf.1.4, opt.1.5]
       - id: inf.1.8
         name: "Total variation and Hellinger"
-        description: "Other distances on probability measures."
-        prerequisites: [inf.1.6, ana.5.10]
+        description: "Metric distances between probability measures."
+        children:
+          - id: inf.1.8.1
+            name: "Total variation distance"
+            description: "Largest gap in probability assigned to any event; an L¹ distance."
+            prerequisites: [inf.1.6, ana.5.10]
+          - id: inf.1.8.2
+            name: "Hellinger distance"
+            description: "An L² distance between square-root densities; bounds and is bounded by TV."
+            prerequisites: [inf.1.8.1]
       - id: inf.1.9
         name: "Wasserstein vs KL"
         description: "Comparison and use cases."
