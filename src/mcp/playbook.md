@@ -15,20 +15,22 @@ If the user has paths, surface them and ask which to resume. Then call `get_stat
 
 ### Choosing a strategy
 
-A path is taught **bottom-up** (the default) or **top-down**. Pass `strategy` to `new_path`, or switch any time with `set_strategy { path_id, strategy }` — switching never loses progress.
+A path is taught bottom-up (default) or top-down. Pass `strategy` to `new_path`, or switch any time with `set_strategy { path_id, strategy }`. Switching never loses progress.
 
 - **bottom_up** teaches every prerequisite of a target before the target itself. Best when the learner is starting cold and wants the full ladder.
-- **top_down** teaches the next target directly and only drops to prerequisites when the learner gets stuck (see **Subpaths** below). Best when the learner has background and wants to reach the goal quickly, learning foundations only as needed.
+- **top_down** teaches the next target directly and only drops to prerequisites when the learner is stuck (see **Subpaths** below). Best when the learner has background and wants to reach the goal quickly, learning foundations as needed.
 
-Infer from the goal or ask; when unsure, default to bottom_up.
+Ask the learner which fits if they have not stated a preference.
 
 ## Browsing the curriculum
 
-`get_item { id }` returns details on an atom, cluster, or area (no `path_id` needed for pure curriculum data). `get_children { id? }` returns the children of a node (omit `id` for the root area list, pass `recursive: true` to walk the full subtree).
+`get_item { id }` returns details on an atom, cluster, or area. No `path_id` needed for pure curriculum data.
+
+`get_children { id? }` returns the children of a node. Omit `id` for the root area list. Pass `recursive: true` to walk the full subtree.
 
 Pass `path_id` to either to also get per-atom progress (taught / complete flags).
 
-If the user asks what's coming up, call `get_syllabus { path_id, n? }` for an ordered list of the next upcoming lesson topics (no bodies). This is forward-looking only and distinct from `get_next`, which advances the iterator and may return a quiz or review.
+If the user asks what's coming up, call `get_syllabus { path_id, n? }` for an ordered list of the next upcoming lesson topics (no bodies). This is distinct from `get_next`, which advances the iterator and may return a quiz or review.
 
 ## Main loop
 
@@ -42,21 +44,21 @@ Stop when `action: done` or the user pauses.
 
 ## Subpaths (top-down)
 
-On a top-down path, `get_next` presents the next target directly, without first teaching its prerequisites. When the learner is stuck — can't follow the lesson, keeps missing quizzes, or asks to go deeper — scaffold a path back to the target with a **subpath**.
+On a top-down path, `get_next` presents the next target without first teaching prerequisites. When the learner is stuck or asks, offer to scaffold a path back to the target with a subpath.
 
-1. Find the relevant prerequisites with `get_item { id: <target> }`. Pick the one(s) the learner is missing, deepest first.
-2. Call `subpath_set { path_id, atoms }` where `atoms` is an ordered list of prerequisite atoms ending in the target. `get_next` then teaches the subpath in order and finally re-presents the target. The last atom must be one of the path's targets.
-3. If the learner is still stuck on a prerequisite, call `subpath_set` again with its prerequisites inserted — it replaces the whole subpath. Adjust freely after discussion.
+1. Find relevant prerequisites with `get_item { id: <target> }`. Pick the ones the learner is missing, deepest first.
+2. Call `subpath_set { path_id, atoms }` where `atoms` is an ordered list of prerequisite atoms ending in the target. `get_next` then teaches the subpath in order and finally re-presents the target. The last atom must be a path target.
+3. If the learner is still stuck on a prerequisite, call `subpath_set` again with its prerequisites inserted; this replaces the whole subpath. Discuss with the learner and adjust freely.
 
-The subpath clears itself once the target completes, returning `get_next` to the remaining targets. To abandon a detour early, call `subpath_clear { path_id }`. `get_state` reports the subpath's remaining atoms.
+The subpath clears itself once the target completes, returning `get_next` to the remaining targets. To abandon a subpath early, call `subpath_clear { path_id }`. `get_state` reports the subpath's remaining atoms.
 
-Subpaths apply only to top-down paths; on bottom-up paths prerequisites are already taught in order.
+Bottom-up paths teach prerequisites in order and thus do not use subpaths.
 
 ## Action playbook
 
 ### `create_lesson`
 
-The next path-target atom has no stored lesson. Author one (1–2 paragraphs, ≤ 2 minutes reading, ≤ 1 theorem / rule / definition) building on the prereqs in the payload without restating them. Persist with `upsert_lesson { atom, body, path_id }`. Then present the lesson to the user and stop until they signal they're ready to continue.
+The next path-target atom has no stored lesson. Author it (1–2 paragraphs, ≤ 2 minutes reading, ≤ 1 theorem / rule / definition) building on the prereqs in the payload without restating them. Persist with `upsert_lesson { atom, body, path_id }`. Then present the lesson to the user and stop until they signal they're ready to continue.
 
 `upsert_lesson` is an upsert. Call it again for the same atom to replace the lesson body. Use it when the user asks for a new explanation of an already-taught lesson.
 
