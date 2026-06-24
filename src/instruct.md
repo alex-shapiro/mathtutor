@@ -11,83 +11,58 @@ The user is either resuming an existing learning path or starting a new one. Alw
 
     mt path state
 
-`mt path state` defaults to the most recently used path and prints a one-screen summary: goal, targets, `learned: k / N (p%)`, the most recently taught atom, and the next atom queued. Show that summary to the user and ask whether they want to keep going or start something new.
+`mt path state` defaults to the most recently used path and prints a one-screen summary: goal, targets, `learned: k / N (p%)`, the most recently taught atom, and the next atom queued. Show that summary to the user and ask whether they want to keep going or do something else.
 
 If `mt path state` errors with `no learning path found` then there is no existing learning path. Offer to start one with `mt path new`. Use `mt path list` to enumerate every path on this database with its goal and progress percentage.
 
 ### Resuming
 
-If the user wants to continue the existing path, enter the main loop with `mt path next`. The default `--path` resolves to the most recent path, so no flag is needed for the common case. Pass `--path <ID>` only when targeting a specific path id.
+If the user wants to continue the existing path, enter the main loop with `mt path next`. The default `--path` is the most recent one so it can typically be skipped.
 
 ### Starting a new path
 
-If the user wants a new path, ask what they want to learn, translate
-the goal into a list of target IDs from the curriculum (use the
-browsing commands below to find them), and run:
+If the user wants a new path, ask what they want to learn, then translate the user's stated goal into a list of target IDs from the curriculum and run:
 
     mt path new "Understand SVD" --atoms la.5.4
 
-`--atoms` takes a comma-separated list (or repeat the flag). Each entry
-can be:
+`--atoms` takes a comma-separated list (or repeat the flag). Each entry is one of:
 
-- an **atom ID** (leaf concept, e.g. `fnd.1.1.5`, `la.5.4.7`)
-- a **cluster ID** (e.g. `la.5.4` "SVD", `tx.5` "state-space models")
-  — expands to all atomic descendants
-- an **area prefix** (e.g. `tx`, `la`) — expands to every atom in
-  that area
+- an atom ID (leaf concept, e.g. `fnd.1.1.5`, `la.5.4.7`)
+- a cluster ID (e.g. `la.5.4` "SVD", `tx.5` "state-space models") that expands to all atomic descendants
+- an area prefix (e.g. `tx`, `la`) that expands to every atom in that area
 
-`mt path new` returns a path ID on stdout and that path becomes the
-default for subsequent commands.
+`mt path new` returns a path ID on stdout. This path becomes the default for subsequent commands.
 
-### Choosing a strategy
+#### Choosing a strategy
 
-A path is taught **bottom-up** (the default) or **top-down**; pass
-`--strategy top-down` to `mt path new`, or switch an existing path any
-time with `mt path strategy <bottom-up|top-down>`. Switching never loses
-progress.
+A path is taught bottom-up (the default) or top-down; pass `--strategy top-down` to `mt path new`, or switch an existing path any time with `mt path strategy <bottom-up|top-down>`. Switching never loses progress.
 
-- **bottom-up** teaches foundations first: every prerequisite of a target
-  is taught before the target itself. Best when the learner is starting
-  cold and wants the full ladder.
-- **top-down** teaches the next target directly and only drops down to
-  prerequisites when the learner gets stuck (see **Subpaths** below).
-  Best when the learner already has background and wants to get to the
-  goal quickly, learning foundations only as needed.
+- **bottom-up** teaches foundations first: every prerequisite of a target is taught before the target itself. Best when the user wants the full ladder.
+- **top-down** teaches the next target directly and drops down to prerequisites when the learner gets stuck (see **Subpaths** below). Best when the learner has a background and wants to get to the goal quickly, learning prereqs as needed.
 
-Ask the learner which fits, or infer from the goal. When unsure, default
-to bottom-up.
+Ask the learner which fits if they have not stated a preference.
 
 ## Browsing the curriculum
 
-Two read-only commands for discovering atom IDs and looking up
-concept details. Both emit structured output (same format as
-`mt path next`).
+Two read-only commands for discovering atom IDs and looking up concept details. Both emit structured output.
 
-    mt graph list                 # all areas (high-level overview)
-    mt graph list <id>            # children of a cluster, topics in an area
-    mt graph show <id>            # details of an atom, cluster, or area
+Use `mt graph list` with no argument first to see the area set. Then drill down: `mt graph list la` for the linear-algebra topics, `mt graph list la.5` for the matrix-factorizations cluster's children, and so on until you hit atom IDs (where `is_atom: true`).
 
-Use `mt graph list` with no argument first to see the area set. Then
-drill down: `mt graph list la` for the linear-algebra topics,
-`mt graph list la.5` for the matrix-factorizations cluster's children,
-and so on until you hit atom IDs (where `is_atom: true`).
+    mt graph list       # all areas (high-level overview)
+    mt graph list <id>  # children of a cluster, topics in an area
+    mt graph show <id>  # details of an atom, cluster, or area
 
 Use `mt graph show` for full details on a single concept:
 
-- atom output → id, name, description, prerequisites (with names),
-  whether a lesson is stored, quiz count
+- atom output → id, name, description, prerequisites (with names),whether a lesson is stored, quiz count
 - cluster output → adds `children` and `atomic_descendants`
-- area output → cluster-shaped, with the area's slug as `name` and
-  summary as `description`
+- area output → cluster-shaped, with the area's slug as `name` and summary as `description`
 
-Pass `--path P` to either to also surface per-atom progress (`status:
-{ lesson_taught, complete }`) against that path.
+Pass `--path P` to either to also surface per-atom progress (`status: { lesson_taught, complete }`) against that path.
 
 Use these to:
 
-- pick `--atoms` arguments for `mt path new` when the user gives a
-  high-level goal ("teach me linear algebra" → `mt graph list` →
-  `mt graph list la` → choose `--atoms la` or pick specific topics)
+- pick `--atoms` arguments for `mt path new` when the user gives a high-level goal ("teach me linear algebra" → `mt graph list` → `mt graph list la` → choose `--atoms la` or pick specific topics)
 - look up a prerequisite's name while authoring a lesson
 - check whether a concept exists before referencing it
 
@@ -349,7 +324,6 @@ Overlay entries always override the shipped curriculum for items with the same i
 
 ## Errors
 
-- `error: no learning path found` → the user has no active path. Run `mt path new` first.
 - `error: unknown id: X` → that ID isn't an atom, cluster, or area in the curriculum. Use `mt graph list` to browse, or ask the user.
 - `error: cluster 'X' has no atomic descendants` → the cluster is empty (no concepts under it yet). Pick a populated branch.
 - `Error parsing option '--rating' / '--difficulty' / '--type'` → the value isn't one of the allowed enum variants. The error message lists valid ones.
