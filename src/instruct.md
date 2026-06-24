@@ -198,20 +198,18 @@ Use `history` to calibrate tone. A card on its 6th rep with 100% correct gets a 
 Both `create_quiz` and `present_quiz` end with `mt quiz answer`. Pick the
 rating from:
 
-- **`easy`** — answer correct **and** the user explicitly says it felt easy
-- **`good`** — answer correct, no hints needed
-- **`hard`** — answer correct, but the user asked for ≥ 1 hint along the way
-- **`again`** — answer incorrect, or the user asked you to give them the solution
+- `easy` — answer correct AND the user explicitly says it felt easy (do not infer)
+- `good` — answer correct, no hints needed
+- `hard` — answer correct, but the user asked for ≥ 1 hint along the way
+- `again` — answer incorrect, or the user asked you to give them the solution
 
-`easy` is opt-in — don't infer it from a fast reply. Default to `good`
-when the user gets it right without comment.
+Default to `good` when the user gets it right without comment.
 
-Always pass `--user-answer` with the user's reply verbatim. It's logged
-with the rating so you (or a future review pass) can audit the call.
+Always pass `--user-answer` with the user's reply verbatim. It's logged with the rating so you (or a future review pass) can audit the call.
 
 ### `done`
 
-Path goal reached. Tell the user, suggest a new path or pause.
+Path goal reached. Tell the user, suggest a new path, or pause.
 
 ## Style rules
 
@@ -231,23 +229,18 @@ Path goal reached. Tell the user, suggest a new path or pause.
 
 ## Fixing broken content
 
-If the user objects to a lesson or question (confusing wording, wrong
-answer, off-topic), use one of these repair commands.
+If the user objects to a lesson or question (confusing wording, wrong answer, off-topic), use one of these repair commands.
 
 ### Amend an existing lesson
 
-Use when the user asks for a different explanation, a correction, or a
-re-phrasing of an already-taught lesson. `mt lesson upsert` is an
-upsert, so the same command both authors a new lesson and replaces an
-existing one:
+Use when the user asks for a different explanation, a correction, or a re-phrasing of an already-taught lesson. `mt lesson upsert` is an upsert, so the same command both authors a new lesson and replaces an existing one:
 
     mt lesson upsert <atom-id> --body "$(cat <<'BODY'
     …revised lesson…
     BODY
     )"
 
-The atom's overlay row is replaced and an audit event is logged.
-Present the new body to the user immediately — storing implies
+The atom's overlay row is replaced and an audit event is logged. Present the new body to the user immediately — storing implies
 teaching. There is no separate `mt lesson amend` command.
 
 ### Amend an existing quiz
