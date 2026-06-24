@@ -23,7 +23,7 @@ tool surface 1:1.
 
 ```
 mt path list                       # list every path with goal / progress
-mt path new <GOAL> --atom <ID>...  # start a new learning path
+mt path new <GOAL> --targets <ID>...  # start a new learning path
 mt path state [--path P]           # one-screen status summary
 mt path next  [--path P]           # next scheduled action (AYML on stdout)
 mt path tree  [--path P]           # full reachable-graph progress view

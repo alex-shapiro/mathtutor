@@ -44,7 +44,7 @@ Operator-only verbs (`graph check`, `graph dump`, `instruct`,
 ```bash
 # Path lifecycle
 mt path list                       # list all paths with goal / progress
-mt path new <GOAL> --atoms <ID>[,<ID>...]  # start a new learning path
+mt path new <GOAL> --targets <ID>[,<ID>...]  # start a new learning path
                    [--strategy {bottom-up,top-down}]  # initial traversal mode (default bottom-up)
 mt path state [--path P]           # one-screen status summary
 mt path next  [--path P]           # next scheduled action (AYML on stdout)
@@ -85,17 +85,26 @@ Every command that records learning activity appends a structured event
 to the per-path log (see "Event log" below); agents read the log if they
 need history.
 
-### `--atoms` ID resolution on `mt path new`
+### `--targets` ID resolution
 
-Each `--atoms` entry may be:
+Each `--targets` entry may be:
 
 - an **atom ID** is a leaf concept (e.g. `tx.1.1`)
-- a **cluster ID** is a non-leaf node (e.g. `tx.1` or `tx.5`) and is expanded to all atomic descendants
-- a bare **area prefix** is a non-leaf node (e.g. `tx`) and is expanded to every atom in that area
+- a **cluster ID** is a non-leaf node (e.g. `tx.1` or `tx.5`) and expands to all atomic descendants
+- an **area root** is the top-level node (e.g. `tx`) and expands to every atom in that area
 
-Mixing forms is allowed; results are deduplicated and topologically
-sorted by prerequisite order before being stored as the path's
-`target_atoms`.
+Mixing forms is allowed. `mt path new` validates that each entry expands to
+at least one atom, then stores the entries **verbatim** (deduplicated,
+order preserved) in `path_targets`. The stored IDs are expanded to a
+deduplicated, topologically sorted set of atoms **on every load**, so the
+resolved target set tracks later curriculum edits — e.g. an atom that is
+split into a cluster keeps resolving to the right leaves without a data
+migration. Resolution errors only if an entry no longer maps to any atom.
+
+Subpaths get the same treatment: `mt path subpath set --atoms` requires
+leaf atoms at set time, but the stored sequence is re-expanded on load, so
+a subpath atom later split into a cluster resolves to its descendants
+(in order) rather than being skipped by the scheduler.
 
 ## Lifecycle of an atom (within a path)
 
@@ -323,7 +332,7 @@ Tables, by role:
 | Table                     | Role                          | Mutability                                                     |
 | ------------------------- | ----------------------------- | -------------------------------------------------------------- |
 | `paths`                   | per-path goal + strategy      | `goal`/`created_at` fixed at `mt path new`; `strategy` mutable |
-| `path_targets`            | target atoms, topo-sorted     | fixed at `mt path new`                                         |
+| `path_targets`            | target IDs, verbatim          | fixed at `mt path new`; expanded to atoms on load             |
 | `path_subpath`            | top-down detour to a target   | replaced by `mt path subpath set`, emptied by `clear`          |
 | `events`                  | per-path learning history     | append-only                                                    |
 | `cards`                   | FSRS state per `(path, quiz)` | write-through cache, rebuildable from `events`                 |

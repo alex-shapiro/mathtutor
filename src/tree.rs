@@ -31,15 +31,17 @@ pub async fn cmd_path_tree(
     let manifest = graph::load_manifest_default(graph_dir)?;
     let progress = PathProgress::load(conn, &id).await?;
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
-    let subpath = crate::subpath::load(conn, &id).await?;
+    let subpath = crate::subpath::load_resolved(conn, &id, &g).await?;
+    let target_atoms = p.resolve_targets(&g)?;
 
-    let targets: HashSet<String> = p.target_atoms.iter().cloned().collect();
+    let targets: HashSet<String> = target_atoms.iter().cloned().collect();
     let subpath_set: HashSet<String> = subpath.iter().cloned().collect();
-    let reachable = g.reachable_atoms(&p.target_atoms);
+    let reachable = g.reachable_atoms(&target_atoms);
     let spine = build_spine(&g, &reachable);
     let next_atom = scheduler::next_action(
         &g,
         &p,
+        &target_atoms,
         &progress,
         &due,
         &subpath,
@@ -48,9 +50,8 @@ pub async fn cmd_path_tree(
     .atom_id()
     .map(String::from);
 
-    let total = p.target_atoms.len();
-    let target_learned = p
-        .target_atoms
+    let total = target_atoms.len();
+    let target_learned = target_atoms
         .iter()
         .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
         .count();

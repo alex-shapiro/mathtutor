@@ -386,7 +386,7 @@ async fn unknown_atom_id_returns_structured_business_error() {
                 "name": "new_path",
                 "arguments": {
                     "goal": "Test",
-                    "atoms": ["no.such.atom.exists"]
+                    "targets": ["no.such.atom.exists"]
                 }
             }
         }),
@@ -428,7 +428,7 @@ async fn get_syllabus_returns_upcoming_topics_for_new_path() {
             "method": "tools/call",
             "params": {
                 "name": "new_path",
-                "arguments": { "goal": "Test", "atoms": ["fnd.1.1.2"] }
+                "arguments": { "goal": "Test", "targets": ["fnd.1.1.2"] }
             }
         }),
     )

@@ -3,7 +3,7 @@
 
 mod common;
 
-use common::{PATH_ID, complete_atom, empty_atom, fresh_db, graph_of, path_with_strategy};
+use common::{PATH_ID, cluster, complete_atom, empty_atom, fresh_db, graph_of, path_with_strategy};
 
 use chrono::Utc;
 use libsql::Connection;
@@ -44,6 +44,7 @@ fn top_down_presents_target_before_its_prereqs() {
     let action = scheduler::next_action(
         &g,
         &p,
+        &p.targets,
         &PathProgress::default(),
         NO_DUE,
         &[],
@@ -65,6 +66,7 @@ fn bottom_up_descends_into_prereqs_first() {
     let action = scheduler::next_action(
         &g,
         &p,
+        &p.targets,
         &PathProgress::default(),
         NO_DUE,
         &[],
@@ -87,6 +89,7 @@ fn top_down_subpath_walked_in_order() {
     let action = scheduler::next_action(
         &g,
         &p,
+        &p.targets,
         &PathProgress::default(),
         NO_DUE,
         &subpath,
@@ -101,7 +104,15 @@ fn top_down_subpath_advances_when_earlier_atom_complete() {
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let subpath = vec!["p".to_string(), "t".to_string()];
     let progress = progress_complete(&["p"]);
-    let action = scheduler::next_action(&g, &p, &progress, NO_DUE, &subpath, NextMode::Default);
+    let action = scheduler::next_action(
+        &g,
+        &p,
+        &p.targets,
+        &progress,
+        NO_DUE,
+        &subpath,
+        NextMode::Default,
+    );
     assert_eq!(
         atom_id(&action),
         Some("t"),
@@ -117,7 +128,15 @@ fn top_down_drained_subpath_falls_through_to_targets() {
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let subpath = vec!["p".to_string()];
     let progress = progress_complete(&["p"]);
-    let action = scheduler::next_action(&g, &p, &progress, NO_DUE, &subpath, NextMode::Default);
+    let action = scheduler::next_action(
+        &g,
+        &p,
+        &p.targets,
+        &progress,
+        NO_DUE,
+        &subpath,
+        NextMode::Default,
+    );
     assert_eq!(
         atom_id(&action),
         Some("t"),
@@ -130,10 +149,116 @@ fn top_down_done_when_targets_complete() {
     let g = graph_of(vec![complete_atom("t", &[])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let progress = progress_complete(&["t"]);
-    let action = scheduler::next_action(&g, &p, &progress, NO_DUE, &[], NextMode::Default);
+    let action = scheduler::next_action(
+        &g,
+        &p,
+        &p.targets,
+        &progress,
+        NO_DUE,
+        &[],
+        NextMode::Default,
+    );
     assert!(
         matches!(action, Action::Done),
         "all targets complete → done"
+    );
+}
+
+// ── cluster targets resolve on load ─────────────────────────────────
+
+#[test]
+fn top_down_cluster_target_resolves_to_atomic_children() {
+    // Regression: a target that's a cluster (e.g. an atom the curriculum
+    // later split into one) must expand to its atoms rather than be
+    // skipped or treated as a lesson-less atom. `resolve_targets` does the
+    // expansion; the scheduler then descends into the first child.
+    let g = graph_of(vec![
+        cluster("tx.1", &["tx.1.1", "tx.1.2"]),
+        empty_atom("tx.1.1", &[]),
+        empty_atom("tx.1.2", &[]),
+    ]);
+    let p = path_with_strategy(&["tx.1"], Strategy::TopDown);
+
+    let targets = p.resolve_targets(&g).unwrap();
+    assert_eq!(targets, vec!["tx.1.1".to_string(), "tx.1.2".to_string()]);
+
+    let action = scheduler::next_action(
+        &g,
+        &p,
+        &targets,
+        &PathProgress::default(),
+        NO_DUE,
+        &[],
+        NextMode::Default,
+    );
+    assert_eq!(
+        atom_id(&action),
+        Some("tx.1.1"),
+        "top-down descends a cluster target to its first atomic child",
+    );
+}
+
+#[tokio::test]
+async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
+    // End-to-end against the embedded curriculum: a path targeting an area
+    // root stores the root verbatim, and `syllabus` expands it to the
+    // area's upcoming atoms.
+    let tmp = TempDir::new().unwrap();
+    let conn = open_db(&tmp).await;
+    let id = path::cmd_path_new(
+        &conn,
+        "transformers",
+        &["tx".into()],
+        Strategy::TopDown,
+        None,
+    )
+    .await
+    .expect("new path");
+
+    assert_eq!(
+        path::load_path(&conn, &id).await.unwrap().targets,
+        vec!["tx".to_string()],
+        "the area root is stored as given, not pre-expanded",
+    );
+
+    let view = mathtutor::syllabus::compute_syllabus(&conn, Some(&id), 10, None)
+        .await
+        .expect("syllabus");
+    assert!(
+        view.total_remaining > 0 && !view.atoms.is_empty(),
+        "cluster target must expand to upcoming atoms, got {view:?}",
+    );
+}
+
+#[tokio::test]
+async fn subpath_cluster_atom_resolves_on_load() {
+    // Regression: a subpath atom that a later curriculum edit split into a
+    // cluster must expand on load — same as targets — rather than being
+    // served to the scheduler as a lesson-less cluster. Set-time validation
+    // forbids cluster atoms, so we store one directly to simulate the drift.
+    let tmp = TempDir::new().unwrap();
+    let conn = open_db(&tmp).await;
+    let id = save(&conn, &["tx.1.1.1"], Strategy::TopDown).await;
+    subpath::replace(&conn, &id, &["tx.1".into()])
+        .await
+        .unwrap();
+
+    let g = mathtutor::graph::Graph::load_for_path(&conn, None)
+        .await
+        .unwrap();
+    let resolved = subpath::load_resolved(&conn, &id, &g).await.unwrap();
+
+    assert!(
+        !resolved.contains(&"tx.1".to_string()),
+        "the cluster id itself drops out",
+    );
+    assert!(
+        resolved.contains(&"tx.1.1.1".to_string()),
+        "the cluster expands to its atomic descendants",
+    );
+    assert!(
+        resolved.iter().all(|a| g.by_id[a].children_ids.is_empty()),
+        "every resolved subpath entry is a leaf atom",
     );
 }
 
@@ -150,7 +275,7 @@ async fn save(conn: &Connection, targets: &[&str], strategy: Strategy) -> String
         id: PATH_ID.into(),
         goal: "test".into(),
         created_at: Utc::now(),
-        target_atoms: targets.iter().map(|s| (*s).to_string()).collect(),
+        targets: targets.iter().map(|s| (*s).to_string()).collect(),
         strategy,
     };
     path::save_path(conn, &p).await.expect("save_path");

@@ -62,6 +62,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "strategy_subpath",
         sql: include_str!("migrations/003_strategy_subpath.sql"),
     },
+    Migration {
+        version: 4,
+        name: "rename_target_column",
+        sql: include_str!("migrations/004_rename_target_column.sql"),
+    },
 ];
 
 /// Schema migrations bookkeeping table
@@ -484,7 +489,7 @@ mod tests {
         // off mid-copy, then back on); inserting an orphan must fail.
         let bad = conn
             .execute(
-                "INSERT INTO path_targets(path_id, atom_id, position) VALUES (?, ?, ?)",
+                "INSERT INTO path_targets(path_id, target_id, position) VALUES (?, ?, ?)",
                 params!["nope", "atom", 0],
             )
             .await;

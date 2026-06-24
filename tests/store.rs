@@ -28,7 +28,7 @@ async fn fresh_db_with_path(dir: &TempDir) -> (Connection, String) {
         id: "p_test".into(),
         goal: "test".into(),
         created_at: Utc::now(),
-        target_atoms: vec![NO_LESSON_ATOM.into()],
+        targets: vec![NO_LESSON_ATOM.into()],
         strategy: mathtutor::types::Strategy::BottomUp,
     };
     path::save_path(&conn, &p).await.expect("save_path");

@@ -125,8 +125,8 @@ impl MathTutorServer {
 pub struct NewPathArgs {
     /// Free-text learning goal, e.g. "Understand SVD".
     pub goal: String,
-    /// Target atom / cluster / area IDs (one or more).
-    pub atoms: Vec<String>,
+    /// Targets — atom, cluster, or area IDs (one or more).
+    pub targets: Vec<String>,
     /// Initial traversal strategy: `bottom_up` (default) or `top_down`.
     #[serde(default)]
     pub strategy: Strategy,
@@ -266,7 +266,7 @@ impl MathTutorServer {
         )
     }
 
-    #[tool(description = "Start a new learning path with a goal and target atoms.")]
+    #[tool(description = "Start a new learning path with a goal and targets.")]
     async fn new_path(
         &self,
         Parameters(args): Parameters<NewPathArgs>,
@@ -275,7 +275,7 @@ impl MathTutorServer {
         let result = path::cmd_path_new(
             &conn,
             &args.goal,
-            &args.atoms,
+            &args.targets,
             args.strategy,
             self.graph_path(),
         )
@@ -549,7 +549,8 @@ struct PathSummary {
     goal: String,
     strategy: Strategy,
     created_at: DateTime<Utc>,
-    target_atoms: Vec<String>,
+    /// Targets as the learner chose them — atoms, clusters, or area roots.
+    targets: Vec<String>,
 }
 
 async fn list_paths(conn: &Connection) -> CrateResult<Vec<PathSummary>> {
@@ -568,20 +569,20 @@ async fn list_paths(conn: &Connection) -> CrateResult<Vec<PathSummary>> {
         let strategy: Strategy = row.get::<String>(3)?.parse()?;
         let mut t_rows = conn
             .query(
-                "SELECT atom_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
+                "SELECT target_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
                 libsql::params![id.as_str()],
             )
             .await?;
-        let mut target_atoms = Vec::new();
+        let mut targets = Vec::new();
         while let Some(r) = t_rows.next().await? {
-            target_atoms.push(r.get::<String>(0)?);
+            targets.push(r.get::<String>(0)?);
         }
         out.push(PathSummary {
             id,
             goal,
             strategy,
             created_at,
-            target_atoms,
+            targets,
         });
     }
     Ok(out)
@@ -760,13 +761,13 @@ async fn compute_tree(
     let g = Graph::load_for_path(conn, graph_dir).await?;
     let manifest = graph::load_manifest_default(graph_dir)?;
     let progress = PathProgress::load(conn, path_id).await?;
+    let target_atoms = p.resolve_targets(&g)?;
 
-    let reachable = g.reachable_atoms(&p.target_atoms);
+    let reachable = g.reachable_atoms(&target_atoms);
     let spine = tree::build_spine(&g, &reachable);
 
-    let targets_total = p.target_atoms.len();
-    let targets_learned = p
-        .target_atoms
+    let targets_total = target_atoms.len();
+    let targets_learned = target_atoms
         .iter()
         .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
         .count();
@@ -784,7 +785,7 @@ async fn compute_tree(
         .count();
 
     let target_set: std::collections::HashSet<&str> =
-        p.target_atoms.iter().map(String::as_str).collect();
+        target_atoms.iter().map(String::as_str).collect();
 
     let mut nodes = Vec::new();
     for area in &manifest.areas {

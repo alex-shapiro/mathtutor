@@ -65,6 +65,7 @@ fn create_lesson_when_atom_has_none() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &PathProgress::default(),
             NO_DUE,
             &[],
@@ -85,6 +86,7 @@ fn present_lesson_when_stored_but_not_taught_in_path() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &PathProgress::default(),
             NO_DUE,
             &[],
@@ -107,6 +109,7 @@ fn lesson_authored_event_satisfies_taught_check() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             NO_DUE,
             &[],
@@ -126,6 +129,7 @@ fn create_easy_quiz_when_lesson_stored_and_taught() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             NO_DUE,
             &[],
@@ -150,6 +154,7 @@ fn present_easy_quiz_when_authored_but_unanswered() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             NO_DUE,
             &[],
@@ -174,6 +179,7 @@ fn keep_presenting_easy_after_again_rating() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             NO_DUE,
             &[],
@@ -202,6 +208,7 @@ fn advance_to_medium_after_hard_rating() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             NO_DUE,
             &[],
@@ -226,6 +233,7 @@ fn advance_to_medium_after_easy_correct() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             NO_DUE,
             &[],
@@ -257,6 +265,7 @@ fn advance_to_hard_after_easy_and_medium_correct() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             NO_DUE,
             &[],
@@ -290,6 +299,7 @@ fn done_after_all_three_correct_on_only_target() {
         scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             NO_DUE,
             &[],
@@ -325,6 +335,7 @@ fn advance_to_next_target_lesson_after_first_complete() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             NO_DUE,
             &[],
@@ -349,6 +360,7 @@ fn does_not_advance_after_only_lesson_stored() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &PathProgress::default(),
             NO_DUE,
             &[],
@@ -369,6 +381,7 @@ fn descends_into_prereq_before_target() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &PathProgress::default(),
             NO_DUE,
             &[],
@@ -395,6 +408,7 @@ fn finishes_prereq_quizzes_before_target_lesson() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             NO_DUE,
             &[],
@@ -421,6 +435,7 @@ fn cluster_target_descends_to_first_atom() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &PathProgress::default(),
             NO_DUE,
             &[],
@@ -448,6 +463,7 @@ fn cluster_prereq_descends_before_target() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &PathProgress::default(),
             NO_DUE,
             &[],
@@ -472,6 +488,7 @@ fn cluster_prereq_advances_to_target_when_complete() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             NO_DUE,
             &[],
@@ -564,6 +581,7 @@ fn new_mode_skips_due_card_and_returns_walker_action() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             &due,
             &[],
@@ -589,6 +607,7 @@ fn due_mode_returns_earliest_due_card() {
         &scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             &due,
             &[],
@@ -609,6 +628,7 @@ fn due_mode_returns_done_when_no_card_is_due() {
         scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &PathProgress::default(),
             NO_DUE,
             &[],
@@ -664,6 +684,7 @@ fn new_mode_returns_done_when_walker_has_nothing_left() {
         scheduler::next_action(
             &g,
             &p,
+            &p.targets,
             &common::progress_of(&events),
             &due,
             &[],

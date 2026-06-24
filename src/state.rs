@@ -132,16 +132,18 @@ pub async fn compute_state(
     let progress = PathProgress::load(conn, &id).await?;
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
 
-    let subpath_ids = subpath::load(conn, &id).await?;
+    let subpath_ids = subpath::load_resolved(conn, &id, &g).await?;
+    let target_atoms = p.resolve_targets(&g)?;
 
-    let reachable = g.reachable_atoms(&p.target_atoms);
+    let reachable = g.reachable_atoms(&target_atoms);
     let complete = complete_set(&g, &reachable, &progress);
-    let (targets, reach) = counters(&p, &reachable, &complete, &progress);
+    let (targets, reach) = counters(&target_atoms, &reachable, &complete, &progress);
 
     let updated_at = latest_event_ts(conn, &id).await?.unwrap_or(p.created_at);
     let next = scheduler::next_action(
         &g,
         &p,
+        &target_atoms,
         &progress,
         &due,
         &subpath_ids,
@@ -149,7 +151,7 @@ pub async fn compute_state(
     )
     .atom_id()
     .and_then(|id| atom_ref(&g, id));
-    let most_recent = most_recent_completed_target(conn, &id, &g, &p, &complete)
+    let most_recent = most_recent_completed_target(conn, &id, &g, &target_atoms, &complete)
         .await?
         .map(atom_ref_of);
 
@@ -182,15 +184,18 @@ pub async fn compute_state(
     })
 }
 
-/// Count completed targets and completed reachable atoms.
+/// Count completed targets and completed reachable atoms. Resolves the
+/// path's stored targets to atoms against `g` (see
+/// [`PathFile::resolve_targets`]) before counting.
 pub fn compute_progress(
     g: &Graph,
     p: &PathFile,
     progress: &PathProgress,
-) -> (TargetProgress, ReachProgress) {
-    let reachable = g.reachable_atoms(&p.target_atoms);
+) -> Result<(TargetProgress, ReachProgress)> {
+    let targets = p.resolve_targets(g)?;
+    let reachable = g.reachable_atoms(&targets);
     let complete = complete_set(g, &reachable, progress);
-    counters(p, &reachable, &complete, progress)
+    Ok(counters(&targets, &reachable, &complete, progress))
 }
 
 fn complete_set(
@@ -206,14 +211,13 @@ fn complete_set(
 }
 
 fn counters(
-    p: &PathFile,
+    targets: &[String],
     reachable: &HashSet<String>,
     complete: &HashSet<String>,
     progress: &PathProgress,
 ) -> (TargetProgress, ReachProgress) {
-    let total = p.target_atoms.len();
-    let learned = p
-        .target_atoms
+    let total = targets.len();
+    let learned = targets
         .iter()
         .filter(|a| complete.contains(a.as_str()))
         .count();
@@ -256,11 +260,10 @@ async fn most_recent_completed_target<'a>(
     conn: &Connection,
     path_id: &str,
     g: &'a Graph,
-    p: &PathFile,
+    targets: &[String],
     complete: &HashSet<String>,
 ) -> Result<Option<&'a FlatConcept>> {
-    let completed: Vec<&FlatConcept> = p
-        .target_atoms
+    let completed: Vec<&FlatConcept> = targets
         .iter()
         .filter(|a| complete.contains(a.as_str()))
         .filter_map(|a| g.by_id.get(a.as_str()))

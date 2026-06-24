@@ -74,9 +74,10 @@ pub async fn compute_next(
     let p = path::load_path(&tx, &id).await?;
     let progress = PathProgress::load(&tx, &id).await?;
     let due = cards::due_quizzes(&tx, &id, Utc::now()).await?;
-    let subpath = subpath::load(&tx, &id).await?;
+    let subpath = subpath::load_resolved(&tx, &id, &g).await?;
+    let targets = p.resolve_targets(&g)?;
 
-    let action = next_action(&g, &p, &progress, &due, &subpath, mode);
+    let action = next_action(&g, &p, &targets, &progress, &due, &subpath, mode);
     // Build the envelope first — its history aggregates count past
     // presentations only, not the `quiz_presented` / `lesson_taught`
     // we are about to log below.
@@ -167,6 +168,7 @@ impl Action {
 pub fn next_action(
     g: &Graph,
     p: &PathFile,
+    targets: &[String],
     progress: &PathProgress,
     due_quizzes: &[(String, DateTime<Utc>)],
     subpath: &[String],
@@ -184,7 +186,7 @@ pub fn next_action(
     match p.strategy {
         Strategy::BottomUp => {
             let mut visited = HashSet::new();
-            for target in &p.target_atoms {
+            for target in targets {
                 if let Some(action) = next_atom_action(g, progress, target, &mut visited) {
                     return action;
                 }
@@ -194,7 +196,7 @@ pub fn next_action(
         Strategy::TopDown => {
             // A set subpath takes priority; once it drains (all complete)
             // fall through to the targets it was driving toward.
-            for atom in subpath.iter().chain(&p.target_atoms) {
+            for atom in subpath.iter().chain(targets) {
                 if let Some(action) = atom_action(g, progress, atom) {
                     return action;
                 }

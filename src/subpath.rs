@@ -28,6 +28,12 @@ pub async fn load(conn: &Connection, path_id: &str) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Load a path's subpath, expanded to atoms against `g` and kept in
+/// order, mirroring how path targets are resolved.
+pub async fn load_resolved(conn: &Connection, path_id: &str, g: &Graph) -> Result<Vec<String>> {
+    g.expand_to_atoms(&load(conn, path_id).await?)
+}
+
 /// Replace `path_id`'s subpath with `atoms`, preserving their order.
 /// Atomicity is the caller's responsibility.
 ///
@@ -73,11 +79,12 @@ pub async fn cmd_subpath_set(
     if p.strategy != Strategy::TopDown {
         return Err(Error::SubpathNotTopDown);
     }
-    if !p.target_atoms.iter().any(|t| t == tail) {
+
+    let g = Graph::load_for_path(conn, graph_dir).await?;
+    if !p.resolve_targets(&g)?.iter().any(|t| t == tail) {
         return Err(Error::SubpathTailNotTarget(tail.clone()));
     }
 
-    let g = Graph::load_for_path(conn, graph_dir).await?;
     let mut seen = HashSet::with_capacity(atoms.len());
     for a in atoms {
         if !seen.insert(a.as_str()) {
