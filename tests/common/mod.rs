@@ -14,7 +14,7 @@ use mathtutor::event_log::{Event, EventKind, EventPayload};
 use mathtutor::graph::{FlatConcept, Graph, Quiz};
 use mathtutor::path::PathFile;
 use mathtutor::progress::PathProgress;
-use mathtutor::types::{Difficulty, Rating};
+use mathtutor::types::{Difficulty, Rating, Strategy};
 use tempfile::TempDir;
 
 pub const PATH_ID: &str = "p_test";
@@ -104,11 +104,16 @@ pub fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
 }
 
 pub fn path_with(targets: &[&str]) -> PathFile {
+    path_with_strategy(targets, Strategy::BottomUp)
+}
+
+pub fn path_with_strategy(targets: &[&str], strategy: Strategy) -> PathFile {
     PathFile {
         id: PATH_ID.into(),
         goal: "test".into(),
         created_at: Utc::now(),
         target_atoms: targets.iter().map(|s| (*s).to_string()).collect(),
+        strategy,
     }
 }
 

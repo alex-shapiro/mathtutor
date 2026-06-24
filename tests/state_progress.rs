@@ -193,6 +193,7 @@ fn write_state_emits_past_due_line() {
     let s = state::StateSummary {
         path: PATH_ID.into(),
         goal: "test".into(),
+        strategy: mathtutor::types::Strategy::BottomUp,
         created_at: Utc::now(),
         updated_at: Utc::now(),
         targets: state::TargetProgress {
@@ -200,11 +201,12 @@ fn write_state_emits_past_due_line() {
             learned: 0,
             learned_pct: 0,
         },
-        reachable: state::ReachProgress {
+        reachable: Some(state::ReachProgress {
             total: 0,
             taught: 0,
             learned: 0,
-        },
+        }),
+        subpath: Vec::new(),
         past_due: 7,
         most_recent: None,
         next: None,

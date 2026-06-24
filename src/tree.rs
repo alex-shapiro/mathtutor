@@ -31,13 +31,21 @@ pub async fn cmd_path_tree(
     let manifest = graph::load_manifest_default(graph_dir)?;
     let progress = PathProgress::load(conn, &id).await?;
     let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
+    let subpath = crate::subpath::load(conn, &id).await?;
 
     let targets: HashSet<String> = p.target_atoms.iter().cloned().collect();
     let reachable = g.reachable_atoms(&p.target_atoms);
     let spine = build_spine(&g, &reachable);
-    let next_atom = scheduler::next_action(&g, &p, &progress, &due, scheduler::NextMode::Default)
-        .atom_id()
-        .map(String::from);
+    let next_atom = scheduler::next_action(
+        &g,
+        &p,
+        &progress,
+        &due,
+        &subpath,
+        scheduler::NextMode::Default,
+    )
+    .atom_id()
+    .map(String::from);
 
     let total = p.target_atoms.len();
     let target_learned = p

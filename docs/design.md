@@ -3,9 +3,10 @@
 Math Tutor is a tool for learning math via a DAG of small lessons and
 quizzes. It incorporates spaced repetition so that learned concepts stay
 learned. It runs as a CLI: the curriculum graph is compiled into the
-binary, per-user state lives as [AYML](https://crates.io/crates/ayml)
-text files under `~/.mathtutor/`. AYML is a safe, serde-compatible variant
-of YAML; the only practical difference is that AYML uses triple-quoted
+binary and per-user state lives in a local libSQL (SQLite) database under
+`~/.mathtutor/`. Curriculum source and tool I/O use
+[AYML](https://crates.io/crates/ayml), a safe, serde-compatible variant of
+YAML; the only practical difference is that AYML uses triple-quoted
 multiline strings (like Swift) instead of `|`, and disallows YAML's long
 tail of fringe features.
 
@@ -14,7 +15,7 @@ tail of fringe features.
 `mt` is invoked as a tool from inside an existing LLM agent (e.g. Claude, ChatGPT, Gemini):
 
 - `mt` owns scheduling, persistence, deterministic reuse, graph
-  validation, and the per-path overlay where the user's authored
+  validation, and the user overlay where the user's authored
   content lives.
 - The LLM authors lessons and quizzes, presents them to the user,
   and grades free-text answers.
@@ -44,12 +45,12 @@ Operator-only verbs (`graph check`, `graph dump`, `instruct`,
 ```bash
 # Path lifecycle
 mt path list                       # list all paths with goal / progress
-mt path new <GOAL> --atom <ID>...  # start a new learning path
+mt path new <GOAL> --atoms <ID>[,<ID>...]  # start a new learning path
                    [--strategy {bottom-up,top-down}]  # initial traversal mode (default bottom-up)
 mt path state [--path P]           # one-screen status summary
 mt path next  [--path P]           # next scheduled action (AYML on stdout)
 mt path strategy {bottom-up,top-down} [--path P]      # switch traversal mode
-mt path subpath set --atoms <ID>,... [--path P]       # top-down detour ending in a target
+mt path subpath set --atoms <ID>[,<ID>...] [--path P] # top-down detour ending in a target
 mt path subpath clear [--path P]                      # drop the detour
 mt path syllabus [--path P] [-n N] # upcoming lesson topics (no bodies; default N=10)
 mt path tree  [--path P]           # full reachable-graph progress view
@@ -81,13 +82,13 @@ default. When `--path P` is supplied, atom output is enriched with
 per-path status (`lesson_taught`, `complete`) without altering the
 base shape. Fields are added via `skip_serializing_if`.
 
-Every command that writes appends a structured event to the per-path
-log (see "Event log" below). Agents read the log if they need history;
-nothing else is needed to reconstruct user state.
+Every command that records learning activity appends a structured event
+to the per-path log (see "Event log" below); agents read the log if they
+need history.
 
-### `--atom` ID resolution on `mt path new`
+### `--atoms` ID resolution on `mt path new`
 
-Each `--atom` argument may be:
+Each `--atoms` entry may be:
 
 - an **atom ID** is a leaf concept (e.g. `tx.1.1`)
 - a **cluster ID** is a non-leaf node (e.g. `tx.1` or `tx.5`) and is expanded to all atomic descendants
@@ -100,7 +101,7 @@ sorted by prerequisite order before being stored as the path's
 ## Lifecycle of an atom (within a path)
 
 1. **Bare in the path.** Atom exists in the shipped curriculum with
-   `id`, `name`, `description`, `prerequisites`. The path's overlay
+   `id`, `name`, `description`, `prerequisites`. The user overlay
    has no entry for it.
 2. **Lesson present.** Either the shipped curriculum already has a
    lesson body for the atom, or the agent authors one via
@@ -308,55 +309,50 @@ surface, not the lookahead.
 ## Storage
 
 The curriculum graph is compiled into the binary at build time via
-`include_dir!`. A shipped `mt` runs from any cwd; no checked-out repo
-required. For development against a working tree, `--graph DIR` or the
-`MT_GRAPH` env var override the embedded copy.
+`include_dir!` from AYML source (`curriculum/graph/manifest.ayml` and
+`areas/<NN>-<slug>.ayml`). To override the embedded copy and develop
+against a working tree, use the `--graph DIR` CLI option or the
+`MT_GRAPH` env variable.
 
-```
-curriculum/graph/                # source for the embedded copy
-  manifest.ayml
-  areas/<NN>-<slug>.ayml
+All per-user state lives in a libSQL database at `$MATHTUTOR_HOME/mt.db`.
+The default path is `~/.mathtutor/mt.db`). When `TURSO_URL` and `TURSO_AUTH_TOKEN`
+are set, the file is an embedded replica synced to a Turso server; otherwise
+it is a plain local SQLite file. The schema is versioned by numbered, immutable
+migrations.
 
-~/.mathtutor/                    # per-user state (overridable via $MATHTUTOR_HOME)
-  paths/<path-id>/
-    path.ayml                    # immutable intent: id, goal, created_at, target_atoms
-    log.ayml                     # append-only event stream
-    overlay.ayml                 # authored content (lessons, quizzes, amendments, removals)
-```
+Tables, by role:
 
-Three roles, three files, all distinct:
+| Table                     | Role                          | Mutability                                                     |
+| ------------------------- | ----------------------------- | -------------------------------------------------------------- |
+| `paths`                   | per-path goal + strategy      | `goal`/`created_at` fixed at `mt path new`; `strategy` mutable |
+| `path_targets`            | target atoms, topo-sorted     | fixed at `mt path new`                                         |
+| `path_subpath`            | top-down detour to a target   | replaced by `mt path subpath set`, emptied by `clear`          |
+| `events`                  | per-path learning history     | append-only                                                    |
+| `cards`                   | FSRS state per `(path, quiz)` | write-through cache, rebuildable from `events`                 |
+| `overlay_lessons`         | user-authored lessons         | mutated by `mt lesson upsert`                                  |
+| `overlay_quizzes`         | user-authored quizzes         | mutated by `mt quiz {create,update}`                           |
+| `overlay_removed_quizzes` | user-authored quiz tombstones | mutated by `mt quiz delete`                                    |
 
-| File           | Role                      | Mutability                                                       |
-| -------------- | ------------------------- | ---------------------------------------------------------------- |
-| (embedded)     | shipped curriculum        | recompile only                                                   |
-| `path.ayml`    | per-path intent           | written once at `mt path new`; never updated                     |
-| `log.ayml`     | per-path history          | append-only                                                      |
-| `overlay.ayml` | per-path authored content | mutated by `mt lesson upsert` / `mt quiz {create,update,delete}` |
+The `events` log is the source of truth for learning history; `cards` is a
+derived cache that is rebuilt by replaying the event log.
+The authored overlay is keyed by atom / quiz id.
 
-## Per-path overlay
+## User overlay
 
-User-authored lessons and quizzes live in the path's overlay, not the
-shipped curriculum:
+Lessons and quizzes the agent authors are stored as SQL rows that overlay
+the shipped curriculum without modifying it. The overlay is global to the
+user's database, keyed by atom / quiz id — it is shared across paths, not
+scoped to one:
 
-```yaml
-schema_version: 1
-atoms:
-  la.5.4.7:
-    lesson: """
-      ...authored lesson body, if shipped graph had none...
-      """
-    quizzes:                          # added or amended
-      - id: la.5.4.7.q4
-        difficulty: medium
-        question: """..."""
-        answer: """..."""
-    removed:                          # tombstoned quiz ids; merge skips these
-      - la.5.4.7.q2
-```
+- `overlay_lessons(atom_id, body)` — an authored lesson body for an atom
+  the shipped graph left bare, or a revision of a shipped one.
+- `overlay_quizzes(atom_id, quiz_id, difficulty, kind, question, answer,
+rubric)` — quizzes added by `mt quiz create` or revised by
+  `mt quiz update`.
+- `overlay_removed_quizzes(quiz_id)` — tombstones; the merge skips these.
 
 Merge semantics (`Graph::load_for_path`): an overlay lesson, quiz, or
-tombstone always overrides a shipped item with the same ID. Tombstones
-override everything. Concretely:
+tombstone always overrides a shipped item with the same id. Concretely:
 
 - **Lesson:** if the overlay has one, use it; otherwise use the
   shipped lesson if present. `mt lesson upsert` is an upsert; a second
@@ -369,17 +365,15 @@ override everything. Concretely:
   of the curriculum is fixed by the shipped graph; the overlay only
   carries content.
 
-Blast-radius is per-path on purpose: an unaudited lesson authored under
-path A doesn't leak into path B that targets the same atom. `mt graph
-dump` prints the user overlay (shared across paths) for review and
-eventual merge back into the canonical curriculum.
+`mt graph dump` prints the overlay for review and eventual merge back
+into the canonical curriculum.
 
 ## Event log
 
-One append-only AYML file per learning path. Every event has a top-level
-`ts` field in RFC 3339 / ISO 8601 format with UTC timezone so the log can
+Per-path learning history, appended to the `events` table. Every event has
+a `ts` field in RFC 3339 / ISO 8601 format with UTC timezone so the log can
 be re-played and `time_since_last` / `repetitions` derived without
-additional state. Each entry:
+additional state. Each event, as a logical record:
 
 ```yaml
 - ts: 2026-05-09T18:42:01Z   # required, RFC 3339 UTC
@@ -392,7 +386,7 @@ additional state. Each entry:
     user_answer: """..."""
 ```
 
-Implemented event kinds:
+Event kinds:
 
 - `path_created`
 - `lesson_authored` (on `mt lesson upsert` when no lesson existed)
@@ -405,8 +399,9 @@ Implemented event kinds:
 - `quiz_amended` (on `mt quiz update`)
 - `quiz_removed` (on `mt quiz delete`)
 
-The log is the source of truth for what the user has seen and how they
-performed. FSRS state is derived from a rebuildable cache of the log.
+The log is the source of truth for all learning activity: what the user was
+shown and how they performed. Derived state is reconstructed from it. FSRS
+card state, for instance, is reconstructed by replaying `quiz_answered`.
 
 ## Spaced repetition (FSRS)
 
@@ -488,20 +483,6 @@ any turn.
 2. If a subpath is set, the first incomplete atom in subpath order.
 3. Else the next incomplete target, in target order.
 4. Else `done`.
-
-### Persisted state
-
-The feature adds two pieces of per-path state, both recorded in the event
-log as latest-wins settings rather than as table columns:
-
-- **Strategy** — a `strategy_set` event carries the mode; the live value
-  is the latest one, defaulting to bottom-up when absent (so paths created
-  before this feature keep today's behavior with no migration).
-- **Subpath** — a `subpath_set` event carries the ordered atom list in its
-  payload, `subpath_cleared` drops it, and the live subpath is the latest
-  `subpath_set` not followed by a `subpath_cleared`.
-
-Everything else `next` derives from the existing log.
 
 ## Tool I/O
 

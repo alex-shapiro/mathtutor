@@ -50,6 +50,8 @@ pub enum PathOp {
     New(PathNewCmd),
     State(PathStateCmd),
     Next(PathNextCmd),
+    Strategy(PathStrategyCmd),
+    Subpath(PathSubpathCmd),
     Syllabus(PathSyllabusCmd),
     Tree(PathTreeCmd),
 }
@@ -71,9 +73,13 @@ pub struct PathNewCmd {
     #[argh(positional)]
     pub goal: String,
 
-    /// target atom ID (repeatable)
+    /// target atoms: a comma-separated list and/or a repeated flag
     #[argh(option)]
-    pub atom: Vec<String>,
+    pub atoms: Vec<String>,
+
+    /// initial traversal strategy: bottom-up (default) or top-down
+    #[argh(option, default = "types::Strategy::BottomUp")]
+    pub strategy: types::Strategy,
 
     /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
     #[argh(option)]
@@ -144,6 +150,61 @@ pub struct PathTreeCmd {
     /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
+}
+
+/// Switch a path's traversal strategy.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "strategy")]
+pub struct PathStrategyCmd {
+    /// new strategy: bottom-up or top-down
+    #[argh(positional)]
+    pub strategy: types::Strategy,
+
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    pub path: Option<String>,
+}
+
+/// Set or clear a top-down path's subpath (an ordered detour to a target).
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "subpath")]
+pub struct PathSubpathCmd {
+    #[argh(subcommand)]
+    pub op: SubpathOp,
+}
+
+#[derive(FromArgs, Debug)]
+#[argh(subcommand)]
+pub enum SubpathOp {
+    Set(PathSubpathSetCmd),
+    Clear(PathSubpathClearCmd),
+}
+
+/// Replace the subpath with an ordered sequence of atoms ending in a target.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "set")]
+pub struct PathSubpathSetCmd {
+    /// atoms in teaching order, last must be a target: comma-separated
+    /// and/or a repeated flag
+    #[argh(option)]
+    pub atoms: Vec<String>,
+
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    pub path: Option<String>,
+
+    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
+}
+
+/// Drop the path's subpath.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "clear")]
+pub struct PathSubpathClearCmd {
+    /// path id (defaults to most recent)
+    #[argh(option, short = 'p')]
+    pub path: Option<String>,
 }
 
 // ── `mt graph …` ───────────────────────────────────────────────────
@@ -458,4 +519,16 @@ pub struct McpToolsOp {}
 #[cfg(feature = "mcp")]
 fn default_mcp_addr() -> String {
     "127.0.0.1:8080".into()
+}
+
+/// Flatten the `--atoms` values into a single ordered list: split each
+/// value on commas so `--atoms a,b,c` and `--atoms a --atoms b` both work,
+/// trimming whitespace and dropping empty entries.
+pub fn flatten_atoms(raw: &[String]) -> Vec<String> {
+    raw.iter()
+        .flat_map(|s| s.split(','))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
 }

@@ -1,14 +1,15 @@
 use std::process::ExitCode;
 
 use libsql::Connection;
+use mathtutor::cli;
 #[cfg(feature = "mcp")]
 use mathtutor::cli::McpOp;
-use mathtutor::cli::{Cmd, GraphOp, LessonOp, Mt, PathOp, QuizOp};
+use mathtutor::cli::{Cmd, GraphOp, LessonOp, Mt, PathOp, QuizOp, SubpathOp};
 #[cfg(feature = "mcp")]
 use mathtutor::mcp;
 use mathtutor::{
     Result, answer, db, discover, graph, instruct, migrate, overlay, path, scheduler, state, store,
-    syllabus, tree,
+    subpath, syllabus, tree,
 };
 
 #[cfg(feature = "mcp")]
@@ -145,7 +146,10 @@ async fn real_main() -> ExitCode {
 /// inspectors (`show`, `list`, `dump`) don't trigger a foreground sync.
 fn mutating(cmd: &Cmd) -> bool {
     match cmd {
-        Cmd::Path(p) => matches!(p.op, PathOp::New(_) | PathOp::Next(_)),
+        Cmd::Path(p) => matches!(
+            p.op,
+            PathOp::New(_) | PathOp::Next(_) | PathOp::Strategy(_) | PathOp::Subpath(_)
+        ),
         Cmd::Lesson(_) | Cmd::Quiz(_) | Cmd::MigrateFromAyml(_) => true,
         Cmd::Graph(_) | Cmd::Instruct(_) => false,
         #[cfg(feature = "mcp")]
@@ -212,7 +216,8 @@ async fn dispatch_path(conn: &Connection, op: PathOp) -> (Result<()>, u8) {
     match op {
         PathOp::List(c) => (path::cmd_path_list(conn, c.graph.as_deref()).await, 1),
         PathOp::New(c) => {
-            let r = path::cmd_path_new(conn, &c.goal, &c.atom, c.graph.as_deref())
+            let atoms = cli::flatten_atoms(&c.atoms);
+            let r = path::cmd_path_new(conn, &c.goal, &atoms, c.strategy, c.graph.as_deref())
                 .await
                 .map(|id| {
                     eprintln!("created path: {id}");
@@ -230,6 +235,13 @@ async fn dispatch_path(conn: &Connection, op: PathOp) -> (Result<()>, u8) {
                 1,
             ),
         },
+        PathOp::Strategy(c) => {
+            let r = path::cmd_path_strategy(conn, c.path.as_deref(), c.strategy)
+                .await
+                .map(|id| eprintln!("path {id}: strategy → {}", c.strategy));
+            (r, 2)
+        }
+        PathOp::Subpath(c) => dispatch_subpath(conn, c.op).await,
         PathOp::Syllabus(c) => (
             syllabus::cmd_path_syllabus(conn, c.path.as_deref(), c.n, c.graph.as_deref()).await,
             1,
@@ -238,6 +250,24 @@ async fn dispatch_path(conn: &Connection, op: PathOp) -> (Result<()>, u8) {
             tree::cmd_path_tree(conn, c.path.as_deref(), c.graph.as_deref()).await,
             1,
         ),
+    }
+}
+
+async fn dispatch_subpath(conn: &Connection, op: SubpathOp) -> (Result<()>, u8) {
+    match op {
+        SubpathOp::Set(c) => {
+            let atoms = cli::flatten_atoms(&c.atoms);
+            let r = subpath::cmd_subpath_set(conn, c.path.as_deref(), &atoms, c.graph.as_deref())
+                .await
+                .map(|id| eprintln!("path {id}: subpath set ({} atoms)", atoms.len()));
+            (r, 2)
+        }
+        SubpathOp::Clear(c) => {
+            let r = subpath::cmd_subpath_clear(conn, c.path.as_deref())
+                .await
+                .map(|id| eprintln!("path {id}: subpath cleared"));
+            (r, 2)
+        }
     }
 }
 

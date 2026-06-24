@@ -82,6 +82,26 @@ pub enum Error {
     #[error("invalid quiz type: {0}")]
     InvalidQuizType(String),
 
+    /// Unrecognized string for [`crate::types::Strategy`]
+    #[error("invalid strategy: {0}")]
+    InvalidStrategy(String),
+
+    /// `mt path subpath set` on a path whose strategy is not top-down.
+    #[error("subpaths apply only to top-down paths; switch with `mt path strategy top-down`")]
+    SubpathNotTopDown,
+
+    /// `mt path subpath set` with no atoms.
+    #[error("a subpath needs at least one atom")]
+    SubpathEmpty,
+
+    /// The last atom of a subpath must be one of the path's target atoms.
+    #[error("subpath must end in a target atom; '{0}' is not a target of this path")]
+    SubpathTailNotTarget(String),
+
+    /// An atom appeared more than once in a subpath.
+    #[error("atom '{0}' appears more than once in the subpath")]
+    SubpathDuplicateAtom(String),
+
     // Cards cache row missing its expected columns.
     #[error("cards cache corrupt: {0}")]
     CardsCorrupt(String),
