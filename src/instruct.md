@@ -270,5 +270,5 @@ Quiz deletion forfeits spaced-repetition state; prefer updates for wording fixes
 
 - `error: unknown id: X` → that ID isn't an atom, cluster, or area in the curriculum. Use `mt graph list` to browse, or ask the user.
 - `error: cluster 'X' has no atomic descendants` → the cluster is empty (no concepts under it yet). Pick a populated branch.
-- `Error parsing option '--rating' / '--difficulty' / '--type'` → the value isn't one of the allowed enum variants. The error message lists valid ones.
+- `Error parsing option '--rating' / '--difficulty' / '--type'` → the value is not an allowed enum variant. The message lists valid ones.
 - Anything else → surface the message verbatim to the user; it's a configuration issue for whoever set you up.
