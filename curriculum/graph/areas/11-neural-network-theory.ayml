@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 2
 area: neural-network-theory
 prefix: nn
 summary: "Neural network architectures, training dynamics, loss landscapes, expressivity, regularization, scaling, efficiency."
@@ -15,216 +15,836 @@ cross_references:
   - probability
   - learning-theory
   - numerical
-
-topics:
+children:
   - id: nn.1
     name: "Architectures (mathematical content)"
-    leaves:
+    description: "The standard layer types and how they compose into networks."
+    children:
       - id: nn.1.1
         name: "Multilayer perceptron"
         description: "Stacked affine + nonlinear maps."
-        prerequisites: [la.2.1]
+        children:
+          - id: nn.1.1.1
+            name: "Affine layer"
+            description: "A linear map plus bias, y = Wx + b."
+            prerequisites:
+              - la.2.1
+          - id: nn.1.1.2
+            name: "Hidden layer"
+            description: "Affine map followed by a pointwise nonlinearity."
+            prerequisites:
+              - nn.1.1.1
+              - nn.1.2.1
+          - id: nn.1.1.3
+            name: "Depth and width"
+            description: "Number of layers vs units per layer."
+            prerequisites:
+              - nn.1.1.2
+          - id: nn.1.1.4
+            name: "Feedforward network as composition"
+            description: "An MLP is a composition of hidden layers ending in a readout."
+            prerequisites:
+              - nn.1.1.3
       - id: nn.1.2
         name: "Activation functions"
-        description: "ReLU, GELU, SiLU/Swish, tanh, sigmoid, softmax."
-        prerequisites: [ana.1.4]
+        description: "Pointwise nonlinearities."
+        children:
+          - id: nn.1.2.1
+            name: "Nonlinearity and why it is needed"
+            description: "Without it a deep stack collapses to a single affine map."
+            prerequisites:
+              - ana.1.4
+          - id: nn.1.2.2
+            name: "Sigmoid and tanh"
+            description: "Saturating activations; bounded range, vanishing tails."
+            prerequisites:
+              - nn.1.2.1
+          - id: nn.1.2.3
+            name: "ReLU and its variants"
+            description: "Piecewise-linear units: ReLU, leaky ReLU, PReLU."
+            prerequisites:
+              - nn.1.2.1
+          - id: nn.1.2.4
+            name: "GELU and SiLU/Swish"
+            description: "Smooth gated activations common in modern nets."
+            prerequisites:
+              - nn.1.2.3
+          - id: nn.1.2.5
+            name: "Softmax"
+            description: "Maps a vector to a probability simplex; the standard classifier head."
+            prerequisites:
+              - nn.1.2.1
       - id: nn.1.3
         name: "Convolutions"
-        description: "1D / 2D, separable, dilated; translation equivariance."
-        prerequisites: [ana.6.4, geom.4.4]
+        description: "Weight-shared local linear maps."
+        children:
+          - id: nn.1.3.1
+            name: "Discrete convolution"
+            description: "Sliding weighted sum of a signal with a kernel."
+            prerequisites:
+              - ana.6.4
+          - id: nn.1.3.2
+            name: "Convolutional layer"
+            description: "Learned kernels sharing weights across spatial positions."
+            prerequisites:
+              - nn.1.3.1
+              - nn.1.1.1
+          - id: nn.1.3.3
+            name: "Translation equivariance"
+            description: "Shifting the input shifts the feature map identically."
+            prerequisites:
+              - nn.1.3.2
+              - geom.4.4
+          - id: nn.1.3.4
+            name: "Stride, dilation, separability"
+            description: "Variants controlling receptive field and cost."
+            prerequisites:
+              - nn.1.3.2
       - id: nn.1.4
         name: "Pooling"
-        description: "Max, average; pooling as down-sampling."
-        prerequisites: [nn.1.3]
+        description: "Spatial downsampling operators."
+        children:
+          - id: nn.1.4.1
+            name: "Pooling operation"
+            description: "Max or average aggregation over local windows."
+            prerequisites:
+              - nn.1.3.2
+          - id: nn.1.4.2
+            name: "Downsampling and receptive field"
+            description: "Pooling enlarges the effective receptive field."
+            prerequisites:
+              - nn.1.4.1
       - id: nn.1.5
         name: "RNN, LSTM, GRU"
-        description: "Recurrent maps over sequences; gating."
-        prerequisites: [dyn.1.2]
+        description: "Recurrent sequence models."
+        children:
+          - id: nn.1.5.1
+            name: "Recurrent cell"
+            description: "A shared map applied over a sequence with a hidden state."
+            prerequisites:
+              - dyn.1.2
+              - nn.1.1.1
+          - id: nn.1.5.2
+            name: "Backpropagation through time"
+            description: "Unrolling the recurrence and applying backprop."
+            prerequisites:
+              - nn.1.5.1
+              - nn.2.1.3
+          - id: nn.1.5.3
+            name: "Gating: LSTM and GRU"
+            description: "Multiplicative gates regulating memory and forgetting."
+            prerequisites:
+              - nn.1.5.1
+          - id: nn.1.5.4
+            name: "Long-range dependencies"
+            description: "Gating mitigates gradient decay over long sequences."
+            prerequisites:
+              - nn.1.5.2
+              - nn.2.5.1
+              - nn.1.5.3
       - id: nn.1.6
         name: "Graph neural networks / message passing"
         description: "Permutation-equivariant aggregation on graphs."
-        prerequisites: [dis.2.8, geom.4.4, geom.4.3]
+        children:
+          - id: nn.1.6.1
+            name: "Message passing"
+            description: "Nodes update by aggregating neighbor messages."
+            prerequisites:
+              - dis.2.8
+          - id: nn.1.6.2
+            name: "Permutation equivariance"
+            description: "Outputs respect relabeling of the nodes."
+            prerequisites:
+              - nn.1.6.1
+              - geom.4.3
+          - id: nn.1.6.3
+            name: "Aggregation and readout"
+            description: "Permutation-invariant pooling to node/graph outputs."
+            prerequisites:
+              - nn.1.6.1
+            terminal: true
       - id: nn.1.7
-        name: "Attention (cross-link)"
-        description: "Cross-link `tx.1`."
-        prerequisites: [tx.1.1]
+        name: "Attention as a layer"
+        description: "Content-based sequence mixing (cross-link `tx.1`)."
+        children:
+          - id: nn.1.7.1
+            name: "Attention as a sequence-mixing layer"
+            description: "A data-dependent weighted average over positions."
+            prerequisites:
+              - tx.1.1
+              - nn.1.5.4
+          - id: nn.1.7.2
+            name: "Self- vs cross-attention"
+            description: "Queries from the same vs a different sequence."
+            prerequisites:
+              - nn.1.7.1
+            terminal: true
       - id: nn.1.8
         name: "Residual connections"
-        description: "Identity skip; gradient flow benefits."
-        prerequisites: [nn.1.1]
+        description: "Identity skip paths."
+        children:
+          - id: nn.1.8.1
+            name: "Skip connection"
+            description: "Add the input to a block's output, y = x + f(x)."
+            prerequisites:
+              - nn.1.1.1
+          - id: nn.1.8.2
+            name: "Gradient flow through residuals"
+            description: "The identity path carries gradient unattenuated."
+            prerequisites:
+              - nn.1.8.1
+              - nn.2.5.1
       - id: nn.1.9
         name: "Normalization layers"
-        description: "BatchNorm, LayerNorm, GroupNorm, RMSNorm."
-        prerequisites: [prob.3.2]
+        description: "Activation normalization."
+        children:
+          - id: nn.1.9.1
+            name: "Batch normalization"
+            description: "Normalize across the batch using running statistics."
+            prerequisites:
+              - prob.3.2
+          - id: nn.1.9.2
+            name: "LayerNorm and RMSNorm"
+            description: "Per-example normalization over features; the transformer default."
+            prerequisites:
+              - nn.1.9.1
+          - id: nn.1.9.3
+            name: "Normalization and optimization"
+            description: "Normalization smooths the landscape and decouples weight scale."
+            prerequisites:
+              - nn.1.9.1
       - id: nn.1.10
         name: "Dropout and stochastic regularization"
         description: "Multiplicative noise; ensembling interpretation."
-        prerequisites: [prob.2.4]
+        children:
+          - id: nn.1.10.1
+            name: "Dropout"
+            description: "Randomly zero units during training; rescale at test time."
+            prerequisites:
+              - prob.2.4
+          - id: nn.1.10.2
+            name: "Ensemble interpretation"
+            description: "Dropout approximates averaging over subnetworks."
+            prerequisites:
+              - nn.1.10.1
 
   - id: nn.2
     name: "Training dynamics"
-    leaves:
+    description: "How gradients are computed and how signals propagate during training."
+    children:
       - id: nn.2.1
         name: "Backpropagation algorithm"
-        description: "Chain rule applied to layered computation graphs."
-        prerequisites: [num.4.3, la.7.5, la.7.1, la.7.2, num.4.4]
+        description: "Reverse-mode differentiation of the loss."
+        children:
+          - id: nn.2.1.1
+            name: "Computational graph"
+            description: "Layered computation as a directed acyclic graph of operations."
+            prerequisites:
+              - num.4.4
+          - id: nn.2.1.2
+            name: "Chain rule on the graph"
+            description: "Local Jacobians composed along graph edges."
+            prerequisites:
+              - nn.2.1.1
+              - la.7.1
+          - id: nn.2.1.3
+            name: "Reverse-mode autodiff"
+            description: "Backprop: one forward pass, one reverse pass accumulating gradients."
+            prerequisites:
+              - nn.2.1.2
+              - num.4.3
+              - la.7.5
+              - la.7.2
+          - id: nn.2.1.4
+            name: "Forward vs reverse mode"
+            description: "Cost asymmetry: reverse mode is cheap for scalar losses."
+            prerequisites:
+              - nn.2.1.3
+            terminal: true
       - id: nn.2.2
         name: "Gradient flow"
-        description: "Continuous-time limit of GD (cross-link `dyn.6.3`)."
-        prerequisites: [dyn.6.3]
+        description: "Continuous-time limit of gradient descent (cross-link `dyn.6.3`)."
+        children:
+          - id: nn.2.2.1
+            name: "Gradient descent as discretization"
+            description: "GD is an explicit Euler step on the gradient field."
+            prerequisites:
+              - dyn.6.3
+          - id: nn.2.2.2
+            name: "Gradient-flow ODE"
+            description: "The vanishing-step-size limit ẋ = −∇L(x)."
+            prerequisites:
+              - nn.2.2.1
+            terminal: true
       - id: nn.2.3
         name: "Initialization theory"
-        description: "Xavier, Kaiming, orthogonal initializations."
-        prerequisites: [prob.2.5, la.5.2]
+        description: "Choosing the initial weight scale."
+        children:
+          - id: nn.2.3.1
+            name: "Why initialization matters"
+            description: "Initial scale sets the signal/gradient magnitude through depth."
+            prerequisites:
+              - prob.2.5
+          - id: nn.2.3.2
+            name: "Xavier / Glorot initialization"
+            description: "Variance scaling balancing fan-in and fan-out."
+            prerequisites:
+              - nn.2.3.1
+          - id: nn.2.3.3
+            name: "Kaiming / He initialization"
+            description: "Fan-in scaling tuned for ReLU networks."
+            prerequisites:
+              - nn.2.3.1
+              - nn.1.2.3
+          - id: nn.2.3.4
+            name: "Orthogonal initialization"
+            description: "Orthogonal weight matrices preserving norms at init."
+            prerequisites:
+              - nn.2.3.1
+              - la.5.2
       - id: nn.2.4
         name: "Variance propagation"
-        description: "Maintaining activation / gradient variance through depth."
-        prerequisites: [nn.2.3]
+        description: "Keeping activation/gradient scale stable through depth."
+        children:
+          - id: nn.2.4.1
+            name: "Forward activation variance"
+            description: "Tracking the variance of activations layer to layer."
+            prerequisites:
+              - nn.2.3.1
+          - id: nn.2.4.2
+            name: "Backward gradient variance"
+            description: "Tracking the variance of gradients on the backward pass."
+            prerequisites:
+              - nn.2.4.1
       - id: nn.2.5
         name: "Vanishing and exploding gradients"
-        description: "Failure modes of backprop in deep nets."
-        prerequisites: [nn.2.1, opt.4.7]
+        description: "Gradient-scale failures in deep nets."
+        children:
+          - id: nn.2.5.1
+            name: "Vanishing and exploding gradients"
+            description: "Repeated Jacobian products shrink or blow up the gradient."
+            prerequisites:
+              - nn.2.1.3
+              - opt.4.7
+          - id: nn.2.5.2
+            name: "Remedies"
+            description: "Initialization, normalization, residuals, and gradient clipping."
+            prerequisites:
+              - nn.2.5.1
+              - nn.2.3.2
+              - nn.2.3.3
+            terminal: true
       - id: nn.2.6
         name: "Dynamical isometry"
-        description: "Singular-value structure of Jacobian products."
-        prerequisites: [la.5.4, nn.2.4, dyn.1.7]
+        description: "Isometric Jacobian spectra."
+        children:
+          - id: nn.2.6.1
+            name: "Input-output Jacobian"
+            description: "The end-to-end Jacobian as a product of layer Jacobians."
+            prerequisites:
+              - la.5.4
+              - nn.2.4.2
+          - id: nn.2.6.2
+            name: "Dynamical isometry condition"
+            description: "Singular values near one keep signals isometric through depth."
+            prerequisites:
+              - nn.2.6.1
+              - dyn.1.7
+              - nn.2.3.4
+            terminal: true
       - id: nn.2.7
         name: "NTK / lazy regime"
-        description: "Cross-link `lt.5.3`."
-        prerequisites: [lt.5.3]
+        description: "Wide-net kernel regime (cross-link `lt.5.3`)."
+        children:
+          - id: nn.2.7.1
+            name: "Lazy training"
+            description: "Wide nets barely move their weights; training looks linear."
+            prerequisites:
+              - lt.5.3
+          - id: nn.2.7.2
+            name: "Finite-width corrections"
+            description: "How the kernel drifts away from its infinite-width value."
+            prerequisites:
+              - nn.2.7.1
+            terminal: true
       - id: nn.2.8
         name: "Feature-learning regime"
-        description: "Cross-link `lt.5.7`."
-        prerequisites: [lt.5.7]
+        description: "When features adapt (cross-link `lt.5.7`)."
+        children:
+          - id: nn.2.8.1
+            name: "Feature learning vs lazy"
+            description: "Whether internal representations move during training."
+            prerequisites:
+              - lt.5.7
+          - id: nn.2.8.2
+            name: "Rich-regime dynamics"
+            description: "Large-update regimes where features genuinely change."
+            prerequisites:
+              - nn.2.8.1
+            terminal: true
       - id: nn.2.9
         name: "Mean-field analysis"
-        description: "Cross-link `lt.5.4`."
-        prerequisites: [lt.5.4]
+        description: "Measure-flow view of wide nets (cross-link `lt.5.4`)."
+        children:
+          - id: nn.2.9.1
+            name: "Mean-field limit of training"
+            description: "Neurons as a distribution evolving under training."
+            prerequisites:
+              - lt.5.4
+          - id: nn.2.9.2
+            name: "Convergence in the mean-field regime"
+            description: "Conditions under which the measure flow reaches a global optimum."
+            prerequisites:
+              - nn.2.9.1
+            terminal: true
       - id: nn.2.10
         name: "Deep linear networks"
         description: "Tractable model isolating depth effects."
-        prerequisites: [la.4.3, opt.3.1]
+        children:
+          - id: nn.2.10.1
+            name: "Deep linear network"
+            description: "A product of linear layers; an affine map with deep parameterization."
+            prerequisites:
+              - la.4.3
+          - id: nn.2.10.2
+            name: "Dynamics of deep linear nets"
+            description: "Saddle-to-saddle and stage-wise learning of singular modes."
+            prerequisites:
+              - nn.2.10.1
+              - opt.3.1
+            terminal: true
 
   - id: nn.3
     name: "Loss landscape"
-    leaves:
+    description: "Geometry of the training objective."
+    children:
       - id: nn.3.1
         name: "Saddle points and plateaus"
-        description: "Cross-link `opt.7.1`."
-        prerequisites: [opt.7.1]
+        description: "Critical-point structure (cross-link `opt.7.1`)."
+        children:
+          - id: nn.3.1.1
+            name: "Critical points of the loss"
+            description: "Gradient-zero points classified by the Hessian."
+            prerequisites:
+              - opt.7.1
+          - id: nn.3.1.2
+            name: "Saddles and plateaus in deep nets"
+            description: "High-dimensional losses are dominated by saddles, not minima."
+            prerequisites:
+              - nn.3.1.1
+            terminal: true
       - id: nn.3.2
         name: "Mode connectivity"
-        description: "Cross-link `lt.5.9`."
-        prerequisites: [lt.5.9]
+        description: "Connected low-loss solutions (cross-link `lt.5.9`)."
+        children:
+          - id: nn.3.2.1
+            name: "Connected low-loss basins"
+            description: "Distinct solutions joined by low-loss paths."
+            prerequisites:
+              - lt.5.9
+          - id: nn.3.2.2
+            name: "Linear connectivity and permutations"
+            description: "Accounting for neuron permutations links solutions linearly."
+            prerequisites:
+              - nn.3.2.1
+            terminal: true
       - id: nn.3.3
         name: "Hessian spectrum"
-        description: "Bulk and outliers; bulk-spike phenomena."
-        prerequisites: [la.4.4, lt.5.8, la.8.4, opt.5.6, opt.5.7]
+        description: "Curvature structure of the loss."
+        children:
+          - id: nn.3.3.1
+            name: "Loss Hessian"
+            description: "Second-order curvature of the training objective."
+            prerequisites:
+              - la.4.4
+              - opt.5.6
+          - id: nn.3.3.2
+            name: "Bulk and outlier eigenvalues"
+            description: "A dense bulk near zero plus a few large class-related outliers."
+            prerequisites:
+              - nn.3.3.1
+              - lt.5.8
+              - la.8.4
+              - opt.5.7
       - id: nn.3.4
         name: "Sharpness and flatness"
-        description: "Cross-link `lt.4.4`."
-        prerequisites: [lt.4.4]
+        description: "Curvature at minima (cross-link `lt.4.4`)."
+        children:
+          - id: nn.3.4.1
+            name: "Sharp vs flat minima"
+            description: "Width of the basin around a solution."
+            prerequisites:
+              - lt.4.4
+          - id: nn.3.4.2
+            name: "Sharpness in practice"
+            description: "Batch size, learning rate, and measured sharpness."
+            prerequisites:
+              - nn.3.4.1
+              - nn.3.3.2
+            terminal: true
       - id: nn.3.5
         name: "Lottery ticket hypothesis"
         description: "Sparse subnetworks trainable in isolation."
-        prerequisites: [nn.7.5]
+        children:
+          - id: nn.3.5.1
+            name: "Winning tickets"
+            description: "Sparse subnetworks that train to full accuracy from init."
+            prerequisites:
+              - nn.7.5.1
+          - id: nn.3.5.2
+            name: "Iterative magnitude pruning"
+            description: "Prune-and-rewind to uncover winning tickets."
+            prerequisites:
+              - nn.3.5.1
+            terminal: true
 
   - id: nn.4
     name: "Approximation and expressivity"
-    leaves:
+    description: "What networks can represent and at what cost."
+    children:
       - id: nn.4.1
         name: "Universal approximation theorems"
-        description: "Cross-link `lt.5.1`."
-        prerequisites: [lt.5.1]
+        description: "Density of network function classes (cross-link `lt.5.1`)."
+        children:
+          - id: nn.4.1.1
+            name: "Universal approximation for nets"
+            description: "Networks are dense in continuous functions on compacta."
+            prerequisites:
+              - lt.5.1
+          - id: nn.4.1.2
+            name: "Approximation vs trainability"
+            description: "Representability does not imply a reachable solution."
+            prerequisites:
+              - nn.4.1.1
+            terminal: true
       - id: nn.4.2
         name: "Width / depth tradeoffs"
         description: "Capacity vs trainability."
-        prerequisites: [nn.4.1, lt.5.2]
+        children:
+          - id: nn.4.2.1
+            name: "Width-bounded expressivity"
+            description: "What narrow but deep networks can still represent."
+            prerequisites:
+              - nn.4.1.1
+              - lt.5.2
+          - id: nn.4.2.2
+            name: "Depth efficiency"
+            description: "Depth can represent functions exponentially more compactly."
+            prerequisites:
+              - nn.4.2.1
+            terminal: true
       - id: nn.4.3
         name: "Approximation rates"
-        description: "Rates over Sobolev / Barron classes."
-        prerequisites: [ana.4.10]
+        description: "Rates over function classes."
+        children:
+          - id: nn.4.3.1
+            name: "Rates over smoothness classes"
+            description: "Error vs parameter count for Sobolev-smooth targets."
+            prerequisites:
+              - ana.4.10
+          - id: nn.4.3.2
+            name: "Barron classes and dimension"
+            description: "Dimension-free rates for functions of bounded Fourier moment."
+            prerequisites:
+              - nn.4.3.1
+            terminal: true
       - id: nn.4.4
         name: "Equivariance / invariance in architectures"
-        description: "Cross-link `geom.4.5`."
-        prerequisites: [geom.4.5]
+        description: "Symmetry-structured layers (cross-link `geom.4.5`)."
+        children:
+          - id: nn.4.4.1
+            name: "Invariance vs equivariance"
+            description: "Outputs unchanged by, or transforming with, a group action."
+            prerequisites:
+              - geom.4.5
+          - id: nn.4.4.2
+            name: "Group-equivariant layers"
+            description: "Weight sharing tied to a symmetry group."
+            prerequisites:
+              - nn.4.4.1
+              - nn.1.6.2
+            terminal: true
       - id: nn.4.5
         name: "Implicit neural representations"
-        description: "SIRENs, Fourier features; coordinate networks."
-        prerequisites: [ana.6.1, nn.1.2]
+        description: "Coordinate networks."
+        children:
+          - id: nn.4.5.1
+            name: "Coordinate networks"
+            description: "Networks mapping coordinates to signal values."
+            prerequisites:
+              - nn.1.2.1
+              - ana.6.1
+          - id: nn.4.5.2
+            name: "Fourier features and SIRENs"
+            description: "Frequency encodings overcoming spectral bias."
+            prerequisites:
+              - nn.4.5.1
 
   - id: nn.5
     name: "Regularization and augmentation"
-    leaves:
+    description: "Explicit and implicit control of capacity."
+    children:
       - id: nn.5.1
         name: "L1 / L2 / weight decay"
-        description: "Decoupled weight decay (AdamW)."
-        prerequisites: [opt.4.6, opt.3.3, opt.4.4, opt.4.5]
+        description: "Norm penalties on the weights."
+        children:
+          - id: nn.5.1.1
+            name: "L2 regularization and weight decay"
+            description: "Penalize squared weight norm; shrink toward zero."
+            prerequisites:
+              - opt.4.6
+              - opt.3.3
+          - id: nn.5.1.2
+            name: "L1 regularization and sparsity"
+            description: "Penalize absolute weight norm; induce sparsity."
+            prerequisites:
+              - opt.4.4
+          - id: nn.5.1.3
+            name: "Decoupled weight decay (AdamW)"
+            description: "Apply decay separately from the adaptive gradient step."
+            prerequisites:
+              - nn.5.1.1
+              - opt.4.5
+            terminal: true
       - id: nn.5.2
         name: "Data augmentation"
-        description: "Group-equivariant noise injection."
-        prerequisites: [geom.4.4, geom.3.5]
+        description: "Label-preserving input transformations."
+        children:
+          - id: nn.5.2.1
+            name: "Augmentation as invariance"
+            description: "Encourage invariance by training on transformed inputs."
+            prerequisites:
+              - geom.4.4
+          - id: nn.5.2.2
+            name: "Group-structured augmentation"
+            description: "Sampling transformations from a symmetry group."
+            prerequisites:
+              - nn.5.2.1
+              - geom.3.5
+            terminal: true
       - id: nn.5.3
         name: "Early stopping"
         description: "Implicit regularization via training time."
-        prerequisites: [opt.4.1]
+        children:
+          - id: nn.5.3.1
+            name: "Early stopping as regularization"
+            description: "Halting limits the effective hypothesis-space size."
+            prerequisites:
+              - opt.4.1
+          - id: nn.5.3.2
+            name: "Validation-based stopping"
+            description: "Stop when held-out loss stops improving."
+            prerequisites:
+              - nn.5.3.1
+            terminal: true
       - id: nn.5.4
         name: "Label smoothing"
         description: "Soft targets; calibration trade-offs."
-        prerequisites: [inf.1.5]
+        children:
+          - id: nn.5.4.1
+            name: "Label smoothing"
+            description: "Replace one-hot targets with a softened distribution."
+            prerequisites:
+              - inf.1.5
+          - id: nn.5.4.2
+            name: "Calibration effects"
+            description: "Smoothing tightens logits and changes confidence calibration."
+            prerequisites:
+              - nn.5.4.1
+            terminal: true
       - id: nn.5.5
         name: "Mixup / CutMix"
         description: "Convex combinations of inputs and targets."
-        prerequisites: [opt.1.2]
+        children:
+          - id: nn.5.5.1
+            name: "Mixup"
+            description: "Train on convex blends of example/label pairs."
+            prerequisites:
+              - opt.1.2
+          - id: nn.5.5.2
+            name: "CutMix and variants"
+            description: "Region-swapping augmentation with proportional labels."
+            prerequisites:
+              - nn.5.5.1
+            terminal: true
       - id: nn.5.6
         name: "Stochastic depth"
         description: "Random layer dropout in residual nets."
-        prerequisites: [nn.1.10, nn.1.8]
+        children:
+          - id: nn.5.6.1
+            name: "Stochastic depth"
+            description: "Randomly drop residual blocks during training."
+            prerequisites:
+              - nn.1.10.1
+              - nn.1.8.1
+          - id: nn.5.6.2
+            name: "Implicit ensembling over depth"
+            description: "Training many depth-subnetworks jointly."
+            prerequisites:
+              - nn.5.6.1
+              - nn.1.10.2
+            terminal: true
 
   - id: nn.6
     name: "Scaling and parameterization"
-    leaves:
+    description: "How performance and hyperparameters move with model size."
+    children:
       - id: nn.6.1
         name: "Width / depth / data scaling"
-        description: "Empirical scaling regimes."
-        prerequisites: [lt.5.6]
+        description: "Empirical scaling regimes (cross-link `lt.5.6`)."
+        children:
+          - id: nn.6.1.1
+            name: "Empirical scaling regimes"
+            description: "Loss falling as a power law in size and data."
+            prerequisites:
+              - lt.5.6
+          - id: nn.6.1.2
+            name: "Scaling exponents"
+            description: "Fitting and interpreting the power-law exponents."
+            prerequisites:
+              - nn.6.1.1
       - id: nn.6.2
         name: "Compute-optimal training (Chinchilla)"
-        description: "Joint optimization of N and D under compute budget."
-        prerequisites: [nn.6.1]
+        description: "Allocating a compute budget."
+        children:
+          - id: nn.6.2.1
+            name: "Compute-optimal frontier"
+            description: "Best loss achievable for a fixed compute budget."
+            prerequisites:
+              - nn.6.1.1
+          - id: nn.6.2.2
+            name: "Parameter / token balance"
+            description: "Chinchilla: scale parameters and tokens together."
+            prerequisites:
+              - nn.6.2.1
+            terminal: true
       - id: nn.6.3
         name: "μP / unit scaling"
         description: "Width-stable parameterizations enabling HP transfer."
-        prerequisites: [nn.2.3, nn.2.4, lt.5.7.2]
+        children:
+          - id: nn.6.3.1
+            name: "Maximal-update parameterization"
+            description: "Per-layer scaling keeping updates stable as width grows."
+            prerequisites:
+              - nn.2.3.1
+              - nn.2.4.1
+              - lt.5.7.2
+          - id: nn.6.3.2
+            name: "Unit scaling"
+            description: "Scale rules keeping activations and gradients near unit variance."
+            prerequisites:
+              - nn.6.3.1
+            terminal: true
       - id: nn.6.4
         name: "Hyperparameter transfer across scales"
         description: "Enabled by μP and scaling exponents."
-        prerequisites: [nn.6.3]
+        children:
+          - id: nn.6.4.1
+            name: "HP transfer across width (μTransfer)"
+            description: "Tune at small width, reuse at large width under μP."
+            prerequisites:
+              - nn.6.3.1
+          - id: nn.6.4.2
+            name: "Transfer across depth and scale"
+            description: "Extending transfer along depth and other size axes."
+            prerequisites:
+              - nn.6.4.1
+              - nn.6.1.2
+            terminal: true
 
   - id: nn.7
     name: "Memory and efficiency math"
-    leaves:
+    description: "Resource accounting and model-compression methods."
+    children:
       - id: nn.7.1
         name: "Activation memory accounting"
         description: "Per-layer footprint; sequence × hidden."
-        prerequisites: [num.4.3]
+        children:
+          - id: nn.7.1.1
+            name: "Activation memory footprint"
+            description: "Stored activations dominate training memory."
+            prerequisites:
+              - num.4.3
+          - id: nn.7.1.2
+            name: "Memory vs batch, sequence, hidden"
+            description: "How footprint scales with the shape dimensions."
+            prerequisites:
+              - nn.7.1.1
+            terminal: true
       - id: nn.7.2
         name: "Recomputation / checkpointing tradeoffs"
-        description: "Cross-link `num.4.7`."
-        prerequisites: [num.4.7]
+        description: "Trading compute for memory (cross-link `num.4.7`)."
+        children:
+          - id: nn.7.2.1
+            name: "Gradient checkpointing"
+            description: "Recompute activations in the backward pass to save memory."
+            prerequisites:
+              - num.4.7
+              - nn.7.1.1
+          - id: nn.7.2.2
+            name: "Compute-memory tradeoff"
+            description: "Checkpoint placement balancing recompute cost vs savings."
+            prerequisites:
+              - nn.7.2.1
+            terminal: true
       - id: nn.7.3
         name: "Quantization theory"
-        description: "Cross-link `num.1.6`."
-        prerequisites: [num.1.6]
+        description: "Low-precision inference and training (cross-link `num.1.6`)."
+        children:
+          - id: nn.7.3.1
+            name: "Low-precision representation"
+            description: "Representing weights/activations in few bits."
+            prerequisites:
+              - num.1.6
+          - id: nn.7.3.2
+            name: "Post-training vs quantization-aware"
+            description: "Quantize after training or simulate it during training."
+            prerequisites:
+              - nn.7.3.1
+            terminal: true
       - id: nn.7.4
         name: "Knowledge distillation"
         description: "Soft-target supervision; matched divergence."
-        prerequisites: [inf.1.4]
+        children:
+          - id: nn.7.4.1
+            name: "Soft-target distillation"
+            description: "Train a student to match a teacher's output distribution."
+            prerequisites:
+              - inf.1.4
+          - id: nn.7.4.2
+            name: "Temperature and dark knowledge"
+            description: "Softened logits expose inter-class structure."
+            prerequisites:
+              - nn.7.4.1
       - id: nn.7.5
         name: "Sparsity and pruning"
         description: "Magnitude / movement pruning; mask theory."
-        prerequisites: [opt.1.4, opt.3.2]
+        children:
+          - id: nn.7.5.1
+            name: "Magnitude pruning"
+            description: "Remove small-magnitude weights and retrain."
+            prerequisites:
+              - opt.1.4
+              - opt.3.2
+              - nn.5.1.2
+          - id: nn.7.5.2
+            name: "Structured and movement pruning"
+            description: "Prune whole units, or by accumulated movement during training."
+            prerequisites:
+              - nn.7.5.1
+            terminal: true
       - id: nn.7.6
         name: "Low-rank adaptation (LoRA)"
         description: "Frozen W + low-rank ΔW; rank-budget analysis."
-        prerequisites: [la.5.9]
+        children:
+          - id: nn.7.6.1
+            name: "Low-rank weight update"
+            description: "Adapt a frozen weight by a trainable low-rank term."
+            prerequisites:
+              - la.5.9
+          - id: nn.7.6.2
+            name: "Rank budget and placement"
+            description: "Choosing rank and which layers to adapt."
+            prerequisites:
+              - nn.7.6.1
+            terminal: true
