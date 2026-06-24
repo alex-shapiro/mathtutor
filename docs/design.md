@@ -6,7 +6,7 @@ learned. It runs as a CLI: the curriculum graph is compiled into the
 binary and per-user state lives in a local libSQL (SQLite) database under
 `~/.mathtutor/`. Curriculum source and tool I/O use
 [AYML](https://crates.io/crates/ayml), a safe, serde-compatible variant of
-YAML; the only practical difference is that AYML uses triple-quoted
+YAML; the differences are that AYML uses triple-quoted
 multiline strings (like Swift) instead of `|`, and disallows YAML's long
 tail of fringe features.
 
