@@ -1,10 +1,11 @@
 //! `mt path syllabus`: forward-looking preview of upcoming lesson topics.
 //!
 //! Unlike `mt path next` (the do-iterator that returns the single next
-//! action — lesson, quiz, or FSRS review), `syllabus` walks the path's
-//! prerequisite graph and lists the atoms whose lessons haven't been
-//! taught yet, in the order the scheduler would teach them. Lesson
-//! bodies are deliberately omitted: this is a roadmap, not a reader.
+//! action — lesson, quiz, or FSRS review), `syllabus` lists the atoms
+//! whose lessons haven't been taught yet, in the order the scheduler would
+//! teach them. Bottom-up walks the prerequisite graph; top-down lists the
+//! subpath's remaining atoms then the targets, mirroring `mt path next`.
+//! Lesson bodies are deliberately omitted: this is a roadmap, not a reader.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -16,6 +17,8 @@ use crate::event_log::{self, Event};
 use crate::graph::Graph;
 use crate::path::{PathFile, load_path, resolve_id};
 use crate::scheduler;
+use crate::subpath;
+use crate::types::Strategy;
 use crate::{Error, Result};
 
 #[derive(Debug, Serialize)]
@@ -62,7 +65,13 @@ pub async fn compute_syllabus(
     let g = Graph::load_for_path(conn, graph_dir).await?;
     let events = event_log::load(conn, &id).await?;
 
-    let upcoming = upcoming_atoms(&g, &p, &events);
+    let upcoming = match p.strategy {
+        Strategy::BottomUp => upcoming_atoms(&g, &p, &events),
+        Strategy::TopDown => {
+            let subpath = subpath::load(conn, &id).await?;
+            upcoming_top_down(&g, &p, &events, &subpath)
+        }
+    };
     let total_remaining = upcoming.len();
     let atoms: Vec<SyllabusAtom> = upcoming
         .into_iter()
@@ -121,6 +130,45 @@ fn collect_untaught(
         for child in &c.children_ids {
             collect_untaught(g, events, child, visited, out);
         }
+        return;
+    }
+    if !scheduler::lesson_taught_in_path(events, id) {
+        out.push(id.to_string());
+    }
+}
+
+/// Top-down upcoming order: the subpath's remaining (untaught) atoms
+/// first — the route the learner chose back to a target — then the path's
+/// untaught targets. Prerequisites are not planned under top-down, so none
+/// are walked; the subpath is the only place they appear.
+pub fn upcoming_top_down(
+    g: &Graph,
+    p: &PathFile,
+    events: &[Event],
+    subpath: &[String],
+) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for id in subpath.iter().chain(&p.target_atoms) {
+        push_upcoming_leaf(g, events, id, &mut seen, &mut out);
+    }
+    out
+}
+
+/// Append `id` to `out` if it's a not-yet-seen leaf atom whose lesson
+/// hasn't been taught. Clusters are skipped (top-down lists atoms only).
+fn push_upcoming_leaf(
+    g: &Graph,
+    events: &[Event],
+    id: &str,
+    seen: &mut HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    if !seen.insert(id.to_string()) {
+        return;
+    }
+    let Some(c) = g.by_id.get(id) else { return };
+    if !c.children_ids.is_empty() {
         return;
     }
     if !scheduler::lesson_taught_in_path(events, id) {

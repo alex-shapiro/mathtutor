@@ -279,13 +279,13 @@ or is empty. Exit codes: `0` ok; `1` scheduler / state-read failure;
 
 ## `mt path syllabus` I/O
 
-`mt path syllabus` is the read-only counterpart to `mt path next`. Where
-`next` returns one action (lesson, quiz, or FSRS review) and mutates the
-event log, `syllabus` walks the path's prerequisite graph and lists every
-upcoming atom whose lesson hasn't been taught yet, in scheduler-teach
-order. Lesson bodies are deliberately omitted — this is a roadmap, not a
-reader. `-n N` caps the list (default 10); `total_remaining` always
-reports the untruncated count.
+`mt path syllabus` is the read-only counterpart to `mt path next`.
+It lists every upcoming atom whose lesson hasn't been taught yet, in scheduler-teach order.
+Under bottom-up it walks the path's prerequisite graph; under top-down it lists the
+subpath's remaining atoms first (when one is set), then the path's untaught targets — never
+descending into prerequisites. Lesson bodies are deliberately omitted —
+this is a roadmap, not a reader. `-n N` caps the list (default 10);
+`total_remaining` always reports the untruncated count.
 
 ```yaml
 schema_version: 1

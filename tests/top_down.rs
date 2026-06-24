@@ -41,7 +41,14 @@ fn top_down_presents_target_before_its_prereqs() {
     // target `t` depends on `p`; nothing taught yet.
     let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let action = scheduler::next_action(&g, &p, &PathProgress::default(), NO_DUE, &[], NextMode::Default);
+    let action = scheduler::next_action(
+        &g,
+        &p,
+        &PathProgress::default(),
+        NO_DUE,
+        &[],
+        NextMode::Default,
+    );
     assert_eq!(
         atom_id(&action),
         Some("t"),
@@ -55,8 +62,19 @@ fn bottom_up_descends_into_prereqs_first() {
     // unlearned prerequisite before the target.
     let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::BottomUp);
-    let action = scheduler::next_action(&g, &p, &PathProgress::default(), NO_DUE, &[], NextMode::Default);
-    assert_eq!(atom_id(&action), Some("p"), "bottom-up teaches prereqs first");
+    let action = scheduler::next_action(
+        &g,
+        &p,
+        &PathProgress::default(),
+        NO_DUE,
+        &[],
+        NextMode::Default,
+    );
+    assert_eq!(
+        atom_id(&action),
+        Some("p"),
+        "bottom-up teaches prereqs first"
+    );
 }
 
 #[test]
@@ -66,7 +84,14 @@ fn top_down_subpath_walked_in_order() {
     let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let subpath = vec!["p".to_string(), "t".to_string()];
-    let action = scheduler::next_action(&g, &p, &PathProgress::default(), NO_DUE, &subpath, NextMode::Default);
+    let action = scheduler::next_action(
+        &g,
+        &p,
+        &PathProgress::default(),
+        NO_DUE,
+        &subpath,
+        NextMode::Default,
+    );
     assert_eq!(atom_id(&action), Some("p"), "first incomplete subpath atom");
 }
 
@@ -93,7 +118,11 @@ fn top_down_drained_subpath_falls_through_to_targets() {
     let subpath = vec!["p".to_string()];
     let progress = progress_complete(&["p"]);
     let action = scheduler::next_action(&g, &p, &progress, NO_DUE, &subpath, NextMode::Default);
-    assert_eq!(atom_id(&action), Some("t"), "fall through to remaining targets");
+    assert_eq!(
+        atom_id(&action),
+        Some("t"),
+        "fall through to remaining targets"
+    );
 }
 
 #[test]
@@ -102,7 +131,10 @@ fn top_down_done_when_targets_complete() {
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let progress = progress_complete(&["t"]);
     let action = scheduler::next_action(&g, &p, &progress, NO_DUE, &[], NextMode::Default);
-    assert!(matches!(action, Action::Done), "all targets complete → done");
+    assert!(
+        matches!(action, Action::Done),
+        "all targets complete → done"
+    );
 }
 
 // ── strategy persistence ────────────────────────────────────────────
@@ -169,7 +201,10 @@ async fn subpath_round_trips_and_clears() {
     subpath::replace(&conn, &id, &["a".into(), "b".into(), "c".into()])
         .await
         .unwrap();
-    assert_eq!(subpath::load(&conn, &id).await.unwrap(), vec!["a", "b", "c"]);
+    assert_eq!(
+        subpath::load(&conn, &id).await.unwrap(),
+        vec!["a", "b", "c"]
+    );
 
     // Replacement is wholesale, not additive.
     subpath::replace(&conn, &id, &["x".into(), "y".into()])
@@ -189,9 +224,14 @@ async fn subpath_set_happy_path() {
     let conn = open_db(&tmp).await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
-    subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.1".into(), "fnd.1.1.2".into()], None)
-        .await
-        .expect("valid subpath ending in a target");
+    subpath::cmd_subpath_set(
+        &conn,
+        Some(&id),
+        &["fnd.1.1.1".into(), "fnd.1.1.2".into()],
+        None,
+    )
+    .await
+    .expect("valid subpath ending in a target");
     assert_eq!(
         subpath::load(&conn, &id).await.unwrap(),
         vec!["fnd.1.1.1", "fnd.1.1.2"],

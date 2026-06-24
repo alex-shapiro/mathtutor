@@ -31,7 +31,8 @@ pub struct StateSummary {
     /// where prerequisites are not required and the count would mislead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reachable: Option<ReachProgress>,
-    /// The active top-down subpath, in order. Empty when none is set.
+    /// The active top-down subpath's remaining (incomplete) atoms, in
+    /// order. Empty when none is set or all are complete.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub subpath: Vec<AtomRef>,
     pub past_due: usize,
@@ -158,7 +159,13 @@ pub async fn compute_state(
         Strategy::BottomUp => Some(reach),
         Strategy::TopDown => None,
     };
-    let subpath = subpath_ids.iter().filter_map(|a| atom_ref(&g, a)).collect();
+    // Only the atoms still to teach on the subpath — completed ones have
+    // already drained out of the route.
+    let subpath = subpath_ids
+        .iter()
+        .filter(|a| !scheduler::is_atom_complete(&g, &progress, a))
+        .filter_map(|a| atom_ref(&g, a))
+        .collect();
 
     Ok(StateSummary {
         path: p.id.clone(),
