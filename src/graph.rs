@@ -519,6 +519,32 @@ impl Graph {
     }
 }
 
+/// Orders dotted concept ids segment by segment, comparing numeric
+/// segments by value so `nn.1.2` precedes `nn.1.10`. Plain lexicographic
+/// ordering interleaves `nn.1.10` between `nn.1.1` and `nn.1.2`, which
+/// scrambles path order and tree rendering. Allocation-free: segments are
+/// parsed in place, never collected into a key.
+pub fn natural_id_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let (mut sa, mut sb) = (a.split('.'), b.split('.'));
+    loop {
+        match (sa.next(), sb.next()) {
+            (Some(x), Some(y)) => {
+                let ord = match (x.parse::<u64>(), y.parse::<u64>()) {
+                    (Ok(nx), Ok(ny)) => nx.cmp(&ny),
+                    _ => x.cmp(y),
+                };
+                if ord != Ordering::Equal {
+                    return ord;
+                }
+            }
+            (Some(_), None) => return Ordering::Greater,
+            (None, Some(_)) => return Ordering::Less,
+            (None, None) => return Ordering::Equal,
+        }
+    }
+}
+
 fn flatten(c: Concept, by_id: &mut HashMap<String, FlatConcept>) {
     let children = c.children;
     let children_ids: Vec<String> = children.iter().map(|x| x.id.clone()).collect();
@@ -960,5 +986,31 @@ impl CheckReport {
             println!();
             println!("graph check FAILED.");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::natural_id_cmp;
+
+    #[test]
+    fn natural_id_cmp_orders_numeric_segments_by_value() {
+        // Lexicographic order would place `nn.1.10.1` between `…1.1` and
+        // `…2.1`; natural order must keep `1, 2, …, 10` by value.
+        let mut ids = vec!["nn.1.10.1", "nn.1.2.1", "nn.1.1.2", "nn.1.1.1"];
+        ids.sort_by(|a, b| natural_id_cmp(a, b));
+        assert_eq!(ids, vec!["nn.1.1.1", "nn.1.1.2", "nn.1.2.1", "nn.1.10.1"]);
+    }
+
+    #[test]
+    fn natural_id_cmp_groups_by_area_prefix() {
+        let mut ids = vec!["nn.1.1", "la.10.1", "la.2.1"];
+        ids.sort_by(|a, b| natural_id_cmp(a, b));
+        assert_eq!(ids, vec!["la.2.1", "la.10.1", "nn.1.1"]);
+    }
+
+    #[test]
+    fn natural_id_cmp_orders_prefix_before_its_children() {
+        assert_eq!(natural_id_cmp("nn.1", "nn.1.1"), std::cmp::Ordering::Less);
     }
 }

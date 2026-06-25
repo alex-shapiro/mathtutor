@@ -1,6 +1,6 @@
 //! Learning-path data, per-path storage, and `mt path new`/`mt path list`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -8,7 +8,7 @@ use libsql::{Connection, params};
 
 use crate::db;
 use crate::event_log;
-use crate::graph::Graph;
+use crate::graph::{Graph, natural_id_cmp};
 use crate::types::Strategy;
 use crate::{Error, Result};
 
@@ -294,26 +294,24 @@ fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>> {
         }
     }
 
-    // Stable: sort the initial frontier so output is deterministic.
-    let mut frontier: Vec<&str> = indegree
+    // Kahn's algorithm with a min-heap frontier so topo ties break by
+    // natural id order: siblings come out `nn.1.1.1, nn.1.1.2, …` rather
+    // than `…1, …10, …2`. The heap keeps this O(n log n) with no per-
+    // comparison allocation (see `natural_id_cmp`).
+    let mut frontier: BinaryHeap<NaturalOrd> = indegree
         .iter()
-        .filter_map(|(k, &v)| if v == 0 { Some(*k) } else { None })
+        .filter_map(|(k, &v)| if v == 0 { Some(NaturalOrd(k)) } else { None })
         .collect();
-    frontier.sort_unstable();
 
     let mut result = Vec::new();
-    while !frontier.is_empty() {
-        let node = frontier.remove(0);
+    while let Some(NaturalOrd(node)) = frontier.pop() {
         result.push(node.to_string());
         if let Some(neighbors) = adj.get(node) {
-            let mut neighbors = neighbors.clone();
-            neighbors.sort_unstable();
             for n in neighbors {
                 let entry = indegree.get_mut(n).unwrap();
                 *entry -= 1;
                 if *entry == 0 {
-                    frontier.push(n);
-                    frontier.sort_unstable();
+                    frontier.push(NaturalOrd(n));
                 }
             }
         }
@@ -323,4 +321,83 @@ fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>> {
         return Err(Error::Cycle);
     }
     Ok(result)
+}
+
+/// `&str` id wrapped to pop in natural order from a `BinaryHeap` (a
+/// max-heap), so `Ord` is reversed: the natural-smallest id is "greatest".
+struct NaturalOrd<'a>(&'a str);
+
+impl Ord for NaturalOrd<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        natural_id_cmp(other.0, self.0)
+    }
+}
+impl PartialOrd for NaturalOrd<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl PartialEq for NaturalOrd<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl Eq for NaturalOrd<'_> {}
+
+#[cfg(test)]
+mod tests {
+    use super::topo_sort;
+    use crate::graph::{FlatConcept, Graph};
+    use std::collections::HashMap;
+
+    /// Build a graph from `(id, prerequisites)` pairs; other fields unused
+    /// by `topo_sort`.
+    fn graph(nodes: &[(&str, &[&str])]) -> Graph {
+        let by_id = nodes
+            .iter()
+            .map(|(id, prereqs)| {
+                let c = FlatConcept {
+                    id: (*id).to_string(),
+                    name: String::new(),
+                    description: None,
+                    prerequisites: prereqs.iter().map(|p| (*p).to_string()).collect(),
+                    children_ids: Vec::new(),
+                    lesson: None,
+                    quizzes: Vec::new(),
+                };
+                ((*id).to_string(), c)
+            })
+            .collect::<HashMap<_, _>>();
+        Graph { by_id }
+    }
+
+    #[test]
+    fn topo_sort_breaks_ties_in_natural_id_order() {
+        // The bug: lexicographic tie-breaking jumped `nn.1.1.1` straight to
+        // `nn.1.10.1`, skipping `nn.1.1.2`. With a prereq chain only along
+        // the `.1.1.x` spine, the independent `.1.10.1` must still sort
+        // after the lower-numbered siblings, not between `…1.1` and `…1.2`.
+        let g = graph(&[
+            ("nn.1.1.1", &[]),
+            ("nn.1.1.2", &["nn.1.1.1"]),
+            ("nn.1.2.1", &["nn.1.1.1"]),
+            ("nn.1.10.1", &["nn.1.1.1"]),
+        ]);
+        let atoms: Vec<String> = ["nn.1.1.1", "nn.1.1.2", "nn.1.2.1", "nn.1.10.1"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let order = topo_sort(&g, &atoms).unwrap();
+        assert_eq!(order, vec!["nn.1.1.1", "nn.1.1.2", "nn.1.2.1", "nn.1.10.1"]);
+    }
+
+    #[test]
+    fn topo_sort_respects_prerequisites_over_id_order() {
+        // A lower-numbered atom that depends on a higher-numbered one must
+        // still come after it, regardless of natural id order.
+        let g = graph(&[("nn.1.1.1", &["nn.1.9.1"]), ("nn.1.9.1", &[])]);
+        let atoms = vec!["nn.1.1.1".to_string(), "nn.1.9.1".to_string()];
+        let order = topo_sort(&g, &atoms).unwrap();
+        assert_eq!(order, vec!["nn.1.9.1", "nn.1.1.1"]);
+    }
 }

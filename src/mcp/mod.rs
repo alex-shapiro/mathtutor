@@ -55,7 +55,7 @@ use url::Url;
 
 use crate::Error;
 use crate::db::{self, DbConfig};
-use crate::graph::Graph;
+use crate::graph::{Graph, natural_id_cmp};
 use crate::progress::PathProgress;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{answer, discover, graph, path, scheduler, state, store, subpath, syllabus, tree};
@@ -798,7 +798,7 @@ async fn compute_tree(
             })
             .map(|c| build_tree_node(&g, &progress, &spine, &target_set, c, depth, 1))
             .collect();
-        top.sort_by(|a, b| natural_cmp(&a.id, &b.id));
+        top.sort_by(|a, b| natural_id_cmp(&a.id, &b.id));
         nodes.extend(top);
     }
 
@@ -847,7 +847,7 @@ fn build_tree_node(
             .filter(|kc| spine.contains(&kc.id))
             .map(|kc| build_tree_node(g, progress, spine, targets, kc, max_depth, depth + 1))
             .collect();
-        kids.sort_by(|a, b| natural_cmp(&a.id, &b.id));
+        kids.sort_by(|a, b| natural_id_cmp(&a.id, &b.id));
         kids
     };
     TreeNode {
@@ -858,12 +858,6 @@ fn build_tree_node(
         status,
         children,
     }
-}
-
-fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    let ak: Vec<u32> = a.split('.').filter_map(|s| s.parse().ok()).collect();
-    let bk: Vec<u32> = b.split('.').filter_map(|s| s.parse().ok()).collect();
-    ak.cmp(&bk)
 }
 
 // ───────────────────────────── error mapping ──────────────────────
