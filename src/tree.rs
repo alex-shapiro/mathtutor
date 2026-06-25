@@ -14,7 +14,7 @@ use libsql::Connection;
 
 use crate::Result;
 use crate::cards;
-use crate::graph::{self, FlatConcept, Graph};
+use crate::graph::{self, FlatConcept, Graph, natural_id_cmp};
 use crate::path::{load_path, resolve_id};
 use crate::progress::PathProgress;
 use crate::scheduler;
@@ -150,14 +150,8 @@ fn top_level_in_area<'a>(g: &'a Graph, prefix: &str) -> Vec<&'a FlatConcept> {
         })
         .collect();
     // Natural-numeric sort so `tx.2` comes before `tx.10`, not after.
-    out.sort_by_key(|c| natural_id_key(&c.id));
+    out.sort_by(|a, b| natural_id_cmp(&a.id, &b.id));
     out
-}
-
-fn natural_id_key(id: &str) -> Vec<u32> {
-    id.split('.')
-        .filter_map(|s| s.parse::<u32>().ok())
-        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -247,16 +241,7 @@ fn quiz_badge(progress: &PathProgress, c: &FlatConcept, diff: Difficulty, upper:
 
 #[cfg(test)]
 mod tests {
-    use super::{natural_id_key, parent_id};
-
-    #[test]
-    fn natural_id_key_sorts_tx_2_before_tx_10() {
-        // Lexicographic sort would put `tx.10` between `tx.1` and `tx.2`.
-        // Natural-numeric sort must keep them in `1, 2, 10` order.
-        let mut ids = vec!["tx.10", "tx.2", "tx.1"];
-        ids.sort_by_key(|id| natural_id_key(id));
-        assert_eq!(ids, vec!["tx.1", "tx.2", "tx.10"]);
-    }
+    use super::parent_id;
 
     #[test]
     fn parent_id_drops_last_segment() {
