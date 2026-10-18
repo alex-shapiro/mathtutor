@@ -168,7 +168,7 @@ While the primary output is structured JSON, the MCP response may also include a
 
 ### Remote Access & Security
 
-The server is single-user, single-tenant: one SQLite database, one human operator. Both supported auth modes resolve to the same authority over every path and overlay row in that database. Multi-user hosting would require per-user storage scoping and identity work that is explicitly out of scope.
+The server is single-user, single-tenant: one Baserunna database, one human operator. Both supported auth modes resolve to the same authority over every path and overlay row in that database. Multi-user hosting would require per-user storage scoping and identity work that is explicitly out of scope.
 
 #### Authentication Modes
 
@@ -226,7 +226,7 @@ OAuth state lives in four new SQL tables, scoped to the single-user database:
 - `oauth_access_tokens` are opaque access tokens with expiries.
 - `oauth_refresh_tokens` are long-lived refresh tokens with expiries.
 
-These never leak between MCP databases / Turso instances because they live in the same SQLite file as `paths`, `events`, etc.
+These live in the user's database beside `paths` and `cards`, so they never leak between users. Each row expires on its own with its token (Baserunna row TTLs), so no sweep is needed.
 
 #### Keep-alive & Heartbeats
 
@@ -236,172 +236,11 @@ To prevent network proxies and load balancers from prematurely closing the long-
 - **Payload:** A standard SSE comment (`: keep-alive`) or an empty `heartbeat` event.
 - **Client Impact:** Clients should be configured to handle these heartbeats without treating them as tool/resource data.
 
-## Persistence & Storage: SQLite + Turso
+## Persistence & Storage
 
-The server will be hosted remotely and accessed from multiple devices and so we must migrate the storage layer from local AYML files to SQLite. The server will use Turso for sync/backup.
-
-### Storage Approach
-
-We take a hybrid approach to data storage.
-
-- **Base Curriculum:** Remains a static set of AYML files embedded in the binary. This preserves the developer experience for curriculum authoring.
-- **User Database**: A single SQLite database represents the entire state for a user (or server instance). It contains:
-  - All learning paths, goals, and target atoms.
-  - The user's shared curriculum overlay (agent-authored lessons and quizzes).
-  - The event log of user interactions, partitioned by `path_id`.
-  - FSRS card states: a materialized view of the latest FSRS parameters (stability, difficulty, due date) for every quiz/path combination, updated on every answer.
-
-FSRS Recomputation: The event log remains the source of truth for all learning path state. The `cards` table is a write-through cache. If the cache is missing or suspected to be corrupt, it can be recomputed by replaying the `events` table.
-
-### Sync Strategy (libSQL)
-
-- **Mode:** `libsql::Builder::new_synced_database` (Embedded Replica with Offline Writes).
-- **Initialization:**
-  - If `TURSO_URL` and `TURSO_AUTH_TOKEN` are set: Enable remote sync.
-  - Otherwise: Fallback to a standard local SQLite database.
-- **Sync Behavior:**
-  - MCP: Sync in a background tokio task every 5 minutes. State-modifying tool calls trigger a non-blocking background sync.
-  - CLI: Sync at the end of every command that modifies state.
-  - Timeout: Use a 10-second timeout for all foreground sync operations.
-  - Error Handling: If a sync fails or times out, issue a warning to stderr but consider the operation successful. libSQL can sync after a future command.
-
-### SQL Schema
-
-```sql
-CREATE TABLE paths (
-    id TEXT PRIMARY KEY,
-    goal TEXT NOT NULL,
-    created_at DATETIME NOT NULL
-);
-
--- Join table for referential integrity and efficient querying of goals
-CREATE TABLE path_targets (
-    path_id TEXT NOT NULL REFERENCES paths(id),
-    atom_id TEXT NOT NULL,
-    PRIMARY KEY (path_id, atom_id)
-);
-
-CREATE TABLE events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts DATETIME NOT NULL,
-    kind TEXT NOT NULL, -- e.g., 'LessonRead', 'QuizAnswered'
-    path_id TEXT NOT NULL REFERENCES paths(id),
-    atom_id TEXT,
-    quiz_id TEXT,
-    rating INTEGER, -- Pulled out of payload for easy FSRS querying
-    payload TEXT CHECK (payload IS NULL OR json_valid(payload))
-);
-
--- Indexes for performance
-CREATE INDEX idx_events_path ON events(path_id);
-CREATE INDEX idx_events_atom ON events(atom_id);
-CREATE INDEX idx_events_quiz ON events(quiz_id);
-
--- FSRS Card State: Materialized view of the event log for fast scheduling.
-CREATE TABLE cards (
-    path_id TEXT NOT NULL REFERENCES paths(id),
-    quiz_id TEXT NOT NULL,
-    stability REAL NOT NULL,
-    difficulty REAL NOT NULL,
-    due_at DATETIME NOT NULL,
-    last_reviewed_at DATETIME NOT NULL,
-    reps INTEGER NOT NULL,
-    lapses INTEGER NOT NULL,
-    PRIMARY KEY (path_id, quiz_id)
-);
-CREATE INDEX idx_cards_due ON cards(path_id, due_at);
-
--- Overlays are global to the user/database, not path-scoped.
-CREATE TABLE overlay_lessons (
-    atom_id TEXT PRIMARY KEY,
-    body TEXT NOT NULL
-);
-
-CREATE TABLE overlay_quizzes (
-    atom_id TEXT NOT NULL,
-    quiz_id TEXT NOT NULL,
-    difficulty TEXT NOT NULL, -- easy, medium, hard
-    kind TEXT, -- NULL for free_text
-    question TEXT NOT NULL,
-    answer TEXT NOT NULL,
-    rubric TEXT,
-    PRIMARY KEY (quiz_id)
-);
-
-CREATE TABLE overlay_removed_quizzes (
-    quiz_id TEXT PRIMARY KEY
-);
-
--- OAuth authorization server state (single-user; every issued token has the
--- same authority over the database).
-CREATE TABLE oauth_clients (
-    client_id      TEXT PRIMARY KEY,
-    client_name    TEXT,
-    redirect_uris  TEXT NOT NULL,           -- JSON array of strings
-    created_at     DATETIME NOT NULL
-);
-
-CREATE TABLE oauth_authorization_codes (
-    code                  TEXT PRIMARY KEY,
-    client_id             TEXT NOT NULL REFERENCES oauth_clients(client_id),
-    redirect_uri          TEXT NOT NULL,
-    scope                 TEXT,
-    code_challenge        TEXT NOT NULL,
-    code_challenge_method TEXT NOT NULL,    -- always 'S256'
-    resource              TEXT,             -- RFC 8707 resource indicator
-    expires_at            DATETIME NOT NULL,
-    used_at               DATETIME          -- single-use enforcement
-);
-
-CREATE TABLE oauth_access_tokens (
-    token       TEXT PRIMARY KEY,
-    client_id   TEXT NOT NULL REFERENCES oauth_clients(client_id),
-    scope       TEXT,
-    expires_at  DATETIME NOT NULL
-);
-CREATE INDEX idx_oauth_access_tokens_exp ON oauth_access_tokens(expires_at);
-
-CREATE TABLE oauth_refresh_tokens (
-    token       TEXT PRIMARY KEY,
-    client_id   TEXT NOT NULL REFERENCES oauth_clients(client_id),
-    scope       TEXT,
-    expires_at  DATETIME NOT NULL
-);
-CREATE INDEX idx_oauth_refresh_tokens_exp ON oauth_refresh_tokens(expires_at);
-```
-
-## Implementation Plan (PR-Sized Tasks)
-
-1.  **PR 1: Database Foundation.**
-    - Update `Cargo.toml` dependencies (`libsql`, `tokio`, `serde_json`).
-    - Create `src/db.rs`: setup `libsql` connection pooling, initial schema migrations (paths, events, cards, overlays).
-    - Implement the "Local vs. Synced" initialization logic.
-2.  **PR 2: Event Log & FSRS Cache Migration.**
-    - Refactor `src/event_log.rs` to use SQL for appending and loading events.
-    - **Write-through Cache:** Implement logic to update the `cards` table whenever a `QuizAnswered` event is recorded.
-    - Create `src/cards.rs` (or update) to support reading from the `cards` table for O(1) scheduling lookups.
-3.  **PR 3: User Overlay & Store SQL Migration.**
-    - Refactor `src/overlay.rs` and `src/store.rs` to use SQL.
-    - **Scope Shift:** Ensure overlays (lessons/quizzes) are stored globally in the user database, not partitioned by `path_id`.
-    - **Upsert Lessons:** `mt store lesson` becomes an upsert (matches the MCP `UpsertLesson` tool); a second call replaces the body and emits `lesson_amended` instead of `lesson_authored`.
-    - **Validation:** Update `Graph::load_for_path` to merge the static base graph with the global SQL-resident overlay and implement fast-fail validation for IDs.
-4.  **PR 4: AYML to SQLite Migration Tool.**
-    - Implement `mt migrate-from-ayml` CLI command to port existing local paths and overlays into the new schema.
-    - **Idempotency:** Use `INSERT OR IGNORE` to allow safe repeated runs.
-5.  **PR 5: MCP Server (SSE) + Tool Implementation.**
-    - Implement `src/mcp.rs` using `rmcp`.
-    - Port all tools to return **machine-readable JSON**.
-    - Implement the `GetPaths` tool.
-    - Setup `axum` server with SSE routes, heartbeats (15s), and API Key authentication.
-    - **Graceful Shutdown:** Implement signal handlers to ensure final `db.sync()` before exit.
-6.  **PR 6: OAuth Authorization Server.**
-    - Add the four `oauth_*` SQL tables (migration 002).
-    - Implement `/oauth/{register,authorize,token}` plus the two `.well-known` discovery endpoints in `src/mcp/oauth.rs`.
-    - Layer the OAuth bearer check alongside the existing `MT_API_KEY` path; either accepted on `/mcp`.
-    - Single-user login via `MT_ADMIN_PASSWORD`, PKCE S256 mandatory, open DCR.
-7.  **PR 7: Deployment & Infrastructure.**
-    - Create Fly.io configuration
-    - Setup CI/CD for automated deployments
+The server stores everything in the user's Baserunna database, described in
+`docs/design.md` under Storage. It holds no state of its own beyond an
+in-memory cache, so machines can be stopped and replaced freely.
 
 ## Deploying to Fly.io
 
@@ -412,15 +251,12 @@ first deploy, set the auth secrets:
 ```sh
 flyctl secrets set MT_ADMIN_PASSWORD='…'    # enables OAuth login form
 flyctl secrets set MT_API_KEY='…'           # optional static bearer
-flyctl secrets set TURSO_URL='…'            # Turso DB URL
-flyctl secrets set TURSO_AUTH_TOKEN='…'     # Turso auth token
+flyctl secrets set BASERUNNA_TOKEN='…'      # Baserunna API key
 ```
 
 At least one of `MT_ADMIN_PASSWORD` or `MT_API_KEY` must be set or the
 server refuses to start. `MT_PUBLIC_URL` is configured in `fly.toml` to
 match the default `https://<app>.fly.dev` URL.
 
-Persist state across machine restarts with `TURSO_URL` and `TURSO_AUTH_TOKEN`
-to sync the embedded libSQL to a remote replica. Without those, the local SQLite
-under `$HOME/.mathtutor/mt.db` is the only copy of data, and Fly instances wipe
-on restart.
+`BASERUNNA_TOKEN` is required. `BASERUNNA_URL` and `BASERUNNA_DB` default to
+`https://baserunna.fly.dev` and `mathtutor`.

@@ -8,15 +8,14 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use libsql::Connection;
 use serde::Serialize;
 
-use crate::event_log::{self, Event};
+use crate::db::Db;
 use crate::graph::Graph;
-use crate::path::{load_path, resolve_id};
-use crate::scheduler;
+use crate::progress::PathProgress;
 use crate::subpath;
 use crate::types::Strategy;
+use crate::view::Want;
 use crate::{Error, Result};
 
 #[derive(Debug, Serialize)]
@@ -39,12 +38,12 @@ pub struct SyllabusAtom {
 }
 
 pub async fn cmd_path_syllabus(
-    conn: &Connection,
+    db: &Db,
     explicit_id: Option<&str>,
     n: usize,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let view = compute_syllabus(conn, explicit_id, n, graph_dir).await?;
+    let view = compute_syllabus(db, explicit_id, n, graph_dir).await?;
     let text = ayml::to_string(&view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
@@ -53,22 +52,23 @@ pub async fn cmd_path_syllabus(
 /// Build a `SyllabusView` for the given path. Pure read-only — shared by
 /// the CLI (AYML) and the MCP server (JSON).
 pub async fn compute_syllabus(
-    conn: &Connection,
+    db: &Db,
     explicit_id: Option<&str>,
     n: usize,
     graph_dir: Option<&Path>,
 ) -> Result<SyllabusView> {
-    let id = resolve_id(conn, explicit_id).await?;
-    let p = load_path(conn, &id).await?;
-    let g = Graph::load_for_path(conn, graph_dir).await?;
-    let events = event_log::load(conn, &id).await?;
+    let view = db.snapshot(&Want::path(explicit_id)).await?;
+    let ps = view.path()?;
+    let p = ps.file.clone();
+    let g = view.graph(graph_dir)?;
+    let progress = ps.progress();
     let targets = p.resolve_targets(&g)?;
 
     let upcoming = match p.strategy {
-        Strategy::BottomUp => upcoming_atoms(&g, &targets, &events),
+        Strategy::BottomUp => upcoming_atoms(&g, &targets, &progress),
         Strategy::TopDown => {
-            let subpath = subpath::load_resolved(conn, &id, &g).await?;
-            upcoming_top_down(&g, &targets, &events, &subpath)
+            let subpath = subpath::resolved(&p, &g)?;
+            upcoming_top_down(&g, &targets, &progress, &subpath)
         }
     };
     let total_remaining = upcoming.len();
@@ -98,22 +98,21 @@ pub async fn compute_syllabus(
 /// been taught in this path yet. The order matches what `mt path next`
 /// would emit if every quiz answered correctly on the first try.
 ///
-/// "Taught" is `lesson_taught_in_path`: a `LessonTaught` or
-/// `LessonAuthored` event suffices. Atoms whose lesson has been taught
+/// "Taught" means a `LessonTaught` or `LessonAuthored` event was logged. Atoms whose lesson has been taught
 /// but whose quizzes are still pending fall out of the syllabus — they
 /// are in-progress, not upcoming.
-pub fn upcoming_atoms(g: &Graph, targets: &[String], events: &[Event]) -> Vec<String> {
+pub fn upcoming_atoms(g: &Graph, targets: &[String], progress: &PathProgress) -> Vec<String> {
     let mut visited = HashSet::new();
     let mut out = Vec::new();
     for target in targets {
-        collect_untaught(g, events, target, &mut visited, &mut out);
+        collect_untaught(g, progress, target, &mut visited, &mut out);
     }
     out
 }
 
 fn collect_untaught(
     g: &Graph,
-    events: &[Event],
+    progress: &PathProgress,
     id: &str,
     visited: &mut HashSet<String>,
     out: &mut Vec<String>,
@@ -123,15 +122,15 @@ fn collect_untaught(
     }
     let Some(c) = g.by_id.get(id) else { return };
     for prereq in &c.prerequisites {
-        collect_untaught(g, events, prereq, visited, out);
+        collect_untaught(g, progress, prereq, visited, out);
     }
     if !c.children_ids.is_empty() {
         for child in &c.children_ids {
-            collect_untaught(g, events, child, visited, out);
+            collect_untaught(g, progress, child, visited, out);
         }
         return;
     }
-    if !scheduler::lesson_taught_in_path(events, id) {
+    if !progress.lesson_taught(id) {
         out.push(id.to_string());
     }
 }
@@ -143,13 +142,13 @@ fn collect_untaught(
 pub fn upcoming_top_down(
     g: &Graph,
     targets: &[String],
-    events: &[Event],
+    progress: &PathProgress,
     subpath: &[String],
 ) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for id in subpath.iter().chain(targets) {
-        push_upcoming_leaf(g, events, id, &mut seen, &mut out);
+        push_upcoming_leaf(g, progress, id, &mut seen, &mut out);
     }
     out
 }
@@ -158,7 +157,7 @@ pub fn upcoming_top_down(
 /// hasn't been taught. Clusters are skipped (top-down lists atoms only).
 fn push_upcoming_leaf(
     g: &Graph,
-    events: &[Event],
+    progress: &PathProgress,
     id: &str,
     seen: &mut HashSet<String>,
     out: &mut Vec<String>,
@@ -170,7 +169,7 @@ fn push_upcoming_leaf(
     if !c.children_ids.is_empty() {
         return;
     }
-    if !scheduler::lesson_taught_in_path(events, id) {
+    if !progress.lesson_taught(id) {
         out.push(id.to_string());
     }
 }

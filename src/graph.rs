@@ -6,7 +6,6 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use include_dir::{Dir, include_dir};
-use libsql::Connection;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{Difficulty, QuizType};
@@ -317,7 +316,7 @@ fn load_area_default(explicit: Option<&Path>, filename: &str) -> Result<AreaFile
 
 /// Flattened lookup view: every concept (cluster + atom) keyed by ID.
 /// Built once via `Graph::load`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Graph {
     pub by_id: HashMap<String, FlatConcept>,
 }
@@ -344,8 +343,17 @@ impl Graph {
         Ok(Self { by_id })
     }
 
-    /// Load curriculum from compiled-in bytes
+    /// Load curriculum from compiled-in bytes, parsed once per process.
     pub fn load_embedded() -> Result<Self> {
+        static PARSED: std::sync::OnceLock<Graph> = std::sync::OnceLock::new();
+        if let Some(g) = PARSED.get() {
+            return Ok(g.clone());
+        }
+        let g = Self::parse_embedded()?;
+        Ok(PARSED.get_or_init(|| g).clone())
+    }
+
+    fn parse_embedded() -> Result<Self> {
         let manifest = load_manifest_embedded()?;
         let mut by_id = HashMap::new();
         for entry in &manifest.areas {
@@ -376,9 +384,8 @@ impl Graph {
     /// Conflict resolution rule: an overlay lesson, quiz, or tombstone
     /// always overrides a built-in item with the same ID. Tombstones
     /// override everything.
-    pub async fn load_for_path(conn: &Connection, graph_dir: Option<&Path>) -> Result<Self> {
+    pub fn merged(overlay: &crate::overlay::Overlay, graph_dir: Option<&Path>) -> Result<Self> {
         let mut g = Self::load_default(graph_dir)?;
-        let overlay = crate::overlay::load(conn).await?;
         g.apply_overlay(overlay);
         Ok(g)
     }
@@ -487,10 +494,10 @@ impl Graph {
     }
 
     /// Apply the user overlay to this graph in place. See
-    /// [`Graph::load_for_path`] for the conflict-resolution contract.
-    fn apply_overlay(&mut self, overlay: crate::overlay::Overlay) {
-        for (atom_id, entry) in overlay.atoms {
-            let Some(c) = self.by_id.get_mut(&atom_id) else {
+    /// [`Graph::merged`] for the conflict-resolution contract.
+    fn apply_overlay(&mut self, overlay: &crate::overlay::Overlay) {
+        for (atom_id, entry) in &overlay.atoms {
+            let Some(c) = self.by_id.get_mut(atom_id) else {
                 // Atom is not in the shipped graph and should be skipped.
                 // A future graph version may add it, at which point the
                 // overlay starts taking effect; or the user can clean
@@ -498,15 +505,15 @@ impl Graph {
                 continue;
             };
             if entry.lesson.is_some() {
-                c.lesson = entry.lesson;
+                c.lesson.clone_from(&entry.lesson);
             }
 
             // Quizzes: overlay entries replace shipped entries with the
             // same id (amend), and are appended otherwise (added).
-            for overlay_quiz in entry.quizzes {
+            for overlay_quiz in &entry.quizzes {
                 match c.quizzes.iter_mut().find(|q| q.id == overlay_quiz.id) {
-                    Some(existing) => *existing = overlay_quiz,
-                    None => c.quizzes.push(overlay_quiz),
+                    Some(existing) => existing.clone_from(overlay_quiz),
+                    None => c.quizzes.push(overlay_quiz.clone()),
                 }
             }
             // Tombstones beat both shipped and overlay-authored quizzes:

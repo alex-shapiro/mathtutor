@@ -3,8 +3,8 @@
 Math Tutor is a tool for learning math via a DAG of small lessons and
 quizzes. It incorporates spaced repetition so that learned concepts stay
 learned. It runs as a CLI: the curriculum graph is compiled into the
-binary and per-user state lives in a local libSQL (SQLite) database under
-`~/.mathtutor/`. Curriculum source and tool I/O use
+binary and per-user state lives in a [Baserunna](https://baserunna.fly.dev)
+database. Curriculum source and tool I/O use
 [AYML](https://crates.io/crates/ayml), a safe, serde-compatible variant of
 YAML. AYML uses Swift-like triple-quoted multiline strings instead of `|`,
 and disallows YAML's long tail of fringe features.
@@ -320,32 +320,37 @@ The curriculum graph is compiled into the binary at build time via
 against a working tree, use the `--graph DIR` CLI option or the
 `MT_GRAPH` env variable.
 
-All user state lives in a libSQL database at `$MATHTUTOR_HOME/mt.db`.
-The default path is `~/.mathtutor/mt.db`). When `TURSO_URL` and `TURSO_AUTH_TOKEN`
-are set, the file is an embedded replica synced to a Turso server; otherwise
-it is a plain local SQLite file. The schema is versioned by numbered, immutable
-migrations.
+All user state lives in one Baserunna database: `BASERUNNA_DB` (default
+`mathtutor`) on the server at `BASERUNNA_URL` (default
+`https://baserunna.fly.dev`), reached with the API key in `BASERUNNA_TOKEN`.
+The database and its tables are created on first use.
 
-Tables, by role:
+| Data                 | Stored as                  | Role                                                             |
+| -------------------- | -------------------------- | ---------------------------------------------------------------- |
+| `paths`              | table, by path id          | goal, strategy, target IDs verbatim, top-down subpath            |
+| `events.<path id>`   | stream                     | per-path learning history, append-only                           |
+| `cards`              | table, by `(path, quiz)`   | FSRS state and answer history, derived from the events           |
+| `taught`             | table, by `(path, atom)`   | lessons taught on a path, derived from the events                |
+| `lessons`            | table, by atom id          | user-authored lessons (overlay)                                  |
+| `quizzes`            | table, by quiz id          | user-authored or amended quizzes (overlay)                       |
+| `removed_quizzes`    | table, by quiz id          | quiz tombstones (overlay)                                        |
+| `activity/<path id>` | key                        | time of the path's latest event                                  |
+| `overlay_version`    | key                        | changes with every overlay write                                 |
 
-| Table                     | Role                          | Mutability                                                     |
-| ------------------------- | ----------------------------- | -------------------------------------------------------------- |
-| `paths`                   | per-path goal + strategy      | `goal`/`created_at` fixed at `mt path new`; `strategy` mutable |
-| `path_targets`            | target IDs, verbatim          | fixed at `mt path new`; expanded to atoms on load             |
-| `path_subpath`            | top-down detour to a target   | replaced by `mt path subpath set`, emptied by `clear`          |
-| `events`                  | per-path learning history     | append-only                                                    |
-| `cards`                   | FSRS state per `(path, quiz)` | write-through cache, rebuildable from `events`                 |
-| `overlay_lessons`         | user-authored lessons         | mutated by `mt lesson upsert`                                  |
-| `overlay_quizzes`         | user-authored quizzes         | mutated by `mt quiz {create,update}`                           |
-| `overlay_removed_quizzes` | user-authored quiz tombstones | mutated by `mt quiz delete`                                    |
+The event streams are the source of truth for learning history. `cards` and
+`taught` are updated in the same transaction as each event, and
+`cards::recompute` rebuilds them by replaying a path's stream.
 
-The `events` log is the source of truth for learning history; `cards` is a
-derived cache that is rebuilt by replaying the event log.
-The authored overlay is keyed by atom / quiz id.
+Every command is one serializable transaction: it reads everything it needs
+in its first request and writes in its second, and it is rerun if a
+concurrent command conflicts. The client keeps the overlay cached, in
+memory and under `$MATHTUTOR_HOME` (default `~/.mathtutor`), and reads only
+`overlay_version` to check it, so a command downloads the overlay only after
+another client changed it.
 
 ## User overlay
 
-Lessons and quizzes the agent authors are stored as SQL rows that overlay
+Lessons and quizzes the agent authors are stored as rows that overlay
 the shipped curriculum without modifying it. The overlay is global to the
 user's database, keyed by atom / quiz id — it is shared across paths, not
 scoped to one:

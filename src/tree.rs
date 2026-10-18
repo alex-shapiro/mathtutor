@@ -10,28 +10,28 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::Utc;
-use libsql::Connection;
 
 use crate::Result;
-use crate::cards;
+use crate::db::Db;
 use crate::graph::{self, FlatConcept, Graph, natural_id_cmp};
-use crate::path::{load_path, resolve_id};
 use crate::progress::PathProgress;
 use crate::scheduler;
 use crate::types::Difficulty;
+use crate::view::Want;
 
 pub async fn cmd_path_tree(
-    conn: &Connection,
+    db: &Db,
     explicit_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let id = resolve_id(conn, explicit_id).await?;
-    let p = load_path(conn, &id).await?;
-    let g = Graph::load_for_path(conn, graph_dir).await?;
+    let view = db.snapshot(&Want::path(explicit_id)).await?;
+    let ps = view.path()?;
+    let p = &ps.file;
+    let g = view.graph(graph_dir)?;
     let manifest = graph::load_manifest_default(graph_dir)?;
-    let progress = PathProgress::load(conn, &id).await?;
-    let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
-    let subpath = crate::subpath::load_resolved(conn, &id, &g).await?;
+    let progress = ps.progress();
+    let due = ps.due(Utc::now());
+    let subpath = crate::subpath::resolved(p, &g)?;
     let target_atoms = p.resolve_targets(&g)?;
 
     let targets: HashSet<String> = target_atoms.iter().cloned().collect();
@@ -40,7 +40,7 @@ pub async fn cmd_path_tree(
     let spine = build_spine(&g, &reachable);
     let next_atom = scheduler::next_action(
         &g,
-        &p,
+        p,
         &target_atoms,
         &progress,
         &due,

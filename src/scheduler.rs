@@ -4,29 +4,28 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use libsql::Connection;
 use serde::Serialize;
 
 use crate::answer::atom_from_quiz_id;
-use crate::cards;
-use crate::db;
+use crate::db::Db;
 use crate::event_log::{self, Event, EventKind};
 use crate::graph::{FlatConcept, Graph};
 use crate::path::{self, PathFile};
 use crate::progress::PathProgress;
 use crate::subpath;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
+use crate::view::{PathState, Want};
 use crate::{Error, Result};
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
 pub async fn cmd_path_next(
-    conn: &Connection,
+    db: &Db,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
     mode: NextMode,
 ) -> Result<()> {
-    let envelope = compute_next(conn, path_id, graph_dir, mode).await?;
+    let envelope = compute_next(db, path_id, graph_dir, mode).await?;
     let text = ayml::to_string(&envelope).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
@@ -63,57 +62,52 @@ impl NextMode {
 /// Pick the next action for `path_id` and auto-log its
 /// `quiz_presented` / `lesson_taught` side effect.
 pub async fn compute_next(
-    conn: &Connection,
+    db: &Db,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
     mode: NextMode,
 ) -> Result<Envelope> {
-    let tx = conn.transaction().await?;
-    let id = path::resolve_id(&tx, path_id).await?;
-    let g = Graph::load_for_path(&tx, graph_dir).await?;
-    let p = path::load_path(&tx, &id).await?;
-    let progress = PathProgress::load(&tx, &id).await?;
-    let due = cards::due_quizzes(&tx, &id, Utc::now()).await?;
-    let subpath = subpath::load_resolved(&tx, &id, &g).await?;
-    let targets = p.resolve_targets(&g)?;
+    db.transact(&Want::path(path_id), |view, changes| {
+        let ps = view.path()?;
+        let p = &ps.file;
+        let g = view.graph(graph_dir)?;
+        let progress = ps.progress();
+        let due = ps.due(Utc::now());
+        let subpath = subpath::resolved(p, &g)?;
+        let targets = p.resolve_targets(&g)?;
 
-    let action = next_action(&g, &p, &targets, &progress, &due, &subpath, mode);
-    // Build the envelope first — its history aggregates count past
-    // presentations only, not the `quiz_presented` / `lesson_taught`
-    // we are about to log below.
-    let envelope = Envelope::build(&tx, &g, &p, action.clone()).await?;
+        let action = next_action(&g, p, &targets, &progress, &due, &subpath, mode);
+        // Build the envelope first — its history aggregates count past
+        // presentations only, not the `quiz_presented` / `lesson_taught`
+        // we are about to log below.
+        let envelope = Envelope::build(ps, &g, action.clone());
 
-    match &action {
-        Action::PresentQuiz { quiz_id, atom_id } => {
-            event_log::append(
-                &tx,
+        match &action {
+            Action::PresentQuiz { quiz_id, atom_id } => changes.append(
+                view,
                 &event_log::quiz_presented(p.id.clone(), atom_id.clone(), quiz_id.clone()),
-            )
-            .await?;
+            )?,
+            Action::PresentLesson { atom_id } => {
+                changes.append(
+                    view,
+                    &event_log::lesson_taught(p.id.clone(), atom_id.clone()),
+                )?;
+            }
+            _ => {}
         }
-        Action::PresentLesson { atom_id } => {
-            event_log::append(
-                &tx,
-                &event_log::lesson_taught(p.id.clone(), atom_id.clone()),
-            )
-            .await?;
+
+        // Auto-clear a fully-drained subpath: once every atom on it (the
+        // target included) is complete, the detour is spent and `next` has
+        // already moved on to the remaining targets.
+        if p.strategy == Strategy::TopDown
+            && !subpath.is_empty()
+            && subpath.iter().all(|a| is_atom_complete(&g, &progress, a))
+        {
+            path::set_subpath(changes, &p.id, &[]);
         }
-        _ => {}
-    }
-
-    // Auto-clear a fully-drained subpath: once every atom on it (the
-    // target included) is complete, the detour is spent and `next` has
-    // already moved on to the remaining targets.
-    if p.strategy == Strategy::TopDown
-        && !subpath.is_empty()
-        && subpath.iter().all(|a| is_atom_complete(&g, &progress, a))
-    {
-        subpath::clear(&tx, &id).await?;
-    }
-
-    tx.commit().await?;
-
-    Ok(envelope)
+        Ok(envelope)
+    })
+    .await
 }
 
 #[derive(Debug, Clone)]
@@ -317,7 +311,7 @@ pub fn is_atom_complete(g: &Graph, progress: &PathProgress, atom_id: &str) -> bo
     })
 }
 
-// ── Quiz / lesson history (targeted SQL — one quiz_id or atom_id) ──
+// ── Quiz / lesson history ─────────────────────────────────────────
 
 #[derive(Serialize, Default, Debug)]
 pub struct QuizHistory {
@@ -333,57 +327,19 @@ pub struct QuizHistory {
 
 /// Past presentations, answer counts, and the last 10 ratings for one
 /// quiz card on one path.
-pub async fn compute_quiz_history(
-    conn: &Connection,
-    path_id: &str,
-    quiz_id: &str,
-) -> Result<QuizHistory> {
-    let mut h = QuizHistory::default();
-
-    // Presentations: count and most-recent ts (one row, aggregate).
-    let mut rows = conn
-        .query(
-            "SELECT COUNT(*), MAX(ts) FROM events \
-             WHERE path_id = ? AND kind = 'quiz_presented' AND quiz_id = ?",
-            libsql::params![path_id, quiz_id],
-        )
-        .await?;
-    if let Some(row) = rows.next().await? {
-        let count: i64 = row.get(0)?;
-        h.repetitions = u32::try_from(count)
-            .map_err(|_| Error::CardsCorrupt(format!("bad presented count {count}")))?;
-        let max_ts: Option<String> = row.get(1)?;
-        h.last_presented_at = max_ts.as_deref().map(db::parse_ts).transpose()?;
+pub fn quiz_history(ps: &PathState, quiz_id: &str) -> QuizHistory {
+    let Some(c) = ps.cards.get(quiz_id) else {
+        return QuizHistory::default();
+    };
+    let correct = c.reps - c.lapses;
+    QuizHistory {
+        repetitions: c.presented,
+        last_presented_at: c.last_presented_at,
+        correct_count: correct,
+        total_count: c.reps,
+        correct_pct: percent(correct, c.reps),
+        recent_ratings: c.recent.clone(),
     }
-
-    // `lapses <= reps` is an invariant of `apply_answer_to_cache`;
-    // checked_sub surfaces a broken cache instead of silently zeroing.
-    if let Some((reps, lapses)) = cards::read_counts(conn, path_id, quiz_id).await? {
-        h.total_count = reps;
-        h.correct_count = reps.checked_sub(lapses).ok_or_else(|| {
-            Error::CardsCorrupt(format!(
-                "lapses {lapses} > reps {reps} for {path_id}/{quiz_id}"
-            ))
-        })?;
-        h.correct_pct = percent(h.correct_count, h.total_count);
-    }
-
-    // Recent ratings: newest first, capped at 10. `quiz_answered`
-    // events always carry a rating (validated by `event_log::append`).
-    let mut rows = conn
-        .query(
-            "SELECT rating FROM events \
-             WHERE path_id = ? AND kind = 'quiz_answered' AND quiz_id = ? \
-             ORDER BY id DESC LIMIT 10",
-            libsql::params![path_id, quiz_id],
-        )
-        .await?;
-    while let Some(row) = rows.next().await? {
-        let r: i64 = row.get(0)?;
-        h.recent_ratings.push(Rating::try_from(r)?);
-    }
-
-    Ok(h)
 }
 
 /// Nearest-integer percent, or `None` when `denominator == 0`.
@@ -396,27 +352,13 @@ fn percent(numerator: u32, denominator: u32) -> Option<u32> {
 }
 
 /// Past `lesson_taught` count and the most-recent ts for one atom.
-pub async fn compute_lesson_history(
-    conn: &Connection,
-    path_id: &str,
-    atom_id: &str,
-) -> Result<LessonHistory> {
-    let mut h = LessonHistory::default();
-    let mut rows = conn
-        .query(
-            "SELECT COUNT(*), MAX(ts) FROM events \
-             WHERE path_id = ? AND kind = 'lesson_taught' AND atom_id = ?",
-            libsql::params![path_id, atom_id],
-        )
-        .await?;
-    if let Some(row) = rows.next().await? {
-        let count: i64 = row.get(0)?;
-        h.repetitions = u32::try_from(count)
-            .map_err(|_| Error::CardsCorrupt(format!("bad lesson_taught count {count}")))?;
-        let max_ts: Option<String> = row.get(1)?;
-        h.last_presented_at = max_ts.as_deref().map(db::parse_ts).transpose()?;
-    }
-    Ok(h)
+pub fn lesson_history(ps: &PathState, atom_id: &str) -> LessonHistory {
+    ps.taught
+        .get(atom_id)
+        .map_or_else(LessonHistory::default, |t| LessonHistory {
+            repetitions: t.count,
+            last_presented_at: t.last_at,
+        })
 }
 
 // ── AYML output shape ──────────────────────────────────────────────
@@ -522,7 +464,8 @@ struct DonePayload {
 
 impl Envelope {
     #[allow(clippy::too_many_lines)]
-    async fn build(conn: &Connection, g: &Graph, p: &PathFile, action: Action) -> Result<Self> {
+    fn build(ps: &PathState, g: &Graph, action: Action) -> Self {
+        let p = &ps.file;
         match action {
             Action::PresentLesson { atom_id } => {
                 let c = g.by_id.get(&atom_id).expect("atom exists in graph");
@@ -532,8 +475,8 @@ impl Envelope {
                     description: c.description.clone(),
                     lesson: c.lesson.clone(),
                 };
-                let history = compute_lesson_history(conn, &p.id, &atom_id).await?;
-                Ok(Envelope {
+                let history = lesson_history(ps, &atom_id);
+                Envelope {
                     schema_version: 1,
                     action: "present_lesson".to_string(),
                     path: p.id.clone(),
@@ -543,7 +486,7 @@ impl Envelope {
                         history,
                         next_step: "mt path next".to_string(),
                     }),
-                })
+                }
             }
             Action::PresentQuiz { quiz_id, atom_id } => {
                 let c = g.by_id.get(&atom_id).expect("atom exists in graph");
@@ -566,8 +509,8 @@ impl Envelope {
                     answer: q.answer.clone(),
                     rubric: q.rubric.clone(),
                 };
-                let history = compute_quiz_history(conn, &p.id, &quiz_id).await?;
-                Ok(Envelope {
+                let history = quiz_history(ps, &quiz_id);
+                Envelope {
                     schema_version: 1,
                     action: "present_quiz".to_string(),
                     path: p.id.clone(),
@@ -579,7 +522,7 @@ impl Envelope {
                             "mt quiz answer {quiz_id} --rating {{again|hard|good|easy}}"
                         ),
                     }),
-                })
+                }
             }
             Action::CreateLesson { atom_id } => {
                 let c = g.by_id.get(&atom_id).expect("atom exists in graph");
@@ -590,7 +533,7 @@ impl Envelope {
                     lesson: None,
                 };
                 let prerequisites = collect_prereqs(g, c);
-                Ok(Envelope {
+                Envelope {
                     schema_version: 1,
                     action: "create_lesson".to_string(),
                     path: p.id.clone(),
@@ -599,7 +542,7 @@ impl Envelope {
                         prerequisites,
                         next_step: format!("mt lesson upsert {atom_id} --body TEXT"),
                     }),
-                })
+                }
             }
             Action::CreateQuiz {
                 atom_id,
@@ -626,7 +569,7 @@ impl Envelope {
                     "mt quiz create {atom_id} --difficulty {difficulty} \
                      --question TEXT --answer TEXT [--rubric TEXT]"
                 );
-                Ok(Envelope {
+                Envelope {
                     schema_version: 1,
                     action: "create_quiz".to_string(),
                     path: p.id.clone(),
@@ -637,16 +580,16 @@ impl Envelope {
                         prerequisites,
                         next_step,
                     }),
-                })
+                }
             }
-            Action::Done => Ok(Envelope {
+            Action::Done => Envelope {
                 schema_version: 1,
                 action: "done".to_string(),
                 path: p.id.clone(),
                 payload: Payload::Done(DonePayload {
                     message: "Path complete.".into(),
                 }),
-            }),
+            },
         }
     }
 }

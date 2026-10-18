@@ -10,11 +10,9 @@
 //! comments. That's the SSE-over-HTTP the design doc specifies; rmcp 1.7
 //! ships no separate "pure SSE" feature.
 //!
-//! Database lifecycle: the server holds one shared `libsql::Database`
-//! across every session. Each tool call opens a fresh connection, so
-//! concurrent calls are safe. After any state-mutating tool, a background
-//! `db::maybe_sync` task is spawned; on graceful shutdown a final
-//! foreground sync runs before the process exits.
+//! Every session shares one [`Db`] handle and its connection pool; each
+//! tool call runs as its own Baserunna transaction, so concurrent calls
+//! are safe.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,7 +28,6 @@ use axum::{
     routing::get,
 };
 use chrono::{DateTime, Utc};
-use libsql::{Connection, Database};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{router::prompt::PromptRouter, tool::ToolRouter, wrapper::Parameters},
@@ -54,10 +51,11 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse};
 use url::Url;
 
 use crate::Error;
-use crate::db::{self, DbConfig};
+use crate::db::{Db, DbConfig};
 use crate::graph::{Graph, natural_id_cmp};
 use crate::progress::PathProgress;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
+use crate::view::{PathSel, Want};
 use crate::{answer, discover, graph, path, scheduler, state, store, subpath, syllabus, tree};
 
 /// Local alias kept distinct from `std::result::Result` so the rmcp tool /
@@ -69,27 +67,20 @@ pub mod oauth;
 
 const PLAYBOOK: &str = include_str!("playbook.md");
 
-/// Background sync cadence for the embedded Turso replica. State-modifying
-/// tools also fire a non-blocking sync immediately after success; this
-/// interval covers the idle path.
-const BACKGROUND_SYNC_INTERVAL: Duration = Duration::from_mins(5);
-
 // ───────────────────────────── server ─────────────────────────────
 
 #[derive(Clone)]
 pub struct MathTutorServer {
-    db: Arc<Database>,
-    cfg: Arc<DbConfig>,
+    db: Db,
     graph_dir: Option<Arc<PathBuf>>,
     tool_router: ToolRouter<Self>,
     prompt_router: PromptRouter<Self>,
 }
 
 impl MathTutorServer {
-    pub fn new(db: Arc<Database>, cfg: Arc<DbConfig>, graph_dir: Option<PathBuf>) -> Self {
+    pub fn new(db: Db, graph_dir: Option<PathBuf>) -> Self {
         Self {
             db,
-            cfg,
             graph_dir: graph_dir.map(Arc::new),
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
@@ -98,24 +89,6 @@ impl MathTutorServer {
 
     fn graph_path(&self) -> Option<&std::path::Path> {
         self.graph_dir.as_deref().map(AsRef::as_ref)
-    }
-
-    /// Open a fresh connection. `db::connect` enables FK enforcement so
-    /// callers get the same pragmas the CLI uses.
-    async fn conn(&self) -> std::result::Result<Connection, McpError> {
-        db::connect(&self.db)
-            .await
-            .map_err(|e| map_protocol_error(&e))
-    }
-
-    /// Non-blocking sync after a state-modifying tool.
-    /// Failures are logged to stderr.
-    fn spawn_sync(&self) {
-        let db = self.db.clone();
-        let cfg = self.cfg.clone();
-        tokio::spawn(async move {
-            db::maybe_sync(&db, &cfg).await;
-        });
     }
 }
 
@@ -258,9 +231,8 @@ pub struct AnswerQuizArgs {
 impl MathTutorServer {
     #[tool(description = "List all learning paths for this user.")]
     async fn get_paths(&self) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         encode(
-            list_paths(&conn)
+            list_paths(&self.db)
                 .await
                 .map(|paths| json!({ "paths": paths })),
         )
@@ -271,18 +243,14 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<NewPathArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result = path::cmd_path_new(
-            &conn,
+            &self.db,
             &args.goal,
             &args.targets,
             args.strategy,
             self.graph_path(),
         )
         .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
@@ -291,11 +259,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<SetStrategyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        let result = path::cmd_path_strategy(&conn, Some(&args.path_id), args.strategy).await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
+        let result = path::cmd_path_strategy(&self.db, Some(&args.path_id), args.strategy).await;
         encode(result.map(|id| json!({ "path_id": id, "strategy": args.strategy })))
     }
 
@@ -306,13 +270,13 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<SubpathSetArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        let result =
-            subpath::cmd_subpath_set(&conn, Some(&args.path_id), &args.atoms, self.graph_path())
-                .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
+        let result = subpath::cmd_subpath_set(
+            &self.db,
+            Some(&args.path_id),
+            &args.atoms,
+            self.graph_path(),
+        )
+        .await;
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
@@ -321,11 +285,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<PathOnlyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        let result = subpath::cmd_subpath_clear(&conn, Some(&args.path_id)).await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
+        let result = subpath::cmd_subpath_clear(&self.db, Some(&args.path_id)).await;
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
@@ -334,12 +294,9 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetNextArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result =
-            scheduler::compute_next(&conn, Some(&args.path_id), self.graph_path(), args.mode).await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
+            scheduler::compute_next(&self.db, Some(&args.path_id), self.graph_path(), args.mode)
+                .await;
         encode(result)
     }
 
@@ -348,8 +305,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<PathOnlyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        encode(state::compute_state(&conn, Some(&args.path_id), self.graph_path()).await)
+        encode(state::compute_state(&self.db, Some(&args.path_id), self.graph_path()).await)
     }
 
     #[tool(description = "Full prerequisite tree with per-atom status for a path.")]
@@ -357,8 +313,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetTreeArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        encode(compute_tree(&conn, &args.path_id, args.depth, self.graph_path()).await)
+        encode(compute_tree(&self.db, &args.path_id, args.depth, self.graph_path()).await)
     }
 
     #[tool(description = "Preview upcoming lesson topics.")]
@@ -366,9 +321,9 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetSyllabusArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         encode(
-            syllabus::compute_syllabus(&conn, Some(&args.path_id), args.n, self.graph_path()).await,
+            syllabus::compute_syllabus(&self.db, Some(&args.path_id), args.n, self.graph_path())
+                .await,
         )
     }
 
@@ -377,8 +332,15 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetItemArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        encode(compute_item(&conn, &args.id, args.path_id.as_deref(), self.graph_path()).await)
+        encode(
+            compute_item(
+                &self.db,
+                &args.id,
+                args.path_id.as_deref(),
+                self.graph_path(),
+            )
+            .await,
+        )
     }
 
     #[tool(description = "List children of a curriculum node. Omit `id` for root areas.")]
@@ -386,10 +348,9 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetChildrenArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         encode(
             compute_children(
-                &conn,
+                &self.db,
                 args.id.as_deref(),
                 args.path_id.as_deref(),
                 args.recursive.unwrap_or(false),
@@ -404,18 +365,14 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<UpsertLessonArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result = store::cmd_lesson_upsert(
-            &conn,
+            &self.db,
             &args.atom,
             args.body,
             Some(&args.path_id),
             self.graph_path(),
         )
         .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
         encode(result.map(|()| json!({ "atom_id": args.atom })))
     }
 
@@ -424,9 +381,8 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<CreateQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result = store::cmd_quiz_create(
-            &conn,
+            &self.db,
             &args.atom,
             args.difficulty,
             args.question,
@@ -437,9 +393,6 @@ impl MathTutorServer {
             self.graph_path(),
         )
         .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
         encode(result.map(|quiz_id| json!({ "quiz_id": quiz_id })))
     }
 
@@ -448,9 +401,8 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<UpdateQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result = store::cmd_quiz_update(
-            &conn,
+            &self.db,
             &args.quiz_id,
             args.question,
             args.answer,
@@ -461,9 +413,6 @@ impl MathTutorServer {
             self.graph_path(),
         )
         .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
     }
 
@@ -472,13 +421,13 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<DeleteQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        let result =
-            store::cmd_quiz_delete(&conn, &args.quiz_id, Some(&args.path_id), self.graph_path())
-                .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
+        let result = store::cmd_quiz_delete(
+            &self.db,
+            &args.quiz_id,
+            Some(&args.path_id),
+            self.graph_path(),
+        )
+        .await;
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
     }
 
@@ -487,9 +436,8 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<AnswerQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result = answer::cmd_quiz_answer(
-            &conn,
+            &self.db,
             &args.quiz_id,
             args.rating,
             args.answer,
@@ -497,9 +445,6 @@ impl MathTutorServer {
             self.graph_path(),
         )
         .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id, "rating": args.rating })))
     }
 }
@@ -553,39 +498,24 @@ struct PathSummary {
     targets: Vec<String>,
 }
 
-async fn list_paths(conn: &Connection) -> CrateResult<Vec<PathSummary>> {
-    let mut rows = conn
-        .query(
-            "SELECT id, goal, created_at, strategy FROM paths ORDER BY created_at ASC",
-            (),
-        )
-        .await?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().await? {
-        let id: String = row.get(0)?;
-        let goal: String = row.get(1)?;
-        let created_str: String = row.get(2)?;
-        let created_at = db::parse_ts(&created_str)?;
-        let strategy: Strategy = row.get::<String>(3)?.parse()?;
-        let mut t_rows = conn
-            .query(
-                "SELECT target_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
-                libsql::params![id.as_str()],
-            )
-            .await?;
-        let mut targets = Vec::new();
-        while let Some(r) = t_rows.next().await? {
-            targets.push(r.get::<String>(0)?);
-        }
-        out.push(PathSummary {
-            id,
-            goal,
-            strategy,
-            created_at,
-            targets,
-        });
-    }
-    Ok(out)
+async fn list_paths(db: &Db) -> CrateResult<Vec<PathSummary>> {
+    let want = Want {
+        path: PathSel::None,
+        overlay: false,
+        all_paths: true,
+    };
+    let view = db.snapshot(&want).await?;
+    Ok(view
+        .paths
+        .into_iter()
+        .map(|p| PathSummary {
+            id: p.file.id,
+            goal: p.file.goal,
+            strategy: p.file.strategy,
+            created_at: p.file.created_at,
+            targets: p.file.targets,
+        })
+        .collect())
 }
 
 #[derive(Serialize)]
@@ -602,18 +532,14 @@ struct AtomStatus {
 }
 
 async fn compute_item(
-    conn: &Connection,
+    db: &Db,
     id: &str,
     path_id: Option<&str>,
     graph_dir: Option<&std::path::Path>,
 ) -> CrateResult<ItemView> {
-    let (g, _) = load_graph_and_manifest(conn, path_id, graph_dir).await?;
+    let (g, progress) = discover::graph_for(db, path_id, graph_dir).await?;
     let item = discover::show_view(&g, id)?;
-    let status = if let Some(pid) = path_id {
-        status_for(conn, &g, id, pid).await?
-    } else {
-        None
-    };
+    let status = progress.and_then(|p| status_for(&g, id, &p));
     Ok(ItemView { item, status })
 }
 
@@ -634,32 +560,32 @@ struct ChildStatus {
 }
 
 async fn compute_children(
-    conn: &Connection,
+    db: &Db,
     id: Option<&str>,
     path_id: Option<&str>,
     recursive: bool,
     graph_dir: Option<&std::path::Path>,
 ) -> CrateResult<ChildrenView> {
-    let (g, manifest) = load_graph_and_manifest(conn, path_id, graph_dir).await?;
+    let (g, progress) = discover::graph_for(db, path_id, graph_dir).await?;
+    let manifest = graph::load_manifest_default(graph_dir)?;
     let view = discover::list_view(&g, &manifest, id)?;
     let descendants = if recursive {
         let roots = match id {
             Some(s) => vec![s.to_string()],
             None => manifest.areas.iter().map(|a| a.prefix.clone()).collect(),
         };
-        gather_descendants(conn, &g, &roots, path_id).await?
+        gather_descendants(&g, &roots, progress.as_ref())
     } else {
         Vec::new()
     };
     Ok(ChildrenView { view, descendants })
 }
 
-async fn gather_descendants(
-    conn: &Connection,
+fn gather_descendants(
     g: &Graph,
     roots: &[String],
-    path_id: Option<&str>,
-) -> CrateResult<Vec<ChildStatus>> {
+    progress: Option<&PathProgress>,
+) -> Vec<ChildStatus> {
     let mut out = Vec::new();
     let mut stack: Vec<String> = roots.to_vec();
     while let Some(id) = stack.pop() {
@@ -667,53 +593,26 @@ async fn gather_descendants(
         for child in &c.children_ids {
             stack.push(child.clone());
         }
-        let status = if let Some(pid) = path_id {
-            status_for(conn, g, &id, pid).await?
-        } else {
-            None
-        };
         out.push(ChildStatus {
             id: c.id.clone(),
             name: c.name.clone(),
             is_atom: c.children_ids.is_empty(),
-            status,
+            status: progress.and_then(|p| status_for(g, &id, p)),
         });
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(out)
+    out
 }
 
-async fn status_for(
-    conn: &Connection,
-    g: &Graph,
-    id: &str,
-    path_id: &str,
-) -> CrateResult<Option<AtomStatus>> {
-    let Some(c) = g.by_id.get(id) else {
-        return Ok(None);
-    };
+fn status_for(g: &Graph, id: &str, progress: &PathProgress) -> Option<AtomStatus> {
+    let c = g.by_id.get(id)?;
     if !c.children_ids.is_empty() {
-        return Ok(None);
+        return None;
     }
-    let progress = PathProgress::load(conn, path_id).await?;
-    Ok(Some(AtomStatus {
+    Some(AtomStatus {
         lesson_taught: progress.lesson_taught(id),
-        complete: scheduler::is_atom_complete(g, &progress, id),
-    }))
-}
-
-async fn load_graph_and_manifest(
-    conn: &Connection,
-    path_id: Option<&str>,
-    graph_dir: Option<&std::path::Path>,
-) -> CrateResult<(Graph, graph::Manifest)> {
-    let g = if path_id.is_some() {
-        Graph::load_for_path(conn, graph_dir).await?
-    } else {
-        Graph::load_default(graph_dir)?
-    };
-    let manifest = graph::load_manifest_default(graph_dir)?;
-    Ok((g, manifest))
+        complete: scheduler::is_atom_complete(g, progress, id),
+    })
 }
 
 #[derive(Serialize)]
@@ -752,15 +651,17 @@ struct TreeNode {
 }
 
 async fn compute_tree(
-    conn: &Connection,
+    db: &Db,
     path_id: &str,
     depth: Option<u32>,
     graph_dir: Option<&std::path::Path>,
 ) -> CrateResult<TreeView> {
-    let p = path::load_path(conn, path_id).await?;
-    let g = Graph::load_for_path(conn, graph_dir).await?;
+    let view = db.snapshot(&Want::path(Some(path_id))).await?;
+    let ps = view.path()?;
+    let p = ps.file.clone();
+    let g = view.graph(graph_dir)?;
     let manifest = graph::load_manifest_default(graph_dir)?;
-    let progress = PathProgress::load(conn, path_id).await?;
+    let progress = ps.progress();
     let target_atoms = p.resolve_targets(&g)?;
 
     let reachable = g.reachable_atoms(&target_atoms);
@@ -862,10 +763,6 @@ fn build_tree_node(
 
 // ───────────────────────────── error mapping ──────────────────────
 
-fn map_protocol_error(e: &Error) -> McpError {
-    McpError::internal_error(format!("{e}"), None)
-}
-
 /// Map a fallible `crate::Result<T>` into a `CallToolResult`. Business
 /// errors (atom not found, unknown id, invalid rating, etc.) become
 /// `isError: true` with a structured JSON error body. Encoding-only
@@ -917,7 +814,8 @@ fn error_kind(e: &Error) -> &'static str {
         Error::CardsCorrupt(_) => "cards_corrupt",
         Error::NoHome => "no_home",
         Error::FileIo { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => "io",
-        Error::Db(_) => "database",
+        Error::Api(_) | Error::Http(_) | Error::MissingToken => "database",
+        Error::BadResponse(_) | Error::BadRow(_) | Error::BadEvent(_) => "corrupt",
         Error::Json(_) => "json",
         Error::Fsrs(_) => "fsrs",
         Error::ConflictingFlags(_, _) => "conflicting_flags",
@@ -964,9 +862,7 @@ pub fn print_tools() -> CrateResult<()> {
     Ok(())
 }
 
-/// Run the MCP server until SIGINT/SIGTERM. On shutdown, runs one final
-/// foreground `db.sync()` so locally-acked writes land on Turso before
-/// the process exits.
+/// Run the MCP server until SIGINT/SIGTERM.
 ///
 /// `addr` parses the same as `std::net::SocketAddr` (`"127.0.0.1:8080"`).
 pub async fn run(
@@ -977,14 +873,8 @@ pub async fn run(
 ) -> CrateResult<()> {
     auth.validate()?;
 
-    let db = Arc::new(db::open(&cfg).await?);
-    let cfg_arc = Arc::new(cfg);
-
-    // Pull the latest remote state before accepting traffic
-    db::maybe_sync(&db, &cfg_arc).await;
-
+    let db = Db::open(&cfg).await?;
     let shutdown = CancellationToken::new();
-    let background = spawn_background_sync(db.clone(), cfg_arc.clone(), shutdown.child_token());
 
     let mcp_config = StreamableHttpServerConfig::default()
         .with_sse_keep_alive(Some(Duration::from_secs(15)))
@@ -993,15 +883,8 @@ pub async fn run(
 
     let factory = {
         let db = db.clone();
-        let cfg = cfg_arc.clone();
         let graph_dir = graph_dir.clone();
-        move || {
-            Ok(MathTutorServer::new(
-                db.clone(),
-                cfg.clone(),
-                graph_dir.clone(),
-            ))
-        }
+        move || Ok(MathTutorServer::new(db.clone(), graph_dir.clone()))
     };
 
     let mcp_service = StreamableHttpService::new(
@@ -1057,11 +940,6 @@ pub async fn run(
         .await
         .map_err(Error::Serve)?;
 
-    // Drain the background sync task before the final sync so we don't
-    // race with it on the same `Database` handle.
-    background.await.ok();
-    // Best-effort sync to push local writes to Turso before process exit
-    db::maybe_sync(&db, &cfg_arc).await;
     tracing::info!("mt mcp shutdown complete");
     Ok(())
 }
@@ -1082,7 +960,7 @@ struct AuthState {
     api_key: Option<Arc<str>>,
     /// Database handle for OAuth access-token lookups. `None` when OAuth
     /// is disabled.
-    db: Option<Arc<Database>>,
+    db: Option<Db>,
     /// Pre-formatted `WWW-Authenticate` value pointing at the protected-
     /// resource metadata so OAuth-aware clients can discover the AS on 401.
     www_authenticate: Arc<str>,
@@ -1091,7 +969,7 @@ struct AuthState {
 impl AuthState {
     /// Construct from the resolved `AuthConfig`. Stores only what the
     /// per-request middleware needs.
-    fn new(auth: &AuthConfig, public_url: &Url, db: Arc<Database>) -> Self {
+    fn new(auth: &AuthConfig, public_url: &Url, db: Db) -> Self {
         let api_key = auth
             .api_key
             .as_deref()
@@ -1144,7 +1022,7 @@ async fn auth_middleware(
         {
             return next.run(req).await;
         }
-        if let Some(db) = state.db.as_deref()
+        if let Some(db) = state.db.as_ref()
             && let Ok(Some(_client_id)) = oauth::validate_access_token(db, &token).await
         {
             return next.run(req).await;
@@ -1230,23 +1108,4 @@ async fn wait_for_shutdown() {
     {
         ctrl_c.await;
     }
-}
-
-fn spawn_background_sync(
-    db: Arc<Database>,
-    cfg: Arc<DbConfig>,
-    shutdown: CancellationToken,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(BACKGROUND_SYNC_INTERVAL);
-        // Drop the immediate first tick.
-        // DB runs `maybe_sync` at startup so sync here is redundant.
-        tick.tick().await;
-        loop {
-            tokio::select! {
-                () = shutdown.cancelled() => break,
-                _ = tick.tick() => db::maybe_sync(&db, &cfg).await,
-            }
-        }
-    })
 }

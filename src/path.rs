@@ -4,29 +4,35 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use libsql::{Connection, params};
+use serde_json::{Value as Json, json};
 
-use crate::db;
+use crate::db::{self, Db};
 use crate::event_log;
 use crate::graph::{Graph, natural_id_cmp};
 use crate::types::Strategy;
+use crate::view::{Changes, PathSel, View, Want};
 use crate::{Error, Result};
 
 /// Per-path record: the learner's goal and targets (fixed at `mt path
-/// new`) plus the mutable navigation `strategy`. Learning history lives in
-/// the event log; the top-down subpath lives in the `path_subpath` table.
+/// new`), the mutable navigation `strategy`, and the top-down subpath.
+/// Learning history lives in the path's event log.
 ///
 /// `targets` holds the IDs the learner chose verbatim (atoms or clusters).
 /// They are stored as given and expanded to atoms against the live graph
 /// by [`PathFile::resolve_targets`], so the resolved set tracks curriculum
-/// edits (e.g. an atom later split into a cluster).
+/// edits (e.g. an atom later split into a cluster). `subpath` is kept the
+/// same way.
 #[derive(Debug, Clone)]
 pub struct PathFile {
     pub id: String,
     pub goal: String,
     pub created_at: DateTime<Utc>,
+    /// Time of the path's latest event. Stored apart from the path row,
+    /// so logging events never writes the row.
+    pub updated_at: DateTime<Utc>,
     pub targets: Vec<String>,
     pub strategy: Strategy,
+    pub subpath: Vec<String>,
 }
 
 impl PathFile {
@@ -50,106 +56,77 @@ pub fn mt_home() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".mathtutor"))
 }
 
+/// A path id from its creation time plus a random suffix, so paths created
+/// within the same second get distinct ids.
 pub fn generate_path_id(now: DateTime<Utc>) -> String {
-    format!("p_{}", now.format("%Y_%m_%d_%H%M%S"))
+    use std::hash::{BuildHasher, RandomState};
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut n = RandomState::new().hash_one(now);
+    let suffix: String = (0..4)
+        .map(|_| {
+            let c = ALPHABET[(n % 36) as usize] as char;
+            n /= 36;
+            c
+        })
+        .collect();
+    format!("p_{}_{suffix}", now.format("%Y_%m_%d_%H%M%S"))
 }
 
-// ── SQL helpers ─────────────────────────────────────────────────────
+// ── Rows ────────────────────────────────────────────────────────────
 
-/// # Panics
-/// Panics if `targets.len()` doesn't fit in `i64` (≈9e18 targets).
-pub async fn save_path(conn: &Connection, p: &PathFile) -> Result<()> {
-    conn.execute(
-        "INSERT INTO paths(id, goal, created_at, strategy) VALUES (?, ?, ?, ?)",
-        params![
-            p.id.as_str(),
-            p.goal.as_str(),
-            db::format_ts(p.created_at),
-            p.strategy.as_str(),
-        ],
-    )
-    .await?;
-    for (i, target) in p.targets.iter().enumerate() {
-        let position = i64::try_from(i).expect("position fits in i64");
-        conn.execute(
-            "INSERT INTO path_targets(path_id, target_id, position) VALUES (?, ?, ?)",
-            params![p.id.as_str(), target.as_str(), position],
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-pub async fn load_path(conn: &Connection, id: &str) -> Result<PathFile> {
-    let mut rows = conn
-        .query(
-            "SELECT goal, created_at, strategy FROM paths WHERE id = ?",
-            params![id],
-        )
-        .await?;
-    let row = rows.next().await?.ok_or(Error::NoPath)?;
-    let goal: String = row.get(0)?;
-    let created_str: String = row.get(1)?;
-    let created_at = db::parse_ts(&created_str)?;
-    let strategy: Strategy = row.get::<String>(2)?.parse()?;
-
-    let mut rows = conn
-        .query(
-            "SELECT target_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
-            params![id],
-        )
-        .await?;
-    let mut targets = Vec::new();
-    while let Some(r) = rows.next().await? {
-        targets.push(r.get::<String>(0)?);
-    }
-
+/// The path a `paths` row holds.
+pub fn decode(r: &Json) -> Result<PathFile> {
+    let s = |k: &str| {
+        r[k].as_str()
+            .map(str::to_string)
+            .ok_or_else(|| Error::BadRow(format!("paths.{k}: {r}")))
+    };
+    let ids = |k: &str| -> Result<Vec<String>> {
+        r[k].as_array()
+            .ok_or_else(|| Error::BadRow(format!("paths.{k}: {r}")))?
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| Error::BadRow(format!("paths.{k}: {r}")))
+            })
+            .collect()
+    };
     Ok(PathFile {
-        id: id.to_string(),
-        goal,
-        created_at,
-        targets,
-        strategy,
+        id: s("id")?,
+        goal: s("goal")?,
+        created_at: db::parse_ts(&s("created_at")?)?,
+        updated_at: db::parse_ts(&s("created_at")?)?,
+        targets: ids("targets")?,
+        strategy: s("strategy")?.parse()?,
+        subpath: ids("subpath")?,
     })
 }
 
-/// "Most recent" = the path mentioned by the latest event, falling back
-/// to the newest row in `paths` if there are no events yet. Mirrors the
-/// old filesystem mtime semantic: a path the user is actively working in
-/// stays sticky regardless of creation order.
-pub async fn most_recent_id(conn: &Connection) -> Result<Option<String>> {
-    let mut rows = conn
-        .query(
-            "SELECT path_id FROM events ORDER BY id DESC LIMIT 1",
-            params![],
-        )
-        .await?;
-    if let Some(r) = rows.next().await? {
-        return Ok(Some(r.get(0)?));
-    }
-    let mut rows = conn
-        .query(
-            "SELECT id FROM paths ORDER BY created_at DESC LIMIT 1",
-            params![],
-        )
-        .await?;
-    Ok(match rows.next().await? {
-        Some(r) => Some(r.get(0)?),
-        None => None,
-    })
+/// Insert `p` and log its `path_created` event.
+pub fn insert(view: &View, changes: &mut Changes, p: &PathFile) -> Result<()> {
+    changes.op(json!({ "op": "insert_row", "table": "paths", "row": {
+        "id": p.id, "goal": p.goal, "created_at": db::format_ts(p.created_at),
+        "strategy": p.strategy.as_str(),
+        "targets": p.targets, "subpath": p.subpath,
+    }}));
+    let mut created = event_log::path_created(p.id.clone());
+    created.ts = p.created_at;
+    changes.append(view, &created)
 }
 
-pub async fn resolve_id(conn: &Connection, explicit: Option<&str>) -> Result<String> {
-    if let Some(id) = explicit {
-        return Ok(id.to_string());
-    }
-    most_recent_id(conn).await?.ok_or(Error::NoPath)
+/// Replace the stored subpath of `path_id`.
+pub fn set_subpath(changes: &mut Changes, path_id: &str, atoms: &[String]) {
+    changes.op(
+        json!({ "op": "update_row", "table": "paths", "pk": [path_id],
+        "set": { "subpath": atoms } }),
+    );
 }
 
 // ── Commands ────────────────────────────────────────────────────────
 
 pub async fn cmd_path_new(
-    conn: &Connection,
+    db: &Db,
     goal: &str,
     ids: &[String],
     strategy: Strategy,
@@ -163,44 +140,45 @@ pub async fn cmd_path_new(
     let targets = dedup_preserving_order(ids);
 
     let now = Utc::now();
-    let id = generate_path_id(now);
-
     let p = PathFile {
-        id: id.clone(),
+        id: generate_path_id(now),
         goal: goal.to_string(),
         created_at: now,
+        updated_at: now,
         targets,
         strategy,
+        subpath: Vec::new(),
     };
-
-    let tx = conn.transaction().await?;
-    save_path(&tx, &p).await?;
-    event_log::append(&tx, &event_log::path_created(id.clone())).await?;
-    tx.commit().await?;
-
-    Ok(id)
+    let want = Want {
+        path: PathSel::None,
+        overlay: false,
+        all_paths: false,
+    };
+    db.transact(&want, |view, changes| insert(view, changes, &p))
+        .await?;
+    Ok(p.id)
 }
 
-/// Switch a path's traversal strategy. Mutates the `paths.strategy`
-/// column directly — strategy is navigation config, not learning history,
-/// so no event is logged. Switching to bottom-up leaves any stored
-/// subpath inert (the DFS ignores it) rather than clearing it.
+/// Switch a path's traversal strategy. Strategy is navigation config, not
+/// learning history, so no event is logged. Switching to bottom-up leaves
+/// any stored subpath inert (the DFS ignores it) rather than clearing it.
 pub async fn cmd_path_strategy(
-    conn: &Connection,
+    db: &Db,
     explicit_id: Option<&str>,
     strategy: Strategy,
 ) -> Result<String> {
-    let id = resolve_id(conn, explicit_id).await?;
-    let changed = conn
-        .execute(
-            "UPDATE paths SET strategy = ? WHERE id = ?",
-            params![strategy.as_str(), id.as_str()],
-        )
-        .await?;
-    if changed == 0 {
-        return Err(Error::NoPath);
-    }
-    Ok(id)
+    let want = Want {
+        path: PathSel::from(explicit_id),
+        overlay: false,
+        all_paths: false,
+    };
+    db.transact(&want, |view, changes| {
+        let id = view.path()?.file.id.clone();
+        changes.op(json!({ "op": "update_row", "table": "paths", "pk": [id],
+            "set": { "strategy": strategy.as_str() } }));
+        Ok(id)
+    })
+    .await
 }
 
 /// Compact summary of one path. Same fields as `mt path state` shows
@@ -223,48 +201,44 @@ struct PathListView {
 
 /// List every path with goal, creation time, target count, and progress
 /// percent. AYML on stdout — same envelope conventions as `mt path next`.
-pub async fn cmd_path_list(conn: &Connection, graph_dir: Option<&Path>) -> Result<()> {
-    let summaries = list_summaries(conn, graph_dir).await?;
+pub async fn cmd_path_list(db: &Db, graph_dir: Option<&Path>) -> Result<()> {
+    let summaries = list_summaries(db, graph_dir).await?;
     let view = PathListView { paths: summaries };
     let text = ayml::to_string(&view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
 }
 
-async fn list_summaries(conn: &Connection, graph_dir: Option<&Path>) -> Result<Vec<PathSummary>> {
-    let g = Graph::load_for_path(conn, graph_dir).await?;
-    let mut rows = conn
-        .query(
-            "SELECT id, goal, created_at FROM paths ORDER BY created_at ASC",
-            params![],
-        )
-        .await?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().await? {
-        let id: String = row.get(0)?;
-        let goal: String = row.get(1)?;
-        let created_str: String = row.get(2)?;
-        let created_at = db::parse_ts(&created_str)?;
-        let p = load_path(conn, &id).await?;
-        let progress = crate::progress::PathProgress::load(conn, &id).await?;
-        let atoms = p.resolve_targets(&g)?;
-        let targets = atoms.len();
-        let learned = atoms
-            .iter()
-            .filter(|a| crate::scheduler::is_atom_complete(&g, &progress, a))
-            .count();
-        let learned_pct = (learned * 100).checked_div(targets).unwrap_or(0);
-        out.push(PathSummary {
-            id,
-            goal,
-            strategy: p.strategy,
-            created_at,
-            targets,
-            learned,
-            learned_pct,
-        });
-    }
-    Ok(out)
+/// Summaries of every path, oldest first.
+pub async fn list_summaries(db: &Db, graph_dir: Option<&Path>) -> Result<Vec<PathSummary>> {
+    let want = Want {
+        path: PathSel::None,
+        overlay: true,
+        all_paths: true,
+    };
+    let view = db.snapshot(&want).await?;
+    let g = view.graph(graph_dir)?;
+    view.paths
+        .iter()
+        .map(|p| {
+            let progress = p.progress();
+            let atoms = p.file.resolve_targets(&g)?;
+            let targets = atoms.len();
+            let learned = atoms
+                .iter()
+                .filter(|a| crate::scheduler::is_atom_complete(&g, &progress, a))
+                .count();
+            Ok(PathSummary {
+                id: p.file.id.clone(),
+                goal: p.file.goal.clone(),
+                strategy: p.file.strategy,
+                created_at: p.file.created_at,
+                targets,
+                learned,
+                learned_pct: (learned * 100).checked_div(targets).unwrap_or(0),
+            })
+        })
+        .collect()
 }
 
 /// Deduplicate `ids` while preserving first-seen order.

@@ -3,10 +3,9 @@
 //! `get_state` tool.
 
 use chrono::{Duration, Utc};
-use libsql::params;
+use mathtutor::cards::{self, CardRow, CardState};
 use mathtutor::progress::PathProgress;
 use mathtutor::state;
-use tempfile::TempDir;
 
 mod common;
 
@@ -109,12 +108,34 @@ fn learned_pct_rounds_down() {
 
 // ── past_due ────────────────────────────────────────────────────────
 
+/// Store a card answered once at `reviewed`, due at `due`.
+async fn seed_card(
+    db: &mathtutor::db::Db,
+    quiz_id: &str,
+    due: chrono::DateTime<Utc>,
+    reviewed: chrono::DateTime<Utc>,
+) {
+    let card = CardRow {
+        state: Some(CardState {
+            due,
+            last_review: reviewed,
+            stability: 1.0,
+            difficulty: 5.0,
+        }),
+        reps: 1,
+        ..CardRow::new(PATH_ID, quiz_id)
+    };
+    common::write(db, PATH_ID, |_, changes| {
+        changes.op(cards::upsert_op(&card));
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn compute_state_past_due_is_zero_on_fresh_path() {
-    let tmp = TempDir::new().unwrap();
-    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    let db = common::fresh_db(PATH_ID).await;
 
-    let s = state::compute_state(&conn, Some(PATH_ID), None)
+    let s = state::compute_state(&db, Some(PATH_ID), None)
         .await
         .expect("compute_state");
     assert_eq!(s.past_due, 0);
@@ -124,28 +145,14 @@ async fn compute_state_past_due_is_zero_on_fresh_path() {
 async fn compute_state_past_due_excludes_future_cards() {
     // Cards exist but every `due_at` is strictly in the future, so the
     // learner is caught up.
-    let tmp = TempDir::new().unwrap();
-    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    let db = common::fresh_db(PATH_ID).await;
     let now = Utc::now();
 
     for (quiz_id, offset_secs) in [("q.a", 60_i64), ("q.b", 3600), ("q.c", 86_400)] {
-        let due = now + Duration::seconds(offset_secs);
-        conn.execute(
-            "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, \
-                               last_reviewed_at, reps, lapses) \
-             VALUES (?, ?, 1.0, 5.0, ?, ?, 1, 0)",
-            params![
-                PATH_ID,
-                quiz_id,
-                mathtutor::db::format_ts(due),
-                mathtutor::db::format_ts(now),
-            ],
-        )
-        .await
-        .unwrap();
+        seed_card(&db, quiz_id, now + Duration::seconds(offset_secs), now).await;
     }
 
-    let s = state::compute_state(&conn, Some(PATH_ID), None)
+    let s = state::compute_state(&db, Some(PATH_ID), None)
         .await
         .expect("compute_state");
     assert_eq!(s.past_due, 0);
@@ -154,8 +161,7 @@ async fn compute_state_past_due_excludes_future_cards() {
 #[tokio::test]
 async fn compute_state_past_due_counts_overdue_cards() {
     // Two overdue cards plus one not-yet-due card ⇒ past_due == 2.
-    let tmp = TempDir::new().unwrap();
-    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    let db = common::fresh_db(PATH_ID).await;
     let now = Utc::now();
 
     for (quiz_id, offset_secs) in [
@@ -164,22 +170,10 @@ async fn compute_state_past_due_counts_overdue_cards() {
         ("q.future", 3600),
     ] {
         let due = now + Duration::seconds(offset_secs);
-        conn.execute(
-            "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, \
-                               last_reviewed_at, reps, lapses) \
-             VALUES (?, ?, 1.0, 5.0, ?, ?, 1, 0)",
-            params![
-                PATH_ID,
-                quiz_id,
-                mathtutor::db::format_ts(due),
-                mathtutor::db::format_ts(due - Duration::seconds(1)),
-            ],
-        )
-        .await
-        .unwrap();
+        seed_card(&db, quiz_id, due, due - Duration::seconds(1)).await;
     }
 
-    let s = state::compute_state(&conn, Some(PATH_ID), None)
+    let s = state::compute_state(&db, Some(PATH_ID), None)
         .await
         .expect("compute_state");
     assert_eq!(s.past_due, 2);

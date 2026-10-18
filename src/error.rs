@@ -58,11 +58,31 @@ pub enum Error {
     #[error("fsrs: {0}")]
     Fsrs(String),
 
-    /// libsql error
-    #[error(transparent)]
-    Db(#[from] libsql::Error),
+    /// The Baserunna server refused a request.
+    #[error("baserunna: {0}")]
+    Api(crate::db::ApiError),
 
-    /// JSON payload for the `events.payload` column
+    /// The Baserunna server could not be reached.
+    #[error("baserunna: {0}")]
+    Http(#[from] reqwest::Error),
+
+    /// `BASERUNNA_TOKEN` is not set.
+    #[error("BASERUNNA_TOKEN not set; create an API key on the Baserunna server")]
+    MissingToken,
+
+    /// The server answered with something other than the expected shape.
+    #[error("unexpected response: {0}")]
+    BadResponse(String),
+
+    /// A stored row or event is missing a field or holds a malformed one.
+    #[error("malformed row: {0}")]
+    BadRow(String),
+
+    /// An event lacks a field its kind requires.
+    #[error("malformed event: {0}")]
+    BadEvent(&'static str),
+
+    /// JSON encoding or decoding failed.
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
 
@@ -70,7 +90,7 @@ pub enum Error {
     #[error("bad timestamp: {0}")]
     BadTimestamp(String),
 
-    /// Out-of-range integer for `events.rating`
+    /// Out-of-range rating in a stored event or card
     #[error("invalid rating value: {0}")]
     InvalidRating(i64),
 
@@ -102,11 +122,11 @@ pub enum Error {
     #[error("atom '{0}' appears more than once in the subpath")]
     SubpathDuplicateAtom(String),
 
-    // Cards cache row missing its expected columns.
+    // A `cards` row is missing a field or holds a malformed one.
     #[error("cards cache corrupt: {0}")]
     CardsCorrupt(String),
 
-    // Unrecognized event kind read out of the `events.kind` column.
+    // Unrecognized event kind in a stored event.
     #[error("unknown event kind: {0}")]
     UnknownEventKind(String),
 

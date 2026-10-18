@@ -34,9 +34,8 @@ use axum::{
     routing::{get, post},
 };
 use base64::Engine;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use hmac::{Hmac, KeyInit, Mac};
-use libsql::{Connection, Database, params};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -44,7 +43,9 @@ use subtle::ConstantTimeEq;
 use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 
-use crate::db;
+use serde_json::{Value as JsonValue, json};
+
+use crate::db::{self, Db};
 
 // ───────────────────────────── tunables ──────────────────────────────
 
@@ -63,7 +64,7 @@ const CSRF_TTL: Duration = Duration::minutes(15);
 /// every field is already an `Arc`.
 #[derive(Clone)]
 pub struct OAuthState {
-    db: Arc<Database>,
+    db: Db,
     /// Constant-time-comparable copy of the admin password. Stored as
     /// bytes so the comparison can't short-circuit on length mismatch.
     admin_password: Arc<[u8]>,
@@ -78,7 +79,7 @@ pub struct OAuthState {
 }
 
 impl OAuthState {
-    pub fn new(db: Arc<Database>, admin_password: &str, public_url: Url) -> Self {
+    pub fn new(db: Db, admin_password: &str, public_url: Url) -> Self {
         let mut csrf_key = [0u8; 32];
         rand::rng().fill_bytes(&mut csrf_key);
         Self {
@@ -94,10 +95,6 @@ impl OAuthState {
     /// rooted at it.
     pub fn issuer(&self) -> &Url {
         &self.public_url
-    }
-
-    async fn conn(&self) -> Result<Connection, OAuthError> {
-        Ok(db::connect(&self.db).await?)
     }
 }
 
@@ -185,20 +182,13 @@ async fn register(
     for uri in &req.redirect_uris {
         validate_redirect_uri(uri)?;
     }
-    let conn = s.conn().await?;
     let client_id = random_token();
-    let redirect_json = serde_json::to_string(&req.redirect_uris)
-        .map_err(|e| OAuthError::server_error(format!("encode redirect_uris: {e}")))?;
-    conn.execute(
-        "INSERT INTO oauth_clients(client_id, client_name, redirect_uris, created_at) \
-         VALUES (?, ?, ?, ?)",
-        params![
-            client_id.as_str(),
-            req.client_name.as_deref(),
-            redirect_json.as_str(),
-            db::format_ts(Utc::now()),
-        ],
-    )
+    s.db.write(&[
+        json!({ "op": "insert_row", "table": "oauth_clients", "row": {
+            "client_id": client_id, "client_name": req.client_name,
+            "redirect_uris": req.redirect_uris, "created_at": db::format_ts(Utc::now()),
+        }}),
+    ])
     .await?;
 
     tracing::info!(
@@ -318,24 +308,14 @@ async fn authorize_post(
         return Ok((StatusCode::UNAUTHORIZED, Html(html)).into_response());
     }
 
-    let conn = s.conn().await?;
     let code = random_token();
     let now = Utc::now();
-    conn.execute(
-        "INSERT INTO oauth_authorization_codes(\
-            code, client_id, redirect_uri, scope, \
-            code_challenge, code_challenge_method, resource, expires_at\
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        params![
-            code.as_str(),
-            client.client_id.as_str(),
-            q.redirect_uri.as_str(),
-            q.scope.as_deref(),
-            q.code_challenge.as_str(),
-            "S256",
-            q.resource.as_deref(),
-            db::format_ts(now + AUTHORIZATION_CODE_TTL),
-        ],
+    s.db.write(
+        &[json!({ "op": "insert_row", "table": "oauth_codes", "row": {
+        "code": code, "client_id": client.client_id, "redirect_uri": q.redirect_uri,
+        "scope": q.scope, "code_challenge": q.code_challenge, "code_challenge_method": "S256",
+        "resource": q.resource, "expires_at": db::format_ts(now + AUTHORIZATION_CODE_TTL),
+    }, "ttl_ms": ttl_ms(AUTHORIZATION_CODE_TTL) })],
     )
     .await?;
 
@@ -372,8 +352,7 @@ async fn validate_authorize_request(
     if q.code_challenge.is_empty() {
         return Err(OAuthError::invalid_request("code_challenge is required"));
     }
-    let conn = s.conn().await?;
-    let client = load_client(&conn, &q.client_id).await?;
+    let client = load_client(&s.db, &q.client_id).await?;
     if !client.redirect_uris.iter().any(|u| u == &q.redirect_uri) {
         return Err(OAuthError::invalid_request(
             "redirect_uri does not match any registered redirect URI for the client",
@@ -443,73 +422,55 @@ async fn token_authorization_code(
         .as_deref()
         .ok_or_else(|| OAuthError::invalid_request("client_id is required"))?;
 
-    let conn = s.conn().await?;
-    let tx = conn.transaction().await?;
-
-    let mut rows = tx
-        .query(
-            "SELECT client_id, redirect_uri, scope, code_challenge, expires_at, used_at \
-             FROM oauth_authorization_codes WHERE code = ?",
-            params![code],
-        )
-        .await?;
-    let row = rows.next().await?.ok_or_else(OAuthError::invalid_grant)?;
-
-    let stored_client_id: String = row.get(0)?;
-    let stored_redirect: String = row.get(1)?;
-    let stored_scope: Option<String> = row.get(2)?;
-    let stored_challenge: String = row.get(3)?;
-    let expires_at: String = row.get(4)?;
-    let used_at: Option<String> = row.get(5)?;
-    drop(rows);
-
-    if used_at.is_some() {
-        tracing::warn!(%client_id, "auth code already used");
-        return Err(OAuthError::invalid_grant());
-    }
-    if stored_client_id != client_id {
-        tracing::warn!(
-            %client_id,
-            stored_client_id = %stored_client_id,
-            "auth code client_id mismatch",
-        );
-        return Err(OAuthError::invalid_grant());
-    }
-    if stored_redirect != redirect_uri {
-        tracing::warn!(%client_id, "auth code redirect_uri mismatch");
-        return Err(OAuthError::invalid_grant());
-    }
-    if db::parse_ts(&expires_at)? < Utc::now() {
-        tracing::warn!(%client_id, "auth code expired");
-        return Err(OAuthError::invalid_grant());
-    }
-    if pkce_s256(verifier) != stored_challenge {
-        tracing::warn!(%client_id, "PKCE verifier did not match challenge");
-        return Err(OAuthError::invalid_grant());
-    }
-
-    // Burn the code and mint the tokens in the same tx; otherwise a
-    // racing duplicate `/token` call could replay the same code.
-    tx.execute(
-        "UPDATE oauth_authorization_codes SET used_at = ? WHERE code = ?",
-        params![db::format_ts(Utc::now()), code],
-    )
-    .await?;
-
-    let access = random_token();
-    let refresh = random_token();
-    let access_exp = Utc::now() + ACCESS_TOKEN_TTL;
-    let refresh_exp = Utc::now() + REFRESH_TOKEN_TTL;
-    insert_access_token(&tx, &access, client_id, stored_scope.as_deref(), access_exp).await?;
-    insert_refresh_token(
-        &tx,
-        &refresh,
-        client_id,
-        stored_scope.as_deref(),
-        refresh_exp,
-    )
-    .await?;
-    tx.commit().await?;
+    // Burn the code and mint the tokens in one transaction, so a racing
+    // duplicate `/token` call cannot replay the same code.
+    let (access, refresh, stored_scope) = db::retry(|| async {
+        let (txn, r) = s.db.begin(&[get_row("oauth_codes", code)]).await?;
+        let row = &r[0]["row"];
+        let check = (|| {
+            if r[0]["found"] != true {
+                return Err(OAuthError::invalid_grant());
+            }
+            if !row["used_at"].is_null() {
+                tracing::warn!(%client_id, "auth code already used");
+                return Err(OAuthError::invalid_grant());
+            }
+            let stored_client_id = row["client_id"].as_str().unwrap_or_default();
+            if stored_client_id != client_id {
+                tracing::warn!(%client_id, %stored_client_id, "auth code client_id mismatch");
+                return Err(OAuthError::invalid_grant());
+            }
+            if row["redirect_uri"].as_str() != Some(redirect_uri) {
+                tracing::warn!(%client_id, "auth code redirect_uri mismatch");
+                return Err(OAuthError::invalid_grant());
+            }
+            if expired(row)? {
+                tracing::warn!(%client_id, "auth code expired");
+                return Err(OAuthError::invalid_grant());
+            }
+            if row["code_challenge"].as_str() != Some(pkce_s256(verifier).as_str()) {
+                tracing::warn!(%client_id, "PKCE verifier did not match challenge");
+                return Err(OAuthError::invalid_grant());
+            }
+            Ok(row["scope"].as_str().map(str::to_string))
+        })();
+        let scope = match check {
+            Ok(scope) => scope,
+            Err(e) => {
+                txn.abort().await;
+                return Ok(Err(e));
+            }
+        };
+        let (access, refresh) = (random_token(), random_token());
+        let mut ops = vec![
+            json!({ "op": "update_row", "table": "oauth_codes", "pk": [code],
+            "set": { "used_at": db::format_ts(Utc::now()) } }),
+        ];
+        ops.extend(token_ops(&access, &refresh, client_id, scope.as_deref()));
+        txn.commit(&ops).await?;
+        Ok(Ok((access, refresh, scope)))
+    })
+    .await??;
     tracing::info!(%client_id, "access + refresh tokens issued (auth_code)");
 
     Ok(Json(TokenResponse {
@@ -530,54 +491,44 @@ async fn token_refresh(
         .as_deref()
         .ok_or_else(|| OAuthError::invalid_request("refresh_token is required"))?;
 
-    let conn = s.conn().await?;
-    let tx = conn.transaction().await?;
-
-    let mut rows = tx
-        .query(
-            "SELECT client_id, scope, expires_at FROM oauth_refresh_tokens WHERE token = ?",
-            params![provided],
-        )
-        .await?;
-    let row = rows.next().await?.ok_or_else(OAuthError::invalid_grant)?;
-
-    let client_id: String = row.get(0)?;
-    let stored_scope: Option<String> = row.get(1)?;
-    let expires_at: String = row.get(2)?;
-    drop(rows);
-
-    if db::parse_ts(&expires_at)? < Utc::now() {
-        tracing::warn!(%client_id, "refresh token expired");
-        return Err(OAuthError::invalid_grant());
-    }
-    // If the caller pinned `client_id` in the refresh request, enforce it.
-    if let Some(rc) = req.client_id.as_deref()
-        && rc != client_id
-    {
-        tracing::warn!(
-            client_id = %rc,
-            stored_client_id = %client_id,
-            "refresh token client_id mismatch",
-        );
-        return Err(OAuthError::invalid_grant());
-    }
-
     // Rotate: invalidate the presented refresh token and mint a fresh
     // pair so an intercepted refresh token can only be used once.
-    tx.execute(
-        "DELETE FROM oauth_refresh_tokens WHERE token = ?",
-        params![provided],
-    )
-    .await?;
-
-    let access = random_token();
-    let refresh = random_token();
-    let scope = req.scope.or(stored_scope.clone());
-    let access_exp = Utc::now() + ACCESS_TOKEN_TTL;
-    let refresh_exp = Utc::now() + REFRESH_TOKEN_TTL;
-    insert_access_token(&tx, &access, &client_id, scope.as_deref(), access_exp).await?;
-    insert_refresh_token(&tx, &refresh, &client_id, scope.as_deref(), refresh_exp).await?;
-    tx.commit().await?;
+    let (access, refresh, client_id, scope) = db::retry(|| async {
+        let (txn, r) = s.db.begin(&[get_row("oauth_refresh_tokens", provided)]).await?;
+        let row = &r[0]["row"];
+        let check = (|| {
+            if r[0]["found"] != true {
+                return Err(OAuthError::invalid_grant());
+            }
+            let client_id = row["client_id"].as_str().unwrap_or_default().to_string();
+            if expired(row)? {
+                tracing::warn!(%client_id, "refresh token expired");
+                return Err(OAuthError::invalid_grant());
+            }
+            // If the caller pinned `client_id` in the refresh request, enforce it.
+            if let Some(rc) = req.client_id.as_deref()
+                && rc != client_id
+            {
+                tracing::warn!(client_id = %rc, stored_client_id = %client_id, "refresh token client_id mismatch");
+                return Err(OAuthError::invalid_grant());
+            }
+            let scope = req.scope.clone().or_else(|| row["scope"].as_str().map(str::to_string));
+            Ok((client_id, scope))
+        })();
+        let (client_id, scope) = match check {
+            Ok(v) => v,
+            Err(e) => {
+                txn.abort().await;
+                return Ok(Err(e));
+            }
+        };
+        let (access, refresh) = (random_token(), random_token());
+        let mut ops = vec![json!({ "op": "delete_row", "table": "oauth_refresh_tokens", "pk": [provided] })];
+        ops.extend(token_ops(&access, &refresh, &client_id, scope.as_deref()));
+        txn.commit(&ops).await?;
+        Ok(Ok((access, refresh, client_id, scope)))
+    })
+    .await??;
     tracing::info!(%client_id, "tokens rotated (refresh_token)");
 
     Ok(Json(TokenResponse {
@@ -589,96 +540,67 @@ async fn token_refresh(
     }))
 }
 
-async fn insert_access_token(
-    conn: &Connection,
-    token: &str,
-    client_id: &str,
-    scope: Option<&str>,
-    expires_at: DateTime<Utc>,
-) -> Result<(), OAuthError> {
-    conn.execute(
-        "INSERT INTO oauth_access_tokens(token, client_id, scope, expires_at) \
-         VALUES (?, ?, ?, ?)",
-        params![token, client_id, scope, db::format_ts(expires_at)],
-    )
-    .await?;
-    Ok(())
+fn get_row(table: &str, pk: &str) -> JsonValue {
+    json!({ "op": "get_row", "table": table, "pk": [pk] })
 }
 
-async fn insert_refresh_token(
-    conn: &Connection,
-    token: &str,
-    client_id: &str,
-    scope: Option<&str>,
-    expires_at: DateTime<Utc>,
-) -> Result<(), OAuthError> {
-    conn.execute(
-        "INSERT INTO oauth_refresh_tokens(token, client_id, scope, expires_at) \
-         VALUES (?, ?, ?, ?)",
-        params![token, client_id, scope, db::format_ts(expires_at)],
-    )
-    .await?;
-    Ok(())
+#[allow(clippy::cast_sign_loss)]
+fn ttl_ms(d: Duration) -> u64 {
+    d.num_milliseconds().max(1) as u64
+}
+
+/// Ops that store a fresh access and refresh token pair. Expired tokens
+/// are deleted by the database.
+fn token_ops(access: &str, refresh: &str, client_id: &str, scope: Option<&str>) -> [JsonValue; 2] {
+    let row = |table: &str, token: &str, ttl: Duration| {
+        json!({ "op": "insert_row", "table": table, "ttl_ms": ttl_ms(ttl), "row": {
+            "token": token, "client_id": client_id, "scope": scope,
+            "expires_at": db::format_ts(Utc::now() + ttl),
+        }})
+    };
+    [
+        row("oauth_access_tokens", access, ACCESS_TOKEN_TTL),
+        row("oauth_refresh_tokens", refresh, REFRESH_TOKEN_TTL),
+    ]
+}
+
+fn expired(row: &JsonValue) -> Result<bool, OAuthError> {
+    let at = row["expires_at"].as_str().unwrap_or_default();
+    Ok(db::parse_ts(at)? < Utc::now())
 }
 
 // ─────────────────── access-token validation (for /mcp) ──────────────
 
 /// Look up an access token and confirm it hasn't expired. Returns `Ok(Some)`
 /// for a valid bearer, `Ok(None)` for unknown/expired (so the caller can
-/// fall through to other auth modes before issuing a 401). Expired rows
-/// are pruned on the read path so the table doesn't grow without bound.
-pub async fn validate_access_token(
-    db: &Database,
-    token: &str,
-) -> Result<Option<String>, crate::Error> {
-    let conn = db::connect(db).await?;
-    let mut rows = conn
-        .query(
-            "SELECT client_id, expires_at FROM oauth_access_tokens WHERE token = ?",
-            params![token],
-        )
-        .await?;
-    let Some(row) = rows.next().await? else {
-        return Ok(None);
-    };
-    let client_id: String = row.get(0)?;
-    let expires_at: String = row.get(1)?;
-    drop(rows);
-    if db::parse_ts(&expires_at)? < Utc::now() {
-        conn.execute(
-            "DELETE FROM oauth_access_tokens WHERE token = ?",
-            params![token],
-        )
-        .await?;
+/// fall through to other auth modes before issuing a 401).
+pub async fn validate_access_token(db: &Db, token: &str) -> Result<Option<String>, crate::Error> {
+    let r = db.read(&[get_row("oauth_access_tokens", token)]).await?;
+    let row = &r[0]["row"];
+    if r[0]["found"] != true
+        || db::parse_ts(row["expires_at"].as_str().unwrap_or_default())? < Utc::now()
+    {
         return Ok(None);
     }
-    Ok(Some(client_id))
+    Ok(row["client_id"].as_str().map(str::to_string))
 }
 
-// ─────────────────────────── SQL helpers ─────────────────────────────
+// ─────────────────────────── clients ─────────────────────────────────
 
 struct RegisteredClient {
     client_id: String,
     redirect_uris: Vec<String>,
 }
 
-async fn load_client(conn: &Connection, client_id: &str) -> Result<RegisteredClient, OAuthError> {
-    let mut rows = conn
-        .query(
-            "SELECT client_id, redirect_uris FROM oauth_clients WHERE client_id = ?",
-            params![client_id],
-        )
-        .await?;
-    let row = rows
-        .next()
-        .await?
-        .ok_or_else(|| OAuthError::invalid_request("unknown client_id"))?;
-    let id: String = row.get(0)?;
-    let uris_json: String = row.get(1)?;
-    let redirect_uris: Vec<String> = serde_json::from_str(&uris_json)
+async fn load_client(db: &Db, client_id: &str) -> Result<RegisteredClient, OAuthError> {
+    let r = db.read(&[get_row("oauth_clients", client_id)]).await?;
+    if r[0]["found"] != true {
+        return Err(OAuthError::invalid_request("unknown client_id"));
+    }
+    let redirect_uris = serde_json::from_value(r[0]["row"]["redirect_uris"].clone())
         .map_err(|e| OAuthError::server_error(format!("decode redirect_uris: {e}")))?;
     Ok(RegisteredClient {
-        client_id: id,
+        client_id: client_id.to_string(),
         redirect_uris,
     })
 }
@@ -830,8 +752,6 @@ pub enum OAuthError {
     #[error("server_error: {0}")]
     ServerError(String),
     #[error(transparent)]
-    Db(#[from] libsql::Error),
-    #[error(transparent)]
     Internal(#[from] crate::Error),
 }
 
@@ -885,14 +805,6 @@ impl IntoResponse for OAuthError {
             ),
             // Internal failures are logged with full context server-side
             // and surfaced as an opaque `server_error` to the client.
-            OAuthError::Db(e) => {
-                tracing::error!(error = %e, "oauth: database error");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "server_error",
-                    "internal server error".to_string(),
-                )
-            }
             OAuthError::Internal(e) => {
                 tracing::error!(error = %e, "oauth: internal error");
                 (

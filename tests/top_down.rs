@@ -3,17 +3,17 @@
 
 mod common;
 
-use common::{PATH_ID, cluster, complete_atom, empty_atom, fresh_db, graph_of, path_with_strategy};
+use common::{
+    PATH_ID, cluster, complete_atom, empty_atom, graph_of, path_state, path_with_strategy,
+};
 
 use chrono::Utc;
-use libsql::Connection;
-use mathtutor::db::{self, DbConfig};
+use mathtutor::db::Db;
 use mathtutor::path::{self, PathFile};
 use mathtutor::progress::PathProgress;
 use mathtutor::scheduler::{self, Action, NextMode};
 use mathtutor::types::Strategy;
 use mathtutor::{Error, subpath};
-use tempfile::TempDir;
 
 const NO_DUE: &[(String, chrono::DateTime<Utc>)] = &[];
 
@@ -203,8 +203,7 @@ async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
     // End-to-end against the embedded curriculum: a path targeting an area
     // root stores the root verbatim, and `syllabus` expands it to the
     // area's upcoming atoms.
-    let tmp = TempDir::new().unwrap();
-    let conn = open_db(&tmp).await;
+    let conn = common::empty_db().await;
     let id = path::cmd_path_new(
         &conn,
         "transformers",
@@ -216,7 +215,7 @@ async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
     .expect("new path");
 
     assert_eq!(
-        path::load_path(&conn, &id).await.unwrap().targets,
+        load_path(&conn, &id).await.targets,
         vec!["tx".to_string()],
         "the area root is stored as given, not pre-expanded",
     );
@@ -236,17 +235,12 @@ async fn subpath_cluster_atom_resolves_on_load() {
     // cluster must expand on load — same as targets — rather than being
     // served to the scheduler as a lesson-less cluster. Set-time validation
     // forbids cluster atoms, so we store one directly to simulate the drift.
-    let tmp = TempDir::new().unwrap();
-    let conn = open_db(&tmp).await;
+    let conn = common::empty_db().await;
     let id = save(&conn, &["tx.1.1.1"], Strategy::TopDown).await;
-    subpath::replace(&conn, &id, &["tx.1".into()])
-        .await
-        .unwrap();
+    replace_subpath(&conn, &id, &["tx.1".into()]).await;
 
-    let g = mathtutor::graph::Graph::load_for_path(&conn, None)
-        .await
-        .unwrap();
-    let resolved = subpath::load_resolved(&conn, &id, &g).await.unwrap();
+    let g = mathtutor::graph::Graph::merged(&common::overlay(&conn).await, None).unwrap();
+    let resolved = subpath::resolved(&load_path(&conn, &id).await, &g).unwrap();
 
     assert!(
         !resolved.contains(&"tx.1".to_string()),
@@ -264,54 +258,34 @@ async fn subpath_cluster_atom_resolves_on_load() {
 
 // ── strategy persistence ────────────────────────────────────────────
 
-async fn open_db(dir: &TempDir) -> Connection {
-    let cfg = DbConfig::local(dir.path().join("mt.db"));
-    let database = db::open(&cfg).await.expect("open");
-    db::connect(&database).await.expect("connect")
+async fn save(db: &Db, targets: &[&str], strategy: Strategy) -> String {
+    common::seed_path(db, PATH_ID, targets, strategy).await;
+    PATH_ID.into()
 }
 
-async fn save(conn: &Connection, targets: &[&str], strategy: Strategy) -> String {
-    let p = PathFile {
-        id: PATH_ID.into(),
-        goal: "test".into(),
-        created_at: Utc::now(),
-        targets: targets.iter().map(|s| (*s).to_string()).collect(),
-        strategy,
-    };
-    path::save_path(conn, &p).await.expect("save_path");
-    p.id
+async fn load_path(db: &Db, id: &str) -> PathFile {
+    path_state(db, id).await.file
+}
+
+/// Store `atoms` as `id`'s subpath without validation.
+async fn replace_subpath(db: &Db, id: &str, atoms: &[String]) {
+    common::write(db, id, |_, changes| path::set_subpath(changes, id, atoms)).await;
 }
 
 #[tokio::test]
 async fn strategy_persists_and_switches() {
-    let tmp = TempDir::new().unwrap();
-    let conn = open_db(&tmp).await;
+    let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
-    assert_eq!(
-        path::load_path(&conn, &id).await.unwrap().strategy,
-        Strategy::TopDown,
-    );
+    assert_eq!(load_path(&conn, &id).await.strategy, Strategy::TopDown,);
 
     path::cmd_path_strategy(&conn, Some(&id), Strategy::BottomUp)
         .await
         .unwrap();
     assert_eq!(
-        path::load_path(&conn, &id).await.unwrap().strategy,
+        load_path(&conn, &id).await.strategy,
         Strategy::BottomUp,
         "the switch is persisted",
-    );
-}
-
-#[tokio::test]
-async fn fresh_db_path_defaults_to_bottom_up() {
-    // A row inserted without the strategy column (as pre-feature paths
-    // were) takes the migration default.
-    let tmp = TempDir::new().unwrap();
-    let conn = fresh_db(&tmp, PATH_ID).await;
-    assert_eq!(
-        path::load_path(&conn, PATH_ID).await.unwrap().strategy,
-        Strategy::BottomUp,
     );
 }
 
@@ -319,34 +293,25 @@ async fn fresh_db_path_defaults_to_bottom_up() {
 
 #[tokio::test]
 async fn subpath_round_trips_and_clears() {
-    let tmp = TempDir::new().unwrap();
-    let conn = open_db(&tmp).await;
+    let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
-    subpath::replace(&conn, &id, &["a".into(), "b".into(), "c".into()])
-        .await
-        .unwrap();
-    assert_eq!(
-        subpath::load(&conn, &id).await.unwrap(),
-        vec!["a", "b", "c"]
-    );
+    replace_subpath(&conn, &id, &["a".into(), "b".into(), "c".into()]).await;
+    assert_eq!(load_path(&conn, &id).await.subpath, vec!["a", "b", "c"]);
 
     // Replacement is wholesale, not additive.
-    subpath::replace(&conn, &id, &["x".into(), "y".into()])
-        .await
-        .unwrap();
-    assert_eq!(subpath::load(&conn, &id).await.unwrap(), vec!["x", "y"]);
+    replace_subpath(&conn, &id, &["x".into(), "y".into()]).await;
+    assert_eq!(load_path(&conn, &id).await.subpath, vec!["x", "y"]);
 
-    subpath::clear(&conn, &id).await.unwrap();
-    assert!(subpath::load(&conn, &id).await.unwrap().is_empty());
+    subpath::cmd_subpath_clear(&conn, Some(&id)).await.unwrap();
+    assert!(load_path(&conn, &id).await.subpath.is_empty());
 }
 
 // ── subpath command validation ──────────────────────────────────────
 
 #[tokio::test]
 async fn subpath_set_happy_path() {
-    let tmp = TempDir::new().unwrap();
-    let conn = open_db(&tmp).await;
+    let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
     subpath::cmd_subpath_set(
@@ -358,15 +323,14 @@ async fn subpath_set_happy_path() {
     .await
     .expect("valid subpath ending in a target");
     assert_eq!(
-        subpath::load(&conn, &id).await.unwrap(),
+        load_path(&conn, &id).await.subpath,
         vec!["fnd.1.1.1", "fnd.1.1.2"],
     );
 }
 
 #[tokio::test]
 async fn subpath_set_rejected_on_bottom_up_path() {
-    let tmp = TempDir::new().unwrap();
-    let conn = open_db(&tmp).await;
+    let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::BottomUp).await;
 
     let err = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.2".into()], None)
@@ -377,8 +341,7 @@ async fn subpath_set_rejected_on_bottom_up_path() {
 
 #[tokio::test]
 async fn subpath_set_requires_target_tail() {
-    let tmp = TempDir::new().unwrap();
-    let conn = open_db(&tmp).await;
+    let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
     let err = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.1".into()], None)
@@ -389,8 +352,7 @@ async fn subpath_set_requires_target_tail() {
 
 #[tokio::test]
 async fn subpath_set_rejects_empty_and_duplicates_and_unknown() {
-    let tmp = TempDir::new().unwrap();
-    let conn = open_db(&tmp).await;
+    let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
     let empty = subpath::cmd_subpath_set(&conn, Some(&id), &[], None)

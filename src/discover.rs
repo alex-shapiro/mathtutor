@@ -4,12 +4,13 @@
 
 use std::path::Path;
 
-use libsql::Connection;
 use serde::Serialize;
 
+use crate::db::Db;
 use crate::graph::{self, FlatConcept, Graph, Manifest};
 use crate::progress::PathProgress;
 use crate::scheduler;
+use crate::view::{PathState, Want};
 use crate::{Error, Result};
 
 // ── Commands ───────────────────────────────────────────────────────
@@ -17,41 +18,46 @@ use crate::{Error, Result};
 /// Read-only `mt graph show`. When `path_id` is set, atom output is
 /// enriched with per-path status (`lesson_taught`, `complete`).
 pub async fn cmd_graph_show(
-    conn: &Connection,
+    db: &Db,
     id: &str,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let g = if path_id.is_some() {
-        Graph::load_for_path(conn, graph_dir).await?
-    } else {
-        Graph::load_default(graph_dir)?
-    };
+    let (g, progress) = graph_for(db, path_id, graph_dir).await?;
     let mut view = show_view(&g, id)?;
-    if let Some(pid) = path_id {
-        let progress = PathProgress::load(conn, pid).await?;
+    if let Some(progress) = progress {
         enrich_show_view(&mut view, &g, &progress, id);
     }
     emit(&view)
 }
 
+/// The merged graph and the path's progress when `path_id` is set, else
+/// the shipped graph alone. An unknown path has no progress.
+pub async fn graph_for(
+    db: &Db,
+    path_id: Option<&str>,
+    graph_dir: Option<&Path>,
+) -> Result<(std::sync::Arc<Graph>, Option<PathProgress>)> {
+    let Some(pid) = path_id else {
+        return Ok((std::sync::Arc::new(Graph::load_default(graph_dir)?), None));
+    };
+    let view = db.snapshot(&Want::path(Some(pid))).await?;
+    let progress = view.path().map(PathState::progress).unwrap_or_default();
+    Ok((view.graph(graph_dir)?, Some(progress)))
+}
+
 /// Read-only `mt graph list`. When `path_id` is set, atom children are
 /// enriched with per-path status.
 pub async fn cmd_graph_list(
-    conn: &Connection,
+    db: &Db,
     id: Option<&str>,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
     let manifest = graph::load_manifest_default(graph_dir)?;
-    let g = if path_id.is_some() {
-        Graph::load_for_path(conn, graph_dir).await?
-    } else {
-        Graph::load_default(graph_dir)?
-    };
+    let (g, progress) = graph_for(db, path_id, graph_dir).await?;
     let mut view = list_view(&g, &manifest, id)?;
-    if let Some(pid) = path_id {
-        let progress = PathProgress::load(conn, pid).await?;
+    if let Some(progress) = progress {
         enrich_list_view(&mut view, &g, &progress);
     }
     emit(&view)

@@ -1,20 +1,20 @@
 //! Integration tests for the `mt mcp` server.
 //!
 //! Each test starts the server on an ephemeral port against a fresh
-//! `tempdir` database, exercises a single contract (auth, MCP initialize,
+//! Baserunna database, exercises a single contract (auth, MCP initialize,
 //! tool list, tool call shapes), and shuts the server down. Tests never
 //! share a port or a database, so they can run in parallel.
 
 #![cfg(feature = "mcp")]
 
+mod common;
+
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use mathtutor::db::DbConfig;
 use mathtutor::mcp::{self, AuthConfig};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{Value, json};
-use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
@@ -23,7 +23,6 @@ const ADMIN_PASSWORD: &str = "hunter2";
 
 struct ServerHandle {
     addr: SocketAddr,
-    _tmp: TempDir,
     join: JoinHandle<()>,
 }
 
@@ -48,9 +47,7 @@ impl ServerHandle {
 /// `run` to accept a pre-bound listener, which isn't worth the API
 /// surface for tests.
 async fn spawn_server_with(auth: AuthConfig) -> ServerHandle {
-    let tmp = TempDir::new().unwrap();
-    let db_path = tmp.path().join("mt.db");
-    let cfg = DbConfig::local(db_path);
+    let cfg = common::fresh_config();
 
     let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = probe.local_addr().unwrap();
@@ -63,7 +60,7 @@ async fn spawn_server_with(auth: AuthConfig) -> ServerHandle {
 
     // Spin until the server has actually bound. Race-free enough for tests
     // because `mcp::run` binds before logging the listening message.
-    for _ in 0..50 {
+    for _ in 0..250 {
         if let Ok(stream) = tokio::net::TcpStream::connect(addr).await {
             drop(stream);
             break;
@@ -71,11 +68,7 @@ async fn spawn_server_with(auth: AuthConfig) -> ServerHandle {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 
-    ServerHandle {
-        addr,
-        _tmp: tmp,
-        join,
-    }
+    ServerHandle { addr, join }
 }
 
 async fn spawn_server() -> ServerHandle {

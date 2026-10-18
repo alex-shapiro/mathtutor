@@ -20,13 +20,14 @@ pub mod event_log;
 pub mod graph;
 #[cfg(feature = "mcp")]
 pub mod mcp;
-pub mod migrate;
 pub mod path;
 pub mod progress;
 pub mod scheduler;
+pub mod schema;
 pub mod state;
 pub mod store;
 pub mod subpath;
 pub mod syllabus;
 pub mod tree;
 pub mod types;
+pub mod view;

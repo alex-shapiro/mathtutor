@@ -1,16 +1,14 @@
-//! Event log persisted in the `events` SQL table.
+//! Per-path event log, stored as the stream `events.<path id>`.
 //!
 //! Each event has a typed `kind` and is constructed via the typed helper
-//! functions in this module.
-//!
-//! A `QuizAnswered` event writes to both the event log and the `cards` cache.
+//! functions in this module. [`crate::view::Changes::append`] logs an event
+//! and updates the rows derived from it in the same transaction.
 
 use chrono::{DateTime, Utc};
-use libsql::{Connection, Row, params};
-use serde::{Deserialize, Serialize};
+use serde_json::{Value as Json, json};
 
-use crate::cards;
-use crate::db;
+use crate::db::{self, Db};
+use crate::schema;
 use crate::types::Rating;
 use crate::{Error, Result};
 
@@ -67,10 +65,7 @@ impl std::str::FromStr for EventKind {
     }
 }
 
-/// Optional fields beyond what the SQL columns already carry. `rating`
-/// lives in its own column on disk; the JSON `payload` column only
-/// stores `reason` / `user_answer`, so FSRS queries can filter by
-/// rating without parsing JSON.
+/// Optional fields beyond the event's kind, path, atom and quiz.
 #[derive(Debug, Default, Clone)]
 pub struct EventPayload {
     pub rating: Option<Rating>,
@@ -82,30 +77,6 @@ impl EventPayload {
     pub fn is_empty(&self) -> bool {
         self.rating.is_none() && self.reason.is_none() && self.user_answer.is_none()
     }
-}
-
-/// Shape sent to the JSON column: rating is stored as its own SQL
-/// column, so the JSON blob carries only the free-form fields.
-#[derive(Serialize, Default)]
-struct StoredPayload<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    user_answer: Option<&'a str>,
-}
-
-impl StoredPayload<'_> {
-    fn is_empty(&self) -> bool {
-        self.reason.is_none() && self.user_answer.is_none()
-    }
-}
-
-#[derive(Serialize, Deserialize, Default)]
-struct LoadedPayload {
-    #[serde(default)]
-    reason: Option<String>,
-    #[serde(default)]
-    user_answer: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -229,93 +200,61 @@ pub fn quiz_answered(
     }
 }
 
-// ── Append + load ─────────────────────────────────────────────────
+// ── Encoding + load ───────────────────────────────────────────────
 
-/// Insert one event into `events`. On `QuizAnswered`, also fold the
-/// rating into the `cards` write-through cache so the scheduler sees
-/// the new due date on its next pass.
-///
-/// Atomicity is the caller's responsibility.
-pub async fn append(conn: &Connection, event: &Event) -> Result<()> {
-    let stored = StoredPayload {
-        reason: event.payload.reason.as_deref(),
-        user_answer: event.payload.user_answer.as_deref(),
+/// An event as a stream record body.
+pub fn encode(e: &Event) -> Json {
+    let mut j = json!({ "ts": db::format_ts(e.ts), "kind": e.kind.as_str(), "path": e.path });
+    let mut set = |k: &str, v: Option<Json>| {
+        if let Some(v) = v {
+            j[k] = v;
+        }
     };
-    let payload_json = if stored.is_empty() {
-        None
-    } else {
-        Some(serde_json::to_string(&stored)?)
-    };
-    let rating_int = event.payload.rating.map(i64::from);
-
-    conn.execute(
-        "INSERT INTO events(ts, kind, path_id, atom_id, quiz_id, rating, payload) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-        params![
-            db::format_ts(event.ts),
-            event.kind.as_str(),
-            event.path.as_str(),
-            event.atom.as_deref(),
-            event.quiz.as_deref(),
-            rating_int,
-            payload_json,
-        ],
-    )
-    .await?;
-
-    if event.kind == EventKind::QuizAnswered
-        && let (Some(quiz), Some(rating)) = (event.quiz.as_deref(), event.payload.rating)
-    {
-        cards::apply_answer_to_cache(conn, &event.path, quiz, rating, event.ts).await?;
-    }
-    Ok(())
+    set("atom", e.atom.as_deref().map(Json::from));
+    set("quiz", e.quiz.as_deref().map(Json::from));
+    set("rating", e.payload.rating.map(|r| Json::from(i64::from(r))));
+    set("reason", e.payload.reason.as_deref().map(Json::from));
+    set(
+        "user_answer",
+        e.payload.user_answer.as_deref().map(Json::from),
+    );
+    j
 }
 
-/// Read all events for a path, in chronological order. Empty if the
-/// path has never recorded anything.
-pub async fn load(conn: &Connection, path_id: &str) -> Result<Vec<Event>> {
-    let mut rows = conn
-        .query(
-            "SELECT ts, kind, path_id, atom_id, quiz_id, rating, payload \
-             FROM events WHERE path_id = ? ORDER BY id ASC",
-            params![path_id],
-        )
-        .await?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().await? {
-        out.push(row_to_event(&row)?);
-    }
-    Ok(out)
-}
-
-fn row_to_event(row: &Row) -> Result<Event> {
-    let ts_str: String = row.get(0)?;
-    let kind_str: String = row.get(1)?;
-    let path: String = row.get(2)?;
-    let atom: Option<String> = row.get(3)?;
-    let quiz: Option<String> = row.get(4)?;
-    let rating_int: Option<i64> = row.get(5)?;
-    let payload_str: Option<String> = row.get(6)?;
-
-    let kind: EventKind = kind_str.parse()?;
-    let ts = db::parse_ts(&ts_str)?;
-    let rating = rating_int.map(Rating::try_from).transpose()?;
-    let mut payload = EventPayload {
-        rating,
-        ..Default::default()
-    };
-    if let Some(s) = payload_str {
-        let parsed: LoadedPayload = serde_json::from_str(&s)?;
-        payload.reason = parsed.reason;
-        payload.user_answer = parsed.user_answer;
-    }
-
+/// The event a stream record body holds.
+pub fn decode(j: &Json) -> Result<Event> {
+    let s = |k: &str| j[k].as_str().map(str::to_string);
+    let required = |k: &str| s(k).ok_or_else(|| Error::BadRow(format!("event.{k}: {j}")));
     Ok(Event {
-        ts,
-        kind,
-        path,
-        atom,
-        quiz,
-        payload,
+        ts: db::parse_ts(&required("ts")?)?,
+        kind: required("kind")?.parse()?,
+        path: required("path")?,
+        atom: s("atom"),
+        quiz: s("quiz"),
+        payload: EventPayload {
+            rating: j["rating"].as_i64().map(Rating::try_from).transpose()?,
+            reason: s("reason"),
+            user_answer: s("user_answer"),
+        },
     })
+}
+
+/// Read all events for a path, in the order they were logged.
+pub async fn load(db: &Db, path_id: &str) -> Result<Vec<Event>> {
+    let stream = schema::events_stream(path_id);
+    let mut out = Vec::new();
+    let mut from = 0;
+    loop {
+        let op = json!({ "op": "read_stream", "stream": stream, "from_seq": from, "limit": 1000 });
+        let r = db.read(&[op]).await?.swap_remove(0);
+        for rec in r["records"].as_array().into_iter().flatten() {
+            out.push(decode(&rec["json"])?);
+        }
+        if r["done"] != false {
+            return Ok(out);
+        }
+        from = r["next_seq"]
+            .as_u64()
+            .ok_or_else(|| Error::BadResponse(format!("next_seq: {r}")))?;
+    }
 }

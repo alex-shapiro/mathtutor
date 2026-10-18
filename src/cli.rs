@@ -28,7 +28,6 @@ pub enum Cmd {
     Lesson(LessonCmd),
     Quiz(QuizCmd),
     Instruct(InstructCmd),
-    MigrateFromAyml(MigrateFromAymlCmd),
     #[cfg(feature = "mcp")]
     Mcp(McpCmd),
 }
@@ -456,17 +455,6 @@ pub struct QuizAnswerCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "instruct")]
 pub struct InstructCmd {}
-
-/// Port legacy AYML state under `$MATHTUTOR_HOME/paths/` into the
-/// libSQL database. Idempotent: re-running skips paths and overlay
-/// rows that are already present.
-#[derive(FromArgs, Debug)]
-#[argh(subcommand, name = "migrate-from-ayml")]
-pub struct MigrateFromAymlCmd {
-    /// override the AYML root (default: `$MATHTUTOR_HOME` / `~/.mathtutor`)
-    #[argh(option)]
-    pub from: Option<PathBuf>,
-}
 
 /// Run the MCP server (SSE over HTTP), or `mt mcp tools` to dump the
 /// in-process JSON-RPC tool catalogue for debugging.

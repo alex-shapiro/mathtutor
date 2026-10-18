@@ -1,548 +1,520 @@
-//! libSQL database setup and schema migration.
+//! Baserunna client.
 //!
-//! All per-user state is stored in one libSQL database at
-//! `$MATHTUTOR_HOME/mt.db` (default `~/.mathtutor/mt.db`). The db
-//! opens as a synced local replica if  `TURSO_URL` and `TURSO_AUTH_TOKEN`
-//! env variables are both set. If either is unset, it falls back to a
-//! local-only file.
+//! All per-user state lives in one Baserunna database: `BASERUNNA_DB`
+//! (default `mathtutor`) on the server at `BASERUNNA_URL`, reached with
+//! the API key or session token in `BASERUNNA_TOKEN`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use libsql::{Builder, Connection, Database, params};
+use reqwest::{Method, StatusCode};
+use serde_json::{Value as Json, json};
 
-use crate::path::mt_home;
 use crate::{Error, Result};
 
-/// Max wall-clock time we'll spend on a foreground sync to the Turso
-/// replica. Beyond this we warn and let libSQL catch up on a later call.
-const SYNC_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
+pub const DEFAULT_DB: &str = "mathtutor";
 
-/// Canonical timestamp format for every `DATETIME` column we write.
-/// Matches `SQLite`'s own `strftime('%Y-%m-%dT%H:%M:%fZ', 'now')` so the
-/// built-in date functions can still operate on these strings, and the
-/// `Z` suffix keeps lexicographic ordering aligned with chronological
-/// ordering (`to_rfc3339`'s `+00:00` would break that the moment a
-/// future migration ever wrote a non-UTC timestamp).
+/// Attempts a transaction gets before a conflict or transient failure is
+/// returned to the caller.
+const MAX_ATTEMPTS: u32 = 10;
+
+/// How long a client waits before asking whether an ambiguous commit
+/// applied: past the server's commit deadline, no copy of it can still land.
+const AMBIGUOUS_COMMIT_WAIT: Duration = Duration::from_secs(15);
+
+/// Canonical timestamp format. The `Z` suffix and fixed width keep
+/// lexicographic order aligned with chronological order, which index
+/// range queries over timestamp columns rely on.
 pub fn format_ts(ts: DateTime<Utc>) -> String {
     ts.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
 }
 
-/// Parse a timestamp string read out of a `DATETIME` column. Accepts
-/// any RFC 3339 form, which covers both the canonical `format_ts`
-/// output and any legacy `to_rfc3339` strings already in the DB.
+/// Parse a timestamp written by [`format_ts`] (or any RFC 3339 form).
 pub fn parse_ts(s: &str) -> Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| Error::BadTimestamp(format!("{s}: {e}")))
 }
 
-/// Numbered schema migration. Versions are strictly increasing,
-/// starting at 1. Each migration file is immutable once shipped.
-struct Migration {
-    version: u32,
-    name: &'static str,
-    sql: &'static str,
-}
-
-const MIGRATIONS: &[Migration] = &[
-    Migration {
-        version: 1,
-        name: "init",
-        sql: include_str!("migrations/001_init.sql"),
-    },
-    Migration {
-        version: 2,
-        name: "oauth",
-        sql: include_str!("migrations/002_oauth.sql"),
-    },
-    Migration {
-        version: 3,
-        name: "strategy_subpath",
-        sql: include_str!("migrations/003_strategy_subpath.sql"),
-    },
-    Migration {
-        version: 4,
-        name: "rename_target_column",
-        sql: include_str!("migrations/004_rename_target_column.sql"),
-    },
-];
-
-/// Schema migrations bookkeeping table
-const META_SCHEMA: &str = "
-    CREATE TABLE IF NOT EXISTS schema_migrations (
-        version    INTEGER PRIMARY KEY,
-        name       TEXT NOT NULL,
-        applied_at DATETIME NOT NULL
-    );
-";
-
-/// libSQL credentials for syncing a local replica to server
-#[derive(Debug, Clone)]
-pub struct SyncConfig {
-    pub url: String,
-    pub auth_token: String,
-}
-
-impl SyncConfig {
-    /// Constructs a config from explicit values.
-    /// Returns `None` if either field is empty.
-    pub fn new(url: String, auth_token: String) -> Option<Self> {
-        if url.is_empty() || auth_token.is_empty() {
-            return None;
-        }
-        Some(Self { url, auth_token })
-    }
-
-    /// Constructs a config from `TURSO_URL` and `TURSO_AUTH_TOKEN` env variables.
-    /// Returns `None` if either is unset or empty.
-    pub fn from_env() -> Option<Self> {
-        let url = std::env::var("TURSO_URL").ok()?;
-        let auth_token = std::env::var("TURSO_AUTH_TOKEN").ok()?;
-        Self::new(url, auth_token)
-    }
-}
-
-/// Resolved configuration for opening the user database.
+/// Where the user database lives.
 #[derive(Debug, Clone)]
 pub struct DbConfig {
-    pub local_path: PathBuf,
-    pub sync: Option<SyncConfig>,
+    pub url: String,
+    pub token: String,
+    pub db: String,
+    /// Directory keeping a copy of the overlay between processes, so a
+    /// command downloads it only after it changed. `None` keeps it in memory.
+    pub cache_dir: Option<PathBuf>,
 }
 
 impl DbConfig {
-    /// Production config: local path under `mt_home()`, sync settings
-    /// from `TURSO_URL` / `TURSO_AUTH_TOKEN`.
+    /// Reads `BASERUNNA_URL`, `BASERUNNA_TOKEN` (required) and `BASERUNNA_DB`.
     pub fn from_env() -> Result<Self> {
+        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         Ok(Self {
-            local_path: default_path()?,
-            sync: SyncConfig::from_env(),
+            url: var("BASERUNNA_URL").unwrap_or_else(|| DEFAULT_URL.into()),
+            token: var("BASERUNNA_TOKEN").ok_or(Error::MissingToken)?,
+            db: var("BASERUNNA_DB").unwrap_or_else(|| DEFAULT_DB.into()),
+            cache_dir: crate::path::mt_home().ok(),
+        })
+    }
+}
+
+/// One HTTP request to the server, as an [`Observer`] sees it.
+#[derive(Debug, Clone)]
+pub struct Sample {
+    /// `begin`, `ops`, `commit`, `abort`, `txn` (one-shot), `status` or `other`.
+    pub kind: &'static str,
+    pub status: u16,
+    /// Time from sending the request to reading the whole response.
+    pub elapsed: Duration,
+    /// The server's own account of the request, from its `Server-Timing` header.
+    pub server: Option<ServerTiming>,
+    pub sent_bytes: usize,
+    pub received_bytes: usize,
+}
+
+/// Where a request spent its time on the server.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ServerTiming {
+    pub total: Duration,
+    /// Object-store calls, summed.
+    pub store: Duration,
+    pub store_calls: u32,
+    /// Waiting for commits.
+    pub commit: Duration,
+    /// Waiting for an in-flight manifest write before a strong read.
+    pub wait: Duration,
+}
+
+impl ServerTiming {
+    /// Parse a `Server-Timing` header value.
+    pub fn parse(v: &str) -> Self {
+        let mut t = Self::default();
+        for metric in v.split(',') {
+            let mut parts = metric.trim().split(';');
+            let name = parts.next().unwrap_or_default();
+            let (mut dur, mut desc) = (Duration::ZERO, 0);
+            for p in parts {
+                if let Some(ms) = p.strip_prefix("dur=").and_then(|d| d.parse::<f64>().ok()) {
+                    dur = Duration::from_secs_f64(ms / 1000.0);
+                } else if let Some(n) = p.strip_prefix("desc=").and_then(|d| d.parse().ok()) {
+                    desc = n;
+                }
+            }
+            match name {
+                "total" => t.total = dur,
+                "store" => (t.store, t.store_calls) = (dur, desc),
+                "commit" => t.commit = dur,
+                "wait" => t.wait = dur,
+                _ => {}
+            }
+        }
+        t
+    }
+}
+
+/// Called with every request a [`Db`] makes.
+pub type Observer = Arc<dyn Fn(Sample) + Send + Sync>;
+
+/// A handle on the user database. Cheap to clone; clones share one
+/// connection pool.
+#[derive(Clone)]
+pub struct Db {
+    http: reqwest::Client,
+    url: String,
+    base: String,
+    token: String,
+    observer: Option<Observer>,
+    /// The path the last transaction resolved, so the next one can read
+    /// that path's state speculatively in its first request.
+    pub(crate) path_hint: Arc<Mutex<Option<String>>>,
+    /// The overlay as last read, validated by its version in later transactions.
+    pub(crate) overlay_cache: Arc<Mutex<Option<crate::view::CachedOverlay>>>,
+    /// Where the overlay cache is kept between processes.
+    pub(crate) cache_file: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for Db {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Db")
+            .field("base", &self.base)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A failure reported by the server.
+#[derive(Debug, Clone)]
+pub struct ApiError {
+    pub status: u16,
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+    /// A commit that may or may not have applied.
+    pub outcome_unknown: bool,
+    /// The answer came from Baserunna, not from a proxy in front of it, so
+    /// its status says whether the request applied.
+    pub from_server: bool,
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}: {}", self.status, self.code, self.message)
+    }
+}
+
+impl ApiError {
+    /// True when the request was certainly not applied and can be retried.
+    fn retry_not_applied(&self) -> bool {
+        matches!(self.status, 404 if self.code == "txn_not_found")
+            || (self.retryable && !self.outcome_unknown)
+    }
+}
+
+impl Db {
+    /// Connect to the configured database, creating it and its schema if
+    /// they do not exist yet.
+    pub async fn open(cfg: &DbConfig) -> Result<Self> {
+        let db = Self::connect(cfg)?;
+        crate::schema::ensure(&db, &cfg.db).await?;
+        Ok(db)
+    }
+
+    /// A handle without any round trip; the database must already exist.
+    pub fn connect(cfg: &DbConfig) -> Result<Self> {
+        let http = reqwest::Client::builder()
+            .user_agent(concat!("mathtutor/", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_mins(1))
+            .pool_idle_timeout(Duration::from_secs(50))
+            .build()?;
+        let url = cfg.url.trim_end_matches('/').to_string();
+        let cache_file = cfg
+            .cache_dir
+            .as_ref()
+            .map(|d| d.join(cache_name(&url, &cfg.db)));
+        let cached = cache_file
+            .as_deref()
+            .and_then(crate::view::read_cached_overlay);
+        Ok(Self {
+            base: format!("{url}/v1/dbs/{}", cfg.db),
+            url,
+            http,
+            token: cfg.token.clone(),
+            observer: None,
+            path_hint: Arc::default(),
+            overlay_cache: Arc::new(Mutex::new(cached)),
+            cache_file,
         })
     }
 
-    /// Test/CLI-injectable config: explicit local path, no sync.
-    pub fn local<P: Into<PathBuf>>(local_path: P) -> Self {
-        Self {
-            local_path: local_path.into(),
-            sync: None,
+    /// Report every request this handle and its clones make to `observer`.
+    #[must_use]
+    pub fn observed(mut self, observer: Observer) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
+    /// Send one request to `path` under the server root and return its JSON body.
+    pub(crate) async fn root_call(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Json>,
+    ) -> Result<Json> {
+        self.send(method, &format!("{}{path}", self.url), body)
+            .await
+    }
+
+    /// Send one request to `path` under this database and return its JSON body.
+    pub(crate) async fn call(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&Json>,
+    ) -> Result<Json> {
+        self.send(method, &format!("{}{path}", self.base), body)
+            .await
+    }
+
+    async fn send(&self, method: Method, url: &str, body: Option<&Json>) -> Result<Json> {
+        let started = std::time::Instant::now();
+        let kind = request_kind(&method, url);
+        let mut req = self.http.request(method, url).bearer_auth(&self.token);
+        let mut sent_bytes = 0;
+        if let Some(b) = body {
+            let bytes = serde_json::to_vec(b)?;
+            sent_bytes = bytes.len();
+            req = req
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(bytes);
         }
+        let resp = req.send().await?;
+        let status = resp.status();
+        let server = resp
+            .headers()
+            .get("server-timing")
+            .and_then(|v| v.to_str().ok())
+            .map(ServerTiming::parse);
+        let bytes = resp.bytes().await?;
+        if let Some(observe) = &self.observer {
+            observe(Sample {
+                kind,
+                status: status.as_u16(),
+                elapsed: started.elapsed(),
+                server,
+                sent_bytes,
+                received_bytes: bytes.len(),
+            });
+        }
+        if status.is_success() {
+            if bytes.is_empty() {
+                return Ok(Json::Null);
+            }
+            return Ok(serde_json::from_slice(&bytes)?);
+        }
+        Err(Error::Api(api_error(status, &bytes)))
+    }
+
+    /// Run read-only `ops` in one request against a strong snapshot.
+    pub async fn read(&self, ops: &[Json]) -> Result<Vec<Json>> {
+        let body = json!({ "ops": ops });
+        let r = retry(|| self.call(Method::POST, "/txn", Some(&body))).await?;
+        results(r)
+    }
+
+    /// Run `ops`, writes included, as one transaction in one request.
+    /// Retried only while certainly not applied.
+    pub async fn write(&self, ops: &[Json]) -> Result<Vec<Json>> {
+        let body = json!({ "ops": ops });
+        results(retry(|| self.call(Method::POST, "/txn", Some(&body))).await?)
+    }
+
+    /// Begin an interactive transaction, running `ops` in it.
+    pub async fn begin(&self, ops: &[Json]) -> Result<(Txn, Vec<Json>)> {
+        let r = self
+            .call(Method::POST, "/transactions", Some(&json!({ "ops": ops })))
+            .await?;
+        let txn = Txn {
+            db: self.clone(),
+            id: str_field(&r, "txn_id")?,
+            commit_id: str_field(&r, "commit_id")?,
+        };
+        Ok((txn, results(r)?))
     }
 }
 
-/// Default on-disk location: `$MATHTUTOR_HOME/mt.db`.
-pub fn default_path() -> Result<PathBuf> {
-    Ok(mt_home()?.join("mt.db"))
+/// An open interactive transaction. It is aborted server-side when idle;
+/// dropping it without committing leaves nothing behind.
+pub struct Txn {
+    db: Db,
+    id: String,
+    commit_id: String,
 }
 
-/// Open the user database, applying any pending schema migrations.
-/// Creates the parent directory if missing. Idempotent: safe to call
-/// on a fresh directory or against an already-initialized file.
-///
-/// If sync is configured and the local path holds a plain `SQLite` file
-/// from an earlier non-sync session, the file is upgraded in place to
-/// a libSQL embedded replica without losing data.
-pub async fn open(cfg: &DbConfig) -> Result<Database> {
-    if let Some(parent) = cfg.local_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| Error::FileIo {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-
-    let db = if let Some(sync) = &cfg.sync {
-        if needs_replica_upgrade(&cfg.local_path) {
-            return upgrade_local_to_replica(&cfg.local_path, sync).await;
-        }
-        let db = Builder::new_synced_database(
-            &cfg.local_path,
-            sync.url.clone(),
-            sync.auth_token.clone(),
+impl Txn {
+    /// Run more `ops` in the transaction. Any error aborts it.
+    pub async fn ops(&self, ops: &[Json]) -> Result<Vec<Json>> {
+        let path = format!("/transactions/{}/ops", self.id);
+        results(
+            self.db
+                .call(Method::POST, &path, Some(&json!({ "ops": ops })))
+                .await?,
         )
-        .build()
-        .await?;
-        // Pull remote frames before local writes, including migrations.
-        // Otherwise we see a version conflict during sync.
-        db.sync().await?;
-        db
+    }
+
+    /// Run `ops` and commit. A commit whose outcome is unknown is resolved
+    /// before returning, so `Ok` means applied and a retryable error
+    /// means not applied.
+    pub async fn commit(self, ops: &[Json]) -> Result<Vec<Json>> {
+        let path = format!("/transactions/{}/commit", self.id);
+        match self
+            .db
+            .call(Method::POST, &path, Some(&json!({ "ops": ops })))
+            .await
+        {
+            Ok(r) => results(r),
+            Err(Error::Api(e)) if e.from_server && !e.outcome_unknown => Err(Error::Api(e)),
+            Err(Error::Http(e)) if e.is_connect() => Err(Error::Http(e)),
+            // A read-only commit applies nothing, so a lost answer is simply retried.
+            Err(Error::Http(_)) if ops.is_empty() => {
+                Err(not_applied("read-only commit lost its answer"))
+            }
+            // A lost response, a proxy's error or an unknown outcome: wait out any copy of
+            // the commit still in flight, then ask whether it applied.
+            Err(_) => {
+                tokio::time::sleep(AMBIGUOUS_COMMIT_WAIT).await;
+                let path = format!("/commits/{}", self.commit_id);
+                let status = retry(|| self.db.call(Method::GET, &path, None)).await?;
+                if status["status"] == "committed" {
+                    // The results of a commit are only in its lost response.
+                    Ok(Vec::new())
+                } else {
+                    Err(not_applied("commit did not apply"))
+                }
+            }
+        }
+    }
+
+    /// Abort the transaction. Failures are ignored: an abandoned
+    /// transaction expires on its own.
+    pub async fn abort(self) {
+        let path = format!("/transactions/{}", self.id);
+        let _ = self.db.call(Method::DELETE, &path, None).await;
+    }
+}
+
+/// True for failures worth running a whole transaction again: conflicts,
+/// rate limits, lost transactions and unavailability that did not apply.
+pub fn is_retryable(e: &Error) -> bool {
+    match e {
+        Error::Api(a) => a.retry_not_applied(),
+        Error::Http(h) => h.is_connect(),
+        _ => false,
+    }
+}
+
+/// Run `f` until it succeeds, fails permanently, or runs out of attempts,
+/// backing off between attempts.
+pub async fn retry<T, F, Fut>(mut f: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let mut attempt = 0;
+    loop {
+        match f().await {
+            Err(e) if is_retryable(&e) && attempt + 1 < MAX_ATTEMPTS => {
+                attempt += 1;
+                tokio::time::sleep(backoff(attempt)).await;
+            }
+            r => return r,
+        }
+    }
+}
+
+/// Exponential backoff with full jitter: up to 10 ms, 20 ms, ... 1 s.
+pub fn backoff(attempt: u32) -> Duration {
+    let cap = 10u64 << attempt.min(7);
+    Duration::from_millis(rand_below(cap.min(1000)) + 1)
+}
+
+fn rand_below(n: u64) -> u64 {
+    use std::hash::{BuildHasher, RandomState};
+    RandomState::new().hash_one(std::time::Instant::now()) % n.max(1)
+}
+
+/// Cache file name for database `db` on the server at `url`.
+fn cache_name(url: &str, db: &str) -> String {
+    let host: String = url
+        .split("://")
+        .last()
+        .unwrap_or(url)
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("overlay-{host}-{db}.json")
+}
+
+fn request_kind(method: &Method, url: &str) -> &'static str {
+    let path = url.split('?').next().unwrap_or(url);
+    if path.ends_with("/txn") {
+        "txn"
+    } else if path.ends_with("/transactions") {
+        "begin"
+    } else if path.ends_with("/ops") {
+        "ops"
+    } else if path.ends_with("/commit") {
+        "commit"
+    } else if path.contains("/transactions/") && method == Method::DELETE {
+        "abort"
+    } else if path.contains("/commits/") {
+        "status"
     } else {
-        Builder::new_local(&cfg.local_path).build().await?
-    };
-
-    let conn = connect(&db).await?;
-    migrate(&conn).await?;
-    Ok(db)
-}
-
-/// libSQL's embedded replica stores its frame-tracking metadata in a
-/// sibling file named `<path>-info`. Its presence is what tells us a
-/// local file is already a replica (versus a plain `SQLite` file left by
-/// an earlier non-sync session).
-fn info_sidecar(local_path: &Path) -> PathBuf {
-    let mut name = local_path.file_name().unwrap_or_default().to_os_string();
-    name.push("-info");
-    local_path.with_file_name(name)
-}
-
-/// `true` when there's a plain local `SQLite` file at `local_path` but no
-/// replica metadata. This can occur if the user previously ran `mt` without
-/// `TURSO_*` set and is now turning sync on.
-fn needs_replica_upgrade(local_path: &Path) -> bool {
-    local_path.exists() && !info_sidecar(local_path).exists()
-}
-
-/// Convert a plain local `SQLite` file into an embedded replica without
-/// losing data. The old file is renamed to `<path>.preupgrade` and
-/// preserved; a fresh replica is opened at the original path, migrated
-/// to the current schema, populated from the backup via `ATTACH`, and
-/// synced to push the rows up to Turso.
-///
-/// Bails out if `<path>.preupgrade` already exists. The user has already
-/// upgraded, and a silently overwrite will destroy whatever the user
-/// was trying to recover.
-async fn upgrade_local_to_replica(local_path: &Path, sync: &SyncConfig) -> Result<Database> {
-    let backup_path = {
-        let mut name = local_path.file_name().unwrap_or_default().to_os_string();
-        name.push(".preupgrade");
-        local_path.with_file_name(name)
-    };
-    if backup_path.exists() {
-        return Err(Error::FileIo {
-            path: backup_path,
-            source: std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                "previous upgrade backup exists; resolve manually before retrying",
-            ),
-        });
+        "other"
     }
-
-    tracing::info!(
-        backup = %backup_path.display(),
-        "converting local SQLite file to libSQL embedded replica",
-    );
-
-    std::fs::rename(local_path, &backup_path).map_err(|e| Error::FileIo {
-        path: local_path.to_path_buf(),
-        source: e,
-    })?;
-
-    let db = Builder::new_synced_database(local_path, sync.url.clone(), sync.auth_token.clone())
-        .build()
-        .await?;
-
-    let conn = connect(&db).await?;
-    migrate(&conn).await?;
-    copy_user_tables_via_attach(&conn, &backup_path).await?;
-    drop(conn);
-
-    // Push the freshly-imported rows to Turso so the local replica and
-    // the remote agree before the caller starts reading.
-    let cfg = DbConfig {
-        local_path: local_path.to_path_buf(),
-        sync: Some(sync.clone()),
-    };
-    maybe_sync(&db, &cfg).await;
-
-    tracing::info!(
-        backup = %backup_path.display(),
-        "replica upgrade complete; original file preserved",
-    );
-    Ok(db)
 }
 
-/// Copy every user table from the `SQLite` file at `backup_path` into the
-/// connection's `main` schema using `ATTACH`. Skips `schema_migrations`
-/// (already populated by [`migrate`] in the new replica) and any table
-/// names that don't exist in the backup. `INSERT OR IGNORE` covers the
-/// edge case where the replica's initial sync from remote already
-/// brought matching rows back.
-async fn copy_user_tables_via_attach(conn: &Connection, backup_path: &Path) -> Result<()> {
-    let attach_path = backup_path.to_str().ok_or_else(|| Error::FileIo {
-        path: backup_path.to_path_buf(),
-        source: std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "backup path is not valid UTF-8",
+/// A retryable failure of a request that certainly did not apply.
+fn not_applied(message: &str) -> Error {
+    Error::Api(ApiError {
+        status: 503,
+        code: "unavailable".into(),
+        message: message.into(),
+        retryable: true,
+        outcome_unknown: false,
+        from_server: true,
+    })
+}
+
+fn api_error(status: StatusCode, body: &[u8]) -> ApiError {
+    let j: Json = serde_json::from_slice(body).unwrap_or(Json::Null);
+    let e = &j["error"];
+    ApiError {
+        status: status.as_u16(),
+        code: e["code"].as_str().unwrap_or("unknown").to_string(),
+        message: e["message"].as_str().map_or_else(
+            || String::from_utf8_lossy(body).into_owned(),
+            str::to_string,
         ),
-    })?;
-    conn.execute("ATTACH DATABASE ? AS legacy", params![attach_path])
-        .await?;
-
-    // The data is internally consistent (it came from a working DB), so
-    // turning FK enforcement off during the copy lets us insert in any
-    // order without weakening any invariant.
-    conn.execute_batch("PRAGMA foreign_keys = OFF;").await?;
-    for table in list_user_tables(conn, "legacy").await? {
-        if table == "schema_migrations" {
-            continue;
-        }
-        let sql = format!(r#"INSERT OR IGNORE INTO main."{table}" SELECT * FROM legacy."{table}""#);
-        conn.execute(&sql, ()).await?;
-    }
-    conn.execute_batch("PRAGMA foreign_keys = ON;").await?;
-    conn.execute_batch("DETACH DATABASE legacy;").await?;
-    Ok(())
-}
-
-async fn list_user_tables(conn: &Connection, schema: &str) -> Result<Vec<String>> {
-    let sql = format!(
-        "SELECT name FROM {schema}.sqlite_master \
-         WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-    );
-    let mut rows = conn.query(&sql, ()).await?;
-    let mut tables = Vec::new();
-    while let Some(row) = rows.next().await? {
-        tables.push(row.get::<String>(0)?);
-    }
-    Ok(tables)
-}
-
-/// Open a new db connection to with FK enforcement enabled.
-pub async fn connect(db: &Database) -> Result<Connection> {
-    let conn = db.connect()?;
-    conn.execute_batch("PRAGMA foreign_keys = ON;").await?;
-    Ok(conn)
-}
-
-/// Apply all new migrations
-pub async fn migrate(conn: &Connection) -> Result<()> {
-    conn.execute_batch(META_SCHEMA).await?;
-    let current = current_version(conn).await?;
-    for m in MIGRATIONS {
-        if m.version <= current {
-            continue;
-        }
-        apply_migration(conn, m).await?;
-    }
-    Ok(())
-}
-
-async fn current_version(conn: &Connection) -> Result<u32> {
-    let mut rows = conn
-        .query(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
-            params![],
-        )
-        .await?;
-    // SQLite aggregates without GROUP BY always return exactly one row,
-    // and the version PK is bounded by the migration count we ship.
-    let row = rows.next().await?.expect("aggregate returns one row");
-    let version: i64 = row.get(0)?;
-    Ok(u32::try_from(version).expect("schema version fits in u32"))
-}
-
-async fn apply_migration(conn: &Connection, m: &Migration) -> Result<()> {
-    let tx = conn.transaction().await?;
-    tx.execute_batch(m.sql).await?;
-    tx.execute(
-        "INSERT INTO schema_migrations(version, name, applied_at) \
-         VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-        params![m.version, m.name],
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(())
-}
-
-/// Convenience for binaries: open with the env-derived config.
-pub async fn open_default() -> Result<Database> {
-    open(&DbConfig::from_env()?).await
-}
-
-/// Push local writes to the remote Turso replica if sync is configured.
-/// No-op for local-only databases. On timeout (after `SYNC_TIMEOUT`) or
-/// transport failure we warn to stderr and return. libSQL will retry
-/// on the next sync, so a transient hiccup never fails a CLI command.
-pub async fn maybe_sync(db: &Database, cfg: &DbConfig) {
-    if cfg.sync.is_none() {
-        return;
-    }
-    match tokio::time::timeout(SYNC_TIMEOUT, db.sync()).await {
-        Ok(Ok(_)) => {}
-        Ok(Err(e)) => tracing::warn!(error = %e, "turso sync failed"),
-        Err(_) => tracing::warn!(
-            timeout_secs = SYNC_TIMEOUT.as_secs(),
-            "turso sync timed out",
-        ),
+        retryable: e["retryable"].as_bool().unwrap_or(status.is_server_error()),
+        outcome_unknown: e["details"]["outcome"] == "unknown",
+        from_server: e.is_object(),
     }
 }
 
-/// Test-only helper: open a local database at `path` with no sync.
-#[doc(hidden)]
-pub async fn open_local(path: &Path) -> Result<Database> {
-    open(&DbConfig::local(path.to_path_buf())).await
+fn results(mut r: Json) -> Result<Vec<Json>> {
+    match r["results"].take() {
+        Json::Array(v) => Ok(v),
+        Json::Null => Ok(Vec::new()),
+        other => Err(Error::BadResponse(format!("results: {other}"))),
+    }
+}
+
+fn str_field(r: &Json, k: &str) -> Result<String> {
+    r[k].as_str()
+        .map(str::to_string)
+        .ok_or_else(|| Error::BadResponse(format!("missing {k} in {r}")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[test]
-    fn sync_config_requires_both_fields_non_empty() {
-        let cfg =
-            SyncConfig::new("libsql://example.turso.io".into(), "secret".into()).expect("both set");
-        assert_eq!(cfg.url, "libsql://example.turso.io");
-        assert_eq!(cfg.auth_token, "secret");
+    fn only_baserunna_errors_say_whether_a_request_applied() {
+        let body = br#"{"error":{"code":"conflict","message":"m","retryable":true}}"#;
+        let server = api_error(StatusCode::CONFLICT, body);
+        assert!(server.from_server && server.retryable && !server.outcome_unknown);
 
-        assert!(SyncConfig::new(String::new(), "secret".into()).is_none());
-        assert!(SyncConfig::new("libsql://x".into(), String::new()).is_none());
-        assert!(SyncConfig::new(String::new(), String::new()).is_none());
-    }
+        let unknown = br#"{"error":{"code":"unavailable","message":"m","retryable":true,"details":{"outcome":"unknown"}}}"#;
+        assert!(api_error(StatusCode::SERVICE_UNAVAILABLE, unknown).outcome_unknown);
 
-    #[test]
-    fn db_config_local_has_no_sync() {
-        let cfg = DbConfig::local("/tmp/never-opened.db");
-        assert!(cfg.sync.is_none());
-        assert_eq!(cfg.local_path, PathBuf::from("/tmp/never-opened.db"));
-    }
-
-    #[test]
-    fn info_sidecar_appends_dash_info() {
-        assert_eq!(
-            info_sidecar(Path::new("/var/lib/mt.db")),
-            PathBuf::from("/var/lib/mt.db-info"),
-        );
-        assert_eq!(
-            info_sidecar(Path::new("mt.db")),
-            PathBuf::from("mt.db-info")
-        );
-    }
-
-    #[test]
-    fn needs_replica_upgrade_detects_plain_file() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("mt.db");
-
-        assert!(!needs_replica_upgrade(&path), "missing file => no upgrade");
-
-        std::fs::write(&path, b"plain sqlite bytes").unwrap();
-        assert!(needs_replica_upgrade(&path), "plain file => upgrade");
-
-        std::fs::write(info_sidecar(&path), b"replica meta").unwrap();
+        let proxy = api_error(StatusCode::BAD_GATEWAY, b"<html>502 Bad Gateway</html>");
         assert!(
-            !needs_replica_upgrade(&path),
-            "-info sidecar present => already a replica"
+            !proxy.from_server,
+            "a proxy's page says nothing about the commit"
         );
+        assert!(proxy.retryable);
     }
 
-    /// End-to-end check of the data-preservation step: a plain local DB
-    /// with user rows is renamed to a backup, a fresh DB is opened at
-    /// the original path and migrated, and `copy_user_tables_via_attach`
-    /// pulls every row across. This is the part of the upgrade that
-    /// must not lose data; the surrounding sync plumbing needs a real
-    /// Turso endpoint and is not exercised here.
-    #[tokio::test]
-    async fn copy_user_tables_via_attach_preserves_rows() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("mt.db");
-
-        // 1. Plain local DB with one row in `paths` and one in `events`.
-        let old = Builder::new_local(&path).build().await.unwrap();
-        let conn = connect(&old).await.unwrap();
-        migrate(&conn).await.unwrap();
-        conn.execute(
-            "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
-            params!["p1", "learn calc", "2026-05-31T00:00:00Z"],
-        )
-        .await
-        .unwrap();
-        conn.execute(
-            "INSERT INTO events(ts, kind, path_id, payload) VALUES (?, ?, ?, ?)",
-            params!["2026-05-31T00:00:01Z", "path_created", "p1", r#"{"k":"v"}"#],
-        )
-        .await
-        .unwrap();
-        drop(conn);
-        drop(old);
-
-        // 2. Simulate the rename step of `upgrade_local_to_replica`.
-        let backup = path.with_extension("db.preupgrade");
-        std::fs::rename(&path, &backup).unwrap();
-
-        // 3. Fresh DB at the original path, migrated to current schema.
-        let fresh = Builder::new_local(&path).build().await.unwrap();
-        let conn = connect(&fresh).await.unwrap();
-        migrate(&conn).await.unwrap();
-
-        // 4. Copy from backup.
-        copy_user_tables_via_attach(&conn, &backup).await.unwrap();
-
-        // 5. Rows are present in the fresh DB.
-        let mut rows = conn
-            .query("SELECT goal FROM paths WHERE id = ?", params!["p1"])
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().expect("path row");
-        assert_eq!(row.get::<String>(0).unwrap(), "learn calc");
-
-        let mut rows = conn
-            .query(
-                "SELECT payload FROM events WHERE path_id = ?",
-                params!["p1"],
-            )
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().expect("event row");
-        assert_eq!(row.get::<String>(0).unwrap(), r#"{"k":"v"}"#);
-
-        // FK enforcement is still on after the copy (the helper flips it
-        // off mid-copy, then back on); inserting an orphan must fail.
-        let bad = conn
-            .execute(
-                "INSERT INTO path_targets(path_id, target_id, position) VALUES (?, ?, ?)",
-                params!["nope", "atom", 0],
-            )
-            .await;
-        assert!(bad.is_err(), "FKs must be re-enabled after copy");
-    }
-
-    /// Copying into a fresh replica must be safe even when remote sync
-    /// has already populated some rows: `INSERT OR IGNORE` skips PK
-    /// collisions rather than failing the upgrade.
-    #[tokio::test]
-    async fn copy_user_tables_via_attach_tolerates_existing_rows() {
-        let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("mt.db");
-
-        let old = Builder::new_local(&path).build().await.unwrap();
-        let conn = connect(&old).await.unwrap();
-        migrate(&conn).await.unwrap();
-        conn.execute(
-            "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
-            params!["dup", "old goal", "2026-05-31T00:00:00Z"],
-        )
-        .await
-        .unwrap();
-        drop(conn);
-        drop(old);
-
-        let backup = path.with_extension("db.preupgrade");
-        std::fs::rename(&path, &backup).unwrap();
-
-        let fresh = Builder::new_local(&path).build().await.unwrap();
-        let conn = connect(&fresh).await.unwrap();
-        migrate(&conn).await.unwrap();
-        // Pre-existing remote row with the same PK as the backup.
-        conn.execute(
-            "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
-            params!["dup", "remote goal", "2026-05-31T00:00:00Z"],
-        )
-        .await
-        .unwrap();
-
-        copy_user_tables_via_attach(&conn, &backup)
-            .await
-            .expect("copy must not fail on PK collisions");
-
-        let mut rows = conn
-            .query("SELECT goal FROM paths WHERE id = ?", params!["dup"])
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap().unwrap();
-        assert_eq!(
-            row.get::<String>(0).unwrap(),
-            "remote goal",
-            "existing row wins; backup row is ignored"
+    #[test]
+    fn server_timing_parses_every_metric() {
+        let t = ServerTiming::parse(
+            "total;dur=80.5, store;dur=75.2;desc=2, commit;dur=74.9, wait;dur=1.5",
         );
+        assert_eq!(t.total, Duration::from_micros(80_500));
+        assert_eq!((t.store, t.store_calls), (Duration::from_micros(75_200), 2));
+        assert_eq!(t.commit, Duration::from_micros(74_900));
+        assert_eq!(t.wait, Duration::from_micros(1_500));
     }
 }

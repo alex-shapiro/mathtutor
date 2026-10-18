@@ -2,13 +2,12 @@
 
 use std::path::Path;
 
-use libsql::Connection;
-
 use crate::Result;
+use crate::db::Db;
 use crate::event_log;
-use crate::graph::Graph;
-use crate::path;
+
 use crate::types::Rating;
+use crate::view::Want;
 
 /// Recover the atom ID from a quiz ID like `fnd.1.1.1.q3`.
 pub fn atom_from_quiz_id(quiz_id: &str) -> Option<String> {
@@ -17,29 +16,30 @@ pub fn atom_from_quiz_id(quiz_id: &str) -> Option<String> {
 }
 
 pub async fn cmd_quiz_answer(
-    conn: &Connection,
+    db: &Db,
     quiz_id: &str,
     rating: Rating,
     user_answer: Option<String>,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let tx = conn.transaction().await?;
-    let id = path::resolve_id(&tx, path_id).await?;
-    let g = Graph::load_for_path(&tx, graph_dir).await?;
-    // Validate the quiz exists in the merged graph before writing
-    // anything. Otherwise a typo silently leaves an event row and a
-    // ghost `cards` entry for a quiz no scheduler will ever surface.
-    let (atom, _) = g.quiz(quiz_id)?;
-    let atom_id = atom.id.clone();
-
-    event_log::append(
-        &tx,
-        &event_log::quiz_answered(id, Some(atom_id), quiz_id.to_string(), rating, user_answer),
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(())
+    db.transact(&Want::path(path_id), |view, changes| {
+        let id = view.path()?.file.id.clone();
+        // Validate the quiz exists in the merged graph before writing
+        // anything. Otherwise a typo silently leaves an event and a
+        // ghost card for a quiz no scheduler will ever surface.
+        let g = view.graph(graph_dir)?;
+        let (atom, _) = g.quiz(quiz_id)?;
+        let e = event_log::quiz_answered(
+            id,
+            Some(atom.id.clone()),
+            quiz_id.to_string(),
+            rating,
+            user_answer.clone(),
+        );
+        changes.append(view, &e)
+    })
+    .await
 }
 
 #[cfg(test)]

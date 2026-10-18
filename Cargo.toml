@@ -33,8 +33,8 @@ chrono = { version = "0.4", features = ["serde"] }
 fsrs = "6.1.0"
 hmac = { version = "0.13", optional = true }
 include_dir = "0.7"
-libsql = { version = "0.9.30", default-features = false, features = ["core", "sync", "tls"] }
 rand = { version = "0.10", optional = true }
+reqwest = { version = "0.13.4", features = ["json"] }
 rmcp = { version = "1.7", optional = true, features = [
     "server",
     "macros",
