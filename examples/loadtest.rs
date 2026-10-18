@@ -609,8 +609,13 @@ async fn main() {
     let server_metrics = |reset: bool| {
         let (http, url, token) = (http.clone(), metrics_url.clone(), base.token.clone());
         async move {
+            let method = if reset {
+                reqwest::Method::DELETE
+            } else {
+                reqwest::Method::GET
+            };
             let r = http
-                .get(format!("{url}?reset={reset}"))
+                .request(method, url)
                 .bearer_auth(token)
                 .send()
                 .await
