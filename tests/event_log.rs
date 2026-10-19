@@ -11,7 +11,7 @@
 //! 3. `cards::recompute` rebuilds cards deterministically from the event
 //!    log alone, matching live append behavior.
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use mathtutor::cards::{self, CardRow, CardState};
 use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::types::{Rating, Strategy};
@@ -204,7 +204,10 @@ async fn non_answer_events_leave_cards_unscheduled() {
     assert!(card.last_presented_at.is_some());
     assert!(!ps.cards.contains_key("atom.x.q2"));
     assert_eq!(ps.cards.len(), 1);
-    assert!(ps.due(Utc::now() + Duration::days(365)).is_empty());
+    assert_eq!(
+        ps.due(Utc::now() + Duration::days(365)),
+        Vec::<(String, DateTime<Utc>)>::new()
+    );
 }
 
 #[tokio::test]

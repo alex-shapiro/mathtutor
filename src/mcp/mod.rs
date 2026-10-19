@@ -468,6 +468,8 @@ impl MathTutorServer {
 
 // ───────────────────────────── handler ────────────────────────────
 
+// rmcp's handler macros generate `async` methods that never await.
+#[allow(unknown_lints, clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 #[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for MathTutorServer {

@@ -191,7 +191,7 @@ async fn initialize_returns_server_info_and_capabilities() {
         "name comes from rmcp's build env helper"
     );
 
-    assert!(!session.is_empty());
+    assert_ne!(session, "");
     server.stop().await;
 }
 
@@ -573,7 +573,7 @@ async fn well_known_routes_unreachable_when_oauth_disabled() {
 async fn register_issues_client_id_and_round_trips_redirect_uris() {
     let server = spawn_oauth_server().await;
     let res = register_client(&server, "Test Client").await;
-    assert!(!res.client_id.is_empty());
+    assert_ne!(res.client_id, "");
     assert_eq!(res.redirect_uris, vec!["http://localhost/cb".to_string()]);
     assert_eq!(res.token_endpoint_auth_method, "none");
     server.stop().await;
@@ -650,8 +650,8 @@ async fn full_authorization_code_flow_yields_a_working_access_token() {
     assert_eq!(returned_state.as_deref(), Some(state));
 
     let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
-    assert!(!tokens.access_token.is_empty());
-    assert!(!tokens.refresh_token.is_empty());
+    assert_ne!(tokens.access_token, "");
+    assert_ne!(tokens.refresh_token, "");
     assert_eq!(tokens.token_type, "Bearer");
 
     // The minted access token must satisfy /mcp without MT_API_KEY.

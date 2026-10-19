@@ -41,7 +41,7 @@ async fn quiz_history_empty_when_quiz_never_touched() {
     assert_eq!(h.correct_count, 0);
     assert_eq!(h.correct_pct, None);
     assert!(h.last_presented_at.is_none());
-    assert!(h.recent_ratings.is_empty());
+    assert_eq!(h.recent_ratings, Vec::<Rating>::new());
 }
 
 #[tokio::test]

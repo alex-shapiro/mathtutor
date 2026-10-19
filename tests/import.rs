@@ -390,7 +390,7 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
         ("p_b", Strategy::BottomUp)
     );
     assert_eq!(b.file.targets, ["fnd.1"]);
-    assert!(b.file.subpath.is_empty());
+    assert_eq!(b.file.subpath, Vec::<String>::new());
     assert_eq!(b.file.updated_at, at(30));
     assert_eq!((c.file.id.as_str(), c.file.updated_at), ("p_c", at(40)));
 

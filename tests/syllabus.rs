@@ -94,7 +94,10 @@ fn authored(atom_id: &str) -> Event {
 fn empty_targets_yield_empty_syllabus() {
     let g = graph_of(vec![]);
     let p = path_with(&[]);
-    assert!(syllabus::upcoming_atoms(&g, &p.targets, &PathProgress::default()).is_empty());
+    assert_eq!(
+        syllabus::upcoming_atoms(&g, &p.targets, &PathProgress::default()),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -114,7 +117,10 @@ fn taught_target_is_skipped() {
     let g = graph_of(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
-    assert!(syllabus::upcoming_atoms(&g, &p.targets, &progress_of(&events)).is_empty());
+    assert_eq!(
+        syllabus::upcoming_atoms(&g, &p.targets, &progress_of(&events)),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -124,7 +130,10 @@ fn lesson_authored_event_counts_as_taught() {
     let g = graph_of(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = vec![authored("a")];
-    assert!(syllabus::upcoming_atoms(&g, &p.targets, &progress_of(&events)).is_empty());
+    assert_eq!(
+        syllabus::upcoming_atoms(&g, &p.targets, &progress_of(&events)),
+        Vec::<String>::new()
+    );
 }
 
 #[test]

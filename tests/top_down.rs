@@ -304,7 +304,7 @@ async fn subpath_round_trips_and_clears() {
     assert_eq!(load_path(&conn, &id).await.subpath, vec!["x", "y"]);
 
     subpath::cmd_subpath_clear(&conn, Some(&id)).await.unwrap();
-    assert!(load_path(&conn, &id).await.subpath.is_empty());
+    assert_eq!(load_path(&conn, &id).await.subpath, Vec::<String>::new());
 }
 
 // ── subpath command validation ──────────────────────────────────────
