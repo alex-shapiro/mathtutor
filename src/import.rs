@@ -1,12 +1,4 @@
-//! `mt import-turso`: one-time import of the libSQL (Turso) database used
-//! before Baserunna.
-//!
-//! Reads a database at the last libSQL migration (4) over Turso's HTTP API
-//! and writes its paths, authored lessons and quizzes, and each path's
-//! events, with their original timestamps, into the user database. Cards
-//! and lessons taught are then rebuilt from the events and checked against
-//! the libSQL `cards` rows. Paths already imported are skipped, so an
-//! interrupted import can be rerun.
+//! Migration from a libSQL (Turso) database to Baserunna (`mt import-turso`).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -27,16 +19,11 @@ use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::Want;
 use crate::{Error, Result};
 
-/// The last migration the libSQL schema had.
 const SCHEMA_VERSION: i64 = 4;
 
-/// Relative difference within which FSRS parameters count as equal: the
-/// libSQL rows hold them as doubles widened from `f32`.
+/// Relative tolerance for comparing `f32` FSRS parameters against `f64` values stored in libSQL.
 const FSRS_TOLERANCE: f64 = 1e-4;
 
-// ── Turso HTTP API ──────────────────────────────────────────────────
-
-/// A libSQL server reached over its HTTP API (Hrana over HTTP, v2).
 pub struct Turso {
     http: reqwest::Client,
     pipeline_url: String,
@@ -44,7 +31,6 @@ pub struct Turso {
 }
 
 impl Turso {
-    /// `url` is the database URL; `libsql://` is read as `https://`.
     pub fn new(url: &str, token: Option<String>) -> Result<Self> {
         let base = match url.strip_prefix("libsql://") {
             Some(host) => format!("https://{host}"),
@@ -59,8 +45,6 @@ impl Turso {
         })
     }
 
-    /// Run `queries` in one read transaction and return each one's rows as
-    /// objects keyed by column name.
     async fn read(&self, queries: &[&str]) -> Result<Vec<Vec<Map<String, Json>>>> {
         let stmts = std::iter::once("BEGIN")
             .chain(queries.iter().copied())
@@ -156,7 +140,7 @@ struct Col {
     name: Option<String>,
 }
 
-/// A `SQLite` value; integers arrive as strings to keep 64 bits exact.
+/// Hrana wire value where 64-bit integers are encoded as strings to avoid JSON float precision loss.
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Value {
@@ -209,8 +193,6 @@ fn rows<T: DeserializeOwned>(table: &str, rows: Vec<Map<String, Json>>) -> Resul
         .collect()
 }
 
-// ── libSQL rows ─────────────────────────────────────────────────────
-
 const QUERIES: [&str; 9] = [
     "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations",
     "SELECT id, goal, created_at, strategy FROM paths",
@@ -240,7 +222,6 @@ struct PathRow {
     strategy: Strategy,
 }
 
-/// A row of `path_targets` or `path_subpath`, in position order.
 #[derive(Deserialize)]
 struct PathAtom {
     path_id: String,
@@ -256,7 +237,6 @@ struct EventRow {
     atom_id: Option<String>,
     quiz_id: Option<String>,
     rating: Option<i64>,
-    /// JSON with the event's `reason` and `user_answer`.
     payload: Option<String>,
 }
 
@@ -286,11 +266,9 @@ struct QuizRow {
 #[derive(Deserialize)]
 struct RemovedRow {
     quiz_id: String,
-    /// The tombstoned quiz's atom, when it was an authored quiz.
     atom_id: Option<String>,
 }
 
-/// A libSQL `cards` row: the FSRS state of an answered quiz.
 #[derive(Deserialize)]
 struct CardRow {
     path_id: String,
@@ -305,10 +283,8 @@ struct CardRow {
     lapses: u32,
 }
 
-/// Everything the import reads, as of one snapshot.
 struct Legacy {
     paths: Vec<PathFile>,
-    /// Each path's events, in logged order.
     events: HashMap<String, Vec<Event>>,
     overlay: Vec<Edit>,
     cards: HashMap<String, Vec<CardRow>>,
@@ -377,7 +353,6 @@ async fn read(turso: &Turso) -> Result<Legacy> {
     })
 }
 
-/// Each path's events, in logged order.
 fn group_events(rows: Vec<EventRow>) -> Result<HashMap<String, Vec<Event>>> {
     let mut by_path: HashMap<String, Vec<Event>> = HashMap::new();
     for e in rows {
@@ -402,8 +377,7 @@ fn group_events(rows: Vec<EventRow>) -> Result<HashMap<String, Vec<Event>>> {
     Ok(by_path)
 }
 
-/// The edits that store the libSQL overlay. Quizzes come before
-/// tombstones, since storing a quiz clears its tombstone.
+/// Orders quiz edits before tombstones because upserting a quiz deletes its tombstone row.
 fn overlay_edits(
     lessons: Vec<LessonRow>,
     quizzes: Vec<QuizRow>,
@@ -443,21 +417,15 @@ fn group(atoms: Vec<PathAtom>) -> HashMap<String, Vec<String>> {
     out
 }
 
-// ── Import ──────────────────────────────────────────────────────────
-
-/// What an import wrote and how its result compares with the source.
 #[derive(Debug, Default)]
 pub struct Report {
     pub paths: usize,
-    /// Paths found already imported.
     pub skipped: usize,
     pub events: usize,
     pub overlay_edits: usize,
-    /// Differences between the imported state and the libSQL rows.
     pub mismatches: Vec<String>,
 }
 
-/// Import everything `turso` holds into `db` and check the result.
 pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     let legacy = read(turso).await?;
     let mut report = Report {
@@ -483,7 +451,6 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         } else {
             report.skipped += 1;
         }
-        // A path without events has no stream to rebuild from.
         if !events.is_empty() {
             cards::recompute(db, &p.id).await?;
         }
@@ -498,7 +465,6 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     Ok(report)
 }
 
-/// Write `p` and its events in one transaction, unless it already exists.
 async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
     let existing = db.read_one(Op::get_row::<PathFile>(&[&p.id])).await?;
     if existing.row::<PathFile>()?.is_some() {
@@ -515,7 +481,6 @@ async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
     Ok(true)
 }
 
-/// Differences between a path's stored events and cards and the libSQL ones.
 async fn verify(
     db: &Db,
     path_id: &str,
@@ -581,7 +546,6 @@ async fn verify(
     Ok(out)
 }
 
-/// `mt import-turso`: import, print a summary, and fail on any mismatch.
 pub async fn cmd_import_turso(db: &Db, url: &str, token: Option<String>) -> Result<()> {
     let r = import(&Turso::new(url, token)?, db).await?;
     eprintln!(

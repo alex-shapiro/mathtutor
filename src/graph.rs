@@ -1,4 +1,4 @@
-//! Curriculum graph: AYML-backed types, loader, and `mt graph check`.
+//! Curriculum graph loader, overlay merger, and graph validator.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -11,12 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::{Difficulty, QuizType};
 use crate::{Error, Result};
 
-/// Curriculum bytes baked into the binary at compile time.
-/// The `--graph DIR` CLI flag and `MT_GRAPH` env override this
-/// for development against a working tree.
 static EMBEDDED_GRAPH: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/curriculum/graph");
-
-// ── Manifest ────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Manifest {
@@ -31,12 +26,6 @@ pub struct ManifestArea {
     pub file: String,
     pub summary: String,
 }
-
-// ── Raw area-file shape (handles both v1 and v2) ────────────────────
-//
-// These types round-trip: deserialize on read, re-serialize on write.
-// Field order matches the on-disk convention; empty / `None` fields
-// are skip-serialized to keep files free of default-valued lines.
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AreaFileRaw {
@@ -111,9 +100,6 @@ struct NodeRaw {
     terminal: bool,
 }
 
-// ── Unified concept tree ────────────────────────────────────────────
-
-/// Concept node
 #[derive(Debug, Clone)]
 struct Concept {
     id: String,
@@ -123,13 +109,9 @@ struct Concept {
     children: Vec<Concept>,
     lesson: Option<String>,
     quizzes: Vec<Quiz>,
-    /// Terminal topic with no dependents
     terminal: bool,
 }
 
-/// A single quiz card. Serializable for AYML round-trip (shipped
-/// curriculum, `mt graph dump`) and as the in-memory shape used by
-/// the scheduler and merge logic.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Quiz {
     pub id: String,
@@ -208,9 +190,7 @@ fn node_to_concept(n: NodeRaw) -> Concept {
     }
 }
 
-/// Synthetic area-root node (keyed by the area prefix) wrapping the area's
-/// top-level concepts, so an area resolves and is looked up like any other
-/// cluster. Identity comes from the manifest entry, children from the file.
+/// Wraps top-level area concepts in a synthetic root node so that area prefixes are resolved as clusters.
 fn area_root_concept(entry: &ManifestArea, children: Vec<Concept>) -> Concept {
     Concept {
         id: entry.prefix.clone(),
@@ -223,8 +203,6 @@ fn area_root_concept(entry: &ManifestArea, children: Vec<Concept>) -> Concept {
         terminal: false,
     }
 }
-
-// ── Loaders ─────────────────────────────────────────────────────────
 
 fn load_manifest(path: &Path) -> Result<Manifest> {
     let reader = open_reader(path)?;
@@ -250,11 +228,6 @@ fn open_reader(path: &Path) -> Result<BufReader<File>> {
     Ok(BufReader::new(file))
 }
 
-// ── Embedded loaders ────────────────────────────────────────────────
-
-/// Display-only sentinel path used in `Error::AymlParse` when reading
-/// the compiled-in curriculum. Lets the error pinpoint the offending
-/// file without lying about its location on disk.
 fn embedded_path(name: &str) -> PathBuf {
     PathBuf::from(format!("<embedded>/{name}"))
 }
@@ -289,9 +262,7 @@ fn load_area_embedded(filename: &str) -> Result<AreaFileRaw> {
     })
 }
 
-/// Resolve where to load curriculum from, honoring (in order) the
-/// explicit `--graph DIR` flag, the `MT_GRAPH` env var, and otherwise
-/// the embedded copy.
+/// Loads `manifest.ayml` from `explicit`, `$MT_GRAPH`, or the embedded curriculum directory.
 pub fn load_manifest_default(explicit: Option<&Path>) -> Result<Manifest> {
     if let Some(p) = explicit {
         return load_manifest(&p.join("manifest.ayml"));
@@ -312,10 +283,6 @@ fn load_area_default(explicit: Option<&Path>, filename: &str) -> Result<AreaFile
     load_area_embedded(filename)
 }
 
-// ── Flat graph (for scheduler / `mt path new`) ─────────────────────
-
-/// Flattened lookup view: every concept (cluster + atom) keyed by ID.
-/// Built once via `Graph::load`.
 #[derive(Debug, Clone)]
 pub struct Graph {
     pub by_id: HashMap<String, FlatConcept>,
@@ -343,7 +310,6 @@ impl Graph {
         Ok(Self { by_id })
     }
 
-    /// Load curriculum from compiled-in bytes, parsed once per process.
     pub fn load_embedded() -> Result<Self> {
         static PARSED: std::sync::OnceLock<Graph> = std::sync::OnceLock::new();
         if let Some(g) = PARSED.get() {
@@ -363,10 +329,7 @@ impl Graph {
         Ok(Self { by_id })
     }
 
-    /// Source priority: explicit `--graph DIR` → `MT_GRAPH` env →
-    /// embedded copy. The embedded variant is the default for shipped
-    /// binaries; the others exist for development against a working
-    /// tree.
+    /// Loads the curriculum graph from `explicit`, `$MT_GRAPH`, or the embedded curriculum directory.
     pub fn load_default(explicit: Option<&Path>) -> Result<Self> {
         if let Some(p) = explicit {
             return Self::load(p);
@@ -377,21 +340,14 @@ impl Graph {
         Self::load_embedded()
     }
 
-    /// Effective graph "as the user sees it", merging the shipped curriculum
-    /// and user overlay. This is the entrypoint for scheduler, tree, and state
-    /// queries.
-    ///
-    /// Conflict resolution rule: an overlay lesson, quiz, or tombstone
-    /// always overrides a built-in item with the same ID. Tombstones
-    /// override everything.
+    /// Loads the curriculum graph and applies `overlay` overrides and tombstones.
     pub fn merged(overlay: &crate::overlay::Overlay, graph_dir: Option<&Path>) -> Result<Self> {
         let mut g = Self::load_default(graph_dir)?;
         g.apply_overlay(overlay);
         Ok(g)
     }
 
-    /// Returns targets and the transitive closure of their prerequisites
-    /// as a set of atoms.
+    /// Returns all atomic descendants of `targets` and their transitive prerequisites.
     pub fn reachable_atoms(&self, targets: &[String]) -> HashSet<String> {
         let mut out: HashSet<String> = HashSet::new();
         let mut stack: Vec<String> = targets.to_vec();
@@ -400,7 +356,6 @@ impl Graph {
                 continue;
             };
             if !c.children_ids.is_empty() {
-                // Expand cluster to atoms and prereqs
                 stack.extend(c.children_ids.iter().cloned());
                 stack.extend(c.prerequisites.iter().cloned());
                 continue;
@@ -413,14 +368,7 @@ impl Graph {
         out
     }
 
-    /// Resolve each input ID to atoms, deduplicated and in first-seen
-    /// order (children before their cluster's later siblings):
-    ///
-    /// - an atom (leaf node) maps to itself
-    /// - a cluster (non-leaf node) expands to all its atomic descendants
-    ///
-    /// Errors if an ID maps to no atom (`UnknownId`) or names an empty
-    /// cluster (`EmptyCluster`).
+    /// Expands atom and cluster IDs into a deduplicated list of atomic descendant IDs in first-seen order.
     pub fn expand_to_atoms(&self, ids: &[String]) -> Result<Vec<String>> {
         let mut seen: HashSet<String> = HashSet::new();
         let mut out: Vec<String> = Vec::new();
@@ -463,8 +411,6 @@ impl Graph {
         }
     }
 
-    /// Validate `id` resolves to an atom in the merged graph.
-    /// Returns `AtomNotFound` if missing and `NotAtom` if id is a cluster.
     pub fn atom(&self, id: &str) -> Result<&FlatConcept> {
         let c = self
             .by_id
@@ -476,8 +422,6 @@ impl Graph {
         Ok(c)
     }
 
-    /// Return the parent atom and `Quiz` for a given quiz ID.
-    /// Validates that the quiz & atom exist.
     pub fn quiz(&self, quiz_id: &str) -> Result<(&FlatConcept, &Quiz)> {
         let atom_id = crate::answer::atom_from_quiz_id(quiz_id)
             .ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
@@ -493,32 +437,21 @@ impl Graph {
         Ok((atom, q))
     }
 
-    /// Apply the user overlay to this graph in place. See
-    /// [`Graph::merged`] for the conflict-resolution contract.
     fn apply_overlay(&mut self, overlay: &crate::overlay::Overlay) {
         for (atom_id, entry) in &overlay.atoms {
             let Some(c) = self.by_id.get_mut(atom_id) else {
-                // Atom is not in the shipped graph and should be skipped.
-                // A future graph version may add it, at which point the
-                // overlay starts taking effect; or the user can clean
-                // up the overlay manually.
                 continue;
             };
             if entry.lesson.is_some() {
                 c.lesson.clone_from(&entry.lesson);
             }
 
-            // Quizzes: overlay entries replace shipped entries with the
-            // same id (amend), and are appended otherwise (added).
             for overlay_quiz in &entry.quizzes {
                 match c.quizzes.iter_mut().find(|q| q.id == overlay_quiz.id) {
                     Some(existing) => existing.clone_from(overlay_quiz),
                     None => c.quizzes.push(overlay_quiz.clone()),
                 }
             }
-            // Tombstones beat both shipped and overlay-authored quizzes:
-            // an answered quiz's `QuizAnswered` events stay in the log
-            // for audit, but the merged view drops it.
             if !entry.removed.is_empty() {
                 c.quizzes.retain(|q| !entry.removed.contains(&q.id));
             }
@@ -526,11 +459,7 @@ impl Graph {
     }
 }
 
-/// Orders dotted concept ids segment by segment, comparing numeric
-/// segments by value so `nn.1.2` precedes `nn.1.10`. Plain lexicographic
-/// ordering interleaves `nn.1.10` between `nn.1.1` and `nn.1.2`, which
-/// scrambles path order and tree rendering. Allocation-free: segments are
-/// parsed in place, never collected into a key.
+/// Compares dot-separated concept IDs segment by segment, ordering numeric segments by integer value.
 pub fn natural_id_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let (mut sa, mut sb) = (a.split('.'), b.split('.'));
@@ -572,8 +501,6 @@ fn flatten(c: Concept, by_id: &mut HashMap<String, FlatConcept>) {
         flatten(child, by_id);
     }
 }
-
-// ── Validation ──────────────────────────────────────────────────────
 
 #[derive(Debug)]
 pub struct CheckIssue {
@@ -736,10 +663,7 @@ pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport> {
     Ok(report)
 }
 
-/// Flag atoms that no other concept lists as a prerequisite. A
-/// prerequisite reference to a cluster covers all its descendant
-/// atoms (mirroring how the scheduler expands cluster prereqs in
-/// `Graph::reachable_atoms`). Atoms marked `terminal: true` opt out.
+/// Reports non-terminal atoms that are not referenced as prerequisites directly or via an ancestor cluster.
 fn check_orphans(
     area_trees: &[(ManifestArea, u32, Vec<Concept>)],
     adj: &HashMap<String, Vec<String>>,
@@ -1002,8 +926,6 @@ mod tests {
 
     #[test]
     fn natural_id_cmp_orders_numeric_segments_by_value() {
-        // Lexicographic order would place `nn.1.10.1` between `…1.1` and
-        // `…2.1`; natural order must keep `1, 2, …, 10` by value.
         let mut ids = vec!["nn.1.10.1", "nn.1.2.1", "nn.1.1.2", "nn.1.1.1"];
         ids.sort_by(|a, b| natural_id_cmp(a, b));
         assert_eq!(ids, vec!["nn.1.1.1", "nn.1.1.2", "nn.1.2.1", "nn.1.10.1"]);

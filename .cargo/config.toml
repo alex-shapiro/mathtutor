@@ -1,4 +1,3 @@
-# Fetch git dependencies with the system git, so private repositories use
-# the same SSH keys and agent as `git clone`.
+# Use the system git binary so private dependencies use the local SSH agent.
 [net]
 git-fetch-with-cli = true

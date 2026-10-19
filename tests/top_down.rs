@@ -1,5 +1,4 @@
-//! Top-down strategy + subpath: scheduler branch, strategy persistence,
-//! and subpath storage / validation.
+//! Unit and integration tests for top-down scheduling, strategy persistence, and subpaths.
 
 mod common;
 
@@ -17,8 +16,6 @@ use mathtutor::{Error, subpath};
 
 const NO_DUE: &[(String, chrono::DateTime<Utc>)] = &[];
 
-/// A `PathProgress` marking each id complete: lesson taught and all three
-/// derived quizzes (`{id}.q1/.q2/.q3`, per `complete_atom`) answered.
 fn progress_complete(ids: &[&str]) -> PathProgress {
     let mut p = PathProgress::default();
     for id in ids {
@@ -34,11 +31,8 @@ fn atom_id(a: &Action) -> Option<&str> {
     a.atom_id()
 }
 
-// ── scheduler branch ────────────────────────────────────────────────
-
 #[test]
 fn top_down_presents_target_before_its_prereqs() {
-    // target `t` depends on `p`; nothing taught yet.
     let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let action = scheduler::next_action(
@@ -59,8 +53,6 @@ fn top_down_presents_target_before_its_prereqs() {
 
 #[test]
 fn bottom_up_descends_into_prereqs_first() {
-    // Same graph, contrasting strategy: bottom-up reaches the deepest
-    // unlearned prerequisite before the target.
     let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::BottomUp);
     let action = scheduler::next_action(
@@ -81,8 +73,6 @@ fn bottom_up_descends_into_prereqs_first() {
 
 #[test]
 fn top_down_subpath_walked_in_order() {
-    // With a subpath set, `next` serves its first incomplete atom even
-    // though the bare target would otherwise come first.
     let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let subpath = vec!["p".to_string(), "t".to_string()];
@@ -122,8 +112,6 @@ fn top_down_subpath_advances_when_earlier_atom_complete() {
 
 #[test]
 fn top_down_drained_subpath_falls_through_to_targets() {
-    // Subpath holds only the (now complete) prereq; `next` falls through
-    // to the still-incomplete target.
     let g = graph_of(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let subpath = vec!["p".to_string()];
@@ -164,14 +152,8 @@ fn top_down_done_when_targets_complete() {
     );
 }
 
-// ── cluster targets resolve on load ─────────────────────────────────
-
 #[test]
 fn top_down_cluster_target_resolves_to_atomic_children() {
-    // Regression: a target that's a cluster (e.g. an atom the curriculum
-    // later split into one) must expand to its atoms rather than be
-    // skipped or treated as a lesson-less atom. `resolve_targets` does the
-    // expansion; the scheduler then descends into the first child.
     let g = graph_of(vec![
         cluster("tx.1", &["tx.1.1", "tx.1.2"]),
         empty_atom("tx.1.1", &[]),
@@ -200,9 +182,6 @@ fn top_down_cluster_target_resolves_to_atomic_children() {
 
 #[tokio::test]
 async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
-    // End-to-end against the embedded curriculum: a path targeting an area
-    // root stores the root verbatim, and `syllabus` expands it to the
-    // area's upcoming atoms.
     let conn = common::empty_db().await;
     let id = path::cmd_path_new(
         &conn,
@@ -231,10 +210,7 @@ async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
 
 #[tokio::test]
 async fn subpath_cluster_atom_resolves_on_load() {
-    // Regression: a subpath atom that a later curriculum edit split into a
-    // cluster must expand on load — same as targets — rather than being
-    // served to the scheduler as a lesson-less cluster. Set-time validation
-    // forbids cluster atoms, so we store one directly to simulate the drift.
+    // Store a cluster ID directly to simulate curriculum refactoring after subpath creation.
     let conn = common::empty_db().await;
     let id = save(&conn, &["tx.1.1.1"], Strategy::TopDown).await;
     replace_subpath(&conn, &id, &["tx.1".into()]).await;
@@ -256,8 +232,6 @@ async fn subpath_cluster_atom_resolves_on_load() {
     );
 }
 
-// ── strategy persistence ────────────────────────────────────────────
-
 async fn save(db: &Db, targets: &[&str], strategy: Strategy) -> String {
     common::seed_path(db, PATH_ID, targets, strategy).await;
     PATH_ID.into()
@@ -267,7 +241,6 @@ async fn load_path(db: &Db, id: &str) -> PathFile {
     path_state(db, id).await.file
 }
 
-/// Store `atoms` as `id`'s subpath without validation.
 async fn replace_subpath(db: &Db, id: &str, atoms: &[String]) {
     common::write(db, id, |_, changes| path::set_subpath(changes, id, atoms)).await;
 }
@@ -289,8 +262,6 @@ async fn strategy_persists_and_switches() {
     );
 }
 
-// ── subpath storage ─────────────────────────────────────────────────
-
 #[tokio::test]
 async fn subpath_round_trips_and_clears() {
     let conn = common::empty_db().await;
@@ -299,15 +270,12 @@ async fn subpath_round_trips_and_clears() {
     replace_subpath(&conn, &id, &["a".into(), "b".into(), "c".into()]).await;
     assert_eq!(load_path(&conn, &id).await.subpath, vec!["a", "b", "c"]);
 
-    // Replacement is wholesale, not additive.
     replace_subpath(&conn, &id, &["x".into(), "y".into()]).await;
     assert_eq!(load_path(&conn, &id).await.subpath, vec!["x", "y"]);
 
     subpath::cmd_subpath_clear(&conn, Some(&id)).await.unwrap();
     assert_eq!(load_path(&conn, &id).await.subpath, Vec::<String>::new());
 }
-
-// ── subpath command validation ──────────────────────────────────────
 
 #[tokio::test]
 async fn subpath_set_happy_path() {

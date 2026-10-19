@@ -1,28 +1,4 @@
 //! OAuth 2.1 authorization server for `mt mcp`.
-//!
-//! Implements the minimum needed for Claude Desktop's "Add custom connector"
-//! flow to register itself, log the operator in, and obtain an access token
-//! it can use against `/mcp`. Everything here is single-user: every issued
-//! token grants the same authority as the static `MT_API_KEY` bearer.
-//!
-//! Wire surface:
-//!
-//! - `GET  /.well-known/oauth-protected-resource` — RFC 9728
-//! - `GET  /.well-known/oauth-authorization-server` — RFC 8414
-//! - `POST /oauth/register` — RFC 7591 dynamic client registration (open)
-//! - `GET  /oauth/authorize` — render login form
-//! - `POST /oauth/authorize` — validate password, issue authorization code,
-//!   redirect back to the client's `redirect_uri`
-//! - `POST /oauth/token` — exchange code (with PKCE verifier) for tokens,
-//!   or refresh
-//!
-//! Tokens are opaque 256-bit random strings; storage lives in the four
-//! `oauth_*` tables. PKCE S256 is mandatory.
-//!
-//! What this module deliberately leaves out: token revocation, consent
-//! prompts (single-user implies trust), `scope` enforcement beyond
-//! round-tripping it, and any persistent refresh-rotation linked list.
-//! These are non-features for the single-user use case.
 
 use std::sync::Arc;
 
@@ -46,34 +22,17 @@ use url::Url;
 use crate::db::{self, Db, Op};
 use crate::schema::{OAuthAccessToken, OAuthClient, OAuthCode, OAuthCodeUse, OAuthRefreshToken};
 
-// ───────────────────────────── tunables ──────────────────────────────
-
 const AUTHORIZATION_CODE_TTL: Duration = Duration::seconds(60);
 const ACCESS_TOKEN_TTL: Duration = Duration::hours(1);
 const REFRESH_TOKEN_TTL: Duration = Duration::days(30);
-
-/// Maximum age accepted on the HMAC-signed CSRF token embedded in the
-/// login form. Bounds how long a stale form can hang in the agent's web
-/// view before submitting.
 const CSRF_TTL: Duration = Duration::minutes(15);
 
-// ───────────────────────────── state ─────────────────────────────────
-
-/// Per-process OAuth state injected into the axum router. Cheap to clone:
-/// every field is already an `Arc`.
+/// Shared OAuth state for the Axum router.
 #[derive(Clone)]
 pub struct OAuthState {
     db: Db,
-    /// Constant-time-comparable copy of the admin password. Stored as
-    /// bytes so the comparison can't short-circuit on length mismatch.
     admin_password: Arc<[u8]>,
-    /// Public-facing URL used as both the AS issuer and the protected-
-    /// resource identifier. Must match what the client sees, otherwise
-    /// metadata discovery and `resource` parameter checks fail.
     public_url: Arc<Url>,
-    /// HMAC key for the CSRF token embedded in the login form. Generated
-    /// fresh per process — losing it on restart only invalidates open
-    /// login pages, which is harmless.
     csrf_key: Arc<[u8; 32]>,
 }
 
@@ -89,18 +48,13 @@ impl OAuthState {
         }
     }
 
-    /// Issuer URL used in `/.well-known/oauth-authorization-server`. Per
-    /// RFC 8414 this is the public base; endpoints are absolute URLs
-    /// rooted at it.
+    /// Return the public issuer URL.
     pub fn issuer(&self) -> &Url {
         &self.public_url
     }
 }
 
-// ───────────────────────────── routes ────────────────────────────────
-
-/// Public-facing well-known endpoints. Mounted at the server root, no
-/// auth — clients hit these to discover the AS.
+/// Build the OAuth discovery and authorization router.
 pub fn router(state: OAuthState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -122,8 +76,6 @@ pub fn router(state: OAuthState) -> Router {
         .layer(cors)
         .with_state(state)
 }
-
-// ───────────────────── /.well-known endpoints ────────────────────────
 
 async fn protected_resource_metadata(State(s): State<OAuthState>) -> Json<serde_json::Value> {
     let issuer = s.issuer().as_str().trim_end_matches('/');
@@ -148,8 +100,6 @@ async fn authorization_server_metadata(State(s): State<OAuthState>) -> Json<serd
         "scopes_supported": ["mcp"],
     }))
 }
-
-// ─────────────────────────── /oauth/register ─────────────────────────
 
 #[derive(Deserialize)]
 struct RegisterRequest {
@@ -205,11 +155,7 @@ async fn register(
     }))
 }
 
-/// Reject obviously dangerous or malformed `redirect_uri` values at
-/// registration time. We allow https URIs, http on loopback (RFC 8252
-/// §7.3), and private-use schemes for native apps (§7.1). Plain http on
-/// a non-loopback host is the case we have to refuse — any code issued
-/// for it would be sent over the wire in the clear.
+// Reject unencrypted non-loopback HTTP redirect URIs to prevent authorization code interception.
 fn validate_redirect_uri(uri: &str) -> Result<(), OAuthError> {
     let parsed = Url::parse(uri).map_err(|_| {
         OAuthError::invalid_request(format!("redirect_uri '{uri}' is not a valid URL"))
@@ -234,8 +180,6 @@ fn validate_redirect_uri(uri: &str) -> Result<(), OAuthError> {
     }
     Ok(())
 }
-
-// ─────────────────────────── /oauth/authorize ────────────────────────
 
 #[derive(Deserialize)]
 struct AuthorizeQuery {
@@ -299,8 +243,6 @@ async fn authorize_post(
     }
     if !constant_time_eq(s.admin_password.as_ref(), f.password.as_bytes()) {
         tracing::warn!(client_id = %client.client_id, "admin password rejected");
-        // Re-render the form with an inline error rather than redirecting:
-        // the agent's web view follows the redirect_uri only on success.
         let csrf = csrf_mint(&s.csrf_key, &q);
         let html = render_login_form(&q, &csrf, Some("Incorrect password."));
         return Ok((StatusCode::UNAUTHORIZED, Html(html)).into_response());
@@ -334,10 +276,6 @@ async fn authorize_post(
     Ok(Redirect::to(redirect.as_str()).into_response())
 }
 
-/// Validate every field of an `/oauth/authorize` request (GET or POST).
-/// On success returns the registered client so callers can use its name
-/// for display purposes; on failure the caller maps the [`OAuthError`]
-/// into the right response shape.
 async fn validate_authorize_request(
     s: &OAuthState,
     q: &AuthorizeQuery,
@@ -361,8 +299,6 @@ async fn validate_authorize_request(
     }
     Ok(client)
 }
-
-// ─────────────────────────── /oauth/token ────────────────────────────
 
 #[derive(Deserialize)]
 struct TokenRequest {
@@ -423,8 +359,7 @@ async fn token_authorization_code(
         .as_deref()
         .ok_or_else(|| OAuthError::invalid_request("client_id is required"))?;
 
-    // Burn the code and mint the tokens in one transaction, so a racing
-    // duplicate `/token` call cannot replay the same code.
+    // Consume the authorization code and issue tokens in a single transaction to prevent replay.
     let (access, refresh, stored_scope) = db::retry(|| async {
         let (txn, mut r) = s.db.begin(&[Op::get_row::<OAuthCode>(&[code])]).await?;
         let scope = match redeem(r.swap_remove(0).row()?, client_id, redirect_uri, verifier) {
@@ -464,8 +399,7 @@ async fn token_refresh(
         .as_deref()
         .ok_or_else(|| OAuthError::invalid_request("refresh_token is required"))?;
 
-    // Rotate: invalidate the presented refresh token and mint a fresh
-    // pair so an intercepted refresh token can only be used once.
+    // Delete the presented refresh token and insert a new pair in the same transaction.
     let (access, refresh, client_id, scope) = db::retry(|| async {
         let (txn, mut r) =
             s.db.begin(&[Op::get_row::<OAuthRefreshToken>(&[provided])])
@@ -501,8 +435,6 @@ async fn token_refresh(
     }))
 }
 
-/// The scope of the authorization code `row`, if it may be redeemed by
-/// `client_id` at `redirect_uri` with the PKCE `verifier`.
 fn redeem(
     row: Option<OAuthCode>,
     client_id: &str,
@@ -535,8 +467,6 @@ fn redeem(
     Ok(row.scope)
 }
 
-/// The refresh token `row`, if it is live and, when the caller pinned
-/// `client_id`, issued to that client.
 fn check_refresh(
     row: Option<OAuthRefreshToken>,
     client_id: Option<&str>,
@@ -557,8 +487,6 @@ fn check_refresh(
     Ok(row)
 }
 
-/// Ops that store a fresh access and refresh token pair. Expired tokens
-/// are deleted by the database.
 fn token_ops(access: &str, refresh: &str, client_id: &str, scope: Option<&str>) -> [Op; 2] {
     let now = Utc::now();
     let access = OAuthAccessToken {
@@ -579,11 +507,7 @@ fn token_ops(access: &str, refresh: &str, client_id: &str, scope: Option<&str>) 
     ]
 }
 
-// ─────────────────── access-token validation (for /mcp) ──────────────
-
-/// Look up an access token and confirm it hasn't expired. Returns `Ok(Some)`
-/// for a valid bearer, `Ok(None)` for unknown/expired (so the caller can
-/// fall through to other auth modes before issuing a 401).
+/// Return the `client_id` for a non-expired access token, or `None` if unknown or expired.
 pub async fn validate_access_token(db: &Db, token: &str) -> Result<Option<String>, crate::Error> {
     let stored: Option<OAuthAccessToken> = db
         .read_one(Op::get_row::<OAuthAccessToken>(&[token]))
@@ -594,16 +518,12 @@ pub async fn validate_access_token(db: &Db, token: &str) -> Result<Option<String
         .map(|t| t.client_id))
 }
 
-// ─────────────────────────── clients ─────────────────────────────────
-
 async fn load_client(db: &Db, client_id: &str) -> Result<OAuthClient, OAuthError> {
     db.read_one(Op::get_row::<OAuthClient>(&[client_id]))
         .await?
         .row()?
         .ok_or_else(|| OAuthError::invalid_request("unknown client_id"))
 }
-
-// ─────────────────────────── login form ──────────────────────────────
 
 fn render_login_form(q: &AuthorizeQuery, csrf: &str, error: Option<&str>) -> String {
     fn esc(s: &str) -> String {
@@ -659,15 +579,12 @@ button {{ margin-top: 1rem; padding: 0.5rem 1rem; font-size: 1rem; }}
     )
 }
 
-// ──────────────────────────── crypto bits ────────────────────────────
-
 fn random_token() -> String {
     let mut buf = [0u8; 32];
     rand::rng().fill_bytes(&mut buf);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
 }
 
-/// RFC 7636 §4.2: `BASE64URL(SHA256(verifier))`, no padding.
 fn pkce_s256(verifier: &str) -> String {
     let digest = Sha256::digest(verifier.as_bytes());
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
@@ -676,15 +593,6 @@ fn pkce_s256(verifier: &str) -> String {
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
-
-// ── CSRF: HMAC-signed `<timestamp>.<mac>` value embedded in the form ──
-//
-// The MAC binds every security-relevant query field — `client_id`,
-// `redirect_uri`, and `code_challenge` — so an attacker can't swap any
-// of them between mint (GET) and verify (POST) by tampering with the
-// hidden form fields. `scope` / `state` / `resource` are not bound:
-// they carry no integrity requirement that isn't already enforced
-// against the registered client record at validate time.
 
 fn csrf_mint(key: &[u8; 32], q: &AuthorizeQuery) -> String {
     let ts = Utc::now().timestamp();
@@ -710,9 +618,7 @@ fn csrf_verify(key: &[u8; 32], q: &AuthorizeQuery, token: &str) -> bool {
     provided.ct_eq(&expected).into()
 }
 
-/// HMAC-SHA256 over `ts ‖ len(f0) ‖ f0 ‖ len(f1) ‖ f1 ‖ …`. Length-
-/// prefixing each field eliminates the canonicalization ambiguity that
-/// plain concatenation would have for variable-length strings.
+// Length-prefix each field before hashing to prevent canonicalization ambiguity.
 fn csrf_mac(key: &[u8; 32], ts: i64, q: &AuthorizeQuery) -> Vec<u8> {
     type HmacSha256 = Hmac<Sha256>;
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
@@ -730,13 +636,7 @@ fn csrf_mac(key: &[u8; 32], ts: i64, q: &AuthorizeQuery) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
-// ──────────────────────────── errors ─────────────────────────────────
-
-/// OAuth error codes per RFC 6749 §4.1.2.1 / §5.2. Each variant maps to
-/// a JSON body `{ "error": "<code>", "error_description": "..." }` plus
-/// an HTTP status when rendered. `Internal` carries the original error so
-/// `Error::source()` chains stay intact; it renders as a generic
-/// `server_error` that does not leak internals to the client.
+/// OAuth 2.1 error response variants.
 #[derive(Debug, thiserror::Error)]
 pub enum OAuthError {
     #[error("invalid_request: {0}")]
@@ -790,8 +690,6 @@ impl IntoResponse for OAuthError {
                 "unsupported_grant_type",
                 format!("grant_type `{g}` is not supported"),
             ),
-            // Internal failures are logged with full context server-side
-            // and surfaced as an opaque `server_error` to the client.
             OAuthError::Internal(e) => {
                 tracing::error!(error = %e, "oauth: internal error");
                 (
@@ -802,7 +700,6 @@ impl IntoResponse for OAuthError {
             }
         };
         let mut headers = HeaderMap::new();
-        // OAuth spec: error responses must not be cached.
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         let body = serde_json::json!({
             "error": code,

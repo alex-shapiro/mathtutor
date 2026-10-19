@@ -1,11 +1,4 @@
-//! FSRS card state.
-//!
-//! A card is the derived state of one quiz on one path: its FSRS memory
-//! state plus the answer history `mt path next` reports. Cards are stored
-//! in the `cards` table, updated by every `quiz_presented` and
-//! `quiz_answered` event in the event's transaction. The event log
-//! remains the source of truth; [`recompute`] rebuilds a path's cards
-//! by replaying it.
+//! FSRS spaced-repetition card state derived from path events.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -21,12 +14,10 @@ use crate::{Error, Result};
 
 const DESIRED_RETENTION: f32 = 0.9;
 
-/// Ratings a card remembers, newest first.
+/// Maximum number of recent ratings retained per card, ordered newest first.
 pub const RECENT: usize = 10;
 
-/// FSRS state for a single quiz card. The fields exist precisely when a
-/// card has been answered at least once. `apply_answer(None, …)` is the
-/// first step that produces a state, so every field is always populated.
+/// FSRS memory and scheduling state for an answered quiz card.
 #[derive(Debug, Clone, Copy)]
 pub struct CardState {
     pub due: DateTime<Utc>,
@@ -35,20 +26,16 @@ pub struct CardState {
     pub difficulty: f32,
 }
 
-/// One quiz's card on one path.
 #[derive(Debug, Clone)]
 pub struct CardRow {
     pub path_id: String,
     pub quiz_id: String,
-    /// `None` until the quiz is first answered.
     pub state: Option<CardState>,
     pub reps: u32,
     pub lapses: u32,
     pub presented: u32,
     pub last_presented_at: Option<DateTime<Utc>>,
-    /// When the quiz was first answered correctly.
     pub first_correct_at: Option<DateTime<Utc>>,
-    /// The latest ratings, newest first, at most [`RECENT`].
     pub recent: Vec<Rating>,
 }
 
@@ -68,15 +55,7 @@ impl CardRow {
     }
 }
 
-// ── Pure FSRS step (no I/O) ────────────────────────────────────────
-
-/// One FSRS step: given the previous state (or none, for the first
-/// answer), apply this rating at this timestamp and return the next
-/// state.
-///
-/// `interval` is converted from FSRS's fractional days to whole seconds
-/// (with a 60-second floor) so sub-day relearning intervals retain their
-/// precision and zero-interval scheduling can't happen.
+/// Computes the next FSRS card state for `rating` at `ts`, with a minimum interval of 60 seconds.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -116,9 +95,6 @@ pub fn apply_answer(
     })
 }
 
-// ── Events ─────────────────────────────────────────────────────────
-
-/// Fold a `quiz_presented` or `quiz_answered` event into its card.
 pub fn apply_event(c: &mut CardRow, e: &Event) -> Result<()> {
     match (e.kind, e.payload.rating) {
         (EventKind::QuizPresented, _) => {
@@ -140,8 +116,6 @@ pub fn apply_event(c: &mut CardRow, e: &Event) -> Result<()> {
     }
     Ok(())
 }
-
-// ── Rows ───────────────────────────────────────────────────────────
 
 impl From<&CardRow> for CardRecord {
     fn from(c: &CardRow) -> Self {
@@ -195,14 +169,7 @@ impl TryFrom<CardRecord> for CardRow {
     }
 }
 
-// ── Rebuild ────────────────────────────────────────────────────────
-
-/// Replace `path_id`'s cards and taught lessons with the state its event
-/// log implies. Use after a suspected corruption or a change to how
-/// events are folded.
-///
-/// The log is read and the rows rewritten in one transaction, so an event
-/// logged concurrently either lands before the replay or conflicts with it.
+/// Rebuilds the `cards` and `taught` rows for `path_id` from its event stream in a single transaction.
 pub async fn recompute(db: &Db, path_id: &str) -> Result<()> {
     db::retry(|| recompute_once(db, path_id)).await
 }
@@ -233,7 +200,6 @@ async fn recompute_once(db: &Db, path_id: &str) -> Result<()> {
     txn.commit(&ops).await
 }
 
-/// Fold a path's events into its cards and taught lessons.
 pub fn fold_history(
     path_id: &str,
     events: &[Event],

@@ -1,7 +1,4 @@
-//! Top-down subpath: a mutable, ordered detour through prerequisites that
-//! ends in a target atom. Stored with its path, replaced wholesale on
-//! `mt path subpath set` and emptied on `clear`. The scheduler
-//! reads it to walk a top-down learner back to a target they're stuck on.
+//! Prerequisite subpath management for top-down learning paths.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -13,15 +10,12 @@ use crate::types::Strategy;
 use crate::view::{PathSel, Want};
 use crate::{Error, Result};
 
-/// A path's subpath, expanded to atoms against `g` and kept in order,
-/// mirroring how path targets are resolved.
+/// Expand the stored subpath of `p` into an ordered list of atom IDs.
 pub fn resolved(p: &PathFile, g: &Graph) -> Result<Vec<String>> {
     g.expand_to_atoms(&p.subpath)
 }
 
-/// `mt path subpath set`: validate `atoms` and store them as the path's
-/// subpath. Requires a top-down strategy; every atom must be a leaf in the
-/// graph, the atoms must be distinct, and the last must be a path target.
+/// Validate `atoms` and store them as the subpath for a top-down path (`mt path subpath set`).
 pub async fn cmd_subpath_set(
     db: &Db,
     explicit_id: Option<&str>,
@@ -57,7 +51,7 @@ pub async fn cmd_subpath_set(
     .await
 }
 
-/// `mt path subpath clear`: drop the path's subpath.
+/// Clear the stored subpath for a learning path (`mt path subpath clear`).
 pub async fn cmd_subpath_clear(db: &Db, explicit_id: Option<&str>) -> Result<String> {
     let want = Want {
         path: PathSel::from(explicit_id),

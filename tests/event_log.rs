@@ -1,15 +1,4 @@
-//! Integration tests for the stream-backed event log and the `cards`
-//! rows derived from it.
-//!
-//! Each test opens a fresh database on the shared test server, seeds one
-//! path, then logs events through `Changes::append` and reads them back
-//! with `event_log::load` and the stored path state. The aim is to pin
-//! three contracts:
-//!
-//! 1. Events round-trip losslessly through the stream (including payload).
-//! 2. `QuizAnswered` updates the path's card in the same transaction.
-//! 3. `cards::recompute` rebuilds cards deterministically from the event
-//!    log alone, matching live append behavior.
+//! Integration tests for the event log and derived card state.
 
 use chrono::{DateTime, Duration, Utc};
 use mathtutor::cards::{self, CardRow, CardState};
@@ -22,7 +11,6 @@ mod common;
 
 use common::PATH_ID;
 
-/// Events logged after the seeded `path_created`.
 async fn logged(db: &Db, path_id: &str) -> Vec<Event> {
     let events = event_log::load(db, path_id).await.expect("load");
     assert_eq!(events[0].kind, EventKind::PathCreated);
@@ -55,9 +43,6 @@ async fn append_and_load_round_trip() {
 
 #[tokio::test]
 async fn load_returns_events_in_insertion_order() {
-    // Events with the same `ts` must still come back in append order —
-    // stream seqs are what guarantee replayability for FSRS even when
-    // wall-clock ticks coincide, within one commit and across commits.
     let db = common::fresh_db(PATH_ID).await;
     let ts = Utc::now();
     common::append(
@@ -105,8 +90,6 @@ async fn append_preserves_payload_user_answer_and_rating() {
 
 #[tokio::test]
 async fn append_only_touches_the_named_path() {
-    // Each path has its own log: events for one path must not leak into
-    // another path's view.
     let db = common::fresh_db(PATH_ID).await;
     common::seed_path(&db, "p_other", &[], Strategy::BottomUp).await;
 
@@ -135,8 +118,6 @@ async fn append_only_touches_the_named_path() {
 
 #[tokio::test]
 async fn quiz_answered_creates_card() {
-    // A single `QuizAnswered` append stores a card whose due date is in
-    // the future and whose history reflects the new answer.
     let db = common::fresh_db(PATH_ID).await;
     let before = Utc::now();
     common::append(
@@ -159,8 +140,6 @@ async fn quiz_answered_creates_card() {
 
 #[tokio::test]
 async fn again_rating_increments_lapses() {
-    // `lapses` counts only `Again` ratings; a `Hard`/`Good`/`Easy`
-    // review must leave it untouched.
     let db = common::fresh_db(PATH_ID).await;
     for rating in [Rating::Again, Rating::Good, Rating::Again] {
         common::append(&db, &[answered(PATH_ID, "atom.x", "atom.x.q1", rating)]).await;
@@ -178,10 +157,6 @@ async fn again_rating_increments_lapses() {
 
 #[tokio::test]
 async fn non_answer_events_leave_cards_unscheduled() {
-    // Presenting a quiz records the presentation on its card, but only an
-    // answer gives the card FSRS state. Authoring and teaching touch no
-    // card at all — otherwise the scheduler would treat unseen quizzes
-    // as due-with-default-stability.
     let db = common::fresh_db(PATH_ID).await;
     common::append(
         &db,
@@ -195,10 +170,7 @@ async fn non_answer_events_leave_cards_unscheduled() {
 
     let ps = common::path_state(&db, PATH_ID).await;
     let card = &ps.cards["atom.x.q1"];
-    assert!(
-        card.state.is_none(),
-        "presented-only card has no FSRS state"
-    );
+    assert!(card.state.is_none(), "presented-only card lacks FSRS state");
     assert_eq!(card.reps, 0);
     assert_eq!(card.presented, 1);
     assert!(card.last_presented_at.is_some());
@@ -212,15 +184,12 @@ async fn non_answer_events_leave_cards_unscheduled() {
 
 #[tokio::test]
 async fn due_returns_only_past_due_in_order() {
-    // Cards are stored directly so due dates are controlled without
-    // waiting wall-clock time. Only cards due at `now` come back,
-    // oldest-due first.
     let db = common::fresh_db(PATH_ID).await;
     let now = Utc::now();
     let rows: [(&str, i64); 3] = [
-        ("q.past_old", -3600),  // 1h ago — should be first
-        ("q.past_recent", -60), // 1m ago — should be second
-        ("q.future", 600),      // 10m from now — must be excluded
+        ("q.past_old", -3600),
+        ("q.past_recent", -60),
+        ("q.future", 600),
     ];
     let cards: Vec<CardRow> = rows
         .iter()
@@ -252,10 +221,6 @@ async fn due_returns_only_past_due_in_order() {
 
 #[tokio::test]
 async fn recompute_rebuilds_cards_identically_to_live_append() {
-    // Append a series of answers, snapshot the resulting card, then call
-    // `recompute`. The rebuilt card must match (stability, difficulty,
-    // due, reps, lapses, history) — otherwise the recovery path doesn't
-    // actually preserve state.
     let db = common::fresh_db(PATH_ID).await;
     let t0 = Utc::now() - Duration::days(60);
     for (rating, ts) in [
@@ -289,8 +254,6 @@ async fn recompute_rebuilds_cards_identically_to_live_append() {
 
 #[tokio::test]
 async fn failed_transaction_leaves_no_event_or_card() {
-    // The event append and the card update commit or fail together: a
-    // command that fails after logging an answer leaves neither behind.
     let db = common::fresh_db(PATH_ID).await;
     let r: Result<(), Error> = db
         .transact(&Want::path(Some(PATH_ID)), |view, changes| {
@@ -303,15 +266,13 @@ async fn failed_transaction_leaves_no_event_or_card() {
         .await;
     assert!(matches!(r, Err(Error::NoPath)));
 
-    assert!(logged(&db, PATH_ID).await.is_empty(), "no event committed");
+    assert!(logged(&db, PATH_ID).await.is_empty());
     let ps = common::path_state(&db, PATH_ID).await;
-    assert!(ps.cards.is_empty(), "no card committed");
+    assert!(ps.cards.is_empty());
 }
 
 #[tokio::test]
 async fn recompute_only_touches_target_path() {
-    // Recompute must scope its rewrite to the named path. A second
-    // path's cards should survive untouched.
     let db = common::fresh_db(PATH_ID).await;
     common::seed_path(&db, "p_other", &[], Strategy::BottomUp).await;
     common::append(

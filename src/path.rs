@@ -1,4 +1,4 @@
-//! Learning-path data, per-path storage, and `mt path new`/`mt path list`.
+//! Learning path records and path management commands.
 
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -14,23 +14,13 @@ use crate::types::Strategy;
 use crate::view::{Changes, PathSel, View, Want};
 use crate::{Error, Result};
 
-/// Per-path record: the learner's goal and targets (fixed at `mt path
-/// new`), the mutable navigation `strategy`, and the top-down subpath.
-/// Learning history lives in the path's event log.
-///
-/// `targets` holds the IDs the learner chose verbatim (atoms or clusters).
-/// They are stored as given and expanded to atoms against the live graph
-/// by [`PathFile::resolve_targets`], so the resolved set tracks curriculum
-/// edits (e.g. an atom later split into a cluster). `subpath` is kept the
-/// same way.
+/// Stored metadata and configuration for a learning path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathFile {
     pub id: String,
     pub goal: String,
     #[serde(with = "ts")]
     pub created_at: DateTime<Utc>,
-    /// Time of the path's latest event. Stored apart from the path row,
-    /// so logging events never writes the row.
     #[serde(skip)]
     pub updated_at: DateTime<Utc>,
     pub targets: Vec<String>,
@@ -39,18 +29,14 @@ pub struct PathFile {
 }
 
 impl PathFile {
-    /// Expand the stored targets to a topo-sorted set of atom IDs against
-    /// `g`. Resolution runs on every load so cluster/area targets always
-    /// reflect the current curriculum. Errors if a target no longer
-    /// resolves to any atom (unknown ID or empty cluster).
+    /// Expand stored targets into a topologically sorted list of atom IDs.
     pub fn resolve_targets(&self, g: &Graph) -> Result<Vec<String>> {
         let atoms = g.expand_to_atoms(&self.targets)?;
         topo_sort(g, &atoms)
     }
 }
 
-// ── Storage layout ──────────────────────────────────────────────────
-
+/// Resolve the local Math Tutor home directory from `MATHTUTOR_HOME` or `$HOME/.mathtutor`.
 pub fn mt_home() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("MATHTUTOR_HOME") {
         return Ok(PathBuf::from(p));
@@ -59,8 +45,7 @@ pub fn mt_home() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".mathtutor"))
 }
 
-/// A path id from its creation time plus a random suffix, so paths created
-/// within the same second get distinct ids.
+/// Generate a unique path ID from `now` and a random 4-character suffix.
 pub fn generate_path_id(now: DateTime<Utc>) -> String {
     use std::hash::{BuildHasher, RandomState};
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
@@ -75,9 +60,7 @@ pub fn generate_path_id(now: DateTime<Utc>) -> String {
     format!("p_{}_{suffix}", now.format("%Y_%m_%d_%H%M%S"))
 }
 
-// ── Rows ────────────────────────────────────────────────────────────
-
-/// Insert `p` and log its `path_created` event.
+/// Insert `p` and append its `path_created` event.
 pub fn insert(view: &View, changes: &mut Changes, p: &PathFile) -> Result<()> {
     changes.op(Op::insert(p));
     let mut created = event_log::path_created(p.id.clone());
@@ -85,7 +68,7 @@ pub fn insert(view: &View, changes: &mut Changes, p: &PathFile) -> Result<()> {
     changes.append(view, &created)
 }
 
-/// Replace the stored subpath of `path_id`.
+/// Replace the stored subpath for `path_id`.
 pub fn set_subpath(changes: &mut Changes, path_id: &str, atoms: &[String]) {
     let set = PathUpdate {
         subpath: Some(atoms),
@@ -94,8 +77,7 @@ pub fn set_subpath(changes: &mut Changes, path_id: &str, atoms: &[String]) {
     changes.op(Op::update::<PathFile>(&[path_id], &set));
 }
 
-// ── Commands ────────────────────────────────────────────────────────
-
+/// Create a new learning path and return its ID.
 pub async fn cmd_path_new(
     db: &Db,
     goal: &str,
@@ -104,9 +86,7 @@ pub async fn cmd_path_new(
     graph_dir: Option<&Path>,
 ) -> Result<String> {
     let g = Graph::load_default(graph_dir)?;
-    // Validate each ID resolves to at least one atom, but store the IDs
-    // verbatim — clusters are kept as-is and re-expanded on load so the
-    // target set tracks later curriculum edits.
+    // Validate that each target expands to at least 1 atom while storing cluster IDs unexpanded.
     g.expand_to_atoms(ids)?;
     let targets = dedup_preserving_order(ids);
 
@@ -130,9 +110,7 @@ pub async fn cmd_path_new(
     Ok(p.id)
 }
 
-/// Switch a path's traversal strategy. Strategy is navigation config, not
-/// learning history, so no event is logged. Switching to bottom-up leaves
-/// any stored subpath inert (the DFS ignores it) rather than clearing it.
+/// Update the traversal strategy for a learning path and return its ID.
 pub async fn cmd_path_strategy(
     db: &Db,
     explicit_id: Option<&str>,
@@ -155,8 +133,7 @@ pub async fn cmd_path_strategy(
     .await
 }
 
-/// Compact summary of one path. Same fields as `mt path state` shows
-/// for a single path, so callers can format both with the same logic.
+/// Summary of progress for a learning path.
 #[derive(Debug, serde::Serialize)]
 pub struct PathSummary {
     pub id: String,
@@ -173,8 +150,7 @@ struct PathListView {
     paths: Vec<PathSummary>,
 }
 
-/// List every path with goal, creation time, target count, and progress
-/// percent. AYML on stdout — same envelope conventions as `mt path next`.
+/// Print all learning path summaries as AYML (`mt path list`).
 pub async fn cmd_path_list(db: &Db, graph_dir: Option<&Path>) -> Result<()> {
     let summaries = list_summaries(db, graph_dir).await?;
     let view = PathListView { paths: summaries };
@@ -183,7 +159,7 @@ pub async fn cmd_path_list(db: &Db, graph_dir: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// Summaries of every path, oldest first.
+/// Compute progress summaries for all learning paths ordered by creation time.
 pub async fn list_summaries(db: &Db, graph_dir: Option<&Path>) -> Result<Vec<PathSummary>> {
     let want = Want {
         path: PathSel::None,
@@ -215,7 +191,6 @@ pub async fn list_summaries(db: &Db, graph_dir: Option<&Path>) -> Result<Vec<Pat
         .collect()
 }
 
-/// Deduplicate `ids` while preserving first-seen order.
 fn dedup_preserving_order(ids: &[String]) -> Vec<String> {
     let mut seen = HashSet::new();
     ids.iter()
@@ -223,8 +198,6 @@ fn dedup_preserving_order(ids: &[String]) -> Vec<String> {
         .cloned()
         .collect()
 }
-
-// ── Topological sort over the user-supplied target atoms ───────────
 
 fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>> {
     let atom_set: HashSet<&str> = atoms.iter().map(String::as_str).collect();
@@ -242,10 +215,7 @@ fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>> {
         }
     }
 
-    // Kahn's algorithm with a min-heap frontier so topo ties break by
-    // natural id order: siblings come out `nn.1.1.1, nn.1.1.2, …` rather
-    // than `…1, …10, …2`. The heap keeps this O(n log n) with no per-
-    // comparison allocation (see `natural_id_cmp`).
+    // Use a min-heap ordered by `natural_id_cmp` to break topological ties deterministically.
     let mut frontier: BinaryHeap<NaturalOrd> = indegree
         .iter()
         .filter_map(|(k, &v)| if v == 0 { Some(NaturalOrd(k)) } else { None })
@@ -271,8 +241,7 @@ fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>> {
     Ok(result)
 }
 
-/// `&str` id wrapped to pop in natural order from a `BinaryHeap` (a
-/// max-heap), so `Ord` is reversed: the natural-smallest id is "greatest".
+// Reverse `natural_id_cmp` so `BinaryHeap` pops the smallest ID first.
 struct NaturalOrd<'a>(&'a str);
 
 impl Ord for NaturalOrd<'_> {
@@ -298,8 +267,6 @@ mod tests {
     use crate::graph::{FlatConcept, Graph};
     use std::collections::HashMap;
 
-    /// Build a graph from `(id, prerequisites)` pairs; other fields unused
-    /// by `topo_sort`.
     fn graph(nodes: &[(&str, &[&str])]) -> Graph {
         let by_id = nodes
             .iter()
@@ -321,10 +288,6 @@ mod tests {
 
     #[test]
     fn topo_sort_breaks_ties_in_natural_id_order() {
-        // The bug: lexicographic tie-breaking jumped `nn.1.1.1` straight to
-        // `nn.1.10.1`, skipping `nn.1.1.2`. With a prereq chain only along
-        // the `.1.1.x` spine, the independent `.1.10.1` must still sort
-        // after the lower-numbered siblings, not between `…1.1` and `…1.2`.
         let g = graph(&[
             ("nn.1.1.1", &[]),
             ("nn.1.1.2", &["nn.1.1.1"]),
@@ -341,8 +304,6 @@ mod tests {
 
     #[test]
     fn topo_sort_respects_prerequisites_over_id_order() {
-        // A lower-numbered atom that depends on a higher-numbered one must
-        // still come after it, regardless of natural id order.
         let g = graph(&[("nn.1.1.1", &["nn.1.9.1"]), ("nn.1.9.1", &[])]);
         let atoms = vec!["nn.1.1.1".to_string(), "nn.1.9.1".to_string()];
         let order = topo_sort(&g, &atoms).unwrap();

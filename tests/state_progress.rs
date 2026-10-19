@@ -1,6 +1,4 @@
-//! Tests for `state::compute_progress` — the per-path target and
-//! reachable-atom counters surfaced by `mt path state` and the MCP
-//! `get_state` tool.
+//! Unit and integration tests for `state::compute_progress` and `state::compute_state`.
 
 use chrono::{Duration, Utc};
 use mathtutor::cards::{CardRow, CardState};
@@ -30,8 +28,6 @@ fn target_complete_counts_toward_both_targets_and_reachable() {
 
 #[test]
 fn prereq_complete_counts_toward_reachable_only() {
-    // Targets only count completed targets; prereqs that aren't also
-    // targets contribute only to `reachable.learned`.
     let g = graph_of(vec![
         complete_atom("pre", &[]),
         complete_atom("target", &["pre"]),
@@ -49,9 +45,6 @@ fn prereq_complete_counts_toward_reachable_only() {
 
 #[test]
 fn taught_counts_lesson_taught_in_path_regardless_of_quiz_progress() {
-    // Lesson presented but no quizzes answered yet: the atom is taught
-    // but not learned. Reachable.taught must reflect lesson exposure
-    // independent of completion.
     let g = graph_of(vec![complete_atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
@@ -70,7 +63,7 @@ fn empty_path_yields_zero_progress_without_division_panic() {
     let (t, r) = state::compute_progress(&g, &p, &PathProgress::default()).unwrap();
     assert_eq!(t.total, 0);
     assert_eq!(t.learned, 0);
-    assert_eq!(t.learned_pct, 0, "no targets must not divide by zero");
+    assert_eq!(t.learned_pct, 0, "zero targets must not divide by zero");
     assert_eq!(r.total, 0);
     assert_eq!(r.taught, 0);
     assert_eq!(r.learned, 0);
@@ -78,7 +71,6 @@ fn empty_path_yields_zero_progress_without_division_panic() {
 
 #[test]
 fn reachable_includes_transitive_prereqs() {
-    // a ← b ← c (target). Reachable should be {a, b, c} = 3.
     let g = graph_of(vec![
         empty_atom("a", &[]),
         empty_atom("b", &["a"]),
@@ -92,7 +84,6 @@ fn reachable_includes_transitive_prereqs() {
 
 #[test]
 fn learned_pct_rounds_down() {
-    // 1 of 3 targets learned → 33 (integer division), not 34.
     let g = graph_of(vec![
         complete_atom("a", &[]),
         complete_atom("b", &[]),
@@ -106,9 +97,6 @@ fn learned_pct_rounds_down() {
     assert_eq!(t.learned_pct, 33);
 }
 
-// ── past_due ────────────────────────────────────────────────────────
-
-/// Store a card answered once at `reviewed`, due at `due`.
 async fn seed_card(
     db: &mathtutor::db::Db,
     quiz_id: &str,
@@ -143,8 +131,6 @@ async fn compute_state_past_due_is_zero_on_fresh_path() {
 
 #[tokio::test]
 async fn compute_state_past_due_excludes_future_cards() {
-    // Cards exist but every `due_at` is strictly in the future, so the
-    // learner is caught up.
     let db = common::fresh_db(PATH_ID).await;
     let now = Utc::now();
 
@@ -160,7 +146,6 @@ async fn compute_state_past_due_excludes_future_cards() {
 
 #[tokio::test]
 async fn compute_state_past_due_counts_overdue_cards() {
-    // Two overdue cards plus one not-yet-due card ⇒ past_due == 2.
     let db = common::fresh_db(PATH_ID).await;
     let now = Utc::now();
 
@@ -181,8 +166,6 @@ async fn compute_state_past_due_counts_overdue_cards() {
 
 #[test]
 fn write_state_emits_past_due_line() {
-    // CLI output must include a "past due:" line so a learner sees the
-    // backlog without having to invoke the scheduler.
     let mut buf = Vec::new();
     let s = state::StateSummary {
         path: PATH_ID.into(),

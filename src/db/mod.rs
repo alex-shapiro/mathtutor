@@ -1,8 +1,4 @@
-//! Baserunna client.
-//!
-//! All per-user state lives in one Baserunna database: `BASERUNNA_DB`
-//! (default `mathtutor`) on the server at `BASERUNNA_URL`, reached with
-//! the API key or session token in `BASERUNNA_TOKEN`.
+//! Baserunna HTTP client and transaction execution.
 
 mod op;
 pub mod ts;
@@ -22,27 +18,22 @@ use crate::{Error, Result};
 pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
 pub const DEFAULT_DB: &str = "mathtutor";
 
-/// Attempts a transaction gets before a conflict or transient failure is
-/// returned to the caller.
 const MAX_ATTEMPTS: u32 = 10;
 
-/// How long a client waits before asking whether an ambiguous commit
-/// applied: past the server's commit deadline, no copy of it can still land.
+/// Delay before querying commit status after an ambiguous response, exceeding the server commit deadline.
 const AMBIGUOUS_COMMIT_WAIT: Duration = Duration::from_secs(15);
 
-/// Where the user database lives.
 #[derive(Debug, Clone)]
 pub struct DbConfig {
     pub url: String,
     pub token: String,
     pub db: String,
-    /// Directory keeping a copy of the overlay between processes, so a
-    /// command downloads it only after it changed. `None` keeps it in memory.
+    /// Directory used to persist the cached overlay across processes, or `None` for in-memory caching only.
     pub cache_dir: Option<PathBuf>,
 }
 
 impl DbConfig {
-    /// Reads `BASERUNNA_URL`, `BASERUNNA_TOKEN` (required) and `BASERUNNA_DB`.
+    /// Reads `BASERUNNA_URL`, `BASERUNNA_TOKEN` (required), and `BASERUNNA_DB` from the environment.
     pub fn from_env() -> Result<Self> {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         Ok(Self {
@@ -54,20 +45,14 @@ impl DbConfig {
     }
 }
 
-/// What a request does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RequestKind {
-    /// A one-shot transaction.
     Txn,
-    /// Beginning an interactive transaction.
     Begin,
-    /// More ops in an interactive transaction.
     Ops,
     Commit,
     Abort,
-    /// Asking whether a commit applied.
     Status,
-    /// Creating the database or a table.
     Create,
 }
 
@@ -85,34 +70,26 @@ impl std::fmt::Display for RequestKind {
     }
 }
 
-/// One HTTP request to the server, as an [`Observer`] sees it.
 #[derive(Debug, Clone)]
 pub struct Sample {
     pub kind: RequestKind,
     pub status: u16,
-    /// Time from sending the request to reading the whole response.
     pub elapsed: Duration,
-    /// The server's own account of the request, from its `Server-Timing` header.
     pub server: Option<ServerTiming>,
     pub sent_bytes: usize,
     pub received_bytes: usize,
 }
 
-/// Where a request spent its time on the server.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ServerTiming {
     pub total: Duration,
-    /// Object-store calls, summed.
     pub store: Duration,
     pub store_calls: u32,
-    /// Waiting for commits.
     pub commit: Duration,
-    /// Waiting for an in-flight manifest write before a strong read.
     pub wait: Duration,
 }
 
 impl ServerTiming {
-    /// Parse a `Server-Timing` header value.
     pub fn parse(v: &str) -> Self {
         let mut t = Self::default();
         for metric in v.split(',') {
@@ -138,11 +115,8 @@ impl ServerTiming {
     }
 }
 
-/// Called with every request a [`Db`] makes.
 pub type Observer = Arc<dyn Fn(Sample) + Send + Sync>;
 
-/// A handle on the user database. Cheap to clone; clones share one
-/// connection pool.
 #[derive(Clone)]
 pub struct Db {
     http: reqwest::Client,
@@ -150,12 +124,8 @@ pub struct Db {
     name: String,
     token: String,
     observer: Option<Observer>,
-    /// The path the last transaction resolved, so the next one can read
-    /// that path's state speculatively in its first request.
     pub(crate) path_hint: Arc<Mutex<Option<String>>>,
-    /// The overlay as last read, validated by its version in later transactions.
     pub(crate) overlay_cache: Arc<Mutex<Option<crate::view::CachedOverlay>>>,
-    /// Where the overlay cache is kept between processes.
     pub(crate) cache_file: Option<PathBuf>,
 }
 
@@ -168,17 +138,14 @@ impl std::fmt::Debug for Db {
     }
 }
 
-/// A failure reported by the server.
 #[derive(Debug, Clone)]
 pub struct ApiError {
     pub status: u16,
     pub code: String,
     pub message: String,
     pub retryable: bool,
-    /// A commit that may or may not have applied.
     pub outcome_unknown: bool,
-    /// The answer came from Baserunna, not from a proxy in front of it, so
-    /// its status says whether the request applied.
+    /// True when the response originated from Baserunna rather than an intermediate proxy.
     pub from_server: bool,
 }
 
@@ -189,7 +156,6 @@ impl std::fmt::Display for ApiError {
 }
 
 impl ApiError {
-    /// True when the request was certainly not applied and can be retried.
     fn retry_not_applied(&self) -> bool {
         matches!(self.status, 404 if self.code == "txn_not_found")
             || (self.retryable && !self.outcome_unknown)
@@ -232,7 +198,6 @@ impl ApiError {
         }
     }
 
-    /// A retryable failure of a request that certainly did not apply.
     fn not_applied(message: &str) -> Error {
         Error::Api(Self {
             status: 503,
@@ -276,15 +241,14 @@ enum CommitState {
 }
 
 impl Db {
-    /// Connect to the configured database, creating it and its schema if
-    /// they do not exist yet.
+    /// Connects to the database and creates the database and tables if they do not exist.
     pub async fn open(cfg: &DbConfig) -> Result<Self> {
         let db = Self::connect(cfg)?;
         crate::schema::ensure(&db).await?;
         Ok(db)
     }
 
-    /// A handle without any round trip; the database must already exist.
+    /// Creates a client handle without performing network I/O; the database and tables must already exist.
     pub fn connect(cfg: &DbConfig) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(concat!("mathtutor/", env!("CARGO_PKG_VERSION")))
@@ -312,33 +276,29 @@ impl Db {
         })
     }
 
-    /// Report every request this handle and its clones make to `observer`.
     #[must_use]
     pub fn observed(mut self, observer: Observer) -> Self {
         self.observer = Some(observer);
         self
     }
 
-    /// Run read-only `ops` in one request against a strong snapshot.
+    /// Executes read-only `ops` in a single snapshot request.
     pub async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
         let r: Results = retry(|| self.run(RequestKind::Txn, "/txn", ops)).await?;
         one_per_op(ops, r.results.unwrap_or_default())
     }
 
-    /// Run one read-only op against a strong snapshot.
     pub async fn read_one(&self, op: Op) -> Result<OpResult> {
         let mut r = self.read(std::slice::from_ref(&op)).await?;
         Ok(r.swap_remove(0))
     }
 
-    /// Run `ops`, writes included, as one transaction in one request.
-    /// Retried only while certainly not applied.
+    /// Executes `ops` in a single transaction, retrying only when the transaction was not applied.
     pub async fn write(&self, ops: &[Op]) -> Result<()> {
         retry(|| self.run::<IgnoredAny>(RequestKind::Txn, "/txn", ops)).await?;
         Ok(())
     }
 
-    /// Begin an interactive transaction, running `ops` in it.
     pub async fn begin(&self, ops: &[Op]) -> Result<(Txn, Vec<OpResult>)> {
         let r: Begun = self.run(RequestKind::Begin, "/transactions", ops).await?;
         let txn = Txn {
@@ -349,7 +309,6 @@ impl Db {
         Ok((txn, one_per_op(ops, r.results)?))
     }
 
-    /// Create this database. Succeeds if it already exists.
     pub(crate) async fn create_database(&self) -> Result<()> {
         #[derive(Serialize)]
         struct NewDb<'a> {
@@ -374,7 +333,6 @@ impl Db {
         )
     }
 
-    /// Create a table from its schema. Succeeds if it already exists.
     pub(crate) async fn create_table(&self, schema: &impl Serialize) -> Result<()> {
         exists_ok(
             self.call(RequestKind::Create, Method::POST, "/tables", Some(schema))
@@ -382,7 +340,6 @@ impl Db {
         )
     }
 
-    /// Send `body` to `path` under this database.
     async fn call<T: DeserializeOwned>(
         &self,
         kind: RequestKind,
@@ -394,7 +351,6 @@ impl Db {
         self.send(kind, method, &url, body).await
     }
 
-    /// Run `ops` at `path` under this database.
     async fn run<T: DeserializeOwned>(
         &self,
         kind: RequestKind,
@@ -467,8 +423,6 @@ fn exists_ok(r: Result<IgnoredAny>) -> Result<()> {
     }
 }
 
-/// An open interactive transaction. It is aborted server-side when idle;
-/// dropping it without committing leaves nothing behind.
 pub struct Txn {
     db: Db,
     id: String,
@@ -476,16 +430,13 @@ pub struct Txn {
 }
 
 impl Txn {
-    /// Run more `ops` in the transaction. Any error aborts it.
     pub async fn ops(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
         let path = format!("/transactions/{}/ops", self.id);
         let r: Results = self.db.run(RequestKind::Ops, &path, ops).await?;
         one_per_op(ops, r.results.unwrap_or_default())
     }
 
-    /// Run `ops` and commit. A commit whose outcome is unknown is resolved
-    /// before returning, so `Ok` means applied and a retryable error
-    /// means not applied.
+    /// Commits `ops` and reconciles ambiguous commit outcomes before returning.
     pub async fn commit(self, ops: &[Op]) -> Result<()> {
         let path = format!("/transactions/{}/commit", self.id);
         match self
@@ -496,12 +447,10 @@ impl Txn {
             Ok(_) => Ok(()),
             Err(Error::Api(e)) if e.from_server && !e.outcome_unknown => Err(Error::Api(e)),
             Err(Error::Http(e)) if e.is_connect() => Err(Error::Http(e)),
-            // A read-only commit applies nothing, so a lost answer is simply retried.
             Err(Error::Http(_)) if ops.is_empty() => {
                 Err(ApiError::not_applied("read-only commit lost its answer"))
             }
-            // A lost response, a proxy's error or an unknown outcome: wait out any copy of
-            // the commit still in flight, then ask whether it applied.
+            // Wait past the server commit deadline and query `/commits/{commit_id}` to determine whether the commit was applied.
             Err(_) => {
                 tokio::time::sleep(AMBIGUOUS_COMMIT_WAIT).await;
                 let path = format!("/commits/{}", self.commit_id);
@@ -518,8 +467,6 @@ impl Txn {
         }
     }
 
-    /// Abort the transaction. Failures are ignored: an abandoned
-    /// transaction expires on its own.
     pub async fn abort(self) {
         let path = format!("/transactions/{}", self.id);
         let _ = self
@@ -529,8 +476,7 @@ impl Txn {
     }
 }
 
-/// True for failures worth running a whole transaction again: conflicts,
-/// rate limits, lost transactions and unavailability that did not apply.
+/// Returns true if `e` indicates a transient failure where the transaction was not applied.
 pub fn is_retryable(e: &Error) -> bool {
     match e {
         Error::Api(a) => a.retry_not_applied(),
@@ -539,8 +485,6 @@ pub fn is_retryable(e: &Error) -> bool {
     }
 }
 
-/// Run `f` until it succeeds, fails permanently, or runs out of attempts,
-/// backing off between attempts.
 pub async fn retry<T, F, Fut>(mut f: F) -> Result<T>
 where
     F: FnMut() -> Fut,
@@ -558,7 +502,6 @@ where
     }
 }
 
-/// Exponential backoff with full jitter: up to 10 ms, 20 ms, ... 1 s.
 pub fn backoff(attempt: u32) -> Duration {
     let cap = 10u64 << attempt.min(7);
     Duration::from_millis(rand_below(cap.min(1000)) + 1)
@@ -569,7 +512,6 @@ fn rand_below(n: u64) -> u64 {
     RandomState::new().hash_one(std::time::Instant::now()) % n.max(1)
 }
 
-/// Cache file name for database `db` on the server at `url`.
 fn cache_name(url: &str, db: &str) -> String {
     let host: String = url
         .split("://")
@@ -604,7 +546,7 @@ mod tests {
             ApiError::from_response(StatusCode::BAD_GATEWAY, b"<html>502 Bad Gateway</html>");
         assert!(
             !proxy.from_server,
-            "a proxy's page says nothing about the commit"
+            "a proxy response does not indicate whether the commit was applied"
         );
         assert!(proxy.retryable);
     }

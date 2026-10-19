@@ -1,5 +1,4 @@
-//! `mt import-turso` against a fake libSQL server speaking Turso's HTTP
-//! API, serving canned rows in the schema of the last libSQL migration.
+//! Integration tests for `mt import-turso` against a mock libSQL HTTP server.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,8 +20,6 @@ use serde::{Deserialize, Serialize};
 mod common;
 
 const TOKEN: &str = "turso-token";
-
-// ── Fake server ─────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 struct PipelineReq {
@@ -93,7 +90,6 @@ fn int(n: i64) -> V {
     }
 }
 
-/// Rows of each libSQL table, keyed by the table a query reads `FROM`.
 #[derive(Default, Clone)]
 struct Tables(HashMap<&'static str, StmtResult>);
 
@@ -145,8 +141,6 @@ async fn serve(tables: Tables) -> String {
     url
 }
 
-// ── Legacy data ─────────────────────────────────────────────────────
-
 fn at(day: i64) -> DateTime<Utc> {
     ts::parse("2026-01-01T08:30:00.250Z").unwrap() + Duration::days(day)
 }
@@ -173,8 +167,6 @@ fn answer(path: &str, day: i64, quiz: &str, rating: Rating, user_answer: Option<
     }
 }
 
-/// `p_a`, top-down with a lesson and several answers, and `p_b`, created
-/// and never studied. A third path, `p_c`, has no events at all.
 fn events() -> Vec<Event> {
     vec![
         event("p_a", 0, EventKind::PathCreated, None, None),
@@ -294,7 +286,6 @@ fn legacy() -> Tables {
             V::Null,
         ]],
     );
-    // An authored quiz later removed, and a removed shipped quiz.
     t.set(
         "overlay_removed_quizzes",
         &["quiz_id", "atom_id"],
@@ -320,7 +311,6 @@ fn legacy() -> Tables {
     t
 }
 
-/// The cards the libSQL release kept for `p_a`'s answers.
 fn legacy_cards() -> Vec<CardRow> {
     let a: Vec<Event> = events().into_iter().filter(|e| e.path == "p_a").collect();
     cards::fold_history("p_a", &a).unwrap().0
@@ -353,8 +343,6 @@ async fn import(tables: Tables, db: &Db) -> mathtutor::Result<import::Report> {
     let url = serve(tables).await;
     import::import(&Turso::new(&url, Some(TOKEN.into())).unwrap(), db).await
 }
-
-// ── Tests ───────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {

@@ -1,8 +1,4 @@
-//! Integration tests for `store::cmd_lesson_upsert`.
-//!
-//! These pin the upsert contract: the first call for an atom emits
-//! `lesson_authored`, subsequent calls emit `lesson_amended`, and
-//! every call emits `lesson_taught` since storing implies presenting.
+//! Integration tests for `store` commands.
 
 use mathtutor::db::Db;
 use mathtutor::event_log::{self, EventKind};
@@ -11,11 +7,7 @@ use mathtutor::types::{Difficulty, QuizType, Strategy};
 
 mod common;
 
-/// Atom that ships *without* a lesson — exercises the
-/// `lesson_authored` branch on the first store.
 const NO_LESSON_ATOM: &str = "fnd.1.1.2";
-/// Atom that ships *with* a lesson — exercises the `lesson_amended`
-/// branch even on the first store.
 const WITH_LESSON_ATOM: &str = "fnd.1.1.1";
 
 async fn fresh_db_with_path() -> (Db, String) {
@@ -24,7 +16,6 @@ async fn fresh_db_with_path() -> (Db, String) {
     (db, common::PATH_ID.into())
 }
 
-/// The path's event kinds after its `path_created` event.
 async fn event_kinds(db: &Db, path_id: &str) -> Vec<EventKind> {
     event_log::load(db, path_id)
         .await
@@ -51,8 +42,6 @@ async fn first_store_on_lesson_less_atom_emits_authored_then_taught() {
 
 #[tokio::test]
 async fn second_store_on_same_atom_emits_amended_then_taught() {
-    // Upsert semantics: the stored row is replaced, and the event log
-    // distinguishes the follow-up store from the initial authoring.
     let (db, path_id) = fresh_db_with_path().await;
 
     store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "first".into(), Some(&path_id), None)
@@ -75,9 +64,6 @@ async fn second_store_on_same_atom_emits_amended_then_taught() {
 
 #[tokio::test]
 async fn quiz_create_after_delete_skips_tombstoned_id() {
-    // Regression: deleting a quiz tombstones it but leaves the
-    // `quizzes` row, so reusing the id would collide with it and wedge
-    // the atom.
     let (db, path_id) = fresh_db_with_path().await;
 
     store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "body".into(), Some(&path_id), None)
@@ -120,8 +106,6 @@ async fn quiz_create_after_delete_skips_tombstoned_id() {
 
 #[tokio::test]
 async fn store_on_shipped_lesson_atom_emits_amended() {
-    // The atom already has a lesson in the shipped curriculum, so
-    // even the first store is an amendment from the user's POV.
     let (db, path_id) = fresh_db_with_path().await;
 
     store::cmd_lesson_upsert(

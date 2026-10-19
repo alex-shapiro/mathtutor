@@ -1,25 +1,16 @@
-# AYML schema
+# AYML Schema
 
-The curriculum graph lives entirely in [AYML](https://crates.io/crates/ayml)
-under `graph/` — a safe serde-compatible variant of YAML with Swift-style
-triple-quoted multiline strings (`"""…"""`) and none of YAML's fringe
-features. This document is human-readable; the files, and the loader in
-`src/graph.rs`, are authoritative. `mt graph check` validates the whole
-graph.
+The curriculum graph is stored in [AYML](https://crates.io/crates/ayml) files under `graph/` and validated with `mt graph check`.
 
 ## Versioning
 
-- **`schema_version: 2`** — current; every shipped area uses it. Recursive
-  `children:` at any depth. Each atomic node is one mini-lesson: 1–2
-  paragraphs, ≤ 2 minutes reading, ≤ 1 theorem / rule / definition.
-- **`schema_version: 1`** — legacy. Fixed depth (area → topic → leaf) with
-  `topics:` / `leaves:` keys. The loader still dispatches on
-  `schema_version`, but no shipped area uses v1 any more.
+- **`schema_version: 2`** (current): Uses recursive `children:` lists at arbitrary depth.
+- **`schema_version: 1`** (legacy): Uses fixed-depth `topics:` and `leaves:` keys.
 
 ## Files
 
-- `graph/manifest.ayml` — top-level area registry.
-- `graph/areas/<NN>-<slug>.ayml` — one file per top-level area.
+- `graph/manifest.ayml`: Top-level area registry.
+- `graph/areas/<NN>-<slug>.ayml`: Area definition files.
 
 ## `manifest.ayml`
 
@@ -30,22 +21,19 @@ areas:
     slug: foundations
     file: areas/00-foundations.ayml
     summary: "Logic, sets, proof, basic combinatorics, computation models."
-  # ...
 ```
 
-The manifest's own `schema_version` is independent of the per-area schema
-version. `slug` and `prefix` must match the `area` and `prefix` fields
-inside the referenced file.
+`slug` and `prefix` must match the `area` and `prefix` fields in the referenced area file.
 
-## Per-area file (v2)
+## Area file (`schema_version: 2`)
 
 ```yaml
 schema_version: 2
 area: foundations
 prefix: fnd
-summary: "One-line area summary."
+summary: "Area summary."
 motivation: """
-  Multi-line motivation, why this area matters.
+  Multi-line motivation.
   """
 cross_references:
   - linear-algebra
@@ -64,105 +52,58 @@ children:
             name: "Proposition"
             description: "Declarative statement with a truth value."
             prerequisites: []
-            # no children → atomic
 ```
 
 ## Atomicity
 
-A node is **atomic** iff it has no `children` (or `children: []`). Atomic
-nodes are mini-lessons:
-
-- 1–2 paragraphs of reading (~1–2 minutes).
-- At most one theorem, rule, or definition.
-
-A node *with* `children` is a **cluster** — purely organizational. A
-cluster may still have a `description` (one-line summary of what its
-descendants cover) and `prerequisites` (coarse ordering hints), but no
-`lesson` body. Clusters nest arbitrarily deep.
+A node is an **atom** if `children` is omitted or empty. A node with non-empty `children` is a **cluster**.
 
 ## Field reference
 
-### Area-level
+### Area fields
 
-| field | required | description |
-|---|---|---|
-| `schema_version` | yes | `2` |
-| `area` | yes | slug; matches manifest |
-| `prefix` | yes | short ID prefix; matches manifest |
-| `summary` | yes | one-line area description |
-| `motivation` | yes | multi-line motivation |
-| `cross_references` | no | list of adjacent area slugs (documentation only) |
-| `children` | yes (v2) | top-level concept tree |
-| `topics` | yes (v1) | legacy three-level tree; v1 only |
+| Field              | Required | Description                             |
+| ------------------ | -------- | --------------------------------------- |
+| `schema_version`   | Yes      | `2` (or `1` for legacy files)           |
+| `area`             | Yes      | Area slug matching the manifest         |
+| `prefix`           | Yes      | ID prefix matching the manifest         |
+| `summary`          | Yes      | Short area description                  |
+| `motivation`       | Yes      | Multi-line area motivation              |
+| `cross_references` | No       | Related area slugs                      |
+| `children`         | Yes (v2) | Top-level nodes in the area             |
+| `topics`           | Yes (v1) | Legacy three-level hierarchy (v1 only)  |
 
-### Node-level (any depth)
+### Node fields
 
-| field | required | description |
-|---|---|---|
-| `id` | yes | dotted path, e.g. `fnd.1.1.5` |
-| `name` | yes | human-readable name |
-| `description` | recommended | one-line scope (cluster) or hook (atom) |
-| `prerequisites` | no | direct prereq IDs; may target atoms or clusters |
-| `children` | no | sub-nodes; omit or `[]` for an atom |
-| `terminal` | no | `true` marks a leaf that intentionally has no dependents (see below) |
+| Field           | Required    | Description                                                    |
+| --------------- | ----------- | -------------------------------------------------------------- |
+| `id`            | Yes         | Dot-separated identifier (for example, `fnd.1.1.5`)            |
+| `name`          | Yes         | Node title                                                     |
+| `description`   | Recommended | Scope summary (for clusters) or concept summary (for atoms)    |
+| `prerequisites` | No          | Direct prerequisite node IDs (atoms or clusters)               |
+| `children`      | No          | Child nodes; omit or set to `[]` for an atom                   |
+| `terminal`      | No          | Set to `true` on leaf atoms that do not have dependents        |
+| `lesson`        | No          | Inline Markdown lesson body (1–2 paragraphs)                   |
+| `quizzes`       | No          | Inline quiz definitions                                        |
 
-The loader also accepts `relevant_for`, `tags`, `status`, and a node-level
-`difficulty` for forward compatibility, but no shipped area uses them and
-nothing reads them; prefer `prerequisites` and `cross_references`.
-
-### Atom content (optional; usually authored at runtime)
-
-Most atoms ship as metadata only. Lesson and quiz bodies are normally
-authored lazily by the agent on first presentation and stored in the
-per-user overlay (see `docs/design.md`). An atom may instead ship them
-inline when worth fixing canonically; the overlay overrides inline content.
-
-| field | description |
-|---|---|
-| `lesson` | triple-quoted Markdown body, 1–2 paragraphs |
-| `quizzes` | list of quiz cards (shape below) |
-
-A quiz card:
+Inline quiz format:
 
 ```yaml
 quizzes:
-  - id: fnd.1.1.1.q1        # <atom-id>.q<n>
+  - id: fnd.1.1.1.q1
     difficulty: easy        # easy | medium | hard
     type: free_text         # free_text (default) | multiple_choice
-    question: "…"
-    answer: "…"             # reference answer for grading
-    rubric: "…"             # optional grading guidance
+    question: "..."
+    answer: "..."
+    rubric: "..."           # optional
 ```
 
 ## `terminal`
 
-The orphan check in `mt graph check` flags any atom that no other node
-lists as a prerequisite — usually a sign of a forgotten edge. A genuine
-leaf with no dependents (a capstone application atom, a dead-end fact) sets
-`terminal: true` to opt out. A prerequisite reference to a *cluster* covers
-all its descendant atoms, so those need no `terminal` flag.
+`mt graph check` reports an error if an atom is not listed as a prerequisite by any other node. Set `terminal: true` on an intentional leaf endpoint to suppress this error. If a cluster is referenced as a prerequisite, all of its descendant atoms are considered referenced.
 
 ## ID rules
 
-Enforced by `mt graph check`:
-
-- Every ID starts with its area `prefix`; each further segment is a
-  positive integer with no leading zeros (`la.5.4.7`).
-- A node's ID extends its parent's by exactly one segment.
-- IDs are **globally unique** and **stable**: renaming or relocating a
-  concept never changes its ID; the slug, file path, and `name` may change.
-- Deleted IDs are **never reused**.
-- Nesting depth is unlimited; atomicity is a content choice, not a depth
-  choice. A 4-level path like `la.5.4.7` is normal.
-- Cross-area prerequisites use the full ID (e.g. `prob.8.4` from inside a
-  `dif.x.y.z` atom). The prerequisite graph is acyclic and crosses area
-  boundaries freely.
-
-## Conventions
-
-- One canonical home per atom; cross-link via `prerequisites` rather than
-  duplicating a concept.
-- `prerequisites:` lists **direct** dependencies only; the loader computes
-  the transitive closure.
-- One rule / theorem / definition per atom. If you are describing two
-  unrelated rules in one atom, split it.
+- Every ID starts with the area `prefix`, followed by dot-separated positive integers without leading zeros (for example, `la.5.4.7`).
+- Each child ID appends a single segment to its parent ID.
+- IDs are globally unique, permanent, and never reused after deletion.

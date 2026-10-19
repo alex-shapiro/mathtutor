@@ -1,12 +1,4 @@
-//! Tests for the history aggregates used by `present_quiz` /
-//! `present_lesson` envelopes: `scheduler::quiz_history` and
-//! `scheduler::lesson_history`.
-//!
-//! Each test seeds a fresh Baserunna database, appends events, then
-//! asserts on the aggregates computed from the stored cards and taught
-//! rows — without going
-//! through `compute_next`'s walker (which would otherwise need a full
-//! prereq tree seeded for any embedded-curriculum target).
+//! Integration tests for `scheduler::quiz_history` and `scheduler::lesson_history`.
 
 use chrono::{Duration, TimeZone, Utc};
 use mathtutor::db::Db;
@@ -28,8 +20,6 @@ async fn quiz_history(db: &Db) -> QuizHistory {
 async fn lesson_history(db: &Db) -> LessonHistory {
     scheduler::lesson_history(&common::path_state(db, PATH_ID).await, ATOM)
 }
-
-// ── compute_quiz_history ────────────────────────────────────────────
 
 #[tokio::test]
 async fn quiz_history_empty_when_quiz_never_touched() {
@@ -62,8 +52,6 @@ async fn quiz_history_counts_presentations_and_picks_latest_ts() {
 
 #[tokio::test]
 async fn quiz_history_answer_aggregates_match_cards_cache() {
-    // Three answers: Good, Again, Easy → reps=3, lapses=1.
-    // correct_count = reps - lapses = 2; correct_pct = round(2/3 * 100) = 67.
     let db = common::fresh_db(PATH_ID).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
@@ -90,12 +78,10 @@ async fn quiz_history_recent_ratings_newest_first_capped_at_ten() {
     let db = common::fresh_db(PATH_ID).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
-    // 12 answers in chronological order — only the last 10 should come
-    // back, newest first. The 11th-from-last is dropped.
     let ratings = [
-        Rating::Good,  // dropped (oldest)
-        Rating::Good,  // dropped
-        Rating::Again, // → position 9 (oldest kept)
+        Rating::Good,
+        Rating::Good,
+        Rating::Again,
         Rating::Hard,
         Rating::Good,
         Rating::Easy,
@@ -104,7 +90,7 @@ async fn quiz_history_recent_ratings_newest_first_capped_at_ten() {
         Rating::Good,
         Rating::Hard,
         Rating::Easy,
-        Rating::Good, // → position 0 (newest)
+        Rating::Good,
     ];
     for (i, r) in ratings.iter().enumerate() {
         let ts = t0 + Duration::seconds(i64::try_from(i).unwrap());
@@ -123,8 +109,6 @@ async fn quiz_history_recent_ratings_newest_first_capped_at_ten() {
 
 #[tokio::test]
 async fn quiz_history_isolates_quiz_id_and_path_id() {
-    // Events for a different quiz, and for a different path, must not
-    // leak into the aggregates.
     let db = common::fresh_db(PATH_ID).await;
     common::seed_path(&db, "p_other", &[], Strategy::BottomUp).await;
 
@@ -150,8 +134,6 @@ async fn quiz_history_isolates_quiz_id_and_path_id() {
     assert_eq!(h.repetitions, 0, "other.q1 presentation must not leak");
     assert_eq!(h.total_count, 0, "p_other's answer must not leak");
 }
-
-// ── compute_lesson_history ──────────────────────────────────────────
 
 #[tokio::test]
 async fn lesson_history_empty_when_atom_never_taught() {

@@ -1,8 +1,4 @@
-//! Per-path event log, stored as the stream `events.<path id>`.
-//!
-//! Each event has a typed `kind` and is constructed via the typed helper
-//! functions in this module. [`crate::view::Changes::append`] logs an event
-//! and updates the rows derived from it in the same transaction.
+//! Per-path learning event stream (`events.<path id>`).
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -26,7 +22,6 @@ pub enum EventKind {
     QuizRemoved,
 }
 
-/// Optional fields beyond the event's kind, path, atom and quiz.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct EventPayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -43,7 +38,6 @@ impl EventPayload {
     }
 }
 
-/// One logged event; its serialized form is its stream record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     #[serde(with = "ts")]
@@ -57,8 +51,6 @@ pub struct Event {
     #[serde(flatten)]
     pub payload: EventPayload,
 }
-
-// ── Typed constructors ────────────────────────────────────────────
 
 pub fn path_created(path: String) -> Event {
     Event {
@@ -169,9 +161,6 @@ pub fn quiz_answered(
     }
 }
 
-// ── Load ──────────────────────────────────────────────────────────
-
-/// Read all events for a path, in the order they were logged.
 pub async fn load(db: &Db, path_id: &str) -> Result<Vec<Event>> {
     let mut op = Op::read_stream(schema::events_stream(path_id), 0);
     let mut out = Vec::new();

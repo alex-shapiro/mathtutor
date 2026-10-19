@@ -1,9 +1,4 @@
-//! `mt path syllabus`: forward-looking preview of upcoming lesson topics.
-//!
-//! `syllabus` lists atoms whose lessons haven't been taught yet, in the order
-//! the scheduler will teach them. Bottom-up walks the prerequisite graph;
-//! top-down lists the subpath's remaining atoms then the targets.
-//! Lesson bodies are deliberately omitted: this is a roadmap, not a reader.
+//! Upcoming untaught lesson preview (`mt path syllabus`).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -18,17 +13,18 @@ use crate::types::Strategy;
 use crate::view::Want;
 use crate::{Error, Result};
 
+/// Preview of upcoming untaught atoms for a learning path.
 #[derive(Debug, Serialize)]
 pub struct SyllabusView {
     pub schema_version: u32,
     pub path: String,
     pub goal: String,
-    /// Total upcoming-untaught atoms reachable from the path's targets.
-    /// `atoms.len() < total_remaining` whenever `n` truncates the view.
+    /// Total count of upcoming untaught atoms.
     pub total_remaining: usize,
     pub atoms: Vec<SyllabusAtom>,
 }
 
+/// Summary of an upcoming atom in the syllabus.
 #[derive(Debug, Serialize)]
 pub struct SyllabusAtom {
     pub id: String,
@@ -37,6 +33,7 @@ pub struct SyllabusAtom {
     pub description: Option<String>,
 }
 
+/// Print the upcoming syllabus as AYML (`mt path syllabus`).
 pub async fn cmd_path_syllabus(
     db: &Db,
     explicit_id: Option<&str>,
@@ -49,8 +46,7 @@ pub async fn cmd_path_syllabus(
     Ok(())
 }
 
-/// Build a `SyllabusView` for the given path. Pure read-only — shared by
-/// the CLI (AYML) and the MCP server (JSON).
+/// Compute up to `n` upcoming untaught atoms for `explicit_id` (or the latest path).
 pub async fn compute_syllabus(
     db: &Db,
     explicit_id: Option<&str>,
@@ -93,14 +89,7 @@ pub async fn compute_syllabus(
     })
 }
 
-/// Walk the path's targets in scheduler order — prereqs first, then the
-/// target itself — and collect every reachable atom whose lesson hasn't
-/// been taught in this path yet. The order matches what `mt path next`
-/// would emit if every quiz answered correctly on the first try.
-///
-/// "Taught" means a `LessonTaught` or `LessonAuthored` event was logged. Atoms whose lesson has been taught
-/// but whose quizzes are still pending fall out of the syllabus — they
-/// are in-progress, not upcoming.
+/// Return untaught atoms reachable from `targets` in bottom-up traversal order.
 pub fn upcoming_atoms(g: &Graph, targets: &[String], progress: &PathProgress) -> Vec<String> {
     let mut visited = HashSet::new();
     let mut out = Vec::new();
@@ -135,10 +124,7 @@ fn collect_untaught(
     }
 }
 
-/// Top-down upcoming order: the subpath's remaining (untaught) atoms
-/// first — the route the learner chose back to a target — then the path's
-/// untaught targets. Prerequisites are not planned under top-down, so none
-/// are walked; the subpath is the only place they appear.
+/// Return untaught atoms from `subpath` followed by `targets` in top-down order.
 pub fn upcoming_top_down(
     g: &Graph,
     targets: &[String],
@@ -153,8 +139,6 @@ pub fn upcoming_top_down(
     out
 }
 
-/// Append `id` to `out` if it's a not-yet-seen leaf atom whose lesson
-/// hasn't been taught. Clusters are skipped (top-down lists atoms only).
 fn push_upcoming_leaf(
     g: &Graph,
     progress: &PathProgress,

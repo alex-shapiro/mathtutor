@@ -1,9 +1,3 @@
-//! Library entrypoint.
-//!
-//! The `mt` binary is a thin shell over these modules and
-//! integration tests in `tests/` call into them directly.
-//! `pub` here means "visible for tests," not "stable for external consumers."
-
 #![allow(clippy::missing_errors_doc, clippy::must_use_candidate)]
 
 pub mod answer;

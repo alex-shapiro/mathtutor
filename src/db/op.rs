@@ -1,4 +1,4 @@
-//! Transaction ops and their results, typed over the rows they carry.
+//! Database transaction operations and result decoders.
 
 use chrono::TimeDelta;
 use serde::de::DeserializeOwned;
@@ -7,15 +7,13 @@ use serde_json::Value as Json;
 
 use crate::{Error, Result};
 
-/// Rows a query, scan or stream read returns per page; the server's maximum.
+/// Maximum number of items returned per page by a query, scan, or stream read.
 pub const PAGE: usize = 1000;
 
-/// A row of a table, keyed by string columns.
 pub trait Row: Serialize + DeserializeOwned {
     const TABLE: &'static str;
 }
 
-/// One op of a transaction.
 #[derive(Debug, Clone, Serialize)]
 pub struct Op(Kind);
 
@@ -99,13 +97,11 @@ fn keys(k: &[&str]) -> Vec<String> {
     k.iter().map(|s| (*s).to_string()).collect()
 }
 
-/// Rows and records are plain data structs, whose serialization cannot fail.
 fn to_json(v: &impl Serialize) -> Json {
     serde_json::to_value(v).expect("rows serialize to JSON")
 }
 
 impl Op {
-    /// Read a key's value.
     pub fn get(key: impl Into<String>) -> Self {
         Self(Kind::Get { key: key.into() })
     }
@@ -117,12 +113,10 @@ impl Op {
         })
     }
 
-    /// Add one to a key's integer value, starting from zero.
     pub fn increment(key: impl Into<String>) -> Self {
         Self(Kind::Increment { key: key.into() })
     }
 
-    /// Read the keys starting with `prefix`, a page at a time.
     pub fn scan(prefix: impl Into<String>) -> Self {
         Self(Kind::Scan {
             prefix: prefix.into(),
@@ -131,7 +125,6 @@ impl Op {
         })
     }
 
-    /// Read the row of `R` with primary key `pk`.
     pub fn get_row<R: Row>(pk: &[&str]) -> Self {
         Self(Kind::GetRow {
             table: R::TABLE,
@@ -139,7 +132,6 @@ impl Op {
         })
     }
 
-    /// Read the rows of `R` whose primary key starts with `eq`, a page at a time.
     pub fn query<R: Row>(eq: &[&str]) -> Self {
         Self(Kind::QueryRows {
             table: R::TABLE,
@@ -149,7 +141,7 @@ impl Op {
         })
     }
 
-    /// Insert `row`, failing the transaction if its primary key is taken.
+    /// Inserts `row`, failing the transaction if the primary key already exists.
     pub fn insert<R: Row>(row: &R) -> Self {
         Self(Kind::InsertRow {
             table: R::TABLE,
@@ -158,7 +150,7 @@ impl Op {
         })
     }
 
-    /// Insert `row`, which the database deletes after `ttl`.
+    /// Inserts `row` with a time-to-live duration after which the row is deleted automatically.
     pub fn insert_expiring<R: Row>(row: &R, ttl: TimeDelta) -> Self {
         Self(Kind::InsertRow {
             table: R::TABLE,
@@ -167,7 +159,6 @@ impl Op {
         })
     }
 
-    /// Insert or replace `row`.
     pub fn upsert<R: Row>(row: &R) -> Self {
         Self(Kind::UpsertRow {
             table: R::TABLE,
@@ -175,7 +166,6 @@ impl Op {
         })
     }
 
-    /// Overwrite the columns `set` serializes to in the row of `R` with primary key `pk`.
     pub fn update<R: Row>(pk: &[&str], set: &impl Serialize) -> Self {
         Self(Kind::UpdateRow {
             table: R::TABLE,
@@ -191,7 +181,6 @@ impl Op {
         })
     }
 
-    /// Delete the rows of `R` whose primary key starts with `eq`.
     pub fn delete_rows<R: Row>(eq: &[&str]) -> Self {
         Self(Kind::DeleteRows {
             table: R::TABLE,
@@ -199,7 +188,6 @@ impl Op {
         })
     }
 
-    /// Append `records` to `stream`, creating it if needed.
     pub fn append<T: Serialize>(stream: impl Into<String>, records: &[T]) -> Self {
         Self(Kind::Append {
             stream: stream.into(),
@@ -211,7 +199,6 @@ impl Op {
         })
     }
 
-    /// Read `stream`'s records from `from_seq` on, a page at a time.
     pub fn read_stream(stream: impl Into<String>, from_seq: u64) -> Self {
         Self(Kind::ReadStream {
             stream: stream.into(),
@@ -220,7 +207,7 @@ impl Op {
         })
     }
 
-    /// The op reading the page after `result`, if `result` was not the last.
+    /// Returns the operation to fetch the next page after `result`, or `None` if pagination is complete.
     pub fn next_page(&self, result: &OpResult) -> Option<Self> {
         let mut next = self.clone();
         match &mut next.0 {
@@ -239,7 +226,6 @@ impl Op {
     }
 }
 
-/// The result of one read op.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct OpResult {
@@ -254,7 +240,6 @@ pub struct OpResult {
     done: Option<bool>,
 }
 
-/// A key and its value, from a scan.
 #[derive(Debug, Deserialize)]
 pub struct KvItem {
     pub key: String,
@@ -272,12 +257,10 @@ fn decode<T: DeserializeOwned>(what: &str, v: Json) -> Result<T> {
 }
 
 impl OpResult {
-    /// A `get`'s value, if the key exists.
     pub fn value(&self) -> Option<&str> {
         self.value.as_deref()
     }
 
-    /// A `get_row`'s row, if it exists.
     pub fn row<R: Row>(self) -> Result<Option<R>> {
         match self.row.filter(|_| self.found) {
             Some(r) => decode(R::TABLE, r).map(Some),
@@ -285,17 +268,14 @@ impl OpResult {
         }
     }
 
-    /// A `query`'s page of rows.
     pub fn rows<R: Row>(self) -> Result<Vec<R>> {
         self.rows.into_iter().map(|r| decode(R::TABLE, r)).collect()
     }
 
-    /// A `scan`'s page of keys and values.
     pub fn items(self) -> Vec<KvItem> {
         self.items
     }
 
-    /// A `read_stream`'s page of record bodies.
     pub fn records<T: DeserializeOwned>(self) -> Result<Vec<T>> {
         self.records
             .into_iter()

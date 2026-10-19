@@ -1,11 +1,4 @@
-//! CLI command structure
-//!
-//! Every `argh::FromArgs` struct lives here.
-//!
-//! Subcommand layout is resource-first (`mt <noun> <verb>`) and tracks
-//! the MCP tool surface 1:1. Operator-only verbs (`graph check`,
-//! `graph dump`, `instruct`, `import-turso`, `mcp`) have no MCP
-//! equivalent and are explicitly flagged in the docs.
+//! Command-line argument definitions.
 
 use std::path::PathBuf;
 
@@ -13,7 +6,7 @@ use argh::FromArgs;
 
 use crate::types;
 
-/// Math tutor lessons & spaced repetition over a curriculum graph
+/// Manage math lessons and spaced-repetition quizzes over a curriculum graph.
 #[derive(FromArgs, Debug)]
 pub struct Mt {
     #[argh(subcommand)]
@@ -33,9 +26,7 @@ pub enum Cmd {
     Mcp(McpCmd),
 }
 
-// ── `mt path …` ────────────────────────────────────────────────────
-
-/// Operate on learning paths.
+/// Manage learning paths.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "path")]
 pub struct PathCmd {
@@ -56,117 +47,114 @@ pub enum PathOp {
     Tree(PathTreeCmd),
 }
 
-/// List every learning path with goal, creation time, and progress.
+/// List all learning paths with goal, creation time, and progress.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "list")]
 pub struct PathListCmd {
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Start a new learning path.
+/// Create a learning path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "new")]
 pub struct PathNewCmd {
-    /// the user's goal in plain text
+    /// learning goal description
     #[argh(positional)]
     pub goal: String,
 
-    /// targets — atom or cluster IDs: a comma-separated list
-    /// and/or a repeated flag
+    /// target atom or cluster IDs (comma-separated or repeated)
     #[argh(option)]
     pub targets: Vec<String>,
 
-    /// initial traversal strategy: bottom-up (default) or top-down
+    /// initial traversal strategy: `bottom-up` (default) or `top-down`
     #[argh(option, default = "types::Strategy::BottomUp")]
     pub strategy: types::Strategy,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Show the state of a learning path.
+/// Show the status summary for a learning path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "state")]
 pub struct PathStateCmd {
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Get the next action for a learning path.
+/// Get the next scheduled action for a learning path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "next")]
 pub struct PathNextCmd {
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// return the next new action.
-    /// Mutually exclusive with `--due`.
+    /// skip due reviews and return the next untaught or incomplete item
     #[argh(switch)]
     pub new: bool,
 
-    /// return the earliest-due quiz card, or `done` if none is due.
-    /// Mutually exclusive with `--new`.
+    /// return only the earliest due review card, or `done` if zero cards are due
     #[argh(switch)]
     pub due: bool,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Preview the next upcoming lesson topics for a path
+/// List upcoming untaught lesson topics for a path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "syllabus")]
 pub struct PathSyllabusCmd {
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// max upcoming atoms to return (default: 10)
+    /// maximum number of upcoming atoms to return (default: 10)
     #[argh(option, short = 'n', default = "10")]
     pub n: usize,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Show the path's full prerequisite tree with per-atom progress.
+/// Show the prerequisite tree and completion status for a path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "tree")]
 pub struct PathTreeCmd {
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Switch a path's traversal strategy.
+/// Change the traversal strategy for a learning path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "strategy")]
 pub struct PathStrategyCmd {
-    /// new strategy: bottom-up or top-down
+    /// traversal strategy: `bottom-up` or `top-down`
     #[argh(positional)]
     pub strategy: types::Strategy,
 
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
 
-/// Set or clear a top-down path's subpath (an ordered detour to a target).
+/// Set or clear the prerequisite subpath for a top-down path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "subpath")]
 pub struct PathSubpathCmd {
@@ -181,36 +169,33 @@ pub enum SubpathOp {
     Clear(PathSubpathClearCmd),
 }
 
-/// Replace the subpath with an ordered sequence of atoms ending in a target.
+/// Set the subpath to an ordered sequence of atoms ending at a path target.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "set")]
 pub struct PathSubpathSetCmd {
-    /// atoms in teaching order, last must be a target: comma-separated
-    /// and/or a repeated flag
+    /// atom IDs in teaching order ending with a target atom (comma-separated or repeated)
     #[argh(option)]
     pub atoms: Vec<String>,
 
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Drop the path's subpath.
+/// Clear the active subpath for a learning path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "clear")]
 pub struct PathSubpathClearCmd {
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
 
-// ── `mt graph …` ───────────────────────────────────────────────────
-
-/// Inspect or audit the curriculum graph.
+/// Inspect or validate the curriculum graph.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "graph")]
 pub struct GraphCmd {
@@ -227,57 +212,55 @@ pub enum GraphOp {
     Dump(GraphDumpCmd),
 }
 
-/// Look up a single curriculum node (atom or cluster).
+/// Show details for a curriculum atom, cluster, or area.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "show")]
 pub struct GraphShowCmd {
-    /// id to show: an atom or cluster
+    /// atom, cluster, or area ID
     #[argh(positional)]
     pub id: String,
 
-    /// path id (when set, atom output is enriched with per-path status)
+    /// path ID used to include per-atom completion status
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// List entries in the curriculum.
+/// List areas or child nodes in the curriculum.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "list")]
 pub struct GraphListCmd {
-    /// id to list children of (omit for all areas)
+    /// parent node ID (omit to list all areas)
     #[argh(positional)]
     pub id: Option<String>,
 
-    /// path id (when set, atom children are enriched with per-path status)
+    /// path ID used to include per-atom completion status
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Validate the curriculum graph
+/// Validate the curriculum graph.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "check")]
 pub struct GraphCheckCmd {
-    /// override path to a graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option, short = 'p')]
     pub path: Option<PathBuf>,
 }
 
-/// Print the user overlay to stdout, for review or upstreaming
+/// Print the user overlay as AYML to stdout.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "dump")]
 pub struct GraphDumpCmd {}
 
-// ── `mt lesson …` ──────────────────────────────────────────────────
-
-/// Operate on lessons in the user overlay.
+/// Manage lessons in the user overlay.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "lesson")]
 pub struct LessonCmd {
@@ -291,30 +274,28 @@ pub enum LessonOp {
     Upsert(LessonUpsertCmd),
 }
 
-/// Upsert a lesson body on an atom. Re-running replaces the body.
+/// Create or replace the lesson body for an atom.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "upsert")]
 pub struct LessonUpsertCmd {
-    /// atom id
+    /// atom ID
     #[argh(positional)]
     pub atom: String,
 
-    /// lesson body
+    /// lesson body text
     #[argh(option)]
     pub body: String,
 
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-// ── `mt quiz …` ────────────────────────────────────────────────────
-
-/// Operate on quizzes in the user overlay.
+/// Manage quizzes in the user overlay.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "quiz")]
 pub struct QuizCmd {
@@ -331,15 +312,15 @@ pub enum QuizOp {
     Answer(QuizAnswerCmd),
 }
 
-/// Create a quiz on an atom (free-text by default).
+/// Create a quiz for an atom.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "create")]
 pub struct QuizCreateCmd {
-    /// atom id
+    /// atom ID
     #[argh(positional)]
     pub atom: String,
 
-    /// difficulty: easy | medium | hard
+    /// difficulty slot: `easy`, `medium`, or `hard`
     #[argh(option)]
     pub difficulty: types::Difficulty,
 
@@ -347,7 +328,7 @@ pub struct QuizCreateCmd {
     #[argh(option)]
     pub question: String,
 
-    /// reference answer
+    /// reference answer text
     #[argh(option)]
     pub answer: String,
 
@@ -355,111 +336,104 @@ pub struct QuizCreateCmd {
     #[argh(option)]
     pub rubric: Option<String>,
 
-    /// quiz type: `free_text` (default) | `multiple_choice`
+    /// quiz format: `free_text` (default) or `multiple_choice`
     #[argh(option, long = "type", default = "types::QuizType::FreeText")]
     pub quiz_type: types::QuizType,
 
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Apply field edits to an existing quiz. Only the supplied fields
-/// change; the quiz id and FSRS history are preserved.
+/// Update fields on an existing quiz while preserving its ID and FSRS state.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "update")]
 pub struct QuizUpdateCmd {
-    /// quiz id (e.g. fnd.1.1.1.q1)
+    /// quiz ID
     #[argh(positional)]
     pub quiz: String,
 
-    /// new question text
+    /// updated question text
     #[argh(option)]
     pub question: Option<String>,
 
-    /// new reference answer
+    /// updated reference answer text
     #[argh(option)]
     pub answer: Option<String>,
 
-    /// new grading rubric
+    /// updated grading rubric
     #[argh(option)]
     pub rubric: Option<String>,
 
-    /// new difficulty: easy | medium | hard
+    /// updated difficulty slot: `easy`, `medium`, or `hard`
     #[argh(option)]
     pub difficulty: Option<types::Difficulty>,
 
-    /// new quiz type: `free_text` | `multiple_choice`
+    /// updated quiz format: `free_text` or `multiple_choice`
     #[argh(option, long = "type")]
     pub quiz_type: Option<types::QuizType>,
 
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Tombstone a quiz so it no longer appears in the merged view for
-/// this path. The quiz's `quiz_answered` events stay in the log for
-/// audit; the scheduler just stops surfacing it.
+/// Tombstone a quiz so that it is excluded from the merged curriculum.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "delete")]
 pub struct QuizDeleteCmd {
-    /// quiz id (e.g. fnd.1.1.1.q1)
+    /// quiz ID
     #[argh(positional)]
     pub quiz: String,
 
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-/// Record a quiz answer as an FSRS rating.
+/// Record a graded quiz response.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "answer")]
 pub struct QuizAnswerCmd {
-    /// quiz id (e.g. fnd.1.1.1.q1)
+    /// quiz ID
     #[argh(positional)]
     pub quiz: String,
 
-    /// rating: again | hard | good | easy
+    /// FSRS grade: `again`, `hard`, `good`, or `easy`
     #[argh(option)]
     pub rating: types::Rating,
 
-    /// the user's verbatim reply
+    /// verbatim user response
     #[argh(option, long = "user-answer")]
     pub user_answer: Option<String>,
 
-    /// path id (defaults to most recent)
+    /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 }
 
-// ── Operator-only commands ─────────────────────────────────────────
-
-/// Print the agent operator playbook embedded in the binary.
+/// Print the embedded agent playbook.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "instruct")]
 pub struct InstructCmd {}
 
-/// Import paths, authored lessons and quizzes, and events from the libSQL
-/// (Turso) database used before Baserunna, then check every path's cards
-/// against it. Reads `TURSO_AUTH_TOKEN`; rerunning skips imported paths.
+/// Import paths, overlay records, and events from a libSQL (Turso) database into Baserunna.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "import-turso")]
 pub struct ImportTursoCmd {
@@ -468,35 +442,28 @@ pub struct ImportTursoCmd {
     pub url: Option<String>,
 }
 
-/// Run the MCP server (SSE over HTTP), or `mt mcp tools` to dump the
-/// in-process JSON-RPC tool catalogue for debugging.
-///
-/// Authentication is layered. Set at least one of:
-///
-/// * `--api-key` / `$MT_API_KEY` for HTTP basic auth with static bearer token (CLI / `mcp-remote` / test path).
-/// * `--admin-password` / `$MT_ADMIN_PASSWORD` for OAuth authorization server (Claude Desktop / iOS path).
+/// Run the MCP HTTP server, or run `mt mcp tools` to print the tool schemas as JSON.
 #[cfg(feature = "mcp")]
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "mcp")]
 pub struct McpCmd {
-    /// bind address (default: 127.0.0.1:8080)
+    /// bind address (default: `127.0.0.1:8080`)
     #[argh(option, default = "default_mcp_addr()")]
     pub addr: String,
 
-    /// shared API key for static-bearer auth (overrides `$MT_API_KEY`)
+    /// static bearer token for API authentication (overrides `$MT_API_KEY`)
     #[argh(option)]
     pub api_key: Option<String>,
 
-    /// admin password for the built-in OAuth flow (overrides `$MT_ADMIN_PASSWORD`)
+    /// administrator password for OAuth 2.1 login (overrides `$MT_ADMIN_PASSWORD`)
     #[argh(option)]
     pub admin_password: Option<String>,
 
-    /// public-facing base URL advertised in OAuth discovery metadata
-    /// (overrides `$MT_PUBLIC_URL`; defaults to `http://<addr>`)
+    /// public base URL advertised in OAuth metadata (overrides `$MT_PUBLIC_URL`)
     #[argh(option)]
     pub public_url: Option<String>,
 
-    /// override path to a curriculum graph directory (default: embedded / `$MT_GRAPH`)
+    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
     #[argh(option)]
     pub graph: Option<PathBuf>,
 
@@ -511,7 +478,7 @@ pub enum McpOp {
     Tools(McpToolsOp),
 }
 
-/// Dump the MCP tool catalogue as JSON.
+/// Print the MCP tool schemas as JSON.
 #[cfg(feature = "mcp")]
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "tools")]
@@ -522,9 +489,7 @@ fn default_mcp_addr() -> String {
     "127.0.0.1:8080".into()
 }
 
-/// Flatten repeated/comma-separated ID values into one ordered list, so
-/// `--flag a,b,c` and `--flag a --flag b` both work; trims whitespace and
-/// drops empty entries. Shared by `--targets` and subpath `--atoms`.
+/// Splits comma-separated and repeated CLI flag values into a flat list of trimmed strings.
 pub fn flatten_ids(raw: &[String]) -> Vec<String> {
     raw.iter()
         .flat_map(|s| s.split(','))

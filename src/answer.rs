@@ -1,5 +1,3 @@
-//! `mt quiz answer`: record a quiz answer.
-
 use std::path::Path;
 
 use crate::Result;
@@ -9,7 +7,7 @@ use crate::event_log;
 use crate::types::Rating;
 use crate::view::Want;
 
-/// Recover the atom ID from a quiz ID like `fnd.1.1.1.q3`.
+/// Extracts the atom ID prefix from a quiz ID (for example, `fnd.1.1.1.q3` -> `fnd.1.1.1`).
 pub fn atom_from_quiz_id(quiz_id: &str) -> Option<String> {
     let pos = quiz_id.rfind(".q")?;
     Some(quiz_id[..pos].to_string())
@@ -25,9 +23,7 @@ pub async fn cmd_quiz_answer(
 ) -> Result<()> {
     db.transact(&Want::path(path_id), |view, changes| {
         let id = view.path()?.file.id.clone();
-        // Validate the quiz exists in the merged graph before writing
-        // anything. Otherwise a typo silently leaves an event and a
-        // ghost card for a quiz no scheduler will ever surface.
+        // Verify that the quiz exists in the merged graph before recording an event.
         let g = view.graph(graph_dir)?;
         let (atom, _) = g.quiz(quiz_id)?;
         let e = event_log::quiz_answered(

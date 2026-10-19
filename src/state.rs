@@ -1,4 +1,4 @@
-//! Learning path progress summary
+//! Learning path progress summary (`mt path state`).
 
 use std::collections::HashSet;
 use std::io::{self, Write};
@@ -17,7 +17,7 @@ use crate::subpath;
 use crate::types::Strategy;
 use crate::view::{PathState, Want};
 
-/// Per-path progress snapshot returned by `compute_state`.
+/// Progress summary for a learning path.
 #[derive(Debug, Serialize)]
 pub struct StateSummary {
     pub path: String,
@@ -26,12 +26,8 @@ pub struct StateSummary {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub targets: TargetProgress,
-    /// Prerequisite-graph coverage. Omitted under the top-down strategy,
-    /// where prerequisites are not required and the count would mislead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reachable: Option<ReachProgress>,
-    /// The active top-down subpath's remaining (incomplete) atoms, in
-    /// order. Empty when none is set or all are complete.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub subpath: Vec<AtomRef>,
     pub past_due: usize,
@@ -41,7 +37,7 @@ pub struct StateSummary {
     pub next: Option<AtomRef>,
 }
 
-/// Completion of the learning path's explicit target atoms
+/// Completion counts for explicit path target atoms.
 #[derive(Debug, Serialize)]
 pub struct TargetProgress {
     pub total: usize,
@@ -49,7 +45,7 @@ pub struct TargetProgress {
     pub learned_pct: usize,
 }
 
-/// Completion across learning path targets & prerequisites
+/// Completion counts across reachable atoms in a bottom-up path.
 #[derive(Debug, Serialize)]
 pub struct ReachProgress {
     pub total: usize,
@@ -57,14 +53,17 @@ pub struct ReachProgress {
     pub learned: usize,
 }
 
+/// Identifier and display name of an atom.
 #[derive(Debug, Serialize)]
 pub struct AtomRef {
     pub id: String,
     pub name: String,
 }
 
+/// Print the progress summary for a learning path (`mt path state`).
+///
 /// # Panics
-/// Panics on stdout write failure (e.g. broken pipe), matching `println!`.
+/// Panics if writing to stdout fails.
 pub async fn cmd_path_state(
     db: &Db,
     explicit_id: Option<&str>,
@@ -75,8 +74,7 @@ pub async fn cmd_path_state(
     Ok(())
 }
 
-/// Render the human-readable summary to `w`. Splits the formatting
-/// from the print path so callers (e.g. tests) can capture output.
+/// Format `s` as human-readable text to `w`.
 pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
     writeln!(w, "{:13}{}", "path:", s.path)?;
     writeln!(w, "{:13}{}", "goal:", s.goal)?;
@@ -120,6 +118,7 @@ pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
     Ok(())
 }
 
+/// Compute the progress summary for `explicit_id` (or the latest path).
 pub async fn compute_state(
     db: &Db,
     explicit_id: Option<&str>,
@@ -154,14 +153,10 @@ pub async fn compute_state(
     let most_recent =
         most_recent_completed_target(ps, &g, &target_atoms, &complete).map(atom_ref_of);
 
-    // Prerequisites aren't required under top-down, so the reachable-graph
-    // denominator would mislead; report the subpath instead.
     let reachable = match p.strategy {
         Strategy::BottomUp => Some(reach),
         Strategy::TopDown => None,
     };
-    // Only the atoms still to teach on the subpath — completed ones have
-    // already drained out of the route.
     let subpath = subpath_ids
         .iter()
         .filter(|a| !scheduler::is_atom_complete(&g, &progress, a))
@@ -183,9 +178,7 @@ pub async fn compute_state(
     })
 }
 
-/// Count completed targets and completed reachable atoms. Resolves the
-/// path's stored targets to atoms against `g` (see
-/// [`PathFile::resolve_targets`]) before counting.
+/// Compute target and reachable completion counters for `p`.
 pub fn compute_progress(
     g: &Graph,
     p: &PathFile,
@@ -239,8 +232,6 @@ fn counters(
     )
 }
 
-/// Target whose three first-correct answers are the most recent;
-/// `None` when no target is fully complete.
 fn most_recent_completed_target<'a>(
     ps: &PathState,
     g: &'a Graph,

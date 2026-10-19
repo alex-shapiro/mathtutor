@@ -4,33 +4,7 @@
     clippy::cast_sign_loss,
     clippy::too_many_lines
 )]
-//! Load test a Baserunna server with simulated learners.
-//!
-//! Each learner owns a database (`<LT_PREFIX><n>`) and works through
-//! learning paths the way the tutor agent does: it asks for the next action,
-//! authors the lessons and quizzes it is asked for, answers quizzes, and now
-//! and then reads its state, tree or syllabus. Learners never pause between
-//! actions. Each concurrency step reports latency per command and per HTTP
-//! request, splitting request latency into the server's own time (from its
-//! `Server-Timing` header) and the network.
-//!
-//! ```text
-//! BASERUNNA_TOKEN=<api key> cargo run --release --example loadtest
-//! LT_STEPS=1,8,32 LT_SECS=30 cargo run --release --example loadtest
-//! ```
-//!
-//! | variable      | default                     |                                              |
-//! | ------------- | --------------------------- | -------------------------------------------- |
-//! | `BASERUNNA_URL`   | `https://baserunna.fly.dev` | server                                   |
-//! | `BASERUNNA_TOKEN` | required                    | API key                                  |
-//! | `LT_PREFIX`   | `lt-`                       | learner database name prefix                 |
-//! | `LT_STEPS`    | `1,4,16`                    | concurrent learners in each step             |
-//! | `LT_SECS`     | 20                          | duration of each step                        |
-//! | `LT_LESSON`   | 1500                        | bytes per authored lesson                    |
-//! | `LT_THINK_MS` | 0                           | pause between a learner's actions            |
-//! | `LT_SEED`     | 0                           | atoms each learner database starts with authored (a lesson and 3 quizzes each) |
-//! | `LT_METRICS`  | 1                           | print the server's histograms (needs an admin key) |
-//! | `LT_SHARE`    | none                        | `db`: one database, a path per learner; `path`: one path for all |
+//! Load test runner simulating concurrent learners against a Baserunna server.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -54,7 +28,6 @@ fn env<T: std::str::FromStr>(k: &str, default: T) -> T {
         .unwrap_or(default)
 }
 
-/// Latencies of one kind of operation in one step.
 #[derive(Default)]
 struct Series {
     samples: Vec<Duration>,
@@ -86,7 +59,6 @@ impl Series {
     }
 }
 
-/// Request-level samples of one kind in one step.
 #[derive(Default)]
 struct Requests {
     elapsed: Vec<Duration>,
@@ -185,7 +157,6 @@ impl Stats {
     }
 }
 
-/// The server's `/v1/admin/metrics` document.
 #[derive(Deserialize)]
 struct Metrics {
     node: String,
@@ -196,14 +167,12 @@ struct Metrics {
     routes: BTreeMap<String, Histogram>,
 }
 
-/// Cumulative CPU time, where the server's host reports it.
 #[derive(Deserialize)]
 struct Cpu {
     process_ms: Option<f64>,
     steal_ms: Option<f64>,
 }
 
-/// Latencies in ms; only `count` is present when it is zero.
 #[derive(Deserialize)]
 struct Histogram {
     count: u64,
@@ -262,7 +231,6 @@ fn print_server(m: &Metrics, before: Option<&Metrics>, secs: f64) {
     }
 }
 
-/// Deterministic per-learner randomness.
 struct Rng(u64);
 
 impl Rng {
@@ -301,8 +269,6 @@ fn text(rng: &mut Rng, bytes: usize) -> String {
     s
 }
 
-/// Acknowledged and failed answers per `(database, path)`, to check at the
-/// end that each acknowledged answer was logged exactly once.
 type Ledger = Arc<Mutex<BTreeMap<(String, String), (u64, u64)>>>;
 
 struct Learner {
@@ -310,7 +276,6 @@ struct Learner {
     db_name: String,
     ledger: Ledger,
     path: Option<String>,
-    /// The path every learner works on, under `LT_SHARE=path`.
     shared: Option<Arc<Mutex<Option<String>>>>,
     rng: Rng,
     targets: Arc<Vec<String>>,
@@ -337,7 +302,6 @@ impl Learner {
         Ok(())
     }
 
-    /// One agent turn. Returns the commands it ran and how long each took.
     async fn turn(&mut self, out: &mut Vec<(&'static str, Duration, Result<(), String>)>) {
         if let Some(shared) = &self.shared {
             self.path.clone_from(&shared.lock().unwrap());
@@ -440,8 +404,6 @@ impl Learner {
     }
 }
 
-/// Atoms and clusters that make reasonable path targets: second-level
-/// clusters, which expand to a handful of atoms each.
 fn targets() -> Vec<String> {
     let g = Graph::load_embedded().expect("graph");
     let mut out: Vec<String> = g
@@ -454,9 +416,6 @@ fn targets() -> Vec<String> {
     out
 }
 
-/// Author a lesson and three quizzes for the first `atoms` atoms of the
-/// curriculum, unless the database already holds them, in transactions of
-/// `batch` atoms.
 async fn seed(db: &Db, atoms: usize, lesson_bytes: usize) {
     const BATCH: usize = 100;
     let have = db
@@ -513,8 +472,6 @@ async fn seed(db: &Db, atoms: usize, lesson_bytes: usize) {
     );
 }
 
-/// Check that every path's log holds each acknowledged answer once, and
-/// that its stored cards equal a replay of the log.
 async fn verify(base: &DbConfig, ledger: &Ledger) {
     let entries: Vec<_> = ledger.lock().unwrap().clone().into_iter().collect();
     let mut bad = 0;

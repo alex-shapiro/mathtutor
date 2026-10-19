@@ -1,13 +1,4 @@
-//! Persist agent-authored content to the user overlay.
-//!
-//! `mt lesson upsert`, `mt quiz create`, `mt quiz update`, and `mt quiz
-//! delete` write to the overlay tables — never to the shipped
-//! curriculum. The shipped graph is read-only; user-authored content
-//! lives globally on the user database and is shared across every path.
-//!
-//! Pre-condition checks consult the merged (shipped + overlay) graph:
-//! a lesson is "missing" only if neither shipped nor overlay has one;
-//! quiz IDs continue past the highest ID across both sources.
+//! Commands that store user-authored lessons and quizzes in the curriculum overlay.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -20,10 +11,7 @@ use crate::types::{Difficulty, QuizType};
 use crate::view::Want;
 use crate::{Error, Result};
 
-/// Upsert a lesson body for `atom_id` into the user overlay. Emits
-/// `lesson_amended` if a lesson already existed in the merged view
-/// (shipped or overlay), else `lesson_authored`. Always emits
-/// `lesson_taught`: per the agent playbook, storing implies presenting.
+/// Store a lesson body for `atom_id` in the overlay and log its authoring and presentation events.
 pub async fn cmd_lesson_upsert(
     db: &Db,
     atom_id: &str,
@@ -48,10 +36,7 @@ pub async fn cmd_lesson_upsert(
     .await
 }
 
-/// Persist a quiz on `atom_id` into the user overlay and log
-/// `quiz_authored` against the active path. The new quiz ID continues
-/// the `<atom>.qN` sequence past the highest existing N across shipped
-/// + overlay so IDs are globally unique within the merged graph.
+/// Create a quiz for `atom_id` in the overlay and return its generated quiz ID.
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_quiz_create(
     db: &Db,
@@ -90,14 +75,7 @@ pub async fn cmd_quiz_create(
     .await
 }
 
-/// Apply field-level edits to an existing quiz, writing the result
-/// into the user overlay. The quiz may live in the shipped curriculum
-/// or in the overlay; either way the post-amend state shadows or
-/// replaces it in the merged graph.
-///
-/// FSRS history is preserved: the quiz id doesn't change, so the
-/// scheduler keeps treating it as the same card. If you want a fresh
-/// schedule, use `mt quiz delete` followed by `mt quiz create`.
+/// Update fields of `quiz_id` in the overlay while preserving its ID and FSRS history.
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_quiz_update(
     db: &Db,
@@ -132,9 +110,7 @@ pub async fn cmd_quiz_update(
     .await
 }
 
-/// Tombstone a quiz so it no longer appears in the merged view. Past
-/// `QuizAnswered` events stay in the log for audit; the scheduler
-/// simply stops surfacing it. Idempotent.
+/// Mark `quiz_id` as removed in the overlay and log a `quiz_removed` event.
 pub async fn cmd_quiz_delete(
     db: &Db,
     quiz_id: &str,
@@ -143,8 +119,6 @@ pub async fn cmd_quiz_delete(
 ) -> Result<()> {
     db.transact(&Want::path(path_id), |view, changes| {
         let id = view.path()?.file.id.clone();
-        // Refuse to tombstone a name that never resolved to anything
-        // (likely a typo).
         let g = view.graph(graph_dir)?;
         let (atom, _) = g.quiz(quiz_id)?;
         overlay::remove_quiz(changes, &atom.id, quiz_id);
@@ -156,12 +130,7 @@ pub async fn cmd_quiz_delete(
     .await
 }
 
-/// Returns `<atom>.q<n>` where `n` is one greater than the highest
-/// `n` ever assigned for this atom — across live merged quizzes and
-/// tombstones. Tombstoned ids are never recycled: the `overlay_quizzes`
-/// row survives a delete, and reusing the id would both collide with
-/// that row and conflate FSRS history across two logically distinct
-/// quizzes.
+// Include tombstoned quiz IDs when assigning the next suffix so deleted IDs are never reused.
 fn next_quiz_id(
     atom_id: &str,
     quizzes: &[graph::Quiz],

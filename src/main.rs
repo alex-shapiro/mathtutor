@@ -28,9 +28,6 @@ async fn real_main() -> ExitCode {
 
     init_tracing(is_mcp(&cli.cmd));
 
-    // `mt graph check` has its own success-vs-issues exit logic and
-    // prints its report independently handled outside the unified
-    // dispatch.
     if let Cmd::Graph(g) = &cli.cmd
         && let GraphOp::Check(c) = &g.op
     {
@@ -50,7 +47,6 @@ async fn real_main() -> ExitCode {
         };
     }
 
-    // `mt instruct` is read-only and doesn't touch the database.
     if matches!(cli.cmd, Cmd::Instruct(_)) {
         return match instruct::cmd_instruct() {
             Ok(()) => ExitCode::SUCCESS,
@@ -61,9 +57,6 @@ async fn real_main() -> ExitCode {
         };
     }
 
-    // `mt mcp` owns its own DB lifecycle (long-running, graceful
-    // shutdown) so it sits outside the per-command DB setup the rest of
-    // the dispatch block does.
     #[cfg(feature = "mcp")]
     if let Cmd::Mcp(c) = cli.cmd {
         if let Some(McpOp::Tools(_)) = c.op {
@@ -120,9 +113,7 @@ async fn real_main() -> ExitCode {
     }
 }
 
-/// CLI helper: treat empty strings (e.g. `MT_API_KEY=`) as "not set" so
-/// the env-var fallback doesn't accidentally feed an empty token into
-/// the constant-time bearer compare.
+/// Filters out empty strings so unset environment variables do not match empty bearer tokens.
 fn nonempty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.is_empty())
 }
@@ -137,10 +128,6 @@ fn is_mcp(_cmd: &Cmd) -> bool {
     false
 }
 
-/// Install the global `tracing` subscriber. CLI commands run quietly
-/// (only `warn`+); `mt mcp` opts into `info`-level logs from our crate,
-/// `rmcp`, and `tower_http` so request-level events from the long-
-/// running server show up by default. `RUST_LOG` overrides either side.
 fn init_tracing(verbose: bool) {
     let default_filter = if verbose {
         "mathtutor=info,rmcp=info,tower_http=info,warn"
@@ -155,11 +142,6 @@ fn init_tracing(verbose: bool) {
         .init();
 }
 
-/// Run the chosen subcommand. Returns the result plus the exit code to
-/// use on failure. Most commands exit `2` (config / IO / validation),
-/// `mt path next` / `mt path state` / `mt path tree` / `mt graph dump`
-/// exit `1` to distinguish "scheduling / state read failure" from
-/// "you held it wrong."
 #[allow(clippy::too_many_lines)]
 async fn dispatch(db: &db::Db, cmd: Cmd) -> (Result<()>, u8) {
     match cmd {

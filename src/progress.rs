@@ -1,7 +1,8 @@
-//! Per-path progress: atoms taught, quizzes answered correctly.
+//! Per-path progress tracking for taught lessons and passed quizzes.
 
 use std::collections::HashSet;
 
+/// Taught atoms and passed quizzes for a learning path.
 #[derive(Debug, Default, Clone)]
 pub struct PathProgress {
     pub taught_atoms: HashSet<String>,

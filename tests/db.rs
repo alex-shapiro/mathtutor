@@ -1,6 +1,4 @@
-//! Integration tests for the Baserunna storage layer: database and
-//! schema creation, the per-path event stream, conflict retries under
-//! concurrent transactions, and rebuilding derived rows from the log.
+//! Integration tests for database initialization, streams, concurrency, and caching.
 
 use chrono::{Duration, Utc};
 use mathtutor::db::{Db, DbConfig};
@@ -12,7 +10,6 @@ mod common;
 
 use common::PATH_ID;
 
-/// An atom with a shipped lesson, so quizzes can be authored on it.
 const ATOM: &str = "fnd.2.1.1";
 
 const TABLES: [&str; 10] = [
@@ -84,7 +81,6 @@ async fn most_recent_path_follows_logged_events() {
     let (id, at) = recent(&db).await;
     assert_eq!(id, "p_a");
     assert!(at > Utc::now() - Duration::minutes(1), "activity time {at}");
-    // A fresh handle has no hint and must find the same path.
     let fresh = Db::connect(&cfg).unwrap();
     assert_eq!(recent(&fresh).await.0, "p_a");
     store::cmd_lesson_upsert(&db, "fnd.1.1.1", "again".into(), Some("p_b"), None)
@@ -157,7 +153,6 @@ async fn events_round_trip_in_order_with_every_field() {
         ]
     );
     let got = &events[1];
-    // Timestamps are stored at millisecond precision.
     assert_eq!(got.ts.timestamp_millis(), t0.timestamp_millis());
     assert_eq!(got.path, PATH_ID);
     assert_eq!(got.atom.as_deref(), Some("a"));
@@ -173,7 +168,6 @@ async fn events_round_trip_in_order_with_every_field() {
 
 #[tokio::test]
 async fn event_log_pages_past_one_read() {
-    // A read returns at most 1000 records; `load` must follow `next_seq`.
     let db = common::fresh_db(PATH_ID).await;
     let ts = Utc::now();
     let events: Vec<Event> = (0..1205)
@@ -293,7 +287,6 @@ async fn recompute_reproduces_incremental_rows_exactly() {
     assert_eq!(q1.recent, [Rating::Good, Rating::Again]);
 }
 
-/// Bytes received by every request a handle makes.
 fn counting(db: Db) -> (Db, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let received = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let r = received.clone();
@@ -364,7 +357,6 @@ async fn quiz_ids_stay_unique_when_clients_author_concurrently() {
     store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some(PATH_ID), None)
         .await
         .unwrap();
-    // Separate handles keep separate overlay caches.
     let tasks: Vec<_> = (0..6)
         .map(|i| {
             let db = Db::connect(&cfg).unwrap();
@@ -460,7 +452,6 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         .unwrap();
     drop(first);
 
-    // A later process starts from the copy on disk.
     let (second, received) = counting(Db::connect(&cfg).unwrap());
     let view = second
         .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
@@ -473,7 +464,6 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
     let warm = received.swap(0, std::sync::atomic::Ordering::Relaxed);
     assert!(warm < 2_000, "the disk copy was used ({warm} bytes)");
 
-    // A write by a client without the disk copy makes it stale.
     let other = Db::connect(&DbConfig {
         cache_dir: None,
         ..cfg.clone()

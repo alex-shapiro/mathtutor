@@ -1,7 +1,4 @@
-//! Integration tests for `PathState::progress` over stored rows.
-//!
-//! The cards-backed predicate `reps > lapses` must ensure that the
-//! quiz has been answered correctly at least once.
+//! Integration tests for `PathState::progress`.
 
 use mathtutor::event_log::{self, Event};
 use mathtutor::progress::PathProgress;
@@ -49,8 +46,6 @@ async fn lesson_taught_event_lands_in_taught_atoms() {
 
 #[tokio::test]
 async fn lesson_authored_event_also_counts_as_taught() {
-    // Authoring a lesson implies presenting it.
-    // `PathProgress` must recognize either kind.
     let db = common::fresh_db(PATH_ID).await;
     common::append(
         &db,
@@ -73,7 +68,6 @@ async fn correct_answer_lands_in_correct_quizzes() {
 
 #[tokio::test]
 async fn only_again_answers_do_not_count_as_correct() {
-    // An `Again` answer keeps `lapses == reps`
     let db = common::fresh_db(PATH_ID).await;
     common::append(&db, &[answered(PATH_ID, "atom.a", Rating::Again)]).await;
 
@@ -83,8 +77,6 @@ async fn only_again_answers_do_not_count_as_correct() {
 
 #[tokio::test]
 async fn earlier_correct_answer_survives_later_again() {
-    // Get it right, then later get it wrong.
-    // The quiz still counts as "answered correctly at least once"
     let db = common::fresh_db(PATH_ID).await;
     common::append(&db, &[answered(PATH_ID, "atom.a", Rating::Good)]).await;
     common::append(&db, &[answered(PATH_ID, "atom.a", Rating::Again)]).await;
@@ -95,7 +87,6 @@ async fn earlier_correct_answer_survives_later_again() {
 
 #[tokio::test]
 async fn loads_only_rows_for_the_named_path() {
-    // A second path's events and cards must not leak into the snapshot.
     let db = common::fresh_db(PATH_ID).await;
     common::seed_path(&db, "p_other", &[], Strategy::BottomUp).await;
     common::append(

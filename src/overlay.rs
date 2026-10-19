@@ -1,10 +1,4 @@
-//! Curriculum overlay: lessons and quizzes a user has authored on top of
-//! the shipped curriculum.
-//!
-//! Stored in the tables `lessons`, `quizzes`, and `removed_quizzes`. The shipped curriculum is read-only,
-//! compiled into the binary. User-authored content lives in these
-//! tables and is merged on top of the canonical graph by
-//! `Graph::load_for_path`.
+//! User-authored lesson and quiz overrides for the curriculum.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,13 +11,14 @@ use crate::types::{Difficulty, QuizType};
 use crate::view::{Changes, Want};
 use crate::{Error, Result};
 
-/// In-memory snapshot of the curriculum overlay
+/// In-memory snapshot of the curriculum overlay.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Overlay {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub atoms: BTreeMap<String, OverlayAtom>,
 }
 
+/// Overlay state for a single atom.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct OverlayAtom {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -34,10 +29,8 @@ pub struct OverlayAtom {
     pub removed: BTreeSet<String>,
 }
 
-// ── Rows ────────────────────────────────────────────────────────────
-
 impl Overlay {
-    /// Build the overlay from the rows of `lessons`, `quizzes` and `removed_quizzes`.
+    /// Build an overlay from database rows.
     pub fn from_rows(
         lessons: Vec<LessonRow>,
         quizzes: Vec<QuizRow>,
@@ -83,32 +76,33 @@ impl QuizRow {
     }
 }
 
-/// One change to the overlay.
+/// Mutation applied to the curriculum overlay.
 #[derive(Debug, Clone)]
 pub enum Edit {
-    /// Store the lesson body for an atom.
-    Lesson { atom_id: String, body: String },
-    /// Add a quiz under a fresh id, or replace one with the same id and
-    /// un-tombstone it.
+    Lesson {
+        atom_id: String,
+        body: String,
+    },
     Quiz {
         atom_id: String,
         quiz: Quiz,
         new: bool,
     },
-    /// Tombstone a quiz.
-    Remove { atom_id: String, quiz_id: String },
+    Remove {
+        atom_id: String,
+        quiz_id: String,
+    },
 }
 
 impl Edit {
-    /// The write ops that store this edit.
+    /// Convert this edit into database write operations.
     pub fn ops(&self) -> Vec<Op> {
         match self {
             Edit::Lesson { atom_id, body } => vec![Op::upsert(&LessonRow {
                 atom_id: atom_id.clone(),
                 body: body.clone(),
             })],
-            // A new quiz's id was chosen from what this transaction read;
-            // `insert` refuses it if a concurrent one took it first.
+            // Use `insert` for new quizzes so concurrent transactions cannot claim the same ID.
             Edit::Quiz {
                 atom_id,
                 quiz,
@@ -131,7 +125,7 @@ impl Edit {
 }
 
 impl Overlay {
-    /// Apply `e` as the database applies its ops.
+    /// Apply `e` to the in-memory overlay.
     pub fn apply(&mut self, e: &Edit) {
         match e {
             Edit::Lesson { atom_id, body } => {
@@ -158,8 +152,7 @@ impl Overlay {
     }
 }
 
-/// Store the lesson body for `atom_id`. Overlay lessons win over shipped
-/// lessons in the merged view, so this both authors and revises lessons.
+/// Set the lesson body for `atom_id` in the overlay.
 pub fn upsert_lesson(changes: &mut Changes, atom_id: &str, body: &str) {
     changes.overlay(Edit::Lesson {
         atom_id: atom_id.into(),
@@ -167,7 +160,7 @@ pub fn upsert_lesson(changes: &mut Changes, atom_id: &str, body: &str) {
     });
 }
 
-/// Add a quiz under a fresh id.
+/// Insert a new quiz into the overlay.
 pub fn add_quiz(changes: &mut Changes, atom_id: &str, q: &Quiz) {
     changes.overlay(Edit::Quiz {
         atom_id: atom_id.into(),
@@ -176,9 +169,7 @@ pub fn add_quiz(changes: &mut Changes, atom_id: &str, q: &Quiz) {
     });
 }
 
-/// Store an amended quiz. `base` is the quiz's current state in the merged
-/// view (shipped + overlay); only fields supplied as `Some` change.
-/// Un-tombstones the quiz if it was previously removed.
+/// Update fields of `base` in the overlay and clear any removal tombstone.
 #[allow(clippy::too_many_arguments)]
 pub fn amend_quiz(
     changes: &mut Changes,
@@ -208,7 +199,7 @@ pub fn amend_quiz(
     });
 }
 
-/// Tombstone `quiz_id` so it stops appearing in the merged view. Idempotent.
+/// Mark `quiz_id` as removed in the overlay.
 pub fn remove_quiz(changes: &mut Changes, atom_id: &str, quiz_id: &str) {
     changes.overlay(Edit::Remove {
         atom_id: atom_id.into(),
@@ -216,8 +207,7 @@ pub fn remove_quiz(changes: &mut Changes, atom_id: &str, quiz_id: &str) {
     });
 }
 
-// ── `mt graph dump` ────────────────────────────────────────────────
-
+/// Print the curriculum overlay as AYML (`mt graph dump`).
 pub async fn cmd_graph_dump(db: &Db) -> Result<()> {
     let overlay = db.snapshot(&Want::overlay()).await?.overlay;
     let text = ayml::to_string(&*overlay).map_err(|e| Error::AymlSerialize(e.to_string()))?;

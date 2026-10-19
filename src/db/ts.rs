@@ -1,7 +1,4 @@
-//! Stored timestamps, for `#[serde(with = "ts")]` and `#[serde(with = "ts::option")]`.
-//!
-//! Times are written as fixed-width RFC 3339 UTC with millisecond precision,
-//! so string order is time order, and read back from any RFC 3339 form.
+//! Fixed-width RFC 3339 millisecond UTC timestamp serialization for `serde`.
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Deserializer, Serializer};

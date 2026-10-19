@@ -1,18 +1,4 @@
-//! Tables of the user database, their row types, and their creation.
-//!
-//! | table                  | primary key           | role                                          |
-//! | ---------------------- | --------------------- | --------------------------------------------- |
-//! | `paths`                | `id`                  | goal, strategy, targets and subpath per path  |
-//! | `lessons`              | `atom_id`             | user-authored lessons (overlay)               |
-//! | `quizzes`              | `quiz_id`             | user-authored or amended quizzes (overlay)    |
-//! | `removed_quizzes`      | `quiz_id`             | quiz tombstones (overlay)                     |
-//! | `cards`                | `(path_id, quiz_id)`  | FSRS state and answer history per quiz        |
-//! | `taught`               | `(path_id, atom_id)`  | lessons taught per path                       |
-//! | `oauth_*`              | code or token         | MCP authorization-server state                |
-//!
-//! Each path's event log is the stream `events.<path id>`, the source of
-//! truth that `cards` and `taught` are derived from. The key
-//! `activity/<path id>` holds the time of the path's latest event.
+//! Database table schemas, row types, and initialization.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -23,32 +9,27 @@ use crate::error::Error;
 use crate::path::PathFile;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 
-/// Bumped whenever a table is added or changed. Existing databases are
-/// brought up to date by [`ensure`].
 const VERSION: u64 = 1;
 const VERSION_KEY: &str = "schema_version";
 
-/// Name of the stream holding `path_id`'s event log.
+/// Return the stream key for the event log of `path_id`.
 pub fn events_stream(path_id: &str) -> String {
     format!("events.{path_id}")
 }
 
-/// Prefix of the keys holding each path's latest activity time. They are
-/// written blind, so commands logging events on one path never conflict
-/// over them.
+/// Key prefix for per-path latest activity timestamps.
 pub const ACTIVITY_PREFIX: &str = "activity/";
 
+/// Return the key for the latest activity timestamp of `path_id`.
 pub fn activity_key(path_id: &str) -> String {
     format!("{ACTIVITY_PREFIX}{path_id}")
 }
-
-// ── Rows ────────────────────────────────────────────────────────────
 
 impl Row for PathFile {
     const TABLE: &'static str = "paths";
 }
 
-/// The columns of a `paths` row that change after the path is created.
+/// Mutable columns of a `paths` row.
 #[derive(Debug, Default, Serialize)]
 pub struct PathUpdate<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -57,6 +38,7 @@ pub struct PathUpdate<'a> {
     pub subpath: Option<&'a [String]>,
 }
 
+/// Row in the `lessons` overlay table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LessonRow {
     pub atom_id: String,
@@ -67,6 +49,7 @@ impl Row for LessonRow {
     const TABLE: &'static str = "lessons";
 }
 
+/// Row in the `quizzes` overlay table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuizRow {
     pub quiz_id: String,
@@ -82,6 +65,7 @@ impl Row for QuizRow {
     const TABLE: &'static str = "quizzes";
 }
 
+/// Row in the `removed_quizzes` overlay table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemovedQuizRow {
     pub quiz_id: String,
@@ -92,8 +76,7 @@ impl Row for RemovedQuizRow {
     const TABLE: &'static str = "removed_quizzes";
 }
 
-/// A `cards` row. The FSRS columns are all set once the quiz is answered,
-/// and all null before.
+/// Row in the `cards` table storing FSRS state and answer history for a quiz.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CardRecord {
     pub path_id: String,
@@ -111,7 +94,7 @@ pub struct CardRecord {
     pub last_presented_at: Option<DateTime<Utc>>,
     #[serde(with = "ts::option")]
     pub first_correct_at: Option<DateTime<Utc>>,
-    /// Newest first.
+    /// Recent ratings ordered from newest to oldest.
     pub recent: Vec<Rating>,
 }
 
@@ -119,6 +102,7 @@ impl Row for CardRecord {
     const TABLE: &'static str = "cards";
 }
 
+/// Row in the `taught` table tracking lesson presentations per path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaughtRow {
     pub path_id: String,
@@ -132,6 +116,7 @@ impl Row for TaughtRow {
     const TABLE: &'static str = "taught";
 }
 
+/// Row in the `oauth_clients` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthClient {
     pub client_id: String,
@@ -145,6 +130,7 @@ impl Row for OAuthClient {
     const TABLE: &'static str = "oauth_clients";
 }
 
+/// Row in the `oauth_codes` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthCode {
     pub code: String,
@@ -164,14 +150,14 @@ impl Row for OAuthCode {
     const TABLE: &'static str = "oauth_codes";
 }
 
-/// The columns of an `oauth_codes` row that change after it is issued.
+/// Update payload marking an `oauth_codes` row as redeemed.
 #[derive(Debug, Serialize)]
 pub struct OAuthCodeUse {
     #[serde(with = "ts")]
     pub used_at: DateTime<Utc>,
 }
 
-/// A bearer token for `/mcp`.
+/// Row in the `oauth_access_tokens` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthAccessToken {
     pub token: String,
@@ -185,7 +171,7 @@ impl Row for OAuthAccessToken {
     const TABLE: &'static str = "oauth_access_tokens";
 }
 
-/// A one-use token that trades for a fresh access and refresh token.
+/// Row in the `oauth_refresh_tokens` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthRefreshToken {
     pub token: String,
@@ -198,8 +184,6 @@ pub struct OAuthRefreshToken {
 impl Row for OAuthRefreshToken {
     const TABLE: &'static str = "oauth_refresh_tokens";
 }
-
-// ── Tables ──────────────────────────────────────────────────────────
 
 #[derive(Serialize)]
 struct Table {
@@ -357,8 +341,7 @@ const TOKEN_COLUMNS: &[Column] = &[
     string("expires_at"),
 ];
 
-/// Create the database and its tables unless they already exist.
-/// Costs one read when the schema is current.
+/// Ensure that the database and all required tables exist.
 pub async fn ensure(db: &Db) -> Result<()> {
     match db.read(&[Op::get(VERSION_KEY)]).await {
         Ok(r) if r[0].value().and_then(|v| v.parse().ok()) == Some(VERSION) => return Ok(()),

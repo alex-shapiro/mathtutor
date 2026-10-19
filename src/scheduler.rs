@@ -1,4 +1,4 @@
-//! `mt path next` scheduler: action selection + AYML envelope output.
+//! Action scheduler and AYML output envelope for `mt path next`.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -19,6 +19,7 @@ use crate::{Error, Result};
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
+/// Compute the next action for `path_id` and print its AYML envelope (`mt path next`).
 pub async fn cmd_path_next(
     db: &Db,
     path_id: Option<&str>,
@@ -31,11 +32,7 @@ pub async fn cmd_path_next(
     Ok(())
 }
 
-/// Caller-selected filter for `compute_next`
-///
-/// - `Default` returns the earliest-due quiz first, else the next new item
-/// - `New` returns the next new item
-/// - `Due` returns the earliest-due quiz
+/// Filter for [`compute_next`] action selection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -47,8 +44,7 @@ pub enum NextMode {
 }
 
 impl NextMode {
-    /// Translate the `--new` / `--due` CLI switches into a mode.
-    /// Errors if both switches were set.
+    /// Convert `--new` and `--due` CLI flags into a [`NextMode`].
     pub fn from_flags(new: bool, due: bool) -> Result<Self> {
         match (new, due) {
             (true, true) => Err(Error::ConflictingFlags("--new", "--due")),
@@ -59,8 +55,7 @@ impl NextMode {
     }
 }
 
-/// Pick the next action for `path_id` and auto-log its
-/// `quiz_presented` / `lesson_taught` side effect.
+/// Select the next action for `path_id` and append its presentation event.
 pub async fn compute_next(
     db: &Db,
     path_id: Option<&str>,
@@ -77,9 +72,7 @@ pub async fn compute_next(
         let targets = p.resolve_targets(&g)?;
 
         let action = next_action(&g, p, &targets, &progress, &due, &subpath, mode);
-        // Build the envelope first — its history aggregates count past
-        // presentations only, not the `quiz_presented` / `lesson_taught`
-        // we are about to log below.
+        // Build the envelope before appending presentation events so history reflects prior attempts.
         let envelope = Envelope::build(ps, &g, action.clone());
 
         match &action {
@@ -96,9 +89,6 @@ pub async fn compute_next(
             _ => {}
         }
 
-        // Auto-clear a fully-drained subpath: once every atom on it (the
-        // target included) is complete, the detour is spent and `next` has
-        // already moved on to the remaining targets.
         if p.strategy == Strategy::TopDown
             && !subpath.is_empty()
             && subpath.iter().all(|a| is_atom_complete(&g, &progress, a))
@@ -110,6 +100,7 @@ pub async fn compute_next(
     .await
 }
 
+/// Scheduled action for a learning path.
 #[derive(Debug, Clone)]
 pub enum Action {
     PresentQuiz {
@@ -130,6 +121,7 @@ pub enum Action {
 }
 
 impl Action {
+    /// Return the atom ID associated with this action, or `None` for [`Action::Done`].
     pub fn atom_id(&self) -> Option<&str> {
         match self {
             Action::CreateLesson { atom_id }
@@ -141,24 +133,7 @@ impl Action {
     }
 }
 
-/// Action priority (see `DESIGN.md`):
-///   1. earliest-due quiz card → `present_quiz`
-///   2. the next incomplete atom, per the path's strategy. Bottom-up walks
-///      each target and its prereqs in topo order; top-down takes the first
-///      incomplete atom of `subpath` if set, else the next incomplete
-///      target (neither top-down case descends into prereqs). For that
-///      atom: `create_lesson` → `present_lesson` → `create_quiz` →
-///      `present_quiz`.
-///   3. otherwise → `done`
-///
-/// The `mode` param lets the caller filter items:
-///
-/// - `New` skips step 1
-/// - `Due` skips step 2
-///
-/// An atom is considered incomplete until its lesson is stored,
-/// all three difficulty slots are filled, and each quiz has at
-/// least one non-`Again` answer.
+/// Compute the highest-priority action for `p` filtered by `mode`.
 pub fn next_action(
     g: &Graph,
     p: &PathFile,
@@ -188,8 +163,6 @@ pub fn next_action(
             Action::Done
         }
         Strategy::TopDown => {
-            // A set subpath takes priority; once it drains (all complete)
-            // fall through to the targets it was driving toward.
             for atom in subpath.iter().chain(targets) {
                 if let Some(action) = atom_action(g, progress, atom) {
                     return action;
@@ -200,8 +173,6 @@ pub fn next_action(
     }
 }
 
-/// Walk the graph starting at `id` and return the first incomplete action.
-/// Return `None` if all reachable items are complete.
 fn next_atom_action(
     g: &Graph,
     progress: &PathProgress,
@@ -231,10 +202,6 @@ fn next_atom_action(
     atom_action(g, progress, id)
 }
 
-/// The per-atom action sequence: author the lesson, teach it, then author
-/// and answer each difficulty quiz (easy → medium → hard). Returns `None`
-/// when the atom is complete. Unlike [`next_atom_action`], this never
-/// recurses into prerequisites — it acts on `id` alone.
 fn atom_action(g: &Graph, progress: &PathProgress, id: &str) -> Option<Action> {
     let c = g.by_id.get(id)?;
     if c.lesson.is_none() {
@@ -242,8 +209,6 @@ fn atom_action(g: &Graph, progress: &PathProgress, id: &str) -> Option<Action> {
             atom_id: id.to_string(),
         });
     }
-    // Lesson exists in the graph but hasn't been taught in this path yet.
-    // Show the lesson body before quizzing to ensure the user has context.
     if !progress.lesson_taught(id) {
         return Some(Action::PresentLesson {
             atom_id: id.to_string(),
@@ -270,9 +235,7 @@ fn atom_action(g: &Graph, progress: &PathProgress, id: &str) -> Option<Action> {
     None
 }
 
-/// True when `events` contains a `LessonTaught` or `LessonAuthored`
-/// event for `atom_id`. Mirrors `PathProgress::lesson_taught` for
-/// callers (like `syllabus`) that already hold the full event list.
+/// Return `true` if `events` contains a `LessonTaught` or `LessonAuthored` event for `atom_id`.
 pub fn lesson_taught_in_path(events: &[Event], atom_id: &str) -> bool {
     events.iter().any(|e| {
         matches!(e.kind, EventKind::LessonTaught | EventKind::LessonAuthored)
@@ -280,8 +243,6 @@ pub fn lesson_taught_in_path(events: &[Event], atom_id: &str) -> bool {
     })
 }
 
-/// First quiz that's both due and still present in the merged graph.
-/// Tombstoned or graph-pruned quizzes are silently skipped.
 fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<(String, String)> {
     for (quiz_id, _) in due_quizzes {
         let atom_id = atom_from_quiz_id(quiz_id)?;
@@ -293,9 +254,7 @@ fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<
     None
 }
 
-/// "Complete" = lesson stored in the merged graph AND all three
-/// difficulty quizzes exist AND each has at least one correct answer
-/// (per `PathProgress`).
+/// Return `true` if `atom_id` has a stored lesson and passed quizzes for all 3 difficulties.
 pub fn is_atom_complete(g: &Graph, progress: &PathProgress, atom_id: &str) -> bool {
     let Some(c) = g.by_id.get(atom_id) else {
         return false;
@@ -311,8 +270,7 @@ pub fn is_atom_complete(g: &Graph, progress: &PathProgress, atom_id: &str) -> bo
     })
 }
 
-// ── Quiz / lesson history ─────────────────────────────────────────
-
+/// Presentation and answer history for a quiz card.
 #[derive(Serialize, Default, Debug)]
 pub struct QuizHistory {
     pub repetitions: u32,
@@ -325,8 +283,7 @@ pub struct QuizHistory {
     pub recent_ratings: Vec<Rating>,
 }
 
-/// Past presentations, answer counts, and the last 10 ratings for one
-/// quiz card on one path.
+/// Compute presentation and answer statistics for `quiz_id` in `ps`.
 pub fn quiz_history(ps: &PathState, quiz_id: &str) -> QuizHistory {
     let Some(c) = ps.cards.get(quiz_id) else {
         return QuizHistory::default();
@@ -342,7 +299,6 @@ pub fn quiz_history(ps: &PathState, quiz_id: &str) -> QuizHistory {
     }
 }
 
-/// Nearest-integer percent, or `None` when `denominator == 0`.
 fn percent(numerator: u32, denominator: u32) -> Option<u32> {
     if denominator == 0 {
         return None;
@@ -351,7 +307,7 @@ fn percent(numerator: u32, denominator: u32) -> Option<u32> {
     Some(u32::try_from(num / u64::from(denominator)).expect("percent fits in u32"))
 }
 
-/// Past `lesson_taught` count and the most-recent ts for one atom.
+/// Compute lesson presentation statistics for `atom_id` in `ps`.
 pub fn lesson_history(ps: &PathState, atom_id: &str) -> LessonHistory {
     ps.taught
         .get(atom_id)
@@ -361,8 +317,7 @@ pub fn lesson_history(ps: &PathState, atom_id: &str) -> LessonHistory {
         })
 }
 
-// ── AYML output shape ──────────────────────────────────────────────
-
+/// Output envelope returned by [`compute_next`].
 #[derive(Serialize)]
 pub struct Envelope {
     schema_version: u32,
@@ -465,7 +420,7 @@ struct DonePayload {
 }
 
 impl Envelope {
-    /// The action this envelope describes.
+    /// Return the scheduled [`Action`] for this envelope.
     pub fn action(&self) -> &Action {
         &self.next
     }

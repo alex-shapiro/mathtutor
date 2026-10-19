@@ -1,18 +1,4 @@
-//! `mt mcp`: SSE-over-HTTP MCP server.
-//!
-//! The CLI ports the same scheduling + storage layer used by the CLI; the
-//! server adds a JSON-RPC tool surface, a `mathtutor-playbook` prompt, and
-//! a `Bearer`-token (or `?token=` query parameter) auth wrapper.
-//!
-//! Transport: rmcp's `StreamableHttpService`. The MCP 2025-06-18 Streamable
-//! HTTP transport uses `text/event-stream` SSE for server-initiated frames
-//! and `application/json` for client POSTs, with 15-second SSE keep-alive
-//! comments. That's the SSE-over-HTTP the design doc specifies; rmcp 1.7
-//! ships no separate "pure SSE" feature.
-//!
-//! Every session shares one [`Db`] handle and its connection pool; each
-//! tool call runs as its own Baserunna transaction, so concurrent calls
-//! are safe.
+//! Streamable HTTP MCP server (`mt mcp`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -58,16 +44,12 @@ use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::{PathSel, Want};
 use crate::{answer, discover, graph, path, scheduler, state, store, subpath, syllabus, tree};
 
-/// Local alias kept distinct from `std::result::Result` so the rmcp tool /
-/// prompt macros (which expand to bare `Result<…, ErrorData>`) don't pick
-/// it up by accident.
+// Keep distinct from `Result` because rmcp macros expand to bare `Result<_, ErrorData>`.
 type CrateResult<T> = std::result::Result<T, Error>;
 
 pub mod oauth;
 
 const PLAYBOOK: &str = include_str!("playbook.md");
-
-// ───────────────────────────── server ─────────────────────────────
 
 #[derive(Clone)]
 pub struct MathTutorServer {
@@ -92,15 +74,13 @@ impl MathTutorServer {
     }
 }
 
-// ───────────────────────────── parameter types ────────────────────
-
 #[derive(Deserialize, JsonSchema)]
 pub struct NewPathArgs {
-    /// Free-text learning goal, e.g. "Understand SVD".
+    /// Learning goal text.
     pub goal: String,
-    /// Targets — atom or cluster IDs (one or more).
+    /// Target atom or cluster IDs.
     pub targets: Vec<String>,
-    /// Initial traversal strategy: `bottom_up` (default) or `top_down`.
+    /// Initial traversal strategy (`bottom_up` or `top_down`).
     #[serde(default)]
     pub strategy: Strategy,
 }
@@ -113,25 +93,21 @@ pub struct PathOnlyArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct SetStrategyArgs {
     pub path_id: String,
-    /// New traversal strategy: `bottom_up` or `top_down`.
+    /// Traversal strategy (`bottom_up` or `top_down`).
     pub strategy: Strategy,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct SubpathSetArgs {
     pub path_id: String,
-    /// Atoms in teaching order; the last must be a path target.
+    /// Ordered list of atom IDs ending with a path target.
     pub atoms: Vec<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct GetNextArgs {
     pub path_id: String,
-    /// Filter on retrievable next actions:
-    ///
-    /// - `default` (or omit) returns the next new item or due quiz
-    /// - `new` returns only the next new lesson or quiz
-    /// - `due` returns only the next due quiz
+    /// Action filter (`default`, `new`, or `due`).
     #[serde(default)]
     pub mode: scheduler::NextMode,
 }
@@ -139,7 +115,7 @@ pub struct GetNextArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct GetTreeArgs {
     pub path_id: String,
-    /// Max levels to traverse. Omit for full tree.
+    /// Maximum tree depth.
     #[serde(default)]
     pub depth: Option<u32>,
 }
@@ -147,7 +123,7 @@ pub struct GetTreeArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct GetSyllabusArgs {
     pub path_id: String,
-    /// Max upcoming atoms to return. Defaults to 10 when omitted.
+    /// Maximum number of upcoming atoms to return (default 10).
     #[serde(default = "default_syllabus_n")]
     pub n: usize,
 }
@@ -169,7 +145,7 @@ pub struct GetChildrenArgs {
     pub id: Option<String>,
     #[serde(default)]
     pub path_id: Option<String>,
-    /// If true, recursively list all descendants.
+    /// Whether to include all descendants recursively.
     #[serde(default)]
     pub recursive: Option<bool>,
 }
@@ -225,8 +201,6 @@ pub struct AnswerQuizArgs {
     pub path_id: String,
 }
 
-// ───────────────────────────── tools ──────────────────────────────
-
 #[tool_router]
 impl MathTutorServer {
     #[tool(description = "List all learning paths for this user.")]
@@ -254,7 +228,7 @@ impl MathTutorServer {
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
-    #[tool(description = "Switch a path's traversal strategy (bottom_up or top_down).")]
+    #[tool(description = "Switch a path traversal strategy (bottom_up or top_down).")]
     async fn set_strategy(
         &self,
         Parameters(args): Parameters<SetStrategyArgs>,
@@ -263,9 +237,7 @@ impl MathTutorServer {
         encode(result.map(|id| json!({ "path_id": id, "strategy": args.strategy })))
     }
 
-    #[tool(
-        description = "Set a top-down path's subpath: an ordered detour of atoms ending in a target."
-    )]
+    #[tool(description = "Set the ordered atom subpath for a top-down path ending in a target.")]
     async fn subpath_set(
         &self,
         Parameters(args): Parameters<SubpathSetArgs>,
@@ -280,7 +252,7 @@ impl MathTutorServer {
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
-    #[tool(description = "Clear a path's subpath.")]
+    #[tool(description = "Clear the subpath for a path.")]
     async fn subpath_clear(
         &self,
         Parameters(args): Parameters<PathOnlyArgs>,
@@ -300,7 +272,7 @@ impl MathTutorServer {
         encode(result)
     }
 
-    #[tool(description = "Summary of progress for a path: completed vs. remaining atoms.")]
+    #[tool(description = "Return progress summary for a path.")]
     async fn get_state(
         &self,
         Parameters(args): Parameters<PathOnlyArgs>,
@@ -308,7 +280,7 @@ impl MathTutorServer {
         encode(state::compute_state(&self.db, Some(&args.path_id), self.graph_path()).await)
     }
 
-    #[tool(description = "Full prerequisite tree with per-atom status for a path.")]
+    #[tool(description = "Return the prerequisite tree and atom status for a path.")]
     async fn get_tree(
         &self,
         Parameters(args): Parameters<GetTreeArgs>,
@@ -327,7 +299,7 @@ impl MathTutorServer {
         )
     }
 
-    #[tool(description = "Detailed view of a curriculum node (atom or cluster).")]
+    #[tool(description = "Return details for a curriculum node (atom or cluster).")]
     async fn get_item(
         &self,
         Parameters(args): Parameters<GetItemArgs>,
@@ -396,7 +368,7 @@ impl MathTutorServer {
         encode(result.map(|quiz_id| json!({ "quiz_id": quiz_id })))
     }
 
-    #[tool(description = "Update fields of an existing quiz; ID and FSRS history are preserved.")]
+    #[tool(description = "Update fields of an existing quiz while preserving ID and FSRS history.")]
     async fn update_quiz(
         &self,
         Parameters(args): Parameters<UpdateQuizArgs>,
@@ -416,7 +388,7 @@ impl MathTutorServer {
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
     }
 
-    #[tool(description = "Tombstone a quiz so it no longer appears. Past answers stay in the log.")]
+    #[tool(description = "Delete a quiz from the curriculum overlay.")]
     async fn delete_quiz(
         &self,
         Parameters(args): Parameters<DeleteQuizArgs>,
@@ -431,7 +403,7 @@ impl MathTutorServer {
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
     }
 
-    #[tool(description = "Record a user's quiz answer and FSRS rating.")]
+    #[tool(description = "Record a quiz answer and FSRS rating.")]
     async fn answer_quiz(
         &self,
         Parameters(args): Parameters<AnswerQuizArgs>,
@@ -449,8 +421,6 @@ impl MathTutorServer {
     }
 }
 
-// ───────────────────────────── prompts ────────────────────────────
-
 #[prompt_router]
 impl MathTutorServer {
     #[prompt(
@@ -466,9 +436,7 @@ impl MathTutorServer {
     }
 }
 
-// ───────────────────────────── handler ────────────────────────────
-
-// rmcp's handler macros generate `async` methods that never await.
+// rmcp handler macros generate `async` methods that do not await.
 #[allow(unknown_lints, clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 #[prompt_handler(router = self.prompt_router)]
@@ -488,15 +456,12 @@ impl ServerHandler for MathTutorServer {
     }
 }
 
-// ───────────────────── data helpers (shared by tools) ─────────────
-
 #[derive(Serialize)]
 struct PathSummary {
     id: String,
     goal: String,
     strategy: Strategy,
     created_at: DateTime<Utc>,
-    /// Targets as the learner chose them — atoms or clusters.
     targets: Vec<String>,
 }
 
@@ -763,18 +728,7 @@ fn build_tree_node(
     }
 }
 
-// ───────────────────────────── error mapping ──────────────────────
-
-/// Map a fallible `crate::Result<T>` into a `CallToolResult`. Business
-/// errors (atom not found, unknown id, invalid rating, etc.) become
-/// `isError: true` with a structured JSON error body. Encoding-only
-/// failures become protocol-level `McpError`.
-///
-/// MCP requires `structuredContent` to be a JSON object; bare arrays and
-/// primitives get rejected by strict clients (Claude Desktop). Tools that
-/// hold non-object data should wrap it (`{ "paths": [...] }`); this
-/// helper still wraps anything that slips through as `{ "value": ... }`
-/// so the failure mode is a self-describing payload, not a 500.
+// Wrap non-object JSON payloads because MCP requires `structuredContent` to be a JSON object.
 fn encode<T: Serialize>(result: CrateResult<T>) -> std::result::Result<CallToolResult, McpError> {
     match result {
         Ok(value) => {
@@ -828,23 +782,14 @@ fn error_kind(e: &Error) -> &'static str {
     }
 }
 
-// ───────────────────────────── HTTP entry point ───────────────────
-
-/// Resolved auth configuration for `mt mcp`. At least one mode must be
-/// enabled or the server refuses to start.
+/// Authentication configuration for `mt mcp`.
 #[derive(Clone, Debug, Default)]
 pub struct AuthConfig {
-    /// Static-bearer mode. CLI / `mcp-remote` / test path; matches the
-    /// raw token value. Set from `MT_API_KEY` or `--api-key`.
+    /// Static bearer token from `MT_API_KEY` or `--api-key`.
     pub api_key: Option<String>,
-    /// OAuth-AS mode. Static password used by `/oauth/authorize`. Set
-    /// from `MT_ADMIN_PASSWORD` or `--admin-password`.
+    /// OAuth administrator password from `MT_ADMIN_PASSWORD` or `--admin-password`.
     pub admin_password: Option<String>,
-    /// Public-facing URL the server advertises in OAuth discovery
-    /// metadata (issuer + `resource`). Must match what an external
-    /// client types into "Add custom connector". Set from
-    /// `MT_PUBLIC_URL` or `--public-url`; defaults to
-    /// `http://<bind-addr>` when omitted.
+    /// Public issuer URL from `MT_PUBLIC_URL` or `--public-url`.
     pub public_url: Option<String>,
 }
 
@@ -863,9 +808,7 @@ pub fn print_tools() -> CrateResult<()> {
     Ok(())
 }
 
-/// Run the MCP server until SIGINT/SIGTERM.
-///
-/// `addr` parses the same as `std::net::SocketAddr` (`"127.0.0.1:8080"`).
+/// Run the MCP server on `addr` until SIGINT or SIGTERM.
 pub async fn run(
     addr: &str,
     auth: AuthConfig,
@@ -901,8 +844,7 @@ pub async fn run(
     let public_url = resolve_public_url(auth.public_url.as_deref(), socket_addr)?;
 
     let auth_state = AuthState::new(&auth, &public_url, db.clone());
-    // Auth middleware is scoped to MCP transport routes. Body logging
-    // runs after auth so only authenticated payloads are buffered.
+    // Run body logging after auth so unauthenticated requests are not buffered.
     let mut app = Router::new()
         .nest_service("/mcp", mcp_service)
         .route_layer(middleware::from_fn(log_request_body))
@@ -945,9 +887,6 @@ pub async fn run(
     Ok(())
 }
 
-/// Resolve the public-facing URL for discovery metadata. When the operator
-/// hasn't set one explicitly we fall back to `http://<bind-addr>`; this is
-/// only correct for local dev, but it lets `mt mcp` work zero-config.
 fn resolve_public_url(explicit: Option<&str>, socket: std::net::SocketAddr) -> CrateResult<Url> {
     let raw = match explicit {
         Some(s) => s.to_string(),
@@ -959,17 +898,11 @@ fn resolve_public_url(explicit: Option<&str>, socket: std::net::SocketAddr) -> C
 #[derive(Clone)]
 struct AuthState {
     api_key: Option<Arc<str>>,
-    /// Database handle for OAuth access-token lookups. `None` when OAuth
-    /// is disabled.
     db: Option<Db>,
-    /// Pre-formatted `WWW-Authenticate` value pointing at the protected-
-    /// resource metadata so OAuth-aware clients can discover the AS on 401.
     www_authenticate: Arc<str>,
 }
 
 impl AuthState {
-    /// Construct from the resolved `AuthConfig`. Stores only what the
-    /// per-request middleware needs.
     fn new(auth: &AuthConfig, public_url: &Url, db: Db) -> Self {
         let api_key = auth
             .api_key
@@ -993,16 +926,6 @@ struct TokenQuery {
     token: Option<String>,
 }
 
-/// Layered bearer / OAuth auth on `/mcp`. Order:
-///
-/// 1. `Authorization: Bearer <token>` header.
-/// 2. `?token=<token>` query parameter (legacy `EventSource` fallback, bearer mode only).
-///
-/// The presented value is matched against the static API key first
-/// (when enabled), then looked up as an OAuth access token (when
-/// enabled). On failure we return 401 with a `WWW-Authenticate` header
-/// pointing at protected-resource metadata so OAuth-aware MCP clients
-/// can discover the AS and trigger the connector flow.
 async fn auth_middleware(
     State(state): State<AuthState>,
     Query(q): Query<TokenQuery>,
@@ -1064,8 +987,7 @@ async fn log_request_body(req: Request<Body>, next: Next) -> Response {
     let bytes = match axum::body::to_bytes(body, MAX_LOGGED_BODY).await {
         Ok(b) => b,
         Err(e) => {
-            // Body is consumed and can't be replayed.
-            // Surface as 400 so the client retries instead of seeing a confusing 500.
+            // Return 400 because the request body stream has already been consumed.
             tracing::warn!(error = %e, "mcp request body buffering failed");
             let mut resp = Response::new(Body::empty());
             *resp.status_mut() = StatusCode::BAD_REQUEST;
@@ -1081,13 +1003,10 @@ async fn log_request_body(req: Request<Body>, next: Next) -> Response {
         .await
 }
 
-/// Liveness probe
 async fn health() -> &'static str {
     "ok"
 }
 
-/// Wait for SIGINT or SIGTERM, whichever comes first. On non-unix
-/// targets, only Ctrl-C is wired.
 async fn wait_for_shutdown() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;

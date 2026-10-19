@@ -1,9 +1,4 @@
 //! Integration tests for the `mt mcp` server.
-//!
-//! Each test starts the server on an ephemeral port against a fresh
-//! Baserunna database, exercises a single contract (auth, MCP initialize,
-//! tool list, tool call shapes), and shuts the server down. Tests never
-//! share a port or a database, so they can run in parallel.
 
 #![cfg(feature = "mcp")]
 
@@ -41,11 +36,7 @@ impl ServerHandle {
     }
 }
 
-/// Start `mcp::run` on an ephemeral port with the supplied `AuthConfig`.
-/// Bind first to pick a free port, then close the probe listener so
-/// `mcp::run` can grab the same address — the alternative is teaching
-/// `run` to accept a pre-bound listener, which isn't worth the API
-/// surface for tests.
+// Probe an ephemeral port first so `mcp::run` can bind to a known address.
 async fn spawn_server_with(auth: AuthConfig) -> ServerHandle {
     let cfg = common::fresh_config();
 
@@ -58,8 +49,6 @@ async fn spawn_server_with(auth: AuthConfig) -> ServerHandle {
         let _ = mcp::run(&addr_str, auth, cfg, None).await;
     });
 
-    // Spin until the server has actually bound. Race-free enough for tests
-    // because `mcp::run` binds before logging the listening message.
     for _ in 0..250 {
         if let Ok(stream) = tokio::net::TcpStream::connect(addr).await {
             drop(stream);
@@ -128,9 +117,6 @@ async fn rejects_wrong_api_key_with_401() {
 
 #[tokio::test]
 async fn accepts_query_token_when_header_absent() {
-    // EventSource-style clients can't set headers, so the query-string
-    // fallback is the only way they authenticate. Drive the same initialize
-    // request through `?token=` and make sure the MCP handshake completes.
     let server = spawn_server().await;
     let url = format!("{}?token={API_KEY}", server.url("/mcp"));
     let res = client()
@@ -197,9 +183,6 @@ async fn initialize_returns_server_info_and_capabilities() {
 
 #[tokio::test]
 async fn tools_list_includes_every_documented_tool() {
-    // Initialize, capture the session id, then call `tools/list` and check
-    // every tool in the design doc is present (snake_case names match the
-    // method names in `mcp.rs`).
     let server = spawn_server().await;
     let session = handshake(&server).await;
 
@@ -249,8 +232,6 @@ async fn tools_list_includes_every_documented_tool() {
 
 #[tokio::test]
 async fn get_next_advertises_mode_enum_in_schema() {
-    // The `mode` arg must surface in `inputSchema` so MCP clients can
-    // discover the `new` / `due` filter values without reading the docs.
     let server = spawn_server().await;
     let session = handshake(&server).await;
 
@@ -274,8 +255,6 @@ async fn get_next_advertises_mode_enum_in_schema() {
         !schema["properties"]["mode"].is_null(),
         "`mode` property missing from inputSchema",
     );
-    // schemars puts the variant strings in `$defs`. Easiest robust check
-    // is to stringify the whole schema and look for both literals.
     let rendered = schema.to_string();
     assert!(
         rendered.contains("\"new\""),
@@ -318,9 +297,6 @@ async fn prompts_list_includes_playbook() {
 
 #[tokio::test]
 async fn get_paths_returns_empty_list_on_fresh_db() {
-    // First end-to-end tool invocation: prove the path from JSON-RPC
-    // through `tool_router` through `list_paths` returns a sensible JSON
-    // body with `isError: false`.
     let server = spawn_server().await;
     let session = handshake(&server).await;
 
@@ -342,16 +318,11 @@ async fn get_paths_returns_empty_list_on_fresh_db() {
     let body = res.text().await.unwrap();
     let msg = parse_sse_message(&body).expect("sse json");
     let result = &msg["result"];
-    // Old MCP omitted `isError` on success; new MCP sets it to `false`.
-    // Either way it must not be `true`.
     assert_ne!(
         result["isError"].as_bool(),
         Some(true),
         "tool should succeed"
     );
-    // MCP `structuredContent` must be a JSON object — Claude Desktop
-    // rejects bare arrays. The empty path list is wrapped as
-    // `{"paths": []}`.
     assert_eq!(
         result["structuredContent"],
         json!({ "paths": [] }),
@@ -362,9 +333,6 @@ async fn get_paths_returns_empty_list_on_fresh_db() {
 
 #[tokio::test]
 async fn unknown_atom_id_returns_structured_business_error() {
-    // Domain failures (atom not found, no path, etc.) must come back as
-    // `isError: true` JSON, not as a JSON-RPC protocol error — that's
-    // what the design doc tells the agent to recover from.
     let server = spawn_server().await;
     let session = handshake(&server).await;
 
@@ -407,8 +375,6 @@ async fn unknown_atom_id_returns_structured_business_error() {
 
 #[tokio::test]
 async fn get_syllabus_returns_upcoming_topics_for_new_path() {
-    // End-to-end plumbing check: create a path, then call get_syllabus
-    // and verify the structured payload lists the path's untaught atoms.
     let server = spawn_server().await;
     let session = handshake(&server).await;
 
@@ -451,8 +417,6 @@ async fn get_syllabus_returns_upcoming_topics_for_new_path() {
     assert_ne!(msg["result"]["isError"].as_bool(), Some(true));
     assert_eq!(structured["schema_version"], json!(1));
     assert_eq!(structured["path"], json!(path_id));
-    // fnd.1.1.2 depends on fnd.1.1.1, so both atoms appear with the
-    // prereq listed first.
     assert_eq!(structured["total_remaining"], json!(2));
     let atoms = structured["atoms"].as_array().expect("atoms array");
     let ids: Vec<&str> = atoms.iter().map(|a| a["id"].as_str().unwrap()).collect();
@@ -462,8 +426,6 @@ async fn get_syllabus_returns_upcoming_topics_for_new_path() {
 
 #[tokio::test]
 async fn health_returns_200_ok_without_auth() {
-    // Fly's prober won't carry a bearer; `/health` must answer 200 OK
-    // unauthenticated regardless of which auth modes are configured.
     for server in [spawn_server().await, spawn_oauth_server().await] {
         let res = client().get(server.url("/health")).send().await.unwrap();
         assert_eq!(res.status(), 200);
@@ -472,14 +434,8 @@ async fn health_returns_200_ok_without_auth() {
     }
 }
 
-// ─────────────────────────── OAuth flow ────────────────────────────
-
 #[tokio::test]
 async fn unauthenticated_request_returns_resource_metadata_pointer() {
-    // Even without OAuth enabled the 401 response should carry a
-    // `WWW-Authenticate` header pointing at the protected-resource
-    // metadata. That's what makes OAuth-aware MCP clients trigger the
-    // connector flow on a fresh server.
     let server = spawn_oauth_server().await;
     let res = oauth_client()
         .post(server.url("/mcp"))
@@ -556,9 +512,6 @@ async fn authorization_server_metadata_advertises_endpoints() {
 
 #[tokio::test]
 async fn well_known_routes_unreachable_when_oauth_disabled() {
-    // Bearer-only servers must not advertise discovery endpoints — there's
-    // no AS to point at, and ghost metadata would confuse OAuth-aware
-    // clients into trying to register.
     let server = spawn_server().await;
     let res = oauth_client()
         .get(server.url("/.well-known/oauth-authorization-server"))
@@ -596,8 +549,6 @@ async fn register_rejects_empty_redirect_uris() {
 
 #[tokio::test]
 async fn full_authorization_code_flow_yields_a_working_access_token() {
-    // End-to-end: DCR → /authorize GET (csrf) → /authorize POST (password,
-    // get code) → /token (exchange + PKCE verify) → /mcp call.
     let server = spawn_oauth_server().await;
     let reg = register_client(&server, "Full Flow").await;
 
@@ -654,7 +605,6 @@ async fn full_authorization_code_flow_yields_a_working_access_token() {
     assert_ne!(tokens.refresh_token, "");
     assert_eq!(tokens.token_type, "Bearer");
 
-    // The minted access token must satisfy /mcp without MT_API_KEY.
     let session = handshake_with_token(&server, &tokens.access_token).await;
     let res = mcp_post_with_token(
         &server,
@@ -767,7 +717,6 @@ async fn refresh_token_rotates_and_returns_a_fresh_access_token() {
         "refresh tokens rotate"
     );
 
-    // The original refresh token must be invalidated after rotation.
     let replay = oauth_client_no_redirect()
         .post(server.url("/oauth/token"))
         .form(&[
@@ -782,14 +731,10 @@ async fn refresh_token_rotates_and_returns_a_fresh_access_token() {
     server.stop().await;
 }
 
-// ──────────────────────── OAuth test helpers ──────────────────────
-
 fn oauth_client() -> reqwest::Client {
     client()
 }
 
-/// Reqwest client that does NOT follow redirects — we need to inspect the
-/// 303 Location on the `/authorize` POST manually.
 fn oauth_client_no_redirect() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -1025,8 +970,6 @@ async fn mcp_post_with_token(
         .unwrap()
 }
 
-// ─────────────────────────── helpers ───────────────────────────
-
 fn initialize_body() -> String {
     json!({
         "jsonrpc": "2.0",
@@ -1059,11 +1002,8 @@ async fn handshake(server: &ServerHandle) -> String {
         .to_str()
         .unwrap()
         .to_string();
-    // Drain the body so the SSE stream closes.
     let _ = res.text().await;
 
-    // MCP requires the client to send `notifications/initialized` before
-    // calling other methods. The body is accepted with 202 (no SSE).
     let res = client()
         .post(server.url("/mcp"))
         .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
@@ -1101,10 +1041,7 @@ async fn mcp_post(server: &ServerHandle, session: &str, body: &Value) -> reqwest
         .unwrap()
 }
 
-/// Parse one JSON-RPC message out of an SSE response body. SSE chunks
-/// look like `event: message\ndata: {...}\n\n`; we want the JSON in the
-/// `data:` line. (The streamable-http transport may send a priming event
-/// first; skip past anything that doesn't deserialize as JSON.)
+// Skip non-JSON SSE priming events and return the first JSON-RPC payload.
 fn parse_sse_message(body: &str) -> Option<Value> {
     for line in body.lines() {
         if let Some(rest) = line.strip_prefix("data:") {
