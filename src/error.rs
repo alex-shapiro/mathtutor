@@ -86,10 +86,6 @@ pub enum Error {
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
 
-    /// Bad timestamp coming back out of the database
-    #[error("bad timestamp: {0}")]
-    BadTimestamp(String),
-
     /// Out-of-range rating in a stored event or card
     #[error("invalid rating value: {0}")]
     InvalidRating(i64),
@@ -126,9 +122,17 @@ pub enum Error {
     #[error("cards cache corrupt: {0}")]
     CardsCorrupt(String),
 
-    // Unrecognized event kind in a stored event.
-    #[error("unknown event kind: {0}")]
-    UnknownEventKind(String),
+    /// `mt import-turso` without `--url` or `TURSO_URL`.
+    #[error("TURSO_URL not set; pass --url")]
+    MissingTursoUrl,
+
+    /// The libSQL server `mt import-turso` reads from failed a request.
+    #[error("turso: {0}")]
+    Turso(String),
+
+    /// `mt import-turso` found imported state that differs from libSQL.
+    #[error("{0} differences between the import and libSQL")]
+    ImportMismatch(usize),
 
     /// Mutually exclusive CLI flags were both supplied.
     #[error("flags {0} and {1} are mutually exclusive")]

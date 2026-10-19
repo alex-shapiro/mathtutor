@@ -11,11 +11,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
-use serde_json::{Value as Json, json};
 
-use crate::db::{self, Db};
-use crate::event_log::{self, Event, EventKind};
-use crate::schema;
+use crate::db::{self, Db, Op};
+use crate::event_log::{Event, EventKind};
+use crate::schema::{self, CardRecord, TaughtRow};
 use crate::types::Rating;
 use crate::view::Taught;
 use crate::{Error, Result};
@@ -144,76 +143,56 @@ pub fn apply_event(c: &mut CardRow, e: &Event) -> Result<()> {
 
 // ── Rows ───────────────────────────────────────────────────────────
 
-/// The op that stores `c`.
-pub fn upsert_op(c: &CardRow) -> Json {
-    let ts = |t: Option<DateTime<Utc>>| t.map(db::format_ts);
-    json!({ "op": "upsert_row", "table": "cards", "row": {
-        "path_id": c.path_id,
-        "quiz_id": c.quiz_id,
-        "stability": c.state.map(|s| f64::from(s.stability)),
-        "difficulty": c.state.map(|s| f64::from(s.difficulty)),
-        "due_at": ts(c.state.map(|s| s.due)),
-        "last_reviewed_at": ts(c.state.map(|s| s.last_review)),
-        "reps": c.reps,
-        "lapses": c.lapses,
-        "presented": c.presented,
-        "last_presented_at": ts(c.last_presented_at),
-        "first_correct_at": ts(c.first_correct_at),
-        "recent": c.recent.iter().map(|r| i64::from(*r)).collect::<Vec<_>>(),
-    }})
+impl From<&CardRow> for CardRecord {
+    fn from(c: &CardRow) -> Self {
+        Self {
+            path_id: c.path_id.clone(),
+            quiz_id: c.quiz_id.clone(),
+            stability: c.state.map(|s| s.stability),
+            difficulty: c.state.map(|s| s.difficulty),
+            due_at: c.state.map(|s| s.due),
+            last_reviewed_at: c.state.map(|s| s.last_review),
+            reps: c.reps,
+            lapses: c.lapses,
+            presented: c.presented,
+            last_presented_at: c.last_presented_at,
+            first_correct_at: c.first_correct_at,
+            recent: c.recent.clone(),
+        }
+    }
 }
 
-/// The card a `cards` row holds.
-#[allow(clippy::cast_possible_truncation)]
-pub fn decode(r: &Json) -> Result<CardRow> {
-    let bad = |k: &str| Error::CardsCorrupt(format!("{k} in {r}"));
-    let s = |k: &str| r[k].as_str().ok_or_else(|| bad(k)).map(str::to_string);
-    let n = |k: &str| {
-        r[k].as_u64()
-            .and_then(|v| u32::try_from(v).ok())
-            .ok_or_else(|| bad(k))
-    };
-    let ts = |k: &str| r[k].as_str().map(db::parse_ts).transpose();
-    let state = match (
-        r["stability"].as_f64(),
-        r["difficulty"].as_f64(),
-        ts("due_at")?,
-        ts("last_reviewed_at")?,
-    ) {
-        (Some(stability), Some(difficulty), Some(due), Some(last_review)) => Some(CardState {
-            due,
-            last_review,
-            stability: stability as f32,
-            difficulty: difficulty as f32,
-        }),
-        (None, None, None, None) => None,
-        _ => return Err(bad("FSRS state")),
-    };
-    let recent = r["recent"]
-        .as_array()
-        .ok_or_else(|| bad("recent"))?
-        .iter()
-        .map(|v| {
-            v.as_i64()
-                .ok_or_else(|| bad("recent"))
-                .and_then(Rating::try_from)
+impl TryFrom<CardRecord> for CardRow {
+    type Error = Error;
+
+    fn try_from(r: CardRecord) -> Result<Self> {
+        let bad =
+            |what: &str| Error::CardsCorrupt(format!("{what} in {}/{}", r.path_id, r.quiz_id));
+        let state = match (r.stability, r.difficulty, r.due_at, r.last_reviewed_at) {
+            (Some(stability), Some(difficulty), Some(due), Some(last_review)) => Some(CardState {
+                due,
+                last_review,
+                stability,
+                difficulty,
+            }),
+            (None, None, None, None) => None,
+            _ => return Err(bad("partial FSRS state")),
+        };
+        if r.lapses > r.reps {
+            return Err(bad("lapses > reps"));
+        }
+        Ok(Self {
+            path_id: r.path_id,
+            quiz_id: r.quiz_id,
+            state,
+            reps: r.reps,
+            lapses: r.lapses,
+            presented: r.presented,
+            last_presented_at: r.last_presented_at,
+            first_correct_at: r.first_correct_at,
+            recent: r.recent,
         })
-        .collect::<Result<Vec<_>>>()?;
-    let (reps, lapses) = (n("reps")?, n("lapses")?);
-    if lapses > reps {
-        return Err(bad("lapses > reps"));
     }
-    Ok(CardRow {
-        path_id: s("path_id")?,
-        quiz_id: s("quiz_id")?,
-        state,
-        reps,
-        lapses,
-        presented: n("presented")?,
-        last_presented_at: ts("last_presented_at")?,
-        first_correct_at: ts("first_correct_at")?,
-        recent,
-    })
 }
 
 // ── Rebuild ────────────────────────────────────────────────────────
@@ -229,37 +208,29 @@ pub async fn recompute(db: &Db, path_id: &str) -> Result<()> {
 }
 
 async fn recompute_once(db: &Db, path_id: &str) -> Result<()> {
-    let stream = schema::events_stream(path_id);
-    let read = |from: u64| json!({ "op": "read_stream", "stream": stream, "from_seq": from, "limit": 1000 });
-    let (txn, mut r) = db.begin(&[read(0)]).await?;
+    let mut op = Op::read_stream(schema::events_stream(path_id), 0);
+    let (txn, mut results) = db.begin(std::slice::from_ref(&op)).await?;
     let mut events = Vec::new();
     loop {
-        let page = r.swap_remove(0);
-        for rec in page["records"].as_array().into_iter().flatten() {
-            events.push(event_log::decode(&rec["json"])?);
-        }
-        if page["done"] != false {
-            break;
-        }
-        let from = page["next_seq"]
-            .as_u64()
-            .ok_or_else(|| Error::BadResponse(format!("next_seq: {page}")))?;
-        r = txn.ops(&[read(from)]).await?;
+        let page = results.swap_remove(0);
+        let next = op.next_page(&page);
+        events.extend(page.records::<Event>()?);
+        let Some(next) = next else { break };
+        results = txn.ops(std::slice::from_ref(&next)).await?;
+        op = next;
     }
     let (cards, taught) = fold_history(path_id, &events)?;
     let mut ops = vec![
-        json!({ "op": "delete_rows", "table": "cards", "where": { "eq": [path_id] } }),
-        json!({ "op": "delete_rows", "table": "taught", "where": { "eq": [path_id] } }),
+        Op::delete_rows::<CardRecord>(&[path_id]),
+        Op::delete_rows::<TaughtRow>(&[path_id]),
     ];
-    ops.extend(cards.iter().map(upsert_op));
-    ops.extend(taught.into_iter().map(|(atom_id, t)| {
-        json!({ "op": "upsert_row", "table": "taught", "row": {
-            "path_id": path_id, "atom_id": atom_id, "count": t.count,
-            "last_at": t.last_at.map(db::format_ts),
-        }})
-    }));
-    txn.commit(&ops).await?;
-    Ok(())
+    ops.extend(cards.iter().map(|c| Op::upsert(&CardRecord::from(c))));
+    ops.extend(
+        taught
+            .into_iter()
+            .map(|(atom_id, t)| Op::upsert(&t.into_row(path_id, atom_id))),
+    );
+    txn.commit(&ops).await
 }
 
 /// Fold a path's events into its cards and taught lessons.

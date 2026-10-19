@@ -809,8 +809,6 @@ fn error_kind(e: &Error) -> &'static str {
         Error::SubpathEmpty => "subpath_empty",
         Error::SubpathTailNotTarget(_) => "subpath_tail_not_target",
         Error::SubpathDuplicateAtom(_) => "subpath_duplicate_atom",
-        Error::BadTimestamp(_) => "bad_timestamp",
-        Error::UnknownEventKind(_) => "unknown_event_kind",
         Error::CardsCorrupt(_) => "cards_corrupt",
         Error::NoHome => "no_home",
         Error::FileIo { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => "io",
@@ -819,6 +817,7 @@ fn error_kind(e: &Error) -> &'static str {
         Error::Json(_) => "json",
         Error::Fsrs(_) => "fsrs",
         Error::ConflictingFlags(_, _) => "conflicting_flags",
+        Error::MissingTursoUrl | Error::Turso(_) | Error::ImportMismatch(_) => "import",
         Error::MissingAuth
         | Error::BadBindAddr { .. }
         | Error::BadPublicUrl { .. }

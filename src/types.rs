@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::Error;
 
 /// FSRS grade for a quiz answer. The discriminants match the FSRS
-/// convention (Again=1, Hard=2, Good=3, Easy=4) and are the stable
-/// encoding written to the `events.rating` SQL column.
+/// convention (Again=1, Hard=2, Good=3, Easy=4), which the libSQL
+/// `events.rating` column used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
 #[serde(rename_all = "lowercase")]

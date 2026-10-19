@@ -6,11 +6,13 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
+use baserunna::env::Env;
+use baserunna::limits::LimitConfig;
+use baserunna::node::{Node, NodeConfig, Services};
+use baserunna::store::MemStore;
 use chrono::{DateTime, Utc};
 use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{Event, EventKind, EventPayload};
@@ -26,14 +28,10 @@ pub const PATH_ID: &str = "p_test";
 // ── Test server ─────────────────────────────────────────────────────
 
 /// A Baserunna node with an in-memory store, shared by every test in the
-/// binary. Found at `BASERUNNA_BIN`, else in a sibling `baserunna`
-/// checkout's release build, else on `PATH`.
+/// binary, and a session token on it.
 struct Server {
     url: String,
     token: String,
-    /// Holds the watchdog's stdin open: when the test binary exits, the
-    /// pipe closes and the watchdog stops the node.
-    _watchdog: Child,
 }
 
 fn server() -> &'static Server {
@@ -41,97 +39,71 @@ fn server() -> &'static Server {
     SERVER.get_or_init(start_server)
 }
 
+/// Run the node on its own thread and runtime, which outlive any one
+/// test's runtime and end with the test binary.
 fn start_server() -> Server {
-    let bin = std::env::var("BASERUNNA_BIN").unwrap_or_else(|_| {
-        let sibling = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../baserunna/target/release/baserunna"
-        );
-        if std::path::Path::new(sibling).exists() {
-            sibling.into()
-        } else {
-            "baserunna".into()
-        }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("runtime");
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind");
+            let url = format!("http://{}", listener.local_addr().expect("addr"));
+            baserunna::log::set_level(Some(baserunna::log::Level::Warn));
+            let cfg = NodeConfig {
+                name: "test".into(),
+                addr: url.clone(),
+                public_url: url.clone(),
+                pbkdf2_iterations: 1000,
+                limits: LimitConfig::unlimited(),
+                ..NodeConfig::default()
+            };
+            let store = Arc::new(MemStore::with_system_clock());
+            let node = Node::start(cfg, Arc::new(Env::real()), store, Services::local())
+                .await
+                .expect("start baserunna");
+            let app = baserunna::api::router(node)
+                .into_make_service_with_connect_info::<std::net::SocketAddr>();
+            tokio::spawn(async move { axum::serve(listener, app).await });
+            let token = sign_up(&url).await;
+            tx.send(Server { url, token }).expect("send server");
+            std::future::pending::<()>().await;
+        });
     });
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
-    let url = format!("http://127.0.0.1:{port}");
-    let mut watchdog = Command::new("sh")
-        .arg("-c")
-        .arg(r#""$0" </dev/null >/dev/null 2>&1 & pid=$!; echo started; read _; kill $pid"#)
-        .arg(&bin)
-        .env("BASERUNNA_STORE", "mem:")
-        .env("BASERUNNA_LISTEN", format!("127.0.0.1:{port}"))
-        .env("BASERUNNA_ADVERTISE", &url)
-        .env("BASERUNNA_ADMIN_EMAIL", "admin@test.dev")
-        .env("BASERUNNA_ADMIN_PASSWORD", "password-123")
-        .env("BASERUNNA_PBKDF2_ITERATIONS", "1000")
-        .env("BASERUNNA_USER_RPS", "0")
-        .env("BASERUNNA_API_KEY_RPS", "0")
-        .env("BASERUNNA_AUTH_RPS_PER_CLIENT", "0")
-        .env("BASERUNNA_LOG", "warn")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|e| panic!("cannot run {bin}: {e}; set BASERUNNA_BIN"));
-    let mut line = String::new();
-    BufReader::new(watchdog.stdout.take().unwrap())
-        .read_line(&mut line)
-        .unwrap();
-    let token = std::thread::spawn({
-        let url = url.clone();
-        move || {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(admin_key(&url))
-        }
-    })
-    .join()
-    .unwrap();
-    Server {
-        url,
-        token,
-        _watchdog: watchdog,
-    }
+    rx.recv().expect("test baserunna node did not start")
 }
 
-/// Sign in as the bootstrap admin, waiting for the node to come up, and
-/// create an API key.
-async fn admin_key(url: &str) -> String {
-    let http = reqwest::Client::new();
-    let creds = serde_json::json!({ "email": "admin@test.dev", "password": "password-123" });
-    let mut session = None;
-    for _ in 0..200 {
-        if let Ok(r) = http
-            .post(format!("{url}/v1/auth/login"))
-            .json(&creds)
-            .send()
-            .await
-            && r.status().is_success()
-        {
-            let j: serde_json::Value = r.json().await.unwrap();
-            session = j["token"].as_str().map(str::to_string);
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+/// Sign up the node's first user, its admin, and return the session token.
+async fn sign_up(url: &str) -> String {
+    #[derive(serde::Serialize)]
+    struct Credentials<'a> {
+        email: &'a str,
+        password: &'a str,
     }
-    let session = session.expect("test baserunna node did not start");
-    let r: serde_json::Value = http
-        .post(format!("{url}/v1/api-keys"))
-        .bearer_auth(session)
-        .json(&serde_json::json!({ "name": "tests" }))
+    #[derive(serde::Deserialize)]
+    struct Session {
+        token: String,
+    }
+    let creds = Credentials {
+        email: "admin@test.dev",
+        password: "password-123",
+    };
+    reqwest::Client::new()
+        .post(format!("{url}/v1/auth/signup"))
+        .json(&creds)
         .send()
         .await
-        .unwrap()
-        .json()
+        .and_then(reqwest::Response::error_for_status)
+        .expect("sign up")
+        .json::<Session>()
         .await
-        .unwrap();
-    r["key"].as_str().expect("api key").to_string()
+        .expect("session")
+        .token
 }
 
 /// Config for a database no other test uses.

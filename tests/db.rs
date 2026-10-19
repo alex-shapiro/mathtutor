@@ -29,7 +29,15 @@ const TABLES: [&str; 10] = [
 ];
 
 async fn table_names(cfg: &DbConfig) -> Vec<String> {
-    let r: serde_json::Value = reqwest::Client::new()
+    #[derive(serde::Deserialize)]
+    struct Tables {
+        tables: Vec<Table>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Table {
+        name: String,
+    }
+    let r: Tables = reqwest::Client::new()
         .get(format!("{}/v1/dbs/{}/tables", cfg.url, cfg.db))
         .bearer_auth(&cfg.token)
         .send()
@@ -40,12 +48,7 @@ async fn table_names(cfg: &DbConfig) -> Vec<String> {
         .json()
         .await
         .unwrap();
-    let mut names: Vec<String> = r["tables"]
-        .as_array()
-        .expect("tables")
-        .iter()
-        .map(|t| t["name"].as_str().unwrap().to_string())
-        .collect();
+    let mut names: Vec<String> = r.tables.into_iter().map(|t| t.name).collect();
     names.sort();
     names
 }

@@ -219,10 +219,10 @@ Dynamic client registration accepts any well-formed request and issues a fresh `
 
 ##### Storage
 
-OAuth state lives in four new SQL tables, scoped to the single-user database:
+OAuth state lives in four tables, scoped to the single-user database:
 
 - `oauth_clients` are DCR-registered clients (id, name, redirect URIs).
-- `oauth_authorization_codes` are short-lived codes binding client + redirect URI + PKCE challenge.
+- `oauth_codes` are short-lived codes binding client + redirect URI + PKCE challenge.
 - `oauth_access_tokens` are opaque access tokens with expiries.
 - `oauth_refresh_tokens` are long-lived refresh tokens with expiries.
 
@@ -255,7 +255,11 @@ flyctl secrets set BASERUNNA_TOKEN='…'      # Baserunna API key
 ```
 
 At least one of `MT_ADMIN_PASSWORD` or `MT_API_KEY` must be set or the
-server refuses to start. `MT_PUBLIC_URL` is configured in `fly.toml` to
+server refuses to start.
+
+The tests run a Baserunna node in-process from its private repository, so
+CI loads a read-only deploy key on that repository from the
+`BASERUNNA_DEPLOY_KEY` Actions secret. `MT_PUBLIC_URL` is configured in `fly.toml` to
 match the default `https://<app>.fly.dev` URL.
 
 `BASERUNNA_TOKEN` is required. `BASERUNNA_URL` and `BASERUNNA_DB` default to

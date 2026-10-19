@@ -237,7 +237,7 @@ async fn due_returns_only_past_due_in_order() {
         .collect();
     common::write(&db, PATH_ID, |_, changes| {
         for c in &cards {
-            changes.op(cards::upsert_op(c));
+            changes.set_card(c.clone());
         }
     })
     .await;

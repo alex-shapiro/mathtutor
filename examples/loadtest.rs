@@ -37,14 +37,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mathtutor::db::{Db, DbConfig, Sample};
+use mathtutor::db::{Db, DbConfig, RequestKind, Sample};
 use mathtutor::event_log::{self, EventKind};
 use mathtutor::graph::{Graph, Quiz};
 use mathtutor::overlay;
+use mathtutor::scheduler::Action;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
 use mathtutor::view::Want;
 use mathtutor::{answer, cards, path, scheduler, state, store, syllabus};
-use serde_json::Value;
+use serde::Deserialize;
 
 fn env<T: std::str::FromStr>(k: &str, default: T) -> T {
     std::env::var(k)
@@ -110,7 +111,7 @@ fn pct(v: &mut [Duration], p: f64) -> f64 {
 #[derive(Default)]
 struct Stats {
     ops: BTreeMap<&'static str, Series>,
-    requests: BTreeMap<&'static str, Requests>,
+    requests: BTreeMap<RequestKind, Requests>,
 }
 
 impl Stats {
@@ -184,42 +185,78 @@ impl Stats {
     }
 }
 
-fn print_server(m: &Value, before: Option<&Value>, secs: f64) {
-    let delta = |k: &str| {
-        let now = m["cpu"][k].as_f64()?;
-        Some((now - before?["cpu"][k].as_f64()?) / (secs * 10.0))
-    };
-    if let (Some(cpu), Some(steal)) = (delta("process_ms"), delta("steal_ms")) {
+/// The server's `/v1/admin/metrics` document.
+#[derive(Deserialize)]
+struct Metrics {
+    node: String,
+    cpu: Cpu,
+    store: BTreeMap<String, Histogram>,
+    commits: Commits,
+    lag: Histogram,
+    routes: BTreeMap<String, Histogram>,
+}
+
+/// Cumulative CPU time, where the server's host reports it.
+#[derive(Deserialize)]
+struct Cpu {
+    process_ms: Option<f64>,
+    steal_ms: Option<f64>,
+}
+
+/// Latencies in ms; only `count` is present when it is zero.
+#[derive(Deserialize)]
+struct Histogram {
+    count: u64,
+    mean_ms: Option<f64>,
+    p50_ms: Option<f64>,
+    p90_ms: Option<f64>,
+    p99_ms: Option<f64>,
+    max_ms: Option<f64>,
+    errors: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct Commits {
+    #[serde(flatten)]
+    latency: Histogram,
+    txns_per_batch: f64,
+    max_txns_per_batch: u64,
+}
+
+fn print_server(m: &Metrics, before: Option<&Metrics>, secs: f64) {
+    let delta = |f: fn(&Cpu) -> Option<f64>| Some((f(&m.cpu)? - f(&before?.cpu)?) / (secs * 10.0));
+    if let (Some(cpu), Some(steal)) = (delta(|c| c.process_ms), delta(|c| c.steal_ms)) {
         println!("\nserver cpu: process {cpu:.0}% of a core, host steal {steal:.0}%");
     }
-    println!("\nserver {}", m["node"].as_str().unwrap_or("?"));
+    println!("\nserver {}", m.node);
     println!(
         "{:<34} {:>7} {:>8} {:>8} {:>8} {:>8} {:>8} {:>6}",
         "histogram", "count", "mean", "p50", "p90", "p99", "max", "errors"
     );
-    let row = |name: &str, h: &Value| {
+    let ms = |v: Option<f64>| v.map_or(String::new(), |v| v.to_string());
+    let row = |name: &str, h: &Histogram| {
         println!(
             "{name:<34} {:>7} {:>8} {:>8} {:>8} {:>8} {:>8} {:>6}",
-            h["count"],
-            h["mean_ms"],
-            h["p50_ms"],
-            h["p90_ms"],
-            h["p99_ms"],
-            h["max_ms"],
-            h.get("errors").map_or(String::new(), Value::to_string),
+            h.count,
+            ms(h.mean_ms),
+            ms(h.p50_ms),
+            ms(h.p90_ms),
+            ms(h.p99_ms),
+            ms(h.max_ms),
+            h.errors.map_or(String::new(), |e| e.to_string()),
         );
     };
-    for (k, h) in m["store"].as_object().into_iter().flatten() {
+    for (k, h) in &m.store {
         row(&format!("store {k}"), h);
     }
-    row("commit batches", &m["commits"]);
-    row("scheduler lag", &m["lag"]);
+    row("commit batches", &m.commits.latency);
+    row("scheduler lag", &m.lag);
     println!(
         "    txns per batch: mean {} max {}",
-        m["commits"]["txns_per_batch"], m["commits"]["max_txns_per_batch"]
+        m.commits.txns_per_batch, m.commits.max_txns_per_batch
     );
-    for (k, h) in m["routes"].as_object().into_iter().flatten() {
-        if h["count"].as_u64().unwrap_or(0) >= 10 {
+    for (k, h) in &m.routes {
+        if h.count >= 10 {
             row(k, h);
         }
     }
@@ -336,37 +373,28 @@ impl Learner {
             match scheduler::compute_next(&self.db, Some(&p), None, scheduler::NextMode::Default)
                 .await
             {
-                Ok(e) => serde_json::to_value(&e).expect("envelope serializes"),
+                Ok(e) => e,
                 Err(e) => {
                     out.push(("path next", t.elapsed(), Err(e.to_string())));
                     return;
                 }
             };
         out.push(("path next", t.elapsed(), Ok(())));
-        let payload = &envelope["payload"];
-        let s = |v: &Value| v.as_str().unwrap_or_default().to_string();
         let t = Instant::now();
-        match envelope["action"].as_str() {
-            Some("create_lesson") => {
+        match envelope.action() {
+            Action::CreateLesson { atom_id } => {
                 let body = text(&mut self.rng, self.lesson_bytes);
-                let r = store::cmd_lesson_upsert(
-                    &self.db,
-                    &s(&payload["atom"]["id"]),
-                    body,
-                    Some(&p),
-                    None,
-                )
-                .await;
+                let r = store::cmd_lesson_upsert(&self.db, atom_id, body, Some(&p), None).await;
                 out.push(("lesson upsert", t.elapsed(), r.map_err(|e| e.to_string())));
             }
-            Some("create_quiz") => {
-                let difficulty: Difficulty = s(&payload["target_difficulty"])
-                    .parse()
-                    .expect("difficulty");
+            Action::CreateQuiz {
+                atom_id,
+                difficulty,
+            } => {
                 let r = store::cmd_quiz_create(
                     &self.db,
-                    &s(&payload["atom"]["id"]),
-                    difficulty,
+                    atom_id,
+                    *difficulty,
                     text(&mut self.rng, 250),
                     text(&mut self.rng, 300),
                     Some(text(&mut self.rng, 200)),
@@ -378,7 +406,7 @@ impl Learner {
                 .map(drop);
                 out.push(("quiz create", t.elapsed(), r.map_err(|e| e.to_string())));
             }
-            Some("present_quiz") => {
+            Action::PresentQuiz { quiz_id, .. } => {
                 let rating = match self.rng.below(100) {
                     0..15 => Rating::Again,
                     15..30 => Rating::Hard,
@@ -386,15 +414,8 @@ impl Learner {
                     _ => Rating::Easy,
                 };
                 let answer = Some(text(&mut self.rng, 200));
-                let r = answer::cmd_quiz_answer(
-                    &self.db,
-                    &s(&payload["quiz"]["id"]),
-                    rating,
-                    answer,
-                    Some(&p),
-                    None,
-                )
-                .await;
+                let r = answer::cmd_quiz_answer(&self.db, quiz_id, rating, answer, Some(&p), None)
+                    .await;
                 let mut ledger = self.ledger.lock().unwrap();
                 let entry = ledger.entry((self.db_name.clone(), p.clone())).or_default();
                 if r.is_ok() {
@@ -405,7 +426,7 @@ impl Learner {
                 drop(ledger);
                 out.push(("quiz answer", t.elapsed(), r.map_err(|e| e.to_string())));
             }
-            Some("done") => {
+            Action::Done => {
                 if let Some(shared) = &self.shared {
                     let mut current = shared.lock().unwrap();
                     if current.as_deref() == Some(p.as_str()) {
@@ -414,7 +435,7 @@ impl Learner {
                 }
                 self.path = None;
             }
-            _ => {}
+            Action::PresentLesson { .. } => {}
         }
     }
 }
@@ -620,7 +641,7 @@ async fn main() {
                 .send()
                 .await
                 .ok()?;
-            r.json::<Value>().await.ok()
+            r.json::<Metrics>().await.ok()
         }
     };
     for &n in &steps {

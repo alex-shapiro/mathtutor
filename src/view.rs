@@ -12,36 +12,26 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 
 use chrono::{DateTime, Utc};
-use serde_json::{Value as Json, json};
 
 use crate::cards::{self, CardRow};
-use crate::db::{self, Db, Txn};
-use crate::event_log::{self, Event, EventKind};
+use crate::db::{self, Db, Op, OpResult, Txn, ts};
+use crate::event_log::{Event, EventKind};
 use crate::graph::Graph;
-use crate::overlay::{self, Edit, Overlay};
-use crate::path::{self, PathFile};
+use crate::overlay::{Edit, Overlay};
+use crate::path::PathFile;
 use crate::progress::PathProgress;
-use crate::schema::events_stream;
+use crate::schema::{
+    ACTIVITY_PREFIX, CardRecord, LessonRow, QuizRow, RemovedQuizRow, TaughtRow, activity_key,
+    events_stream,
+};
 use crate::{Error, Result};
 
 /// How long a transaction is rerun after conflicts and transient failures.
 const RETRY_FOR: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Rows a query reads per page; the server's maximum.
-const PAGE: usize = 1000;
-
 /// Key whose value changes with every overlay write, so a cached overlay
 /// can be validated by reading it alone.
 const OVERLAY_VERSION_KEY: &str = "overlay_version";
-
-/// Prefix of the keys holding each path's latest activity time. They are
-/// written blind, so commands logging events on one path never conflict
-/// over them.
-const ACTIVITY_PREFIX: &str = "activity/";
-
-fn activity_key(path_id: &str) -> String {
-    format!("{ACTIVITY_PREFIX}{path_id}")
-}
 
 /// An overlay as of an [`OVERLAY_VERSION_KEY`] value.
 pub(crate) type CachedOverlay = (u64, Arc<Overlay>);
@@ -142,6 +132,17 @@ pub struct Taught {
     pub last_at: Option<DateTime<Utc>>,
 }
 
+impl Taught {
+    pub fn into_row(self, path_id: &str, atom_id: String) -> TaughtRow {
+        TaughtRow {
+            path_id: path_id.to_string(),
+            atom_id,
+            count: self.count,
+            last_at: self.last_at,
+        }
+    }
+}
+
 impl PathState {
     pub fn progress(&self) -> PathProgress {
         PathProgress {
@@ -219,21 +220,30 @@ impl View {
 /// Writes a command makes, applied atomically at commit.
 #[derive(Debug, Default)]
 pub struct Changes {
-    ops: Vec<Json>,
+    ops: Vec<Op>,
     overlay: Vec<Edit>,
     cards: BTreeMap<(String, String), CardRow>,
     taught: BTreeMap<(String, String), Taught>,
-    events: BTreeMap<String, Vec<Json>>,
+    events: BTreeMap<String, Vec<Event>>,
 }
 
 impl Changes {
     pub fn is_empty(&self) -> bool {
-        self.ops.is_empty() && self.overlay.is_empty() && self.events.is_empty()
+        self.ops.is_empty()
+            && self.overlay.is_empty()
+            && self.cards.is_empty()
+            && self.events.is_empty()
     }
 
-    /// Add a raw write op.
-    pub fn op(&mut self, op: Json) {
+    /// Add a write op.
+    pub fn op(&mut self, op: Op) {
         self.ops.push(op);
+    }
+
+    /// Store `c` as its quiz's card, replacing what this transaction's
+    /// events derived for it.
+    pub fn set_card(&mut self, c: CardRow) {
+        self.cards.insert((c.path_id.clone(), c.quiz_id.clone()), c);
     }
 
     /// Change the overlay.
@@ -282,30 +292,31 @@ impl Changes {
         self.events
             .entry(e.path.clone())
             .or_default()
-            .push(event_log::encode(e));
+            .push(e.clone());
         Ok(())
     }
 
     /// The commit's ops: raw writes, then derived rows, then event appends
     /// and the touched paths' activity times.
-    fn into_ops(self) -> Vec<Json> {
+    fn into_ops(self) -> Vec<Op> {
         let mut ops = self.ops;
         if !self.overlay.is_empty() {
             ops.extend(self.overlay.iter().flat_map(Edit::ops));
-            ops.push(json!({ "op": "increment", "key": OVERLAY_VERSION_KEY }));
+            ops.push(Op::increment(OVERLAY_VERSION_KEY));
         }
-        ops.extend(self.cards.into_values().map(|c| cards::upsert_op(&c)));
-        ops.extend(self.taught.into_iter().map(|((path_id, atom_id), t)| {
-            json!({ "op": "upsert_row", "table": "taught", "row": {
-                "path_id": path_id, "atom_id": atom_id, "count": t.count,
-                "last_at": t.last_at.map(db::format_ts),
-            }})
-        }));
-        for (path_id, records) in self.events {
-            ops.push(json!({ "op": "put", "key": activity_key(&path_id), "value": db::format_ts(Utc::now()) }));
-            let records: Vec<Json> = records.into_iter().map(|r| json!({ "json": r })).collect();
-            ops.push(json!({ "op": "append", "stream": events_stream(&path_id),
-                "records": records, "create": true }));
+        ops.extend(
+            self.cards
+                .values()
+                .map(|c| Op::upsert(&CardRecord::from(c))),
+        );
+        ops.extend(
+            self.taught
+                .into_iter()
+                .map(|((path_id, atom_id), t)| Op::upsert(&t.into_row(&path_id, atom_id))),
+        );
+        for (path_id, events) in self.events {
+            ops.push(Op::put(activity_key(&path_id), ts::format(Utc::now())));
+            ops.push(Op::append(events_stream(&path_id), &events));
         }
         ops
     }
@@ -467,63 +478,52 @@ struct Plan {
     /// The overlay version the view's overlay was read at.
     overlay_version: Option<u64>,
     overlay_cached: bool,
-    pending: Vec<(Slot, Json)>,
+    pending: Vec<(Slot, Op)>,
     /// Path whose cards and taught rows the current round reads.
     path_id: Option<String>,
     /// Whether the path to read is the most recently active one, still to
     /// be decided once every activity key is read.
     recent: bool,
     activity: HashMap<String, DateTime<Utc>>,
-    /// Path state as it accumulates.
+    /// Rows as they accumulate.
     path_row: PathRow,
-    cards: Vec<Json>,
-    taught: Vec<Json>,
-    lessons: Vec<Json>,
-    quizzes: Vec<Json>,
-    removed: Vec<Json>,
-    paths: Vec<Json>,
-    all_cards: Vec<Json>,
-    all_taught: Vec<Json>,
+    cards: Vec<CardRecord>,
+    taught: Vec<TaughtRow>,
+    lessons: Vec<LessonRow>,
+    quizzes: Vec<QuizRow>,
+    removed: Vec<RemovedQuizRow>,
+    paths: Vec<PathFile>,
+    all_cards: Vec<CardRecord>,
+    all_taught: Vec<TaughtRow>,
 }
 
-fn query(table: &str, eq: &[&str]) -> Json {
-    json!({ "op": "query_rows", "table": table, "eq": eq, "limit": PAGE })
-}
-
-fn path_reads(id: &str) -> [(Slot, Json); 3] {
+fn path_reads(id: &str) -> [(Slot, Op); 3] {
     [
-        (
-            Slot::PathRow,
-            json!({ "op": "get_row", "table": "paths", "pk": [id] }),
-        ),
-        (Slot::Cards, query("cards", &[id])),
-        (Slot::Taught, query("taught", &[id])),
+        (Slot::PathRow, Op::get_row::<PathFile>(&[id])),
+        (Slot::Cards, Op::query::<CardRecord>(&[id])),
+        (Slot::Taught, Op::query::<TaughtRow>(&[id])),
     ]
 }
 
-fn activity_scan() -> (Slot, Json) {
-    (
-        Slot::Activity,
-        json!({ "op": "scan", "prefix": ACTIVITY_PREFIX, "limit": PAGE }),
-    )
+fn overlay_reads() -> [(Slot, Op); 3] {
+    [
+        (Slot::Lessons, Op::query::<LessonRow>(&[])),
+        (Slot::Quizzes, Op::query::<QuizRow>(&[])),
+        (Slot::Removed, Op::query::<RemovedQuizRow>(&[])),
+    ]
 }
 
-fn overlay_reads() -> [(Slot, Json); 3] {
-    [
-        (Slot::Lessons, query("lessons", &[])),
-        (Slot::Quizzes, query("quizzes", &[])),
-        (Slot::Removed, query("removed_quizzes", &[])),
-    ]
+fn parse_activity(key: &str, value: Option<&str>) -> Result<DateTime<Utc>> {
+    value
+        .ok_or_else(|| Error::BadRow(format!("{key}: not UTF-8")))
+        .and_then(|v| ts::parse(v).map_err(|e| Error::BadRow(format!("{key}: {e}"))))
 }
 
 impl Plan {
     fn new(want: &Want, hint: Option<String>, cache: Option<CachedOverlay>) -> Self {
         let mut pending = Vec::new();
         if want.overlay {
-            pending.push((
-                Slot::OverlayVersion,
-                json!({ "op": "get", "key": OVERLAY_VERSION_KEY }),
-            ));
+            pending.push((Slot::OverlayVersion, Op::get(OVERLAY_VERSION_KEY)));
             // Without a cached overlay, read it speculatively at once.
             if cache.is_none() {
                 pending.extend(overlay_reads());
@@ -531,20 +531,17 @@ impl Plan {
         }
         let recent = want.path == PathSel::Recent;
         if want.all_paths {
-            pending.push((Slot::Paths, query("paths", &[])));
-            pending.push((Slot::AllCards, query("cards", &[])));
-            pending.push((Slot::AllTaught, query("taught", &[])));
+            pending.push((Slot::Paths, Op::query::<PathFile>(&[])));
+            pending.push((Slot::AllCards, Op::query::<CardRecord>(&[])));
+            pending.push((Slot::AllTaught, Op::query::<TaughtRow>(&[])));
         }
         if want.all_paths || recent {
-            pending.push(activity_scan());
+            pending.push((Slot::Activity, Op::scan(ACTIVITY_PREFIX)));
         }
         let path_id = match &want.path {
             PathSel::None => None,
             PathSel::Id(id) => {
-                pending.push((
-                    Slot::PathActivity,
-                    json!({ "op": "get", "key": activity_key(id) }),
-                ));
+                pending.push((Slot::PathActivity, Op::get(activity_key(id))));
                 Some(id.clone())
             }
             // Read the hinted path speculatively; the activity keys decide.
@@ -574,37 +571,24 @@ impl Plan {
         }
     }
 
-    fn ops(&self) -> Vec<Json> {
+    fn ops(&self) -> Vec<Op> {
         self.pending.iter().map(|(_, op)| op.clone()).collect()
     }
 
     /// Fold one round's results in. Returns the next round's ops, or `None`
     /// once the view is complete.
-    fn absorb(&mut self, results: Vec<Json>) -> Result<Option<Vec<Json>>> {
+    fn absorb(&mut self, results: Vec<OpResult>) -> Result<Option<Vec<Op>>> {
         let pending = std::mem::take(&mut self.pending);
-        if results.len() != pending.len() {
-            return Err(Error::BadResponse(format!(
-                "{} results for {} ops",
-                results.len(),
-                pending.len()
-            )));
-        }
-        for ((slot, op), mut r) in pending.into_iter().zip(results) {
-            if let Some(cursor) = r["next_cursor"].as_str() {
-                let mut next = op.clone();
-                next["cursor"] = json!(cursor);
+        for ((slot, op), r) in pending.into_iter().zip(results) {
+            if let Some(next) = op.next_page(&r) {
                 self.pending.push((slot, next));
             }
-            let rows = match r["rows"].take() {
-                Json::Array(rows) => rows,
-                _ => Vec::new(),
-            };
             match slot {
                 Slot::OverlayVersion => {
-                    let v = r["value"]
-                        .as_str()
+                    let v = r
+                        .value()
                         .map_or(Ok(0), str::parse)
-                        .map_err(|_| Error::BadRow(format!("{OVERLAY_VERSION_KEY}: {r}")))?;
+                        .map_err(|e| Error::BadRow(format!("{OVERLAY_VERSION_KEY}: {e}")))?;
                     self.overlay_version = Some(v);
                     match self.cache.take() {
                         Some((cached, overlay)) if cached == v => {
@@ -615,34 +599,28 @@ impl Plan {
                         None => {}
                     }
                 }
-                Slot::Lessons => self.lessons.extend(rows),
-                Slot::Quizzes => self.quizzes.extend(rows),
-                Slot::Removed => self.removed.extend(rows),
-                Slot::Paths => self.paths.extend(rows),
-                Slot::AllCards => self.all_cards.extend(rows),
-                Slot::AllTaught => self.all_taught.extend(rows),
-                Slot::Cards => self.cards.extend(rows),
-                Slot::Taught => self.taught.extend(rows),
+                Slot::Lessons => self.lessons.extend(r.rows()?),
+                Slot::Quizzes => self.quizzes.extend(r.rows()?),
+                Slot::Removed => self.removed.extend(r.rows()?),
+                Slot::Paths => self.paths.extend(r.rows()?),
+                Slot::AllCards => self.all_cards.extend(r.rows()?),
+                Slot::AllTaught => self.all_taught.extend(r.rows()?),
+                Slot::Cards => self.cards.extend(r.rows()?),
+                Slot::Taught => self.taught.extend(r.rows()?),
                 Slot::PathRow => {
-                    self.path_row = if r["found"] == true {
-                        PathRow::Found(path::decode(&r["row"])?)
-                    } else {
-                        PathRow::Missing
-                    };
+                    self.path_row = r.row()?.map_or(PathRow::Missing, PathRow::Found);
                 }
                 Slot::Activity => {
-                    for item in r["items"].as_array().into_iter().flatten() {
-                        let (Some(key), Some(at)) = (item["key"].as_str(), item["value"].as_str())
-                        else {
-                            return Err(Error::BadRow(format!("activity: {item}")));
-                        };
-                        let id = key.strip_prefix(ACTIVITY_PREFIX).unwrap_or(key);
-                        self.activity.insert(id.to_string(), db::parse_ts(at)?);
+                    for item in r.items() {
+                        let at = parse_activity(&item.key, item.value.as_deref())?;
+                        let id = item.key.strip_prefix(ACTIVITY_PREFIX).unwrap_or(&item.key);
+                        self.activity.insert(id.to_string(), at);
                     }
                 }
                 Slot::PathActivity => {
-                    if let (Some(id), Some(at)) = (&self.path_id, r["value"].as_str()) {
-                        self.activity.insert(id.clone(), db::parse_ts(at)?);
+                    if let (Some(id), Some(at)) = (&self.path_id, r.value()) {
+                        let at = parse_activity(&activity_key(id), Some(at))?;
+                        self.activity.insert(id.clone(), at);
                     }
                 }
             }
@@ -675,98 +653,70 @@ impl Plan {
     }
 
     fn finish(&mut self) -> Result<()> {
+        use std::mem::take;
         if !self.overlay_cached {
-            self.view.overlay = Arc::new(overlay::decode(
-                &std::mem::take(&mut self.lessons),
-                &std::mem::take(&mut self.quizzes),
-                &std::mem::take(&mut self.removed),
-            )?);
+            self.view.overlay = Arc::new(Overlay::from_rows(
+                take(&mut self.lessons),
+                take(&mut self.quizzes),
+                take(&mut self.removed),
+            ));
         }
-        if let PathRow::Found(mut file) = std::mem::replace(&mut self.path_row, PathRow::Unread) {
-            if let Some(at) = self.activity.get(&file.id) {
-                file.updated_at = *at;
-            }
-            self.view.path = Some(PathState {
-                file,
-                cards: decode_cards(&std::mem::take(&mut self.cards))?,
-                taught: decode_taught(&std::mem::take(&mut self.taught))?,
-            });
+        if let PathRow::Found(file) = std::mem::replace(&mut self.path_row, PathRow::Unread) {
+            let (cards, taught) = (take(&mut self.cards), take(&mut self.taught));
+            self.view.path = Some(self.path_state(file, cards, taught)?);
         }
-        if !self.paths.is_empty() {
-            let mut cards: HashMap<String, HashMap<String, CardRow>> = HashMap::new();
-            for c in decode_card_rows(&std::mem::take(&mut self.all_cards))? {
-                cards
-                    .entry(c.path_id.clone())
-                    .or_default()
-                    .insert(c.quiz_id.clone(), c);
-            }
-            let mut taught: HashMap<String, HashMap<String, Taught>> = HashMap::new();
-            for (path_id, atom_id, t) in decode_taught_rows(&std::mem::take(&mut self.all_taught))?
-            {
-                taught.entry(path_id).or_default().insert(atom_id, t);
-            }
-            let mut paths = std::mem::take(&mut self.paths)
-                .iter()
-                .map(path::decode)
-                .collect::<Result<Vec<_>>>()?;
-            for p in &mut paths {
-                if let Some(at) = self.activity.get(&p.id) {
-                    p.updated_at = *at;
-                }
-            }
-            paths.sort_by(|a, b| {
-                a.created_at
-                    .cmp(&b.created_at)
-                    .then_with(|| a.id.cmp(&b.id))
-            });
-            self.view.paths = paths
-                .into_iter()
-                .map(|file| PathState {
-                    cards: cards.remove(&file.id).unwrap_or_default(),
-                    taught: taught.remove(&file.id).unwrap_or_default(),
-                    file,
-                })
-                .collect();
+        let mut cards: HashMap<String, Vec<CardRecord>> = HashMap::new();
+        for c in take(&mut self.all_cards) {
+            cards.entry(c.path_id.clone()).or_default().push(c);
         }
+        let mut taught: HashMap<String, Vec<TaughtRow>> = HashMap::new();
+        for t in take(&mut self.all_taught) {
+            taught.entry(t.path_id.clone()).or_default().push(t);
+        }
+        let mut paths = take(&mut self.paths);
+        paths.sort_by(|a, b| {
+            a.created_at
+                .cmp(&b.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        self.view.paths = paths
+            .into_iter()
+            .map(|file| {
+                let c = cards.remove(&file.id).unwrap_or_default();
+                let t = taught.remove(&file.id).unwrap_or_default();
+                self.path_state(file, c, t)
+            })
+            .collect::<Result<_>>()?;
         Ok(())
     }
-}
 
-fn decode_card_rows(rows: &[Json]) -> Result<Vec<CardRow>> {
-    rows.iter().map(cards::decode).collect()
-}
-
-fn decode_cards(rows: &[Json]) -> Result<HashMap<String, CardRow>> {
-    Ok(decode_card_rows(rows)?
-        .into_iter()
-        .map(|c| (c.quiz_id.clone(), c))
-        .collect())
-}
-
-fn decode_taught_rows(rows: &[Json]) -> Result<Vec<(String, String, Taught)>> {
-    rows.iter()
-        .map(|r| {
-            let s = |k: &str| {
-                r[k].as_str()
-                    .map(str::to_string)
-                    .ok_or_else(|| Error::BadRow(format!("taught.{k}: {r}")))
-            };
-            let count = r["count"].as_u64().and_then(|c| u32::try_from(c).ok());
-            Ok((
-                s("path_id")?,
-                s("atom_id")?,
-                Taught {
-                    count: count.ok_or_else(|| Error::BadRow(format!("taught.count: {r}")))?,
-                    last_at: r["last_at"].as_str().map(db::parse_ts).transpose()?,
-                },
-            ))
+    fn path_state(
+        &self,
+        mut file: PathFile,
+        cards: Vec<CardRecord>,
+        taught: Vec<TaughtRow>,
+    ) -> Result<PathState> {
+        file.updated_at = self
+            .activity
+            .get(&file.id)
+            .copied()
+            .unwrap_or(file.created_at);
+        Ok(PathState {
+            file,
+            cards: cards
+                .into_iter()
+                .map(|r| Ok((r.quiz_id.clone(), CardRow::try_from(r)?)))
+                .collect::<Result<_>>()?,
+            taught: taught
+                .into_iter()
+                .map(|t| {
+                    let taught = Taught {
+                        count: t.count,
+                        last_at: t.last_at,
+                    };
+                    (t.atom_id, taught)
+                })
+                .collect(),
         })
-        .collect()
-}
-
-fn decode_taught(rows: &[Json]) -> Result<HashMap<String, Taught>> {
-    Ok(decode_taught_rows(rows)?
-        .into_iter()
-        .map(|(_, a, t)| (a, t))
-        .collect())
+    }
 }

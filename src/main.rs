@@ -7,8 +7,8 @@ use mathtutor::cli::{Cmd, GraphOp, LessonOp, Mt, PathOp, QuizOp, SubpathOp};
 #[cfg(feature = "mcp")]
 use mathtutor::mcp;
 use mathtutor::{
-    Result, answer, db, discover, graph, instruct, overlay, path, scheduler, state, store, subpath,
-    syllabus, tree,
+    Error, Result, answer, db, discover, graph, import, instruct, overlay, path, scheduler, state,
+    store, subpath, syllabus, tree,
 };
 
 #[cfg(feature = "mcp")]
@@ -61,9 +61,9 @@ async fn real_main() -> ExitCode {
         };
     }
 
-    // `mt mcp` owns its own DB lifecycle (long-running, background sync
-    // task, graceful shutdown) so it sits outside the per-command DB
-    // setup the rest of the dispatch block does.
+    // `mt mcp` owns its own DB lifecycle (long-running, graceful
+    // shutdown) so it sits outside the per-command DB setup the rest of
+    // the dispatch block does.
     #[cfg(feature = "mcp")]
     if let Cmd::Mcp(c) = cli.cmd {
         if let Some(McpOp::Tools(_)) = c.op {
@@ -123,7 +123,6 @@ async fn real_main() -> ExitCode {
 /// CLI helper: treat empty strings (e.g. `MT_API_KEY=`) as "not set" so
 /// the env-var fallback doesn't accidentally feed an empty token into
 /// the constant-time bearer compare.
-#[cfg(feature = "mcp")]
 fn nonempty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.is_empty())
 }
@@ -165,6 +164,18 @@ fn init_tracing(verbose: bool) {
 async fn dispatch(db: &db::Db, cmd: Cmd) -> (Result<()>, u8) {
     match cmd {
         Cmd::Instruct(_) => unreachable!("handled before dispatch"),
+        Cmd::ImportTurso(c) => match c.url.or_else(|| nonempty(std::env::var("TURSO_URL").ok())) {
+            Some(url) => (
+                import::cmd_import_turso(
+                    db,
+                    &url,
+                    nonempty(std::env::var("TURSO_AUTH_TOKEN").ok()),
+                )
+                .await,
+                1,
+            ),
+            None => (Err(Error::MissingTursoUrl), 2),
+        },
         #[cfg(feature = "mcp")]
         Cmd::Mcp(_) => unreachable!("handled before dispatch"),
         Cmd::Path(p) => dispatch_path(db, p.op).await,

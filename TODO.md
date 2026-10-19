@@ -4,19 +4,17 @@ Follow-ups to moving user state from Turso to Baserunna, in priority order.
 
 ## Before merging
 
-- [ ] **Give CI a Baserunna binary.** The deploy workflow runs `cargo test`,
-      which starts a local Baserunna node, and the Baserunna repo is private.
-      Fetch a published release binary or container image with a read-only
-      token, or check out and build Baserunna with a deploy key, and cache it.
-- [ ] **Import existing Turso data.** Add a one-time import that reads a
-      libSQL database at the last migration on `main` and writes its paths,
-      authored lessons and quizzes, and each path's events into the
-      Baserunna database, keeping event timestamps. Cards and lessons taught
-      are then rebuilt from the events. Check the result by comparing each
-      path's cards with the Turso rows.
-- [ ] **Switch the fly.io app over.** Create the database, set
-      `BASERUNNA_TOKEN` (and `BASERUNNA_DB` if not `mathtutor`), run the
-      import, deploy, then unset `TURSO_URL` and `TURSO_AUTH_TOKEN`.
+- [x] **Give CI Baserunna.** The tests run a node in-process from the
+      private repository, a git dev-dependency that CI fetches with the
+      read-only `BASERUNNA_DEPLOY_KEY` deploy key.
+- [x] **Import existing Turso data.** `mt import-turso`.
+- [ ] **Switch the fly.io app over.** Create the database and set
+      `BASERUNNA_TOKEN` (and `BASERUNNA_DB` if not `mathtutor`). Run
+      `mt import-turso` with `TURSO_URL` and `TURSO_AUTH_TOKEN` set, first
+      into a scratch `BASERUNNA_DB` to see that it reports no mismatches.
+      Deploy, then unset `TURSO_URL` and `TURSO_AUTH_TOKEN`.
+- [ ] **Point the Baserunna dependency at `main`** once `mathtutor-load`
+      merges there; the pinned commit is on that branch.
 
 ## Later
 

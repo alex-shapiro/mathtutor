@@ -369,6 +369,8 @@ pub struct Envelope {
     action: String,
     path: String,
     payload: Payload,
+    #[serde(skip)]
+    next: Action,
 }
 
 #[derive(Serialize)]
@@ -463,9 +465,15 @@ struct DonePayload {
 }
 
 impl Envelope {
+    /// The action this envelope describes.
+    pub fn action(&self) -> &Action {
+        &self.next
+    }
+
     #[allow(clippy::too_many_lines)]
     fn build(ps: &PathState, g: &Graph, action: Action) -> Self {
         let p = &ps.file;
+        let next = action.clone();
         match action {
             Action::PresentLesson { atom_id } => {
                 let c = g.by_id.get(&atom_id).expect("atom exists in graph");
@@ -477,6 +485,7 @@ impl Envelope {
                 };
                 let history = lesson_history(ps, &atom_id);
                 Envelope {
+                    next,
                     schema_version: 1,
                     action: "present_lesson".to_string(),
                     path: p.id.clone(),
@@ -511,6 +520,7 @@ impl Envelope {
                 };
                 let history = quiz_history(ps, &quiz_id);
                 Envelope {
+                    next,
                     schema_version: 1,
                     action: "present_quiz".to_string(),
                     path: p.id.clone(),
@@ -534,6 +544,7 @@ impl Envelope {
                 };
                 let prerequisites = collect_prereqs(g, c);
                 Envelope {
+                    next,
                     schema_version: 1,
                     action: "create_lesson".to_string(),
                     path: p.id.clone(),
@@ -570,6 +581,7 @@ impl Envelope {
                      --question TEXT --answer TEXT [--rubric TEXT]"
                 );
                 Envelope {
+                    next,
                     schema_version: 1,
                     action: "create_quiz".to_string(),
                     path: p.id.clone(),
@@ -583,6 +595,7 @@ impl Envelope {
                 }
             }
             Action::Done => Envelope {
+                next,
                 schema_version: 1,
                 action: "done".to_string(),
                 path: p.id.clone(),

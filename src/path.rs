@@ -4,11 +4,12 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use serde_json::{Value as Json, json};
+use serde::{Deserialize, Serialize};
 
-use crate::db::{self, Db};
+use crate::db::{Db, Op, ts};
 use crate::event_log;
 use crate::graph::{Graph, natural_id_cmp};
+use crate::schema::PathUpdate;
 use crate::types::Strategy;
 use crate::view::{Changes, PathSel, View, Want};
 use crate::{Error, Result};
@@ -22,13 +23,15 @@ use crate::{Error, Result};
 /// by [`PathFile::resolve_targets`], so the resolved set tracks curriculum
 /// edits (e.g. an atom later split into a cluster). `subpath` is kept the
 /// same way.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathFile {
     pub id: String,
     pub goal: String,
+    #[serde(with = "ts")]
     pub created_at: DateTime<Utc>,
     /// Time of the path's latest event. Stored apart from the path row,
     /// so logging events never writes the row.
+    #[serde(skip)]
     pub updated_at: DateTime<Utc>,
     pub targets: Vec<String>,
     pub strategy: Strategy,
@@ -74,42 +77,9 @@ pub fn generate_path_id(now: DateTime<Utc>) -> String {
 
 // ── Rows ────────────────────────────────────────────────────────────
 
-/// The path a `paths` row holds.
-pub fn decode(r: &Json) -> Result<PathFile> {
-    let s = |k: &str| {
-        r[k].as_str()
-            .map(str::to_string)
-            .ok_or_else(|| Error::BadRow(format!("paths.{k}: {r}")))
-    };
-    let ids = |k: &str| -> Result<Vec<String>> {
-        r[k].as_array()
-            .ok_or_else(|| Error::BadRow(format!("paths.{k}: {r}")))?
-            .iter()
-            .map(|v| {
-                v.as_str()
-                    .map(str::to_string)
-                    .ok_or_else(|| Error::BadRow(format!("paths.{k}: {r}")))
-            })
-            .collect()
-    };
-    Ok(PathFile {
-        id: s("id")?,
-        goal: s("goal")?,
-        created_at: db::parse_ts(&s("created_at")?)?,
-        updated_at: db::parse_ts(&s("created_at")?)?,
-        targets: ids("targets")?,
-        strategy: s("strategy")?.parse()?,
-        subpath: ids("subpath")?,
-    })
-}
-
 /// Insert `p` and log its `path_created` event.
 pub fn insert(view: &View, changes: &mut Changes, p: &PathFile) -> Result<()> {
-    changes.op(json!({ "op": "insert_row", "table": "paths", "row": {
-        "id": p.id, "goal": p.goal, "created_at": db::format_ts(p.created_at),
-        "strategy": p.strategy.as_str(),
-        "targets": p.targets, "subpath": p.subpath,
-    }}));
+    changes.op(Op::insert(p));
     let mut created = event_log::path_created(p.id.clone());
     created.ts = p.created_at;
     changes.append(view, &created)
@@ -117,10 +87,11 @@ pub fn insert(view: &View, changes: &mut Changes, p: &PathFile) -> Result<()> {
 
 /// Replace the stored subpath of `path_id`.
 pub fn set_subpath(changes: &mut Changes, path_id: &str, atoms: &[String]) {
-    changes.op(
-        json!({ "op": "update_row", "table": "paths", "pk": [path_id],
-        "set": { "subpath": atoms } }),
-    );
+    let set = PathUpdate {
+        subpath: Some(atoms),
+        ..PathUpdate::default()
+    };
+    changes.op(Op::update::<PathFile>(&[path_id], &set));
 }
 
 // ── Commands ────────────────────────────────────────────────────────
@@ -174,8 +145,11 @@ pub async fn cmd_path_strategy(
     };
     db.transact(&want, |view, changes| {
         let id = view.path()?.file.id.clone();
-        changes.op(json!({ "op": "update_row", "table": "paths", "pk": [id],
-            "set": { "strategy": strategy.as_str() } }));
+        let set = PathUpdate {
+            strategy: Some(strategy),
+            ..PathUpdate::default()
+        };
+        changes.op(Op::update::<PathFile>(&[&id], &set));
         Ok(id)
     })
     .await

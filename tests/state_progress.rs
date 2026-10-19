@@ -3,7 +3,7 @@
 //! `get_state` tool.
 
 use chrono::{Duration, Utc};
-use mathtutor::cards::{self, CardRow, CardState};
+use mathtutor::cards::{CardRow, CardState};
 use mathtutor::progress::PathProgress;
 use mathtutor::state;
 
@@ -126,7 +126,7 @@ async fn seed_card(
         ..CardRow::new(PATH_ID, quiz_id)
     };
     common::write(db, PATH_ID, |_, changes| {
-        changes.op(cards::upsert_op(&card));
+        changes.set_card(card.clone());
     })
     .await;
 }

@@ -1,27 +1,27 @@
-//! Tables of the user database and their creation.
+//! Tables of the user database, their row types, and their creation.
 //!
-//! The database holds:
-//!
-//! | table             | primary key           | role                                          |
-//! | ----------------- | --------------------- | --------------------------------------------- |
-//! | `paths`           | `id`                  | goal, strategy, targets and subpath per path  |
-//! | `lessons`         | `atom_id`             | user-authored lessons (overlay)               |
-//! | `quizzes`         | `quiz_id`             | user-authored or amended quizzes (overlay)    |
-//! | `removed_quizzes` | `quiz_id`             | quiz tombstones (overlay)                     |
-//! | `cards`           | `(path_id, quiz_id)`  | FSRS state and answer history per quiz        |
-//! | `taught`          | `(path_id, atom_id)`  | lessons taught per path                       |
-//! | `oauth_*`         | code or token         | MCP authorization-server state                |
+//! | table                  | primary key           | role                                          |
+//! | ---------------------- | --------------------- | --------------------------------------------- |
+//! | `paths`                | `id`                  | goal, strategy, targets and subpath per path  |
+//! | `lessons`              | `atom_id`             | user-authored lessons (overlay)               |
+//! | `quizzes`              | `quiz_id`             | user-authored or amended quizzes (overlay)    |
+//! | `removed_quizzes`      | `quiz_id`             | quiz tombstones (overlay)                     |
+//! | `cards`                | `(path_id, quiz_id)`  | FSRS state and answer history per quiz        |
+//! | `taught`               | `(path_id, atom_id)`  | lessons taught per path                       |
+//! | `oauth_*`              | code or token         | MCP authorization-server state                |
 //!
 //! Each path's event log is the stream `events.<path id>`, the source of
 //! truth that `cards` and `taught` are derived from. The key
 //! `activity/<path id>` holds the time of the path's latest event.
 
-use reqwest::Method;
-use serde_json::{Value as Json, json};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::db::Db;
+use crate::db::{Db, Op, Row, ts};
 use crate::error::Error;
+use crate::path::PathFile;
+use crate::types::{Difficulty, QuizType, Rating, Strategy};
 
 /// Bumped whenever a table is added or changed. Existing databases are
 /// brought up to date by [`ensure`].
@@ -33,85 +33,341 @@ pub fn events_stream(path_id: &str) -> String {
     format!("events.{path_id}")
 }
 
-fn col(name: &str, ty: &str, nullable: bool) -> Json {
-    json!({ "name": name, "type": ty, "nullable": nullable })
+/// Prefix of the keys holding each path's latest activity time. They are
+/// written blind, so commands logging events on one path never conflict
+/// over them.
+pub const ACTIVITY_PREFIX: &str = "activity/";
+
+pub fn activity_key(path_id: &str) -> String {
+    format!("{ACTIVITY_PREFIX}{path_id}")
 }
 
-fn tables() -> Vec<Json> {
-    let s = |n| col(n, "string", false);
-    let s_null = |n| col(n, "string", true);
-    let i = |n| col(n, "int", false);
-    let f_null = |n| col(n, "float", true);
-    let j = |n| col(n, "json", false);
-    vec![
-        json!({ "name": "paths", "primary_key": ["id"], "columns": [
-            s("id"), s("goal"), s("created_at"), s("strategy"), j("targets"), j("subpath"),
-        ]}),
-        json!({ "name": "lessons", "primary_key": ["atom_id"], "columns": [s("atom_id"), s("body")] }),
-        json!({ "name": "quizzes", "primary_key": ["quiz_id"], "columns": [
-            s("quiz_id"), s("atom_id"), s("difficulty"), s_null("kind"),
-            s("question"), s("answer"), s_null("rubric"),
-        ]}),
-        json!({ "name": "removed_quizzes", "primary_key": ["quiz_id"], "columns": [
-            s("quiz_id"), s("atom_id"),
-        ]}),
-        json!({ "name": "cards", "primary_key": ["path_id", "quiz_id"], "columns": [
-            s("path_id"), s("quiz_id"),
-            f_null("stability"), f_null("difficulty"), s_null("due_at"), s_null("last_reviewed_at"),
-            i("reps"), i("lapses"), i("presented"), s_null("last_presented_at"),
-            s_null("first_correct_at"), j("recent"),
-        ], "indexes": [{ "name": "by_due", "columns": ["path_id", "due_at"] }]}),
-        json!({ "name": "taught", "primary_key": ["path_id", "atom_id"], "columns": [
-            s("path_id"), s("atom_id"), i("count"), s_null("last_at"),
-        ]}),
-        json!({ "name": "oauth_clients", "primary_key": ["client_id"], "columns": [
-            s("client_id"), s_null("client_name"), j("redirect_uris"), s("created_at"),
-        ]}),
-        json!({ "name": "oauth_codes", "primary_key": ["code"], "columns": [
-            s("code"), s("client_id"), s("redirect_uri"), s_null("scope"), s("code_challenge"),
-            s("code_challenge_method"), s_null("resource"), s("expires_at"), s_null("used_at"),
-        ]}),
-        json!({ "name": "oauth_access_tokens", "primary_key": ["token"], "columns": [
-            s("token"), s("client_id"), s_null("scope"), s("expires_at"),
-        ]}),
-        json!({ "name": "oauth_refresh_tokens", "primary_key": ["token"], "columns": [
-            s("token"), s("client_id"), s_null("scope"), s("expires_at"),
-        ]}),
-    ]
+// ── Rows ────────────────────────────────────────────────────────────
+
+impl Row for PathFile {
+    const TABLE: &'static str = "paths";
 }
 
-/// Create the database `name` and its tables unless they already exist.
+/// The columns of a `paths` row that change after the path is created.
+#[derive(Debug, Default, Serialize)]
+pub struct PathUpdate<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<Strategy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subpath: Option<&'a [String]>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LessonRow {
+    pub atom_id: String,
+    pub body: String,
+}
+
+impl Row for LessonRow {
+    const TABLE: &'static str = "lessons";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuizRow {
+    pub quiz_id: String,
+    pub atom_id: String,
+    pub difficulty: Difficulty,
+    pub kind: Option<QuizType>,
+    pub question: String,
+    pub answer: String,
+    pub rubric: Option<String>,
+}
+
+impl Row for QuizRow {
+    const TABLE: &'static str = "quizzes";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemovedQuizRow {
+    pub quiz_id: String,
+    pub atom_id: String,
+}
+
+impl Row for RemovedQuizRow {
+    const TABLE: &'static str = "removed_quizzes";
+}
+
+/// A `cards` row. The FSRS columns are all set once the quiz is answered,
+/// and all null before.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardRecord {
+    pub path_id: String,
+    pub quiz_id: String,
+    pub stability: Option<f32>,
+    pub difficulty: Option<f32>,
+    #[serde(with = "ts::option")]
+    pub due_at: Option<DateTime<Utc>>,
+    #[serde(with = "ts::option")]
+    pub last_reviewed_at: Option<DateTime<Utc>>,
+    pub reps: u32,
+    pub lapses: u32,
+    pub presented: u32,
+    #[serde(with = "ts::option")]
+    pub last_presented_at: Option<DateTime<Utc>>,
+    #[serde(with = "ts::option")]
+    pub first_correct_at: Option<DateTime<Utc>>,
+    /// Newest first.
+    pub recent: Vec<Rating>,
+}
+
+impl Row for CardRecord {
+    const TABLE: &'static str = "cards";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaughtRow {
+    pub path_id: String,
+    pub atom_id: String,
+    pub count: u32,
+    #[serde(with = "ts::option")]
+    pub last_at: Option<DateTime<Utc>>,
+}
+
+impl Row for TaughtRow {
+    const TABLE: &'static str = "taught";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthClient {
+    pub client_id: String,
+    pub client_name: Option<String>,
+    pub redirect_uris: Vec<String>,
+    #[serde(with = "ts")]
+    pub created_at: DateTime<Utc>,
+}
+
+impl Row for OAuthClient {
+    const TABLE: &'static str = "oauth_clients";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthCode {
+    pub code: String,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub scope: Option<String>,
+    pub code_challenge: String,
+    pub code_challenge_method: String,
+    pub resource: Option<String>,
+    #[serde(with = "ts")]
+    pub expires_at: DateTime<Utc>,
+    #[serde(with = "ts::option")]
+    pub used_at: Option<DateTime<Utc>>,
+}
+
+impl Row for OAuthCode {
+    const TABLE: &'static str = "oauth_codes";
+}
+
+/// The columns of an `oauth_codes` row that change after it is issued.
+#[derive(Debug, Serialize)]
+pub struct OAuthCodeUse {
+    #[serde(with = "ts")]
+    pub used_at: DateTime<Utc>,
+}
+
+/// A bearer token for `/mcp`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthAccessToken {
+    pub token: String,
+    pub client_id: String,
+    pub scope: Option<String>,
+    #[serde(with = "ts")]
+    pub expires_at: DateTime<Utc>,
+}
+
+impl Row for OAuthAccessToken {
+    const TABLE: &'static str = "oauth_access_tokens";
+}
+
+/// A one-use token that trades for a fresh access and refresh token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthRefreshToken {
+    pub token: String,
+    pub client_id: String,
+    pub scope: Option<String>,
+    #[serde(with = "ts")]
+    pub expires_at: DateTime<Utc>,
+}
+
+impl Row for OAuthRefreshToken {
+    const TABLE: &'static str = "oauth_refresh_tokens";
+}
+
+// ── Tables ──────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct Table {
+    name: &'static str,
+    primary_key: &'static [&'static str],
+    columns: &'static [Column],
+}
+
+#[derive(Serialize)]
+struct Column {
+    name: &'static str,
+    #[serde(rename = "type")]
+    ty: ColumnType,
+    nullable: bool,
+}
+
+#[derive(Serialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+enum ColumnType {
+    String,
+    Int,
+    Float,
+    Json,
+}
+
+const fn col(name: &'static str, ty: ColumnType, nullable: bool) -> Column {
+    Column { name, ty, nullable }
+}
+
+const fn string(name: &'static str) -> Column {
+    col(name, ColumnType::String, false)
+}
+
+const fn string_or_null(name: &'static str) -> Column {
+    col(name, ColumnType::String, true)
+}
+
+const fn int(name: &'static str) -> Column {
+    col(name, ColumnType::Int, false)
+}
+
+const fn float_or_null(name: &'static str) -> Column {
+    col(name, ColumnType::Float, true)
+}
+
+const fn json(name: &'static str) -> Column {
+    col(name, ColumnType::Json, false)
+}
+
+const TABLES: &[Table] = &[
+    Table {
+        name: PathFile::TABLE,
+        primary_key: &["id"],
+        columns: &[
+            string("id"),
+            string("goal"),
+            string("created_at"),
+            string("strategy"),
+            json("targets"),
+            json("subpath"),
+        ],
+    },
+    Table {
+        name: LessonRow::TABLE,
+        primary_key: &["atom_id"],
+        columns: &[string("atom_id"), string("body")],
+    },
+    Table {
+        name: QuizRow::TABLE,
+        primary_key: &["quiz_id"],
+        columns: &[
+            string("quiz_id"),
+            string("atom_id"),
+            string("difficulty"),
+            string_or_null("kind"),
+            string("question"),
+            string("answer"),
+            string_or_null("rubric"),
+        ],
+    },
+    Table {
+        name: RemovedQuizRow::TABLE,
+        primary_key: &["quiz_id"],
+        columns: &[string("quiz_id"), string("atom_id")],
+    },
+    Table {
+        name: CardRecord::TABLE,
+        primary_key: &["path_id", "quiz_id"],
+        columns: &[
+            string("path_id"),
+            string("quiz_id"),
+            float_or_null("stability"),
+            float_or_null("difficulty"),
+            string_or_null("due_at"),
+            string_or_null("last_reviewed_at"),
+            int("reps"),
+            int("lapses"),
+            int("presented"),
+            string_or_null("last_presented_at"),
+            string_or_null("first_correct_at"),
+            json("recent"),
+        ],
+    },
+    Table {
+        name: TaughtRow::TABLE,
+        primary_key: &["path_id", "atom_id"],
+        columns: &[
+            string("path_id"),
+            string("atom_id"),
+            int("count"),
+            string_or_null("last_at"),
+        ],
+    },
+    Table {
+        name: OAuthClient::TABLE,
+        primary_key: &["client_id"],
+        columns: &[
+            string("client_id"),
+            string_or_null("client_name"),
+            json("redirect_uris"),
+            string("created_at"),
+        ],
+    },
+    Table {
+        name: OAuthCode::TABLE,
+        primary_key: &["code"],
+        columns: &[
+            string("code"),
+            string("client_id"),
+            string("redirect_uri"),
+            string_or_null("scope"),
+            string("code_challenge"),
+            string("code_challenge_method"),
+            string_or_null("resource"),
+            string("expires_at"),
+            string_or_null("used_at"),
+        ],
+    },
+    Table {
+        name: OAuthAccessToken::TABLE,
+        primary_key: &["token"],
+        columns: TOKEN_COLUMNS,
+    },
+    Table {
+        name: OAuthRefreshToken::TABLE,
+        primary_key: &["token"],
+        columns: TOKEN_COLUMNS,
+    },
+];
+
+const TOKEN_COLUMNS: &[Column] = &[
+    string("token"),
+    string("client_id"),
+    string_or_null("scope"),
+    string("expires_at"),
+];
+
+/// Create the database and its tables unless they already exist.
 /// Costs one read when the schema is current.
-pub async fn ensure(db: &Db, name: &str) -> Result<()> {
-    let probe = [json!({ "op": "get", "key": VERSION_KEY })];
-    match db.read(&probe).await {
-        Ok(r) if r[0]["value"].as_str().and_then(|v| v.parse().ok()) == Some(VERSION) => {
-            return Ok(());
-        }
+pub async fn ensure(db: &Db) -> Result<()> {
+    match db.read(&[Op::get(VERSION_KEY)]).await {
+        Ok(r) if r[0].value().and_then(|v| v.parse().ok()) == Some(VERSION) => return Ok(()),
         Ok(_) => {}
-        Err(Error::Api(e)) if e.status == 404 => create_db(db, name).await?,
+        Err(Error::Api(e)) if e.status == 404 => db.create_database().await?,
         Err(e) => return Err(e),
     }
-    for t in tables() {
-        match db.call(Method::POST, "/tables", Some(&t)).await {
-            Err(Error::Api(e)) if e.code == "already_exists" => {}
-            r => {
-                r?;
-            }
-        }
+    for t in TABLES {
+        db.create_table(t).await?;
     }
-    db.write(&[json!({ "op": "put", "key": VERSION_KEY, "value": VERSION.to_string() })])
-        .await?;
-    Ok(())
-}
-
-async fn create_db(db: &Db, name: &str) -> Result<()> {
-    let body = match name.split_once('.') {
-        Some((org, n)) => json!({ "name": n, "org": org }),
-        None => json!({ "name": name }),
-    };
-    match db.root_call(Method::POST, "/v1/dbs", Some(&body)).await {
-        Err(Error::Api(e)) if e.code == "already_exists" => Ok(()),
-        r => r.map(drop),
-    }
+    db.write(&[Op::put(VERSION_KEY, VERSION.to_string())]).await
 }

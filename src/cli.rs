@@ -4,7 +4,7 @@
 //!
 //! Subcommand layout is resource-first (`mt <noun> <verb>`) and tracks
 //! the MCP tool surface 1:1. Operator-only verbs (`graph check`,
-//! `graph dump`, `instruct`, `migrate-from-ayml`, `mcp`) have no MCP
+//! `graph dump`, `instruct`, `import-turso`, `mcp`) have no MCP
 //! equivalent and are explicitly flagged in the docs.
 
 use std::path::PathBuf;
@@ -28,6 +28,7 @@ pub enum Cmd {
     Lesson(LessonCmd),
     Quiz(QuizCmd),
     Instruct(InstructCmd),
+    ImportTurso(ImportTursoCmd),
     #[cfg(feature = "mcp")]
     Mcp(McpCmd),
 }
@@ -455,6 +456,17 @@ pub struct QuizAnswerCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "instruct")]
 pub struct InstructCmd {}
+
+/// Import paths, authored lessons and quizzes, and events from the libSQL
+/// (Turso) database used before Baserunna, then check every path's cards
+/// against it. Reads `TURSO_AUTH_TOKEN`; rerunning skips imported paths.
+#[derive(FromArgs, Debug)]
+#[argh(subcommand, name = "import-turso")]
+pub struct ImportTursoCmd {
+    /// libSQL database URL (default: `$TURSO_URL`)
+    #[argh(option)]
+    pub url: Option<String>,
+}
 
 /// Run the MCP server (SSE over HTTP), or `mt mcp tools` to dump the
 /// in-process JSON-RPC tool catalogue for debugging.

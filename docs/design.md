@@ -39,7 +39,7 @@ The binary embeds the agent operator playbook and prints it via `mt instruct`.
 Subcommands are resource-first (`mt <noun> <verb>`).
 Most commands exist in both CLI and MCP interfaces.
 Operator-only verbs (`graph check`, `graph dump`, `instruct`,
-`migrate-from-ayml`, `mcp`) have no MCP equivalent.
+`import-turso`, `mcp`) have no MCP equivalent.
 
 ```bash
 # Path lifecycle
@@ -74,6 +74,9 @@ mt quiz answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT]
 
 # Agent operator playbook
 mt instruct                        # print AGENTS playbook embedded in binary
+
+# One-time move from the libSQL (Turso) database used before Baserunna
+mt import-turso [--url URL]        # default $TURSO_URL; token in $TURSO_AUTH_TOKEN
 ```
 
 `mt graph show` and `mt graph list` are pure curriculum lookups by
@@ -348,6 +351,12 @@ memory and under `$MATHTUTOR_HOME` (default `~/.mathtutor`), and reads only
 `overlay_version` to check it, so a command downloads the overlay only after
 another client changed it.
 
+`mt import-turso` moves a libSQL database at its last migration into
+Baserunna once: it reads it over Turso's HTTP API in one snapshot, writes its
+paths, overlay and events (keeping event times), rebuilds `cards` and
+`taught` from the events, and reports any card that differs from the libSQL
+`cards` rows. Rerunning it skips paths already imported.
+
 ## User overlay
 
 Lessons and quizzes the agent authors are stored as rows that overlay
@@ -355,12 +364,11 @@ the shipped curriculum without modifying it. The overlay is global to the
 user's database, keyed by atom / quiz id — it is shared across paths, not
 scoped to one:
 
-- `overlay_lessons(atom_id, body)` — an authored lesson body for an atom
+- `lessons(atom_id, body)` — an authored lesson body for an atom
   the shipped graph left bare, or a revision of a shipped one.
-- `overlay_quizzes(atom_id, quiz_id, difficulty, kind, question, answer,
-rubric)` — quizzes added by `mt quiz create` or revised by
-  `mt quiz update`.
-- `overlay_removed_quizzes(quiz_id)` — tombstones; the merge skips these.
+- `quizzes(quiz_id, atom_id, difficulty, kind, question, answer, rubric)` —
+  quizzes added by `mt quiz create` or revised by `mt quiz update`.
+- `removed_quizzes(quiz_id, atom_id)` — tombstones; the merge skips these.
 
 Merge semantics (`Graph::load_for_path`): an overlay lesson, quiz, or
 tombstone always overrides a shipped item with the same id. Concretely:
@@ -371,7 +379,7 @@ tombstone always overrides a shipped item with the same id. Concretely:
 - **Quizzes:** start with shipped, replace any with the same id from
   the overlay (this is how `mt quiz update` works), then append overlay
   quizzes whose ids don't match shipped (added by `mt quiz create`),
-  then filter out anything whose id appears in `overlay_removed_quizzes`.
+  then filter out anything whose id appears in `removed_quizzes`.
 - **Prerequisites / cluster structure:** not overridable. The shape
   of the curriculum is fixed by the shipped graph; the overlay only
   carries content.
@@ -381,7 +389,8 @@ into the canonical curriculum.
 
 ## Event log
 
-Per-path learning history, appended to the `events` table. Every event has
+Per-path learning history, appended to the path's `events.<path id>`
+stream. Every event has
 a `ts` field in RFC 3339 / ISO 8601 format with UTC timezone so the log can
 be re-played and `time_since_last` / `repetitions` derived without
 additional state. Each event, as a logical record:
@@ -417,10 +426,10 @@ card state, for instance, is reconstructed by replaying `quiz_answered`.
 ## Spaced repetition (FSRS)
 
 - **One FSRS card per quiz question.**
-- **No persistent card state.** The card state for any quiz is
-  reconstructed by replaying its `quiz_answered` events through the
-  FSRS algorithm in order. This is intentionally a pure function to
-  keep the log as the sole source of truth
+- **Card state is derived.** The card state for any quiz is the result of
+  replaying its `quiz_answered` events through the FSRS algorithm in
+  order. The `cards` table keeps that result, updated with each event, and
+  `cards::recompute` reproduces it from the log, the sole source of truth.
 - **`mt path next` algorithm:**
   1. Earliest-due quiz card whose atom is in the merged view → `present_quiz`.
   2. Else, walk targets (and their prereqs) in topo order. For each

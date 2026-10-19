@@ -4,13 +4,18 @@
 //! (default `mathtutor`) on the server at `BASERUNNA_URL`, reached with
 //! the API key or session token in `BASERUNNA_TOKEN`.
 
+mod op;
+pub mod ts;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
 use reqwest::{Method, StatusCode};
-use serde_json::{Value as Json, json};
+use serde::de::{DeserializeOwned, IgnoredAny};
+use serde::{Deserialize, Serialize};
+
+pub use op::{KvItem, Op, OpResult, PAGE, Row};
 
 use crate::{Error, Result};
 
@@ -24,20 +29,6 @@ const MAX_ATTEMPTS: u32 = 10;
 /// How long a client waits before asking whether an ambiguous commit
 /// applied: past the server's commit deadline, no copy of it can still land.
 const AMBIGUOUS_COMMIT_WAIT: Duration = Duration::from_secs(15);
-
-/// Canonical timestamp format. The `Z` suffix and fixed width keep
-/// lexicographic order aligned with chronological order, which index
-/// range queries over timestamp columns rely on.
-pub fn format_ts(ts: DateTime<Utc>) -> String {
-    ts.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
-}
-
-/// Parse a timestamp written by [`format_ts`] (or any RFC 3339 form).
-pub fn parse_ts(s: &str) -> Result<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s)
-        .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|e| Error::BadTimestamp(format!("{s}: {e}")))
-}
 
 /// Where the user database lives.
 #[derive(Debug, Clone)]
@@ -63,11 +54,41 @@ impl DbConfig {
     }
 }
 
+/// What a request does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RequestKind {
+    /// A one-shot transaction.
+    Txn,
+    /// Beginning an interactive transaction.
+    Begin,
+    /// More ops in an interactive transaction.
+    Ops,
+    Commit,
+    Abort,
+    /// Asking whether a commit applied.
+    Status,
+    /// Creating the database or a table.
+    Create,
+}
+
+impl std::fmt::Display for RequestKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.pad(match self {
+            Self::Txn => "txn",
+            Self::Begin => "begin",
+            Self::Ops => "ops",
+            Self::Commit => "commit",
+            Self::Abort => "abort",
+            Self::Status => "status",
+            Self::Create => "create",
+        })
+    }
+}
+
 /// One HTTP request to the server, as an [`Observer`] sees it.
 #[derive(Debug, Clone)]
 pub struct Sample {
-    /// `begin`, `ops`, `commit`, `abort`, `txn` (one-shot), `status` or `other`.
-    pub kind: &'static str,
+    pub kind: RequestKind,
     pub status: u16,
     /// Time from sending the request to reading the whole response.
     pub elapsed: Duration,
@@ -126,7 +147,7 @@ pub type Observer = Arc<dyn Fn(Sample) + Send + Sync>;
 pub struct Db {
     http: reqwest::Client,
     url: String,
-    base: String,
+    name: String,
     token: String,
     observer: Option<Observer>,
     /// The path the last transaction resolved, so the next one can read
@@ -141,7 +162,8 @@ pub struct Db {
 impl std::fmt::Debug for Db {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Db")
-            .field("base", &self.base)
+            .field("url", &self.url)
+            .field("name", &self.name)
             .finish_non_exhaustive()
     }
 }
@@ -172,6 +194,85 @@ impl ApiError {
         matches!(self.status, 404 if self.code == "txn_not_found")
             || (self.retryable && !self.outcome_unknown)
     }
+
+    fn from_response(status: StatusCode, body: &[u8]) -> Self {
+        #[derive(Deserialize)]
+        struct Body {
+            error: Detail,
+        }
+        #[derive(Deserialize)]
+        struct Detail {
+            code: String,
+            message: String,
+            retryable: bool,
+            #[serde(default)]
+            details: Details,
+        }
+        #[derive(Deserialize, Default)]
+        struct Details {
+            outcome: Option<String>,
+        }
+        match serde_json::from_slice::<Body>(body) {
+            Ok(Body { error: e }) => Self {
+                status: status.as_u16(),
+                code: e.code,
+                message: e.message,
+                retryable: e.retryable,
+                outcome_unknown: e.details.outcome.as_deref() == Some("unknown"),
+                from_server: true,
+            },
+            Err(_) => Self {
+                status: status.as_u16(),
+                code: "unknown".into(),
+                message: String::from_utf8_lossy(body).into_owned(),
+                retryable: status.is_server_error(),
+                outcome_unknown: false,
+                from_server: false,
+            },
+        }
+    }
+
+    /// A retryable failure of a request that certainly did not apply.
+    fn not_applied(message: &str) -> Error {
+        Error::Api(Self {
+            status: 503,
+            code: "unavailable".into(),
+            message: message.into(),
+            retryable: true,
+            outcome_unknown: false,
+            from_server: true,
+        })
+    }
+}
+
+#[derive(Serialize)]
+struct Ops<'a> {
+    ops: &'a [Op],
+}
+
+#[derive(Deserialize)]
+struct Results {
+    #[serde(default)]
+    results: Option<Vec<OpResult>>,
+}
+
+#[derive(Deserialize)]
+struct Begun {
+    txn_id: String,
+    commit_id: String,
+    results: Vec<OpResult>,
+}
+
+#[derive(Deserialize)]
+struct CommitStatus {
+    status: CommitState,
+}
+
+#[derive(Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CommitState {
+    Committed,
+    NotCommitted,
 }
 
 impl Db {
@@ -179,7 +280,7 @@ impl Db {
     /// they do not exist yet.
     pub async fn open(cfg: &DbConfig) -> Result<Self> {
         let db = Self::connect(cfg)?;
-        crate::schema::ensure(&db, &cfg.db).await?;
+        crate::schema::ensure(&db).await?;
         Ok(db)
     }
 
@@ -200,8 +301,8 @@ impl Db {
             .as_deref()
             .and_then(crate::view::read_cached_overlay);
         Ok(Self {
-            base: format!("{url}/v1/dbs/{}", cfg.db),
             url,
+            name: cfg.db.clone(),
             http,
             token: cfg.token.clone(),
             observer: None,
@@ -218,31 +319,100 @@ impl Db {
         self
     }
 
-    /// Send one request to `path` under the server root and return its JSON body.
-    pub(crate) async fn root_call(
+    /// Run read-only `ops` in one request against a strong snapshot.
+    pub async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
+        let r: Results = retry(|| self.run(RequestKind::Txn, "/txn", ops)).await?;
+        one_per_op(ops, r.results.unwrap_or_default())
+    }
+
+    /// Run one read-only op against a strong snapshot.
+    pub async fn read_one(&self, op: Op) -> Result<OpResult> {
+        let mut r = self.read(std::slice::from_ref(&op)).await?;
+        Ok(r.swap_remove(0))
+    }
+
+    /// Run `ops`, writes included, as one transaction in one request.
+    /// Retried only while certainly not applied.
+    pub async fn write(&self, ops: &[Op]) -> Result<()> {
+        retry(|| self.run::<IgnoredAny>(RequestKind::Txn, "/txn", ops)).await?;
+        Ok(())
+    }
+
+    /// Begin an interactive transaction, running `ops` in it.
+    pub async fn begin(&self, ops: &[Op]) -> Result<(Txn, Vec<OpResult>)> {
+        let r: Begun = self.run(RequestKind::Begin, "/transactions", ops).await?;
+        let txn = Txn {
+            db: self.clone(),
+            id: r.txn_id,
+            commit_id: r.commit_id,
+        };
+        Ok((txn, one_per_op(ops, r.results)?))
+    }
+
+    /// Create this database. Succeeds if it already exists.
+    pub(crate) async fn create_database(&self) -> Result<()> {
+        #[derive(Serialize)]
+        struct NewDb<'a> {
+            name: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            org: Option<&'a str>,
+        }
+        let body = match self.name.split_once('.') {
+            Some((org, name)) => NewDb {
+                name,
+                org: Some(org),
+            },
+            None => NewDb {
+                name: &self.name,
+                org: None,
+            },
+        };
+        let url = format!("{}/v1/dbs", self.url);
+        exists_ok(
+            self.send(RequestKind::Create, Method::POST, &url, Some(&body))
+                .await,
+        )
+    }
+
+    /// Create a table from its schema. Succeeds if it already exists.
+    pub(crate) async fn create_table(&self, schema: &impl Serialize) -> Result<()> {
+        exists_ok(
+            self.call(RequestKind::Create, Method::POST, "/tables", Some(schema))
+                .await,
+        )
+    }
+
+    /// Send `body` to `path` under this database.
+    async fn call<T: DeserializeOwned>(
         &self,
+        kind: RequestKind,
         method: Method,
         path: &str,
-        body: Option<&Json>,
-    ) -> Result<Json> {
-        self.send(method, &format!("{}{path}", self.url), body)
+        body: Option<&(impl Serialize + ?Sized)>,
+    ) -> Result<T> {
+        let url = format!("{}/v1/dbs/{}{path}", self.url, self.name);
+        self.send(kind, method, &url, body).await
+    }
+
+    /// Run `ops` at `path` under this database.
+    async fn run<T: DeserializeOwned>(
+        &self,
+        kind: RequestKind,
+        path: &str,
+        ops: &[Op],
+    ) -> Result<T> {
+        self.call(kind, Method::POST, path, Some(&Ops { ops }))
             .await
     }
 
-    /// Send one request to `path` under this database and return its JSON body.
-    pub(crate) async fn call(
+    async fn send<T: DeserializeOwned>(
         &self,
+        kind: RequestKind,
         method: Method,
-        path: &str,
-        body: Option<&Json>,
-    ) -> Result<Json> {
-        self.send(method, &format!("{}{path}", self.base), body)
-            .await
-    }
-
-    async fn send(&self, method: Method, url: &str, body: Option<&Json>) -> Result<Json> {
+        url: &str,
+        body: Option<&(impl Serialize + ?Sized)>,
+    ) -> Result<T> {
         let started = std::time::Instant::now();
-        let kind = request_kind(&method, url);
         let mut req = self.http.request(method, url).bearer_auth(&self.token);
         let mut sent_bytes = 0;
         if let Some(b) = body {
@@ -270,40 +440,30 @@ impl Db {
                 received_bytes: bytes.len(),
             });
         }
-        if status.is_success() {
-            if bytes.is_empty() {
-                return Ok(Json::Null);
-            }
-            return Ok(serde_json::from_slice(&bytes)?);
+        if !status.is_success() {
+            return Err(Error::Api(ApiError::from_response(status, &bytes)));
         }
-        Err(Error::Api(api_error(status, &bytes)))
+        let body: &[u8] = if bytes.is_empty() { b"null" } else { &bytes };
+        serde_json::from_slice(body).map_err(|e| Error::BadResponse(format!("{kind}: {e}")))
     }
+}
 
-    /// Run read-only `ops` in one request against a strong snapshot.
-    pub async fn read(&self, ops: &[Json]) -> Result<Vec<Json>> {
-        let body = json!({ "ops": ops });
-        let r = retry(|| self.call(Method::POST, "/txn", Some(&body))).await?;
-        results(r)
+fn one_per_op(ops: &[Op], results: Vec<OpResult>) -> Result<Vec<OpResult>> {
+    if results.len() == ops.len() {
+        Ok(results)
+    } else {
+        Err(Error::BadResponse(format!(
+            "{} results for {} ops",
+            results.len(),
+            ops.len()
+        )))
     }
+}
 
-    /// Run `ops`, writes included, as one transaction in one request.
-    /// Retried only while certainly not applied.
-    pub async fn write(&self, ops: &[Json]) -> Result<Vec<Json>> {
-        let body = json!({ "ops": ops });
-        results(retry(|| self.call(Method::POST, "/txn", Some(&body))).await?)
-    }
-
-    /// Begin an interactive transaction, running `ops` in it.
-    pub async fn begin(&self, ops: &[Json]) -> Result<(Txn, Vec<Json>)> {
-        let r = self
-            .call(Method::POST, "/transactions", Some(&json!({ "ops": ops })))
-            .await?;
-        let txn = Txn {
-            db: self.clone(),
-            id: str_field(&r, "txn_id")?,
-            commit_id: str_field(&r, "commit_id")?,
-        };
-        Ok((txn, results(r)?))
+fn exists_ok(r: Result<IgnoredAny>) -> Result<()> {
+    match r {
+        Err(Error::Api(e)) if e.code == "already_exists" => Ok(()),
+        r => r.map(drop),
     }
 }
 
@@ -317,43 +477,42 @@ pub struct Txn {
 
 impl Txn {
     /// Run more `ops` in the transaction. Any error aborts it.
-    pub async fn ops(&self, ops: &[Json]) -> Result<Vec<Json>> {
+    pub async fn ops(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
         let path = format!("/transactions/{}/ops", self.id);
-        results(
-            self.db
-                .call(Method::POST, &path, Some(&json!({ "ops": ops })))
-                .await?,
-        )
+        let r: Results = self.db.run(RequestKind::Ops, &path, ops).await?;
+        one_per_op(ops, r.results.unwrap_or_default())
     }
 
     /// Run `ops` and commit. A commit whose outcome is unknown is resolved
     /// before returning, so `Ok` means applied and a retryable error
     /// means not applied.
-    pub async fn commit(self, ops: &[Json]) -> Result<Vec<Json>> {
+    pub async fn commit(self, ops: &[Op]) -> Result<()> {
         let path = format!("/transactions/{}/commit", self.id);
         match self
             .db
-            .call(Method::POST, &path, Some(&json!({ "ops": ops })))
+            .run::<IgnoredAny>(RequestKind::Commit, &path, ops)
             .await
         {
-            Ok(r) => results(r),
+            Ok(_) => Ok(()),
             Err(Error::Api(e)) if e.from_server && !e.outcome_unknown => Err(Error::Api(e)),
             Err(Error::Http(e)) if e.is_connect() => Err(Error::Http(e)),
             // A read-only commit applies nothing, so a lost answer is simply retried.
             Err(Error::Http(_)) if ops.is_empty() => {
-                Err(not_applied("read-only commit lost its answer"))
+                Err(ApiError::not_applied("read-only commit lost its answer"))
             }
             // A lost response, a proxy's error or an unknown outcome: wait out any copy of
             // the commit still in flight, then ask whether it applied.
             Err(_) => {
                 tokio::time::sleep(AMBIGUOUS_COMMIT_WAIT).await;
                 let path = format!("/commits/{}", self.commit_id);
-                let status = retry(|| self.db.call(Method::GET, &path, None)).await?;
-                if status["status"] == "committed" {
-                    // The results of a commit are only in its lost response.
-                    Ok(Vec::new())
-                } else {
-                    Err(not_applied("commit did not apply"))
+                let s: CommitStatus = retry(|| {
+                    self.db
+                        .call(RequestKind::Status, Method::GET, &path, None::<&()>)
+                })
+                .await?;
+                match s.status {
+                    CommitState::Committed => Ok(()),
+                    CommitState::NotCommitted => Err(ApiError::not_applied("commit did not apply")),
                 }
             }
         }
@@ -363,7 +522,10 @@ impl Txn {
     /// transaction expires on its own.
     pub async fn abort(self) {
         let path = format!("/transactions/{}", self.id);
-        let _ = self.db.call(Method::DELETE, &path, None).await;
+        let _ = self
+            .db
+            .call::<IgnoredAny>(RequestKind::Abort, Method::DELETE, &path, None::<&()>)
+            .await;
     }
 }
 
@@ -425,67 +587,6 @@ fn cache_name(url: &str, db: &str) -> String {
     format!("overlay-{host}-{db}.json")
 }
 
-fn request_kind(method: &Method, url: &str) -> &'static str {
-    let path = url.split('?').next().unwrap_or(url);
-    if path.ends_with("/txn") {
-        "txn"
-    } else if path.ends_with("/transactions") {
-        "begin"
-    } else if path.ends_with("/ops") {
-        "ops"
-    } else if path.ends_with("/commit") {
-        "commit"
-    } else if path.contains("/transactions/") && method == Method::DELETE {
-        "abort"
-    } else if path.contains("/commits/") {
-        "status"
-    } else {
-        "other"
-    }
-}
-
-/// A retryable failure of a request that certainly did not apply.
-fn not_applied(message: &str) -> Error {
-    Error::Api(ApiError {
-        status: 503,
-        code: "unavailable".into(),
-        message: message.into(),
-        retryable: true,
-        outcome_unknown: false,
-        from_server: true,
-    })
-}
-
-fn api_error(status: StatusCode, body: &[u8]) -> ApiError {
-    let j: Json = serde_json::from_slice(body).unwrap_or(Json::Null);
-    let e = &j["error"];
-    ApiError {
-        status: status.as_u16(),
-        code: e["code"].as_str().unwrap_or("unknown").to_string(),
-        message: e["message"].as_str().map_or_else(
-            || String::from_utf8_lossy(body).into_owned(),
-            str::to_string,
-        ),
-        retryable: e["retryable"].as_bool().unwrap_or(status.is_server_error()),
-        outcome_unknown: e["details"]["outcome"] == "unknown",
-        from_server: e.is_object(),
-    }
-}
-
-fn results(mut r: Json) -> Result<Vec<Json>> {
-    match r["results"].take() {
-        Json::Array(v) => Ok(v),
-        Json::Null => Ok(Vec::new()),
-        other => Err(Error::BadResponse(format!("results: {other}"))),
-    }
-}
-
-fn str_field(r: &Json, k: &str) -> Result<String> {
-    r[k].as_str()
-        .map(str::to_string)
-        .ok_or_else(|| Error::BadResponse(format!("missing {k} in {r}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,13 +594,14 @@ mod tests {
     #[test]
     fn only_baserunna_errors_say_whether_a_request_applied() {
         let body = br#"{"error":{"code":"conflict","message":"m","retryable":true}}"#;
-        let server = api_error(StatusCode::CONFLICT, body);
+        let server = ApiError::from_response(StatusCode::CONFLICT, body);
         assert!(server.from_server && server.retryable && !server.outcome_unknown);
 
         let unknown = br#"{"error":{"code":"unavailable","message":"m","retryable":true,"details":{"outcome":"unknown"}}}"#;
-        assert!(api_error(StatusCode::SERVICE_UNAVAILABLE, unknown).outcome_unknown);
+        assert!(ApiError::from_response(StatusCode::SERVICE_UNAVAILABLE, unknown).outcome_unknown);
 
-        let proxy = api_error(StatusCode::BAD_GATEWAY, b"<html>502 Bad Gateway</html>");
+        let proxy =
+            ApiError::from_response(StatusCode::BAD_GATEWAY, b"<html>502 Bad Gateway</html>");
         assert!(
             !proxy.from_server,
             "a proxy's page says nothing about the commit"

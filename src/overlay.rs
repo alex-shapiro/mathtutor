@@ -9,10 +9,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value as Json, json};
 
-use crate::db::Db;
+use crate::db::{Db, Op};
 use crate::graph::Quiz;
+use crate::schema::{LessonRow, QuizRow, RemovedQuizRow};
 use crate::types::{Difficulty, QuizType};
 use crate::view::{Changes, Want};
 use crate::{Error, Result};
@@ -36,49 +36,51 @@ pub struct OverlayAtom {
 
 // ── Rows ────────────────────────────────────────────────────────────
 
-/// Build the overlay from the rows of `lessons`, `quizzes` and `removed_quizzes`.
-pub fn decode(lessons: &[Json], quizzes: &[Json], removed: &[Json]) -> Result<Overlay> {
-    let mut atoms: BTreeMap<String, OverlayAtom> = BTreeMap::new();
-    for r in lessons {
-        atoms.entry(field(r, "atom_id")?).or_default().lesson = Some(field(r, "body")?);
+impl Overlay {
+    /// Build the overlay from the rows of `lessons`, `quizzes` and `removed_quizzes`.
+    pub fn from_rows(
+        lessons: Vec<LessonRow>,
+        quizzes: Vec<QuizRow>,
+        removed: Vec<RemovedQuizRow>,
+    ) -> Self {
+        let mut atoms: BTreeMap<String, OverlayAtom> = BTreeMap::new();
+        for r in lessons {
+            atoms.entry(r.atom_id).or_default().lesson = Some(r.body);
+        }
+        for r in quizzes {
+            let quiz = Quiz {
+                id: r.quiz_id,
+                difficulty: r.difficulty,
+                kind: r.kind,
+                question: r.question,
+                answer: r.answer,
+                rubric: r.rubric,
+            };
+            atoms.entry(r.atom_id).or_default().quizzes.push(quiz);
+        }
+        for r in removed {
+            atoms
+                .entry(r.atom_id)
+                .or_default()
+                .removed
+                .insert(r.quiz_id);
+        }
+        Self { atoms }
     }
-    for r in quizzes {
-        let quiz = Quiz {
-            id: field(r, "quiz_id")?,
-            difficulty: field(r, "difficulty")?.parse()?,
-            kind: r["kind"].as_str().map(str::parse).transpose()?,
-            question: field(r, "question")?,
-            answer: field(r, "answer")?,
-            rubric: r["rubric"].as_str().map(str::to_string),
-        };
-        atoms
-            .entry(field(r, "atom_id")?)
-            .or_default()
-            .quizzes
-            .push(quiz);
-    }
-    for r in removed {
-        atoms
-            .entry(field(r, "atom_id")?)
-            .or_default()
-            .removed
-            .insert(field(r, "quiz_id")?);
-    }
-    Ok(Overlay { atoms })
 }
 
-fn field(r: &Json, k: &str) -> Result<String> {
-    r[k].as_str()
-        .map(str::to_string)
-        .ok_or_else(|| Error::BadRow(format!("{k}: {r}")))
-}
-
-fn quiz_row(atom_id: &str, q: &Quiz) -> Json {
-    json!({
-        "quiz_id": q.id, "atom_id": atom_id, "difficulty": q.difficulty.as_str(),
-        "kind": q.kind.map(QuizType::as_str), "question": q.question, "answer": q.answer,
-        "rubric": q.rubric,
-    })
+impl QuizRow {
+    pub fn new(atom_id: &str, q: &Quiz) -> Self {
+        Self {
+            quiz_id: q.id.clone(),
+            atom_id: atom_id.to_string(),
+            difficulty: q.difficulty,
+            kind: q.kind,
+            question: q.question.clone(),
+            answer: q.answer.clone(),
+            rubric: q.rubric.clone(),
+        }
+    }
 }
 
 /// One change to the overlay.
@@ -99,31 +101,31 @@ pub enum Edit {
 
 impl Edit {
     /// The write ops that store this edit.
-    pub fn ops(&self) -> Vec<Json> {
+    pub fn ops(&self) -> Vec<Op> {
         match self {
-            Edit::Lesson { atom_id, body } => vec![json!({ "op": "upsert_row", "table": "lessons",
-                "row": { "atom_id": atom_id, "body": body } })],
+            Edit::Lesson { atom_id, body } => vec![Op::upsert(&LessonRow {
+                atom_id: atom_id.clone(),
+                body: body.clone(),
+            })],
             // A new quiz's id was chosen from what this transaction read;
-            // `insert_row` refuses it if a concurrent one took it first.
+            // `insert` refuses it if a concurrent one took it first.
             Edit::Quiz {
                 atom_id,
                 quiz,
                 new: true,
-            } => {
-                vec![
-                    json!({ "op": "insert_row", "table": "quizzes", "row": quiz_row(atom_id, quiz) }),
-                ]
-            }
+            } => vec![Op::insert(&QuizRow::new(atom_id, quiz))],
             Edit::Quiz {
                 atom_id,
                 quiz,
                 new: false,
             } => vec![
-                json!({ "op": "upsert_row", "table": "quizzes", "row": quiz_row(atom_id, quiz) }),
-                json!({ "op": "delete_row", "table": "removed_quizzes", "pk": [quiz.id] }),
+                Op::upsert(&QuizRow::new(atom_id, quiz)),
+                Op::delete_row::<RemovedQuizRow>(&[&quiz.id]),
             ],
-            Edit::Remove { atom_id, quiz_id } => vec![json!({ "op": "upsert_row",
-                "table": "removed_quizzes", "row": { "quiz_id": quiz_id, "atom_id": atom_id } })],
+            Edit::Remove { atom_id, quiz_id } => vec![Op::upsert(&RemovedQuizRow {
+                quiz_id: quiz_id.clone(),
+                atom_id: atom_id.clone(),
+            })],
         }
     }
 }
@@ -218,7 +220,7 @@ pub fn remove_quiz(changes: &mut Changes, atom_id: &str, quiz_id: &str) {
 
 pub async fn cmd_graph_dump(db: &Db) -> Result<()> {
     let overlay = db.snapshot(&Want::overlay()).await?.overlay;
-    let text = ayml::to_string(&overlay).map_err(|e| Error::AymlSerialize(e.to_string()))?;
+    let text = ayml::to_string(&*overlay).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
 }
