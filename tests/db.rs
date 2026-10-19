@@ -1,324 +1,484 @@
-//! Integration tests for the libSQL database foundation.
-//!
-//! Each test opens a fresh local database in a `tempdir` so runs don't
-//! collide, then drives `db::open` / SQL directly to verify the
-//! schema, idempotent migration, foreign-key enforcement, and the
-//! `payload` JSON check constraint.
+//! Integration tests for database initialization, streams, concurrency, and caching.
 
-use std::path::PathBuf;
+use chrono::{Duration, Utc};
+use mathtutor::db::{Db, DbConfig};
+use mathtutor::event_log::{self, Event, EventKind, EventPayload};
+use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
+use mathtutor::{answer, cards, overlay, store};
 
-use libsql::{Builder, params};
-use mathtutor::db::{self, DbConfig, SyncConfig};
-use tempfile::TempDir;
+mod common;
 
-fn cfg_in(dir: &TempDir) -> DbConfig {
-    DbConfig::local(dir.path().join("mt.db"))
-}
+use common::PATH_ID;
 
-async fn collect_names(rows: &mut libsql::Rows) -> Vec<String> {
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().await.expect("next") {
-        out.push(row.get::<String>(0).expect("name col"));
+const ATOM: &str = "fnd.2.1.1";
+
+const TABLES: [&str; 10] = [
+    "cards",
+    "lessons",
+    "oauth_access_tokens",
+    "oauth_clients",
+    "oauth_codes",
+    "oauth_refresh_tokens",
+    "paths",
+    "quizzes",
+    "removed_quizzes",
+    "taught",
+];
+
+async fn table_names(cfg: &DbConfig) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    struct Tables {
+        tables: Vec<Table>,
     }
-    out.sort();
-    out
-}
-
-#[tokio::test]
-async fn open_creates_database_file() {
-    let tmp = TempDir::new().unwrap();
-    let cfg = cfg_in(&tmp);
-    let _db = db::open(&cfg).await.expect("open");
-    assert!(cfg.local_path.exists(), "db file should be created");
-}
-
-#[tokio::test]
-async fn open_creates_nested_parent_dir() {
-    let tmp = TempDir::new().unwrap();
-    let nested = tmp.path().join("a").join("b").join("c");
-    let cfg = DbConfig::local(nested.join("mt.db"));
-    let _db = db::open(&cfg).await.expect("open");
-    assert!(nested.exists());
-}
-
-#[tokio::test]
-async fn schema_creates_all_expected_tables() {
-    let tmp = TempDir::new().unwrap();
-    let db = db::open(&cfg_in(&tmp)).await.unwrap();
-    let conn = db::connect(&db).await.unwrap();
-
-    let mut rows = conn
-        .query(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-            params![],
-        )
+    #[derive(serde::Deserialize)]
+    struct Table {
+        name: String,
+    }
+    let r: Tables = reqwest::Client::new()
+        .get(format!("{}/v1/dbs/{}/tables", cfg.url, cfg.db))
+        .bearer_auth(&cfg.token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
         .await
         .unwrap();
-    let tables = collect_names(&mut rows).await;
-
-    let expected: Vec<String> = [
-        "cards",
-        "events",
-        "oauth_access_tokens",
-        "oauth_authorization_codes",
-        "oauth_clients",
-        "oauth_refresh_tokens",
-        "overlay_lessons",
-        "overlay_quizzes",
-        "overlay_removed_quizzes",
-        "path_subpath",
-        "path_targets",
-        "paths",
-        "schema_migrations",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect();
-    assert_eq!(tables, expected);
+    let mut names: Vec<String> = r.tables.into_iter().map(|t| t.name).collect();
+    names.sort();
+    names
 }
 
 #[tokio::test]
-async fn schema_creates_expected_indexes() {
-    let tmp = TempDir::new().unwrap();
-    let db = db::open(&cfg_in(&tmp)).await.unwrap();
-    let conn = db::connect(&db).await.unwrap();
-
-    let mut rows = conn
-        .query(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'",
-            params![],
-        )
-        .await
-        .unwrap();
-    let indexes = collect_names(&mut rows).await;
-
-    let expected: Vec<String> = [
-        "idx_cards_due",
-        "idx_events_atom",
-        "idx_events_path",
-        "idx_events_quiz",
-        "idx_oauth_access_tokens_exp",
-        "idx_oauth_refresh_tokens_exp",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect();
-    assert_eq!(indexes, expected);
+async fn open_creates_database_and_every_table() {
+    let cfg = common::fresh_config();
+    Db::open(&cfg).await.expect("open");
+    assert_eq!(table_names(&cfg).await, TABLES);
 }
 
 #[tokio::test]
-async fn migration_is_idempotent() {
-    let tmp = TempDir::new().unwrap();
-    let cfg = cfg_in(&tmp);
-
-    let db1 = db::open(&cfg).await.expect("first open");
-    let conn = db::connect(&db1).await.unwrap();
-    conn.execute(
-        "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
-        params!["p1", "learn", "2026-05-26T00:00:00Z"],
-    )
-    .await
-    .unwrap();
-    drop(conn);
-    drop(db1);
-
-    // Re-opening must not drop or corrupt data; the row persists.
-    let db2 = db::open(&cfg).await.expect("second open");
-    let conn = db::connect(&db2).await.unwrap();
-    let mut rows = conn
-        .query("SELECT goal FROM paths WHERE id = ?", params!["p1"])
+async fn most_recent_path_follows_logged_events() {
+    let cfg = common::fresh_config();
+    let db = Db::open(&cfg).await.unwrap();
+    common::seed_path(&db, "p_a", &["fnd.1.1.1"], Strategy::BottomUp).await;
+    common::seed_path(&db, "p_b", &["fnd.1.1.1"], Strategy::BottomUp).await;
+    let recent = |db: &Db| {
+        let db = db.clone();
+        async move {
+            let view = db
+                .snapshot(&mathtutor::view::Want::path(None))
+                .await
+                .unwrap();
+            let p = view.path().unwrap().file.clone();
+            (p.id, p.updated_at)
+        }
+    };
+    assert_eq!(recent(&db).await.0, "p_b", "the last created path");
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some("p_a"), None)
         .await
         .unwrap();
-    let row = rows.next().await.unwrap().expect("row");
-    assert_eq!(row.get::<String>(0).unwrap(), "learn");
-}
-
-#[tokio::test]
-async fn open_records_applied_migration() {
-    let tmp = TempDir::new().unwrap();
-    let db = db::open(&cfg_in(&tmp)).await.unwrap();
-    let conn = db::connect(&db).await.unwrap();
-
-    let mut rows = conn
-        .query(
-            "SELECT version, name FROM schema_migrations ORDER BY version",
-            params![],
-        )
+    let (id, at) = recent(&db).await;
+    assert_eq!(id, "p_a");
+    assert!(at > Utc::now() - Duration::minutes(1), "activity time {at}");
+    let fresh = Db::connect(&cfg).unwrap();
+    assert_eq!(recent(&fresh).await.0, "p_a");
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "again".into(), Some("p_b"), None)
         .await
         .unwrap();
-    let row = rows.next().await.unwrap().expect("v1 row");
-    assert_eq!(row.get::<i64>(0).unwrap(), 1);
-    assert_eq!(row.get::<String>(1).unwrap(), "init");
-    let row = rows.next().await.unwrap().expect("v2 row");
-    assert_eq!(row.get::<i64>(0).unwrap(), 2);
-    assert_eq!(row.get::<String>(1).unwrap(), "oauth");
-    let row = rows.next().await.unwrap().expect("v3 row");
-    assert_eq!(row.get::<i64>(0).unwrap(), 3);
-    assert_eq!(row.get::<String>(1).unwrap(), "strategy_subpath");
-    let row = rows.next().await.unwrap().expect("v4 row");
-    assert_eq!(row.get::<i64>(0).unwrap(), 4);
-    assert_eq!(row.get::<String>(1).unwrap(), "rename_target_column");
-    assert!(rows.next().await.unwrap().is_none(), "exactly four rows");
-}
-
-#[tokio::test]
-async fn second_open_does_not_re_apply_migrations() {
-    let tmp = TempDir::new().unwrap();
-    let cfg = cfg_in(&tmp);
-
-    let _db1 = db::open(&cfg).await.unwrap();
-    let db2 = db::open(&cfg).await.unwrap();
-    let conn = db::connect(&db2).await.unwrap();
-
-    let mut rows = conn
-        .query("SELECT COUNT(*) FROM schema_migrations", params![])
-        .await
-        .unwrap();
-    let row = rows.next().await.unwrap().unwrap();
     assert_eq!(
-        row.get::<i64>(0).unwrap(),
-        4,
-        "init + oauth + strategy_subpath + rename_target_column \
-         migrations should each be recorded exactly once"
+        recent(&db).await.0,
+        "p_b",
+        "the hint follows the newer activity"
     );
 }
 
 #[tokio::test]
-async fn foreign_keys_are_enforced() {
-    let tmp = TempDir::new().unwrap();
-    let db = db::open(&cfg_in(&tmp)).await.unwrap();
-    let conn = db::connect(&db).await.unwrap();
+async fn reopening_is_a_no_op_that_preserves_data() {
+    let cfg = common::fresh_config();
+    let db = Db::open(&cfg).await.expect("first open");
+    common::seed_path(&db, PATH_ID, &["fnd.2"], Strategy::TopDown).await;
+    common::write(&db, PATH_ID, |_, changes| {
+        overlay::upsert_lesson(changes, ATOM, "kept");
+    })
+    .await;
 
-    // path_targets.path_id references paths(id); the row should be
-    // rejected because no parent exists.
-    let res = conn
-        .execute(
-            "INSERT INTO path_targets(path_id, target_id) VALUES (?, ?)",
-            params!["does-not-exist", "tx.1.1"],
-        )
-        .await;
-    assert!(
-        res.is_err(),
-        "FK violation should fail; db::connect must set PRAGMA foreign_keys = ON"
-    );
+    let db = Db::open(&cfg).await.expect("second open");
+    assert_eq!(table_names(&cfg).await, TABLES);
+    let ps = common::path_state(&db, PATH_ID).await;
+    assert_eq!(ps.file.goal, "test goal");
+    assert_eq!(ps.file.targets, ["fnd.2"]);
+    assert_eq!(ps.file.strategy, Strategy::TopDown);
+    let ov = common::overlay(&db).await;
+    assert_eq!(ov.atoms[ATOM].lesson.as_deref(), Some("kept"));
 }
 
 #[tokio::test]
-async fn payload_must_be_valid_json_or_null() {
-    let tmp = TempDir::new().unwrap();
-    let db = db::open(&cfg_in(&tmp)).await.unwrap();
-    let conn = db::connect(&db).await.unwrap();
+async fn events_round_trip_in_order_with_every_field() {
+    let db = common::fresh_db(PATH_ID).await;
+    let t0 = Utc::now() - Duration::hours(1);
+    let full = Event {
+        ts: t0,
+        kind: EventKind::QuizAnswered,
+        path: PATH_ID.into(),
+        atom: Some("a".into()),
+        quiz: Some("a.q1".into()),
+        payload: EventPayload {
+            rating: Some(Rating::Hard),
+            reason: Some("why \"quoted\" ✓".into()),
+            user_answer: Some("multi\nline".into()),
+        },
+    };
+    let bare = event_log::lesson_taught(PATH_ID.into(), "b".into());
+    common::append(&db, &[full.clone(), bare.clone()]).await;
+    common::append(
+        &db,
+        &[event_log::quiz_removed(
+            PATH_ID.into(),
+            "a".into(),
+            "a.q1".into(),
+        )],
+    )
+    .await;
 
-    conn.execute(
-        "INSERT INTO paths(id, goal, created_at) VALUES (?, ?, ?)",
-        params!["p1", "g", "2026-05-26T00:00:00Z"],
+    let events = event_log::load(&db, PATH_ID).await.unwrap();
+    let kinds: Vec<EventKind> = events.iter().map(|e| e.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            EventKind::PathCreated,
+            EventKind::QuizAnswered,
+            EventKind::LessonTaught,
+            EventKind::QuizRemoved
+        ]
+    );
+    let got = &events[1];
+    assert_eq!(got.ts.timestamp_millis(), t0.timestamp_millis());
+    assert_eq!(got.path, PATH_ID);
+    assert_eq!(got.atom.as_deref(), Some("a"));
+    assert_eq!(got.quiz.as_deref(), Some("a.q1"));
+    assert_eq!(got.payload.rating, Some(Rating::Hard));
+    assert_eq!(got.payload.reason.as_deref(), Some("why \"quoted\" ✓"));
+    assert_eq!(got.payload.user_answer.as_deref(), Some("multi\nline"));
+    let b = &events[2];
+    assert_eq!(b.atom.as_deref(), Some("b"));
+    assert!(b.quiz.is_none());
+    assert!(b.payload.is_empty());
+}
+
+#[tokio::test]
+async fn event_log_pages_past_one_read() {
+    let db = common::fresh_db(PATH_ID).await;
+    let ts = Utc::now();
+    let events: Vec<Event> = (0..1205)
+        .map(|i| common::presented_at(&format!("q{i}"), ts))
+        .collect();
+    for chunk in events.chunks(500) {
+        common::append(&db, chunk).await;
+    }
+    let loaded = event_log::load(&db, PATH_ID).await.unwrap();
+    assert_eq!(loaded.len(), 1206);
+    assert_eq!(loaded[1].quiz.as_deref(), Some("q0"));
+    assert_eq!(loaded[1205].quiz.as_deref(), Some("q1204"));
+}
+
+#[tokio::test]
+async fn concurrent_answers_all_land_exactly_once() {
+    let db = common::fresh_db(PATH_ID).await;
+    let quiz = store::cmd_quiz_create(
+        &db,
+        ATOM,
+        Difficulty::Easy,
+        "q?".into(),
+        "a".into(),
+        None,
+        QuizType::FreeText,
+        Some(PATH_ID),
+        None,
     )
     .await
     .unwrap();
 
-    // NULL payload — accepted.
-    conn.execute(
-        "INSERT INTO events(ts, kind, path_id, payload) VALUES (?, ?, ?, NULL)",
-        params!["2026-05-26T00:00:00Z", "path_created", "p1"],
-    )
-    .await
-    .expect("null payload allowed");
+    let tasks: Vec<_> = (0..8)
+        .map(|i| {
+            let db = db.clone();
+            let quiz = quiz.clone();
+            tokio::spawn(async move {
+                let rating = if i % 2 == 0 {
+                    Rating::Good
+                } else {
+                    Rating::Again
+                };
+                answer::cmd_quiz_answer(&db, &quiz, rating, None, Some(PATH_ID), None).await
+            })
+        })
+        .collect();
+    for t in tasks {
+        t.await.unwrap().expect("answer");
+    }
 
-    // Valid JSON — accepted.
-    conn.execute(
-        "INSERT INTO events(ts, kind, path_id, payload) VALUES (?, ?, ?, ?)",
-        params![
-            "2026-05-26T00:00:01Z",
-            "quiz_answered",
-            "p1",
-            r#"{"rating":"good"}"#
+    let ps = common::path_state(&db, PATH_ID).await;
+    let card = &ps.cards[&quiz];
+    assert_eq!(card.reps, 8);
+    assert_eq!(card.lapses, 4);
+    assert_eq!(card.recent.len(), 8);
+    let answered = event_log::load(&db, PATH_ID)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|e| e.kind == EventKind::QuizAnswered)
+        .count();
+    assert_eq!(answered, 8);
+}
+
+#[tokio::test]
+async fn recompute_reproduces_incremental_rows_exactly() {
+    let db = common::fresh_db(PATH_ID).await;
+    let t0 = Utc::now() - Duration::days(30);
+    common::append(
+        &db,
+        &[
+            common::taught_at("a", t0),
+            common::lesson_authored("b"),
+            common::presented_at("a.q1", t0),
+            common::answered_at("a.q1", Rating::Again, t0),
         ],
     )
-    .await
-    .expect("valid json allowed");
+    .await;
+    common::append(
+        &db,
+        &[
+            common::taught_at("a", t0 + Duration::days(1)),
+            common::presented_at("a.q1", t0 + Duration::days(2)),
+            common::answered_at("a.q1", Rating::Good, t0 + Duration::days(2)),
+            common::answered_at("a.q2", Rating::Easy, t0 + Duration::days(3)),
+        ],
+    )
+    .await;
 
-    // Invalid JSON — rejected by the CHECK constraint.
-    let bad = conn
-        .execute(
-            "INSERT INTO events(ts, kind, path_id, payload) VALUES (?, ?, ?, ?)",
-            params![
-                "2026-05-26T00:00:02Z",
-                "quiz_answered",
-                "p1",
-                "not json at all"
-            ],
-        )
-        .await;
-    assert!(bad.is_err(), "invalid JSON payload should be rejected");
+    let before = common::path_state(&db, PATH_ID).await;
+    cards::recompute(&db, PATH_ID).await.unwrap();
+    let after = common::path_state(&db, PATH_ID).await;
+
+    assert_eq!(before.taught, after.taught);
+    assert_eq!(after.taught["a"].count, 2);
+    assert_eq!(after.taught["b"].count, 0);
+    let mut quizzes: Vec<&String> = after.cards.keys().collect();
+    quizzes.sort();
+    assert_eq!(quizzes, ["a.q1", "a.q2"]);
+    for (q, b) in &before.cards {
+        let a = &after.cards[q];
+        assert_eq!(
+            (b.reps, b.lapses, b.presented),
+            (a.reps, a.lapses, a.presented),
+            "{q}"
+        );
+        assert_eq!(b.last_presented_at, a.last_presented_at, "{q}");
+        assert_eq!(b.first_correct_at, a.first_correct_at, "{q}");
+        assert_eq!(b.recent, a.recent, "{q}");
+        let (bs, as_) = (b.state.unwrap(), a.state.unwrap());
+        assert_eq!(bs.due, as_.due, "{q}");
+        assert_eq!(bs.last_review, as_.last_review, "{q}");
+        assert!((bs.stability - as_.stability).abs() < 1e-6, "{q}");
+        assert!((bs.difficulty - as_.difficulty).abs() < 1e-6, "{q}");
+    }
+    let q1 = &after.cards["a.q1"];
+    assert_eq!((q1.reps, q1.lapses, q1.presented), (2, 1, 2));
+    assert_eq!(q1.recent, [Rating::Good, Rating::Again]);
+}
+
+fn counting(db: Db) -> (Db, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    let received = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let r = received.clone();
+    let db = db.observed(std::sync::Arc::new(move |s: mathtutor::db::Sample| {
+        r.fetch_add(s.received_bytes, std::sync::atomic::Ordering::Relaxed);
+    }));
+    (db, received)
 }
 
 #[tokio::test]
-async fn maybe_sync_is_noop_on_local_only_db() {
-    // `maybe_sync` must short-circuit when `cfg.sync` is `None` — the
-    // CLI calls it unconditionally after every mutating command, and a
-    // local-only setup (no TURSO_URL) must finish silently rather than
-    // hitting the libsql sync path and erroring on "not a synced db".
-    let tmp = TempDir::new().unwrap();
-    let cfg = cfg_in(&tmp);
-    assert!(cfg.sync.is_none());
-    let db = db::open(&cfg).await.expect("open");
-    db::maybe_sync(&db, &cfg).await;
-}
+async fn cached_overlay_is_reused_until_another_client_writes() {
+    let cfg = common::fresh_config();
+    let writer = Db::open(&cfg).await.unwrap();
+    common::seed_path(&writer, PATH_ID, &[], Strategy::BottomUp).await;
+    let body = "x".repeat(20_000);
+    common::write(&writer, PATH_ID, |_, c| {
+        overlay::upsert_lesson(c, "fnd.1.1.1", &body);
+    })
+    .await;
 
-#[tokio::test]
-async fn open_with_sync_pulls_remote_before_migrating() {
-    // Regression: when sync is configured, `open` must pull remote
-    // frames before `migrate` writes anything locally. A fresh replica
-    // that runs `migrate` first creates a divergent commit generation;
-    // the remote then rejects every push as `server returned a conflict`
-    // (sent=1, got=N), and writes pile up on a fork that can never land.
-    //
-    // We pin that contract behaviorally: with sync configured against an
-    // unreachable remote, `open` must fail rather than silently proceed
-    // to migrate. Port 1 refuses connections, so the HTTP attempt
-    // completes synchronously without hanging the test.
-    let tmp = TempDir::new().unwrap();
-    let local = tmp.path().join("mt.db");
-    let cfg = DbConfig {
-        local_path: local.clone(),
-        sync: SyncConfig::new("http://127.0.0.1:1".into(), "irrelevant".into()),
+    let (reader, received) = counting(Db::connect(&cfg).unwrap());
+    let read = |db: &Db| {
+        let db = db.clone();
+        async move {
+            db.snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
+                .await
+                .unwrap()
+        }
     };
-    assert!(cfg.sync.is_some(), "sync must be configured for this test");
-
-    let err = db::open(&cfg)
-        .await
-        .expect_err("open must fail when the sync remote is unreachable");
-    let msg = err.to_string().to_lowercase();
+    let first = read(&reader).await;
+    assert_eq!(
+        first.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        Some(body.as_str())
+    );
+    let cold = received.swap(0, std::sync::atomic::Ordering::Relaxed);
     assert!(
-        msg.contains("sync") || msg.contains("connect"),
-        "expected a sync/connect error, got: {msg}",
+        cold > 20_000,
+        "first read downloads the overlay ({cold} bytes)"
     );
 
-    // Migrate writes the bookkeeping table on its first run. If sync ran
-    // before migrate (correct order), the table must not exist on disk
-    // after the failed open. Reopening as a plain local db lets us look
-    // without re-running migrations.
-    let plain = Builder::new_local(&local).build().await.unwrap();
-    let conn = plain.connect().unwrap();
-    let mut rows = conn
-        .query(
-            "SELECT name FROM sqlite_master \
-             WHERE type='table' AND name='schema_migrations'",
-            (),
-        )
+    let second = read(&reader).await;
+    assert_eq!(
+        second.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        Some(body.as_str())
+    );
+    let warm = received.swap(0, std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        warm < 2_000,
+        "a valid cache skips the overlay ({warm} bytes)"
+    );
+
+    common::write(&writer, PATH_ID, |_, c| {
+        overlay::upsert_lesson(c, "fnd.1.1.1", "revised");
+    })
+    .await;
+    let third = read(&reader).await;
+    assert_eq!(
+        third.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        Some("revised")
+    );
+}
+
+#[tokio::test]
+async fn quiz_ids_stay_unique_when_clients_author_concurrently() {
+    let cfg = common::fresh_config();
+    let db = Db::open(&cfg).await.unwrap();
+    common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some(PATH_ID), None)
         .await
         .unwrap();
-    assert!(
-        rows.next().await.unwrap().is_none(),
-        "schema_migrations must not exist: migrate ran before the failed sync",
+    let tasks: Vec<_> = (0..6)
+        .map(|i| {
+            let db = Db::connect(&cfg).unwrap();
+            tokio::spawn(async move {
+                store::cmd_quiz_create(
+                    &db,
+                    "fnd.1.1.1",
+                    Difficulty::Easy,
+                    format!("q{i}"),
+                    "a".into(),
+                    None,
+                    QuizType::FreeText,
+                    Some(PATH_ID),
+                    None,
+                )
+                .await
+                .unwrap()
+            })
+        })
+        .collect();
+    let mut ids = Vec::new();
+    for t in tasks {
+        ids.push(t.await.unwrap());
+    }
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 6, "ids: {ids:?}");
+    assert_eq!(
+        common::overlay(&db).await.atoms["fnd.1.1.1"].quizzes.len(),
+        6
     );
 }
 
 #[tokio::test]
-async fn default_db_path_lives_under_mathtutor_home() {
-    // Test the public helper without mutating env: just sanity-check
-    // it terminates in `mt.db`. The full path depends on the env at
-    // test time and is not stable across machines.
-    let p: PathBuf = db::default_path().expect("default path");
-    assert_eq!(p.file_name().unwrap(), "mt.db");
+async fn own_overlay_writes_keep_the_cache_valid() {
+    let cfg = common::fresh_config();
+    let (db, received) = counting(Db::open(&cfg).await.unwrap());
+    common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
+    let body = "y".repeat(20_000);
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", body.clone(), Some(PATH_ID), None)
+        .await
+        .unwrap();
+    let quiz = store::cmd_quiz_create(
+        &db,
+        "fnd.1.1.1",
+        Difficulty::Easy,
+        "q".into(),
+        "a".into(),
+        None,
+        QuizType::FreeText,
+        Some(PATH_ID),
+        None,
+    )
+    .await
+    .unwrap();
+    store::cmd_quiz_delete(&db, &quiz, Some(PATH_ID), None)
+        .await
+        .unwrap();
+    received.store(0, std::sync::atomic::Ordering::Relaxed);
+
+    let view = db
+        .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
+        .await
+        .unwrap();
+    let warm = received.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        warm < 2_000,
+        "the writer's cache stays valid ({warm} bytes)"
+    );
+    let cached = view.overlay.atoms["fnd.1.1.1"].clone();
+    let fresh = common::overlay(&db).await;
+    let stored = common::overlay(&Db::connect(&cfg).unwrap()).await;
+    assert_eq!(cached.lesson.as_deref(), Some(body.as_str()));
+    assert_eq!(
+        format!("{cached:?}"),
+        format!("{:?}", stored.atoms["fnd.1.1.1"])
+    );
+    assert_eq!(format!("{:?}", fresh.atoms), format!("{:?}", stored.atoms));
+}
+
+#[tokio::test]
+async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg = DbConfig {
+        cache_dir: Some(dir.path().to_path_buf()),
+        ..common::fresh_config()
+    };
+    let first = Db::open(&cfg).await.unwrap();
+    common::seed_path(&first, PATH_ID, &[], Strategy::BottomUp).await;
+    let body = "z".repeat(20_000);
+    store::cmd_lesson_upsert(&first, "fnd.1.1.1", body.clone(), Some(PATH_ID), None)
+        .await
+        .unwrap();
+    drop(first);
+
+    let (second, received) = counting(Db::connect(&cfg).unwrap());
+    let view = second
+        .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
+        .await
+        .unwrap();
+    assert_eq!(
+        view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        Some(body.as_str())
+    );
+    let warm = received.swap(0, std::sync::atomic::Ordering::Relaxed);
+    assert!(warm < 2_000, "the disk copy was used ({warm} bytes)");
+
+    let other = Db::connect(&DbConfig {
+        cache_dir: None,
+        ..cfg.clone()
+    })
+    .unwrap();
+    store::cmd_lesson_upsert(&other, "fnd.1.1.1", "new".into(), Some(PATH_ID), None)
+        .await
+        .unwrap();
+    let third = Db::connect(&cfg).unwrap();
+    let view = third
+        .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
+        .await
+        .unwrap();
+    assert_eq!(
+        view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        Some("new")
+    );
 }

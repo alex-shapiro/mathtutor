@@ -1,20 +1,4 @@
-//! `mt mcp`: SSE-over-HTTP MCP server.
-//!
-//! The CLI ports the same scheduling + storage layer used by the CLI; the
-//! server adds a JSON-RPC tool surface, a `mathtutor-playbook` prompt, and
-//! a `Bearer`-token (or `?token=` query parameter) auth wrapper.
-//!
-//! Transport: rmcp's `StreamableHttpService`. The MCP 2025-06-18 Streamable
-//! HTTP transport uses `text/event-stream` SSE for server-initiated frames
-//! and `application/json` for client POSTs, with 15-second SSE keep-alive
-//! comments. That's the SSE-over-HTTP the design doc specifies; rmcp 1.7
-//! ships no separate "pure SSE" feature.
-//!
-//! Database lifecycle: the server holds one shared `libsql::Database`
-//! across every session. Each tool call opens a fresh connection, so
-//! concurrent calls are safe. After any state-mutating tool, a background
-//! `db::maybe_sync` task is spawned; on graceful shutdown a final
-//! foreground sync runs before the process exits.
+//! Streamable HTTP MCP server (`mt mcp`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,7 +14,6 @@ use axum::{
     routing::get,
 };
 use chrono::{DateTime, Utc};
-use libsql::{Connection, Database};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{router::prompt::PromptRouter, tool::ToolRouter, wrapper::Parameters},
@@ -54,42 +37,32 @@ use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse};
 use url::Url;
 
 use crate::Error;
-use crate::db::{self, DbConfig};
+use crate::db::{Db, DbConfig};
 use crate::graph::{Graph, natural_id_cmp};
 use crate::progress::PathProgress;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
+use crate::view::{PathSel, Want};
 use crate::{answer, discover, graph, path, scheduler, state, store, subpath, syllabus, tree};
 
-/// Local alias kept distinct from `std::result::Result` so the rmcp tool /
-/// prompt macros (which expand to bare `Result<…, ErrorData>`) don't pick
-/// it up by accident.
+// Keep distinct from `Result` because rmcp macros expand to bare `Result<_, ErrorData>`.
 type CrateResult<T> = std::result::Result<T, Error>;
 
 pub mod oauth;
 
 const PLAYBOOK: &str = include_str!("playbook.md");
 
-/// Background sync cadence for the embedded Turso replica. State-modifying
-/// tools also fire a non-blocking sync immediately after success; this
-/// interval covers the idle path.
-const BACKGROUND_SYNC_INTERVAL: Duration = Duration::from_mins(5);
-
-// ───────────────────────────── server ─────────────────────────────
-
 #[derive(Clone)]
 pub struct MathTutorServer {
-    db: Arc<Database>,
-    cfg: Arc<DbConfig>,
+    db: Db,
     graph_dir: Option<Arc<PathBuf>>,
     tool_router: ToolRouter<Self>,
     prompt_router: PromptRouter<Self>,
 }
 
 impl MathTutorServer {
-    pub fn new(db: Arc<Database>, cfg: Arc<DbConfig>, graph_dir: Option<PathBuf>) -> Self {
+    pub fn new(db: Db, graph_dir: Option<PathBuf>) -> Self {
         Self {
             db,
-            cfg,
             graph_dir: graph_dir.map(Arc::new),
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
@@ -99,35 +72,15 @@ impl MathTutorServer {
     fn graph_path(&self) -> Option<&std::path::Path> {
         self.graph_dir.as_deref().map(AsRef::as_ref)
     }
-
-    /// Open a fresh connection. `db::connect` enables FK enforcement so
-    /// callers get the same pragmas the CLI uses.
-    async fn conn(&self) -> std::result::Result<Connection, McpError> {
-        db::connect(&self.db)
-            .await
-            .map_err(|e| map_protocol_error(&e))
-    }
-
-    /// Non-blocking sync after a state-modifying tool.
-    /// Failures are logged to stderr.
-    fn spawn_sync(&self) {
-        let db = self.db.clone();
-        let cfg = self.cfg.clone();
-        tokio::spawn(async move {
-            db::maybe_sync(&db, &cfg).await;
-        });
-    }
 }
-
-// ───────────────────────────── parameter types ────────────────────
 
 #[derive(Deserialize, JsonSchema)]
 pub struct NewPathArgs {
-    /// Free-text learning goal, e.g. "Understand SVD".
+    /// Learning goal text.
     pub goal: String,
-    /// Targets — atom or cluster IDs (one or more).
+    /// Target atom or cluster IDs.
     pub targets: Vec<String>,
-    /// Initial traversal strategy: `bottom_up` (default) or `top_down`.
+    /// Initial traversal strategy (`bottom_up` or `top_down`).
     #[serde(default)]
     pub strategy: Strategy,
 }
@@ -140,25 +93,21 @@ pub struct PathOnlyArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct SetStrategyArgs {
     pub path_id: String,
-    /// New traversal strategy: `bottom_up` or `top_down`.
+    /// Traversal strategy (`bottom_up` or `top_down`).
     pub strategy: Strategy,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct SubpathSetArgs {
     pub path_id: String,
-    /// Atoms in teaching order; the last must be a path target.
+    /// Ordered list of atom IDs ending with a path target.
     pub atoms: Vec<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
 pub struct GetNextArgs {
     pub path_id: String,
-    /// Filter on retrievable next actions:
-    ///
-    /// - `default` (or omit) returns the next new item or due quiz
-    /// - `new` returns only the next new lesson or quiz
-    /// - `due` returns only the next due quiz
+    /// Action filter (`default`, `new`, or `due`).
     #[serde(default)]
     pub mode: scheduler::NextMode,
 }
@@ -166,7 +115,7 @@ pub struct GetNextArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct GetTreeArgs {
     pub path_id: String,
-    /// Max levels to traverse. Omit for full tree.
+    /// Maximum tree depth.
     #[serde(default)]
     pub depth: Option<u32>,
 }
@@ -174,7 +123,7 @@ pub struct GetTreeArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct GetSyllabusArgs {
     pub path_id: String,
-    /// Max upcoming atoms to return. Defaults to 10 when omitted.
+    /// Maximum number of upcoming atoms to return (default 10).
     #[serde(default = "default_syllabus_n")]
     pub n: usize,
 }
@@ -196,7 +145,7 @@ pub struct GetChildrenArgs {
     pub id: Option<String>,
     #[serde(default)]
     pub path_id: Option<String>,
-    /// If true, recursively list all descendants.
+    /// Whether to include all descendants recursively.
     #[serde(default)]
     pub recursive: Option<bool>,
 }
@@ -252,15 +201,12 @@ pub struct AnswerQuizArgs {
     pub path_id: String,
 }
 
-// ───────────────────────────── tools ──────────────────────────────
-
 #[tool_router]
 impl MathTutorServer {
     #[tool(description = "List all learning paths for this user.")]
     async fn get_paths(&self) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         encode(
-            list_paths(&conn)
+            list_paths(&self.db)
                 .await
                 .map(|paths| json!({ "paths": paths })),
         )
@@ -271,61 +217,47 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<NewPathArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result = path::cmd_path_new(
-            &conn,
+            &self.db,
             &args.goal,
             &args.targets,
             args.strategy,
             self.graph_path(),
         )
         .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
-    #[tool(description = "Switch a path's traversal strategy (bottom_up or top_down).")]
+    #[tool(description = "Switch a path traversal strategy (bottom_up or top_down).")]
     async fn set_strategy(
         &self,
         Parameters(args): Parameters<SetStrategyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        let result = path::cmd_path_strategy(&conn, Some(&args.path_id), args.strategy).await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
+        let result = path::cmd_path_strategy(&self.db, Some(&args.path_id), args.strategy).await;
         encode(result.map(|id| json!({ "path_id": id, "strategy": args.strategy })))
     }
 
-    #[tool(
-        description = "Set a top-down path's subpath: an ordered detour of atoms ending in a target."
-    )]
+    #[tool(description = "Set the ordered atom subpath for a top-down path ending in a target.")]
     async fn subpath_set(
         &self,
         Parameters(args): Parameters<SubpathSetArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        let result =
-            subpath::cmd_subpath_set(&conn, Some(&args.path_id), &args.atoms, self.graph_path())
-                .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
+        let result = subpath::cmd_subpath_set(
+            &self.db,
+            Some(&args.path_id),
+            &args.atoms,
+            self.graph_path(),
+        )
+        .await;
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
-    #[tool(description = "Clear a path's subpath.")]
+    #[tool(description = "Clear the subpath for a path.")]
     async fn subpath_clear(
         &self,
         Parameters(args): Parameters<PathOnlyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        let result = subpath::cmd_subpath_clear(&conn, Some(&args.path_id)).await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
+        let result = subpath::cmd_subpath_clear(&self.db, Some(&args.path_id)).await;
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
@@ -334,31 +266,26 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetNextArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result =
-            scheduler::compute_next(&conn, Some(&args.path_id), self.graph_path(), args.mode).await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
+            scheduler::compute_next(&self.db, Some(&args.path_id), self.graph_path(), args.mode)
+                .await;
         encode(result)
     }
 
-    #[tool(description = "Summary of progress for a path: completed vs. remaining atoms.")]
+    #[tool(description = "Return progress summary for a path.")]
     async fn get_state(
         &self,
         Parameters(args): Parameters<PathOnlyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        encode(state::compute_state(&conn, Some(&args.path_id), self.graph_path()).await)
+        encode(state::compute_state(&self.db, Some(&args.path_id), self.graph_path()).await)
     }
 
-    #[tool(description = "Full prerequisite tree with per-atom status for a path.")]
+    #[tool(description = "Return the prerequisite tree and atom status for a path.")]
     async fn get_tree(
         &self,
         Parameters(args): Parameters<GetTreeArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        encode(compute_tree(&conn, &args.path_id, args.depth, self.graph_path()).await)
+        encode(compute_tree(&self.db, &args.path_id, args.depth, self.graph_path()).await)
     }
 
     #[tool(description = "Preview upcoming lesson topics.")]
@@ -366,19 +293,26 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetSyllabusArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         encode(
-            syllabus::compute_syllabus(&conn, Some(&args.path_id), args.n, self.graph_path()).await,
+            syllabus::compute_syllabus(&self.db, Some(&args.path_id), args.n, self.graph_path())
+                .await,
         )
     }
 
-    #[tool(description = "Detailed view of a curriculum node (atom or cluster).")]
+    #[tool(description = "Return details for a curriculum node (atom or cluster).")]
     async fn get_item(
         &self,
         Parameters(args): Parameters<GetItemArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        encode(compute_item(&conn, &args.id, args.path_id.as_deref(), self.graph_path()).await)
+        encode(
+            compute_item(
+                &self.db,
+                &args.id,
+                args.path_id.as_deref(),
+                self.graph_path(),
+            )
+            .await,
+        )
     }
 
     #[tool(description = "List children of a curriculum node. Omit `id` for root areas.")]
@@ -386,10 +320,9 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetChildrenArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         encode(
             compute_children(
-                &conn,
+                &self.db,
                 args.id.as_deref(),
                 args.path_id.as_deref(),
                 args.recursive.unwrap_or(false),
@@ -404,18 +337,14 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<UpsertLessonArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result = store::cmd_lesson_upsert(
-            &conn,
+            &self.db,
             &args.atom,
             args.body,
             Some(&args.path_id),
             self.graph_path(),
         )
         .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
         encode(result.map(|()| json!({ "atom_id": args.atom })))
     }
 
@@ -424,9 +353,8 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<CreateQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result = store::cmd_quiz_create(
-            &conn,
+            &self.db,
             &args.atom,
             args.difficulty,
             args.question,
@@ -437,20 +365,16 @@ impl MathTutorServer {
             self.graph_path(),
         )
         .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
         encode(result.map(|quiz_id| json!({ "quiz_id": quiz_id })))
     }
 
-    #[tool(description = "Update fields of an existing quiz; ID and FSRS history are preserved.")]
+    #[tool(description = "Update fields of an existing quiz while preserving ID and FSRS history.")]
     async fn update_quiz(
         &self,
         Parameters(args): Parameters<UpdateQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result = store::cmd_quiz_update(
-            &conn,
+            &self.db,
             &args.quiz_id,
             args.question,
             args.answer,
@@ -461,35 +385,31 @@ impl MathTutorServer {
             self.graph_path(),
         )
         .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
     }
 
-    #[tool(description = "Tombstone a quiz so it no longer appears. Past answers stay in the log.")]
+    #[tool(description = "Delete a quiz from the curriculum overlay.")]
     async fn delete_quiz(
         &self,
         Parameters(args): Parameters<DeleteQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
-        let result =
-            store::cmd_quiz_delete(&conn, &args.quiz_id, Some(&args.path_id), self.graph_path())
-                .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
+        let result = store::cmd_quiz_delete(
+            &self.db,
+            &args.quiz_id,
+            Some(&args.path_id),
+            self.graph_path(),
+        )
+        .await;
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
     }
 
-    #[tool(description = "Record a user's quiz answer and FSRS rating.")]
+    #[tool(description = "Record a quiz answer and FSRS rating.")]
     async fn answer_quiz(
         &self,
         Parameters(args): Parameters<AnswerQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let conn = self.conn().await?;
         let result = answer::cmd_quiz_answer(
-            &conn,
+            &self.db,
             &args.quiz_id,
             args.rating,
             args.answer,
@@ -497,14 +417,9 @@ impl MathTutorServer {
             self.graph_path(),
         )
         .await;
-        if result.is_ok() {
-            self.spawn_sync();
-        }
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id, "rating": args.rating })))
     }
 }
-
-// ───────────────────────────── prompts ────────────────────────────
 
 #[prompt_router]
 impl MathTutorServer {
@@ -521,8 +436,8 @@ impl MathTutorServer {
     }
 }
 
-// ───────────────────────────── handler ────────────────────────────
-
+// rmcp handler macros generate `async` methods that do not await.
+#[allow(unknown_lints, clippy::unused_async_trait_impl)]
 #[tool_handler(router = self.tool_router)]
 #[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for MathTutorServer {
@@ -541,51 +456,33 @@ impl ServerHandler for MathTutorServer {
     }
 }
 
-// ───────────────────── data helpers (shared by tools) ─────────────
-
 #[derive(Serialize)]
 struct PathSummary {
     id: String,
     goal: String,
     strategy: Strategy,
     created_at: DateTime<Utc>,
-    /// Targets as the learner chose them — atoms or clusters.
     targets: Vec<String>,
 }
 
-async fn list_paths(conn: &Connection) -> CrateResult<Vec<PathSummary>> {
-    let mut rows = conn
-        .query(
-            "SELECT id, goal, created_at, strategy FROM paths ORDER BY created_at ASC",
-            (),
-        )
-        .await?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().await? {
-        let id: String = row.get(0)?;
-        let goal: String = row.get(1)?;
-        let created_str: String = row.get(2)?;
-        let created_at = db::parse_ts(&created_str)?;
-        let strategy: Strategy = row.get::<String>(3)?.parse()?;
-        let mut t_rows = conn
-            .query(
-                "SELECT target_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
-                libsql::params![id.as_str()],
-            )
-            .await?;
-        let mut targets = Vec::new();
-        while let Some(r) = t_rows.next().await? {
-            targets.push(r.get::<String>(0)?);
-        }
-        out.push(PathSummary {
-            id,
-            goal,
-            strategy,
-            created_at,
-            targets,
-        });
-    }
-    Ok(out)
+async fn list_paths(db: &Db) -> CrateResult<Vec<PathSummary>> {
+    let want = Want {
+        path: PathSel::None,
+        overlay: false,
+        all_paths: true,
+    };
+    let view = db.snapshot(&want).await?;
+    Ok(view
+        .paths
+        .into_iter()
+        .map(|p| PathSummary {
+            id: p.file.id,
+            goal: p.file.goal,
+            strategy: p.file.strategy,
+            created_at: p.file.created_at,
+            targets: p.file.targets,
+        })
+        .collect())
 }
 
 #[derive(Serialize)]
@@ -602,18 +499,14 @@ struct AtomStatus {
 }
 
 async fn compute_item(
-    conn: &Connection,
+    db: &Db,
     id: &str,
     path_id: Option<&str>,
     graph_dir: Option<&std::path::Path>,
 ) -> CrateResult<ItemView> {
-    let (g, _) = load_graph_and_manifest(conn, path_id, graph_dir).await?;
+    let (g, progress) = discover::graph_for(db, path_id, graph_dir).await?;
     let item = discover::show_view(&g, id)?;
-    let status = if let Some(pid) = path_id {
-        status_for(conn, &g, id, pid).await?
-    } else {
-        None
-    };
+    let status = progress.and_then(|p| status_for(&g, id, &p));
     Ok(ItemView { item, status })
 }
 
@@ -634,32 +527,32 @@ struct ChildStatus {
 }
 
 async fn compute_children(
-    conn: &Connection,
+    db: &Db,
     id: Option<&str>,
     path_id: Option<&str>,
     recursive: bool,
     graph_dir: Option<&std::path::Path>,
 ) -> CrateResult<ChildrenView> {
-    let (g, manifest) = load_graph_and_manifest(conn, path_id, graph_dir).await?;
+    let (g, progress) = discover::graph_for(db, path_id, graph_dir).await?;
+    let manifest = graph::load_manifest_default(graph_dir)?;
     let view = discover::list_view(&g, &manifest, id)?;
     let descendants = if recursive {
         let roots = match id {
             Some(s) => vec![s.to_string()],
             None => manifest.areas.iter().map(|a| a.prefix.clone()).collect(),
         };
-        gather_descendants(conn, &g, &roots, path_id).await?
+        gather_descendants(&g, &roots, progress.as_ref())
     } else {
         Vec::new()
     };
     Ok(ChildrenView { view, descendants })
 }
 
-async fn gather_descendants(
-    conn: &Connection,
+fn gather_descendants(
     g: &Graph,
     roots: &[String],
-    path_id: Option<&str>,
-) -> CrateResult<Vec<ChildStatus>> {
+    progress: Option<&PathProgress>,
+) -> Vec<ChildStatus> {
     let mut out = Vec::new();
     let mut stack: Vec<String> = roots.to_vec();
     while let Some(id) = stack.pop() {
@@ -667,53 +560,26 @@ async fn gather_descendants(
         for child in &c.children_ids {
             stack.push(child.clone());
         }
-        let status = if let Some(pid) = path_id {
-            status_for(conn, g, &id, pid).await?
-        } else {
-            None
-        };
         out.push(ChildStatus {
             id: c.id.clone(),
             name: c.name.clone(),
             is_atom: c.children_ids.is_empty(),
-            status,
+            status: progress.and_then(|p| status_for(g, &id, p)),
         });
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(out)
+    out
 }
 
-async fn status_for(
-    conn: &Connection,
-    g: &Graph,
-    id: &str,
-    path_id: &str,
-) -> CrateResult<Option<AtomStatus>> {
-    let Some(c) = g.by_id.get(id) else {
-        return Ok(None);
-    };
+fn status_for(g: &Graph, id: &str, progress: &PathProgress) -> Option<AtomStatus> {
+    let c = g.by_id.get(id)?;
     if !c.children_ids.is_empty() {
-        return Ok(None);
+        return None;
     }
-    let progress = PathProgress::load(conn, path_id).await?;
-    Ok(Some(AtomStatus {
+    Some(AtomStatus {
         lesson_taught: progress.lesson_taught(id),
-        complete: scheduler::is_atom_complete(g, &progress, id),
-    }))
-}
-
-async fn load_graph_and_manifest(
-    conn: &Connection,
-    path_id: Option<&str>,
-    graph_dir: Option<&std::path::Path>,
-) -> CrateResult<(Graph, graph::Manifest)> {
-    let g = if path_id.is_some() {
-        Graph::load_for_path(conn, graph_dir).await?
-    } else {
-        Graph::load_default(graph_dir)?
-    };
-    let manifest = graph::load_manifest_default(graph_dir)?;
-    Ok((g, manifest))
+        complete: scheduler::is_atom_complete(g, progress, id),
+    })
 }
 
 #[derive(Serialize)]
@@ -752,15 +618,17 @@ struct TreeNode {
 }
 
 async fn compute_tree(
-    conn: &Connection,
+    db: &Db,
     path_id: &str,
     depth: Option<u32>,
     graph_dir: Option<&std::path::Path>,
 ) -> CrateResult<TreeView> {
-    let p = path::load_path(conn, path_id).await?;
-    let g = Graph::load_for_path(conn, graph_dir).await?;
+    let view = db.snapshot(&Want::path(Some(path_id))).await?;
+    let ps = view.path()?;
+    let p = ps.file.clone();
+    let g = view.graph(graph_dir)?;
     let manifest = graph::load_manifest_default(graph_dir)?;
-    let progress = PathProgress::load(conn, path_id).await?;
+    let progress = ps.progress();
     let target_atoms = p.resolve_targets(&g)?;
 
     let reachable = g.reachable_atoms(&target_atoms);
@@ -860,22 +728,7 @@ fn build_tree_node(
     }
 }
 
-// ───────────────────────────── error mapping ──────────────────────
-
-fn map_protocol_error(e: &Error) -> McpError {
-    McpError::internal_error(format!("{e}"), None)
-}
-
-/// Map a fallible `crate::Result<T>` into a `CallToolResult`. Business
-/// errors (atom not found, unknown id, invalid rating, etc.) become
-/// `isError: true` with a structured JSON error body. Encoding-only
-/// failures become protocol-level `McpError`.
-///
-/// MCP requires `structuredContent` to be a JSON object; bare arrays and
-/// primitives get rejected by strict clients (Claude Desktop). Tools that
-/// hold non-object data should wrap it (`{ "paths": [...] }`); this
-/// helper still wraps anything that slips through as `{ "value": ... }`
-/// so the failure mode is a self-describing payload, not a 500.
+// Wrap non-object JSON payloads because MCP requires `structuredContent` to be a JSON object.
 fn encode<T: Serialize>(result: CrateResult<T>) -> std::result::Result<CallToolResult, McpError> {
     match result {
         Ok(value) => {
@@ -912,15 +765,15 @@ fn error_kind(e: &Error) -> &'static str {
         Error::SubpathEmpty => "subpath_empty",
         Error::SubpathTailNotTarget(_) => "subpath_tail_not_target",
         Error::SubpathDuplicateAtom(_) => "subpath_duplicate_atom",
-        Error::BadTimestamp(_) => "bad_timestamp",
-        Error::UnknownEventKind(_) => "unknown_event_kind",
         Error::CardsCorrupt(_) => "cards_corrupt",
         Error::NoHome => "no_home",
         Error::FileIo { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => "io",
-        Error::Db(_) => "database",
+        Error::Api(_) | Error::Http(_) | Error::MissingToken => "database",
+        Error::BadResponse(_) | Error::BadRow(_) | Error::BadEvent(_) => "corrupt",
         Error::Json(_) => "json",
         Error::Fsrs(_) => "fsrs",
         Error::ConflictingFlags(_, _) => "conflicting_flags",
+        Error::MissingTursoUrl | Error::Turso(_) | Error::ImportMismatch(_) => "import",
         Error::MissingAuth
         | Error::BadBindAddr { .. }
         | Error::BadPublicUrl { .. }
@@ -929,23 +782,14 @@ fn error_kind(e: &Error) -> &'static str {
     }
 }
 
-// ───────────────────────────── HTTP entry point ───────────────────
-
-/// Resolved auth configuration for `mt mcp`. At least one mode must be
-/// enabled or the server refuses to start.
+/// Authentication configuration for `mt mcp`.
 #[derive(Clone, Debug, Default)]
 pub struct AuthConfig {
-    /// Static-bearer mode. CLI / `mcp-remote` / test path; matches the
-    /// raw token value. Set from `MT_API_KEY` or `--api-key`.
+    /// Static bearer token from `MT_API_KEY` or `--api-key`.
     pub api_key: Option<String>,
-    /// OAuth-AS mode. Static password used by `/oauth/authorize`. Set
-    /// from `MT_ADMIN_PASSWORD` or `--admin-password`.
+    /// OAuth administrator password from `MT_ADMIN_PASSWORD` or `--admin-password`.
     pub admin_password: Option<String>,
-    /// Public-facing URL the server advertises in OAuth discovery
-    /// metadata (issuer + `resource`). Must match what an external
-    /// client types into "Add custom connector". Set from
-    /// `MT_PUBLIC_URL` or `--public-url`; defaults to
-    /// `http://<bind-addr>` when omitted.
+    /// Public issuer URL from `MT_PUBLIC_URL` or `--public-url`.
     pub public_url: Option<String>,
 }
 
@@ -964,11 +808,7 @@ pub fn print_tools() -> CrateResult<()> {
     Ok(())
 }
 
-/// Run the MCP server until SIGINT/SIGTERM. On shutdown, runs one final
-/// foreground `db.sync()` so locally-acked writes land on Turso before
-/// the process exits.
-///
-/// `addr` parses the same as `std::net::SocketAddr` (`"127.0.0.1:8080"`).
+/// Run the MCP server on `addr` until SIGINT or SIGTERM.
 pub async fn run(
     addr: &str,
     auth: AuthConfig,
@@ -977,14 +817,8 @@ pub async fn run(
 ) -> CrateResult<()> {
     auth.validate()?;
 
-    let db = Arc::new(db::open(&cfg).await?);
-    let cfg_arc = Arc::new(cfg);
-
-    // Pull the latest remote state before accepting traffic
-    db::maybe_sync(&db, &cfg_arc).await;
-
+    let db = Db::open(&cfg).await?;
     let shutdown = CancellationToken::new();
-    let background = spawn_background_sync(db.clone(), cfg_arc.clone(), shutdown.child_token());
 
     let mcp_config = StreamableHttpServerConfig::default()
         .with_sse_keep_alive(Some(Duration::from_secs(15)))
@@ -993,15 +827,8 @@ pub async fn run(
 
     let factory = {
         let db = db.clone();
-        let cfg = cfg_arc.clone();
         let graph_dir = graph_dir.clone();
-        move || {
-            Ok(MathTutorServer::new(
-                db.clone(),
-                cfg.clone(),
-                graph_dir.clone(),
-            ))
-        }
+        move || Ok(MathTutorServer::new(db.clone(), graph_dir.clone()))
     };
 
     let mcp_service = StreamableHttpService::new(
@@ -1017,8 +844,7 @@ pub async fn run(
     let public_url = resolve_public_url(auth.public_url.as_deref(), socket_addr)?;
 
     let auth_state = AuthState::new(&auth, &public_url, db.clone());
-    // Auth middleware is scoped to MCP transport routes. Body logging
-    // runs after auth so only authenticated payloads are buffered.
+    // Run body logging after auth so unauthenticated requests are not buffered.
     let mut app = Router::new()
         .nest_service("/mcp", mcp_service)
         .route_layer(middleware::from_fn(log_request_body))
@@ -1057,18 +883,10 @@ pub async fn run(
         .await
         .map_err(Error::Serve)?;
 
-    // Drain the background sync task before the final sync so we don't
-    // race with it on the same `Database` handle.
-    background.await.ok();
-    // Best-effort sync to push local writes to Turso before process exit
-    db::maybe_sync(&db, &cfg_arc).await;
     tracing::info!("mt mcp shutdown complete");
     Ok(())
 }
 
-/// Resolve the public-facing URL for discovery metadata. When the operator
-/// hasn't set one explicitly we fall back to `http://<bind-addr>`; this is
-/// only correct for local dev, but it lets `mt mcp` work zero-config.
 fn resolve_public_url(explicit: Option<&str>, socket: std::net::SocketAddr) -> CrateResult<Url> {
     let raw = match explicit {
         Some(s) => s.to_string(),
@@ -1080,18 +898,12 @@ fn resolve_public_url(explicit: Option<&str>, socket: std::net::SocketAddr) -> C
 #[derive(Clone)]
 struct AuthState {
     api_key: Option<Arc<str>>,
-    /// Database handle for OAuth access-token lookups. `None` when OAuth
-    /// is disabled.
-    db: Option<Arc<Database>>,
-    /// Pre-formatted `WWW-Authenticate` value pointing at the protected-
-    /// resource metadata so OAuth-aware clients can discover the AS on 401.
+    db: Option<Db>,
     www_authenticate: Arc<str>,
 }
 
 impl AuthState {
-    /// Construct from the resolved `AuthConfig`. Stores only what the
-    /// per-request middleware needs.
-    fn new(auth: &AuthConfig, public_url: &Url, db: Arc<Database>) -> Self {
+    fn new(auth: &AuthConfig, public_url: &Url, db: Db) -> Self {
         let api_key = auth
             .api_key
             .as_deref()
@@ -1114,16 +926,6 @@ struct TokenQuery {
     token: Option<String>,
 }
 
-/// Layered bearer / OAuth auth on `/mcp`. Order:
-///
-/// 1. `Authorization: Bearer <token>` header.
-/// 2. `?token=<token>` query parameter (legacy `EventSource` fallback, bearer mode only).
-///
-/// The presented value is matched against the static API key first
-/// (when enabled), then looked up as an OAuth access token (when
-/// enabled). On failure we return 401 with a `WWW-Authenticate` header
-/// pointing at protected-resource metadata so OAuth-aware MCP clients
-/// can discover the AS and trigger the connector flow.
 async fn auth_middleware(
     State(state): State<AuthState>,
     Query(q): Query<TokenQuery>,
@@ -1144,7 +946,7 @@ async fn auth_middleware(
         {
             return next.run(req).await;
         }
-        if let Some(db) = state.db.as_deref()
+        if let Some(db) = state.db.as_ref()
             && let Ok(Some(_client_id)) = oauth::validate_access_token(db, &token).await
         {
             return next.run(req).await;
@@ -1185,8 +987,7 @@ async fn log_request_body(req: Request<Body>, next: Next) -> Response {
     let bytes = match axum::body::to_bytes(body, MAX_LOGGED_BODY).await {
         Ok(b) => b,
         Err(e) => {
-            // Body is consumed and can't be replayed.
-            // Surface as 400 so the client retries instead of seeing a confusing 500.
+            // Return 400 because the request body stream has already been consumed.
             tracing::warn!(error = %e, "mcp request body buffering failed");
             let mut resp = Response::new(Body::empty());
             *resp.status_mut() = StatusCode::BAD_REQUEST;
@@ -1202,13 +1003,10 @@ async fn log_request_body(req: Request<Body>, next: Next) -> Response {
         .await
 }
 
-/// Liveness probe
 async fn health() -> &'static str {
     "ok"
 }
 
-/// Wait for SIGINT or SIGTERM, whichever comes first. On non-unix
-/// targets, only Ctrl-C is wired.
 async fn wait_for_shutdown() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
@@ -1230,23 +1028,4 @@ async fn wait_for_shutdown() {
     {
         ctrl_c.await;
     }
-}
-
-fn spawn_background_sync(
-    db: Arc<Database>,
-    cfg: Arc<DbConfig>,
-    shutdown: CancellationToken,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(BACKGROUND_SYNC_INTERVAL);
-        // Drop the immediate first tick.
-        // DB runs `maybe_sync` at startup so sync here is redundant.
-        tick.tick().await;
-        loop {
-            tokio::select! {
-                () = shutdown.cancelled() => break,
-                _ = tick.tick() => db::maybe_sync(&db, &cfg).await,
-            }
-        }
-    })
 }

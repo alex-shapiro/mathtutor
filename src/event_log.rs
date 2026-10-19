@@ -1,20 +1,15 @@
-//! Event log persisted in the `events` SQL table.
-//!
-//! Each event has a typed `kind` and is constructed via the typed helper
-//! functions in this module.
-//!
-//! A `QuizAnswered` event writes to both the event log and the `cards` cache.
+//! Per-path learning event stream (`events.<path id>`).
 
 use chrono::{DateTime, Utc};
-use libsql::{Connection, Row, params};
 use serde::{Deserialize, Serialize};
 
-use crate::cards;
-use crate::db;
+use crate::Result;
+use crate::db::{Db, Op, ts};
+use crate::schema;
 use crate::types::Rating;
-use crate::{Error, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EventKind {
     PathCreated,
     LessonAuthored,
@@ -27,54 +22,13 @@ pub enum EventKind {
     QuizRemoved,
 }
 
-impl EventKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            EventKind::PathCreated => "path_created",
-            EventKind::LessonAuthored => "lesson_authored",
-            EventKind::LessonAmended => "lesson_amended",
-            EventKind::LessonTaught => "lesson_taught",
-            EventKind::QuizAuthored => "quiz_authored",
-            EventKind::QuizPresented => "quiz_presented",
-            EventKind::QuizAnswered => "quiz_answered",
-            EventKind::QuizAmended => "quiz_amended",
-            EventKind::QuizRemoved => "quiz_removed",
-        }
-    }
-}
-
-impl std::fmt::Display for EventKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for EventKind {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self> {
-        match s {
-            "path_created" => Ok(EventKind::PathCreated),
-            "lesson_authored" => Ok(EventKind::LessonAuthored),
-            "lesson_amended" => Ok(EventKind::LessonAmended),
-            "lesson_taught" => Ok(EventKind::LessonTaught),
-            "quiz_authored" => Ok(EventKind::QuizAuthored),
-            "quiz_presented" => Ok(EventKind::QuizPresented),
-            "quiz_answered" => Ok(EventKind::QuizAnswered),
-            "quiz_amended" => Ok(EventKind::QuizAmended),
-            "quiz_removed" => Ok(EventKind::QuizRemoved),
-            other => Err(Error::UnknownEventKind(other.to_string())),
-        }
-    }
-}
-
-/// Optional fields beyond what the SQL columns already carry. `rating`
-/// lives in its own column on disk; the JSON `payload` column only
-/// stores `reason` / `user_answer`, so FSRS queries can filter by
-/// rating without parsing JSON.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct EventPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rating: Option<Rating>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_answer: Option<String>,
 }
 
@@ -84,41 +38,19 @@ impl EventPayload {
     }
 }
 
-/// Shape sent to the JSON column: rating is stored as its own SQL
-/// column, so the JSON blob carries only the free-form fields.
-#[derive(Serialize, Default)]
-struct StoredPayload<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    user_answer: Option<&'a str>,
-}
-
-impl StoredPayload<'_> {
-    fn is_empty(&self) -> bool {
-        self.reason.is_none() && self.user_answer.is_none()
-    }
-}
-
-#[derive(Serialize, Deserialize, Default)]
-struct LoadedPayload {
-    #[serde(default)]
-    reason: Option<String>,
-    #[serde(default)]
-    user_answer: Option<String>,
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
+    #[serde(with = "ts")]
     pub ts: DateTime<Utc>,
     pub kind: EventKind,
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub atom: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quiz: Option<String>,
+    #[serde(flatten)]
     pub payload: EventPayload,
 }
-
-// ── Typed constructors ────────────────────────────────────────────
 
 pub fn path_created(path: String) -> Event {
     Event {
@@ -229,93 +161,16 @@ pub fn quiz_answered(
     }
 }
 
-// ── Append + load ─────────────────────────────────────────────────
-
-/// Insert one event into `events`. On `QuizAnswered`, also fold the
-/// rating into the `cards` write-through cache so the scheduler sees
-/// the new due date on its next pass.
-///
-/// Atomicity is the caller's responsibility.
-pub async fn append(conn: &Connection, event: &Event) -> Result<()> {
-    let stored = StoredPayload {
-        reason: event.payload.reason.as_deref(),
-        user_answer: event.payload.user_answer.as_deref(),
-    };
-    let payload_json = if stored.is_empty() {
-        None
-    } else {
-        Some(serde_json::to_string(&stored)?)
-    };
-    let rating_int = event.payload.rating.map(i64::from);
-
-    conn.execute(
-        "INSERT INTO events(ts, kind, path_id, atom_id, quiz_id, rating, payload) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-        params![
-            db::format_ts(event.ts),
-            event.kind.as_str(),
-            event.path.as_str(),
-            event.atom.as_deref(),
-            event.quiz.as_deref(),
-            rating_int,
-            payload_json,
-        ],
-    )
-    .await?;
-
-    if event.kind == EventKind::QuizAnswered
-        && let (Some(quiz), Some(rating)) = (event.quiz.as_deref(), event.payload.rating)
-    {
-        cards::apply_answer_to_cache(conn, &event.path, quiz, rating, event.ts).await?;
-    }
-    Ok(())
-}
-
-/// Read all events for a path, in chronological order. Empty if the
-/// path has never recorded anything.
-pub async fn load(conn: &Connection, path_id: &str) -> Result<Vec<Event>> {
-    let mut rows = conn
-        .query(
-            "SELECT ts, kind, path_id, atom_id, quiz_id, rating, payload \
-             FROM events WHERE path_id = ? ORDER BY id ASC",
-            params![path_id],
-        )
-        .await?;
+pub async fn load(db: &Db, path_id: &str) -> Result<Vec<Event>> {
+    let mut op = Op::read_stream(schema::events_stream(path_id), 0);
     let mut out = Vec::new();
-    while let Some(row) = rows.next().await? {
-        out.push(row_to_event(&row)?);
+    loop {
+        let page = db.read_one(op.clone()).await?;
+        let next = op.next_page(&page);
+        out.extend(page.records::<Event>()?);
+        match next {
+            Some(n) => op = n,
+            None => return Ok(out),
+        }
     }
-    Ok(out)
-}
-
-fn row_to_event(row: &Row) -> Result<Event> {
-    let ts_str: String = row.get(0)?;
-    let kind_str: String = row.get(1)?;
-    let path: String = row.get(2)?;
-    let atom: Option<String> = row.get(3)?;
-    let quiz: Option<String> = row.get(4)?;
-    let rating_int: Option<i64> = row.get(5)?;
-    let payload_str: Option<String> = row.get(6)?;
-
-    let kind: EventKind = kind_str.parse()?;
-    let ts = db::parse_ts(&ts_str)?;
-    let rating = rating_int.map(Rating::try_from).transpose()?;
-    let mut payload = EventPayload {
-        rating,
-        ..Default::default()
-    };
-    if let Some(s) = payload_str {
-        let parsed: LoadedPayload = serde_json::from_str(&s)?;
-        payload.reason = parsed.reason;
-        payload.user_answer = parsed.user_answer;
-    }
-
-    Ok(Event {
-        ts,
-        kind,
-        path,
-        atom,
-        quiz,
-        payload,
-    })
 }

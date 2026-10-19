@@ -1,80 +1,58 @@
-//! Integration tests for `store::cmd_lesson_upsert`.
-//!
-//! These pin the upsert contract: the first call for an atom emits
-//! `lesson_authored`, subsequent calls emit `lesson_amended`, and
-//! every call emits `lesson_taught` since storing implies presenting.
+//! Integration tests for `store` commands.
 
-use chrono::Utc;
-use libsql::Connection;
-use mathtutor::db::{self, DbConfig};
+use mathtutor::db::Db;
 use mathtutor::event_log::{self, EventKind};
-use mathtutor::path::{self, PathFile};
 use mathtutor::store;
-use mathtutor::types::{Difficulty, QuizType};
-use tempfile::TempDir;
+use mathtutor::types::{Difficulty, QuizType, Strategy};
 
-/// Atom that ships *without* a lesson — exercises the
-/// `lesson_authored` branch on the first store.
+mod common;
+
 const NO_LESSON_ATOM: &str = "fnd.1.1.2";
-/// Atom that ships *with* a lesson — exercises the `lesson_amended`
-/// branch even on the first store.
 const WITH_LESSON_ATOM: &str = "fnd.1.1.1";
 
-async fn fresh_db_with_path(dir: &TempDir) -> (Connection, String) {
-    let cfg = DbConfig::local(dir.path().join("mt.db"));
-    let db = db::open(&cfg).await.expect("open");
-    let conn = db::connect(&db).await.expect("connect");
-    let p = PathFile {
-        id: "p_test".into(),
-        goal: "test".into(),
-        created_at: Utc::now(),
-        targets: vec![NO_LESSON_ATOM.into()],
-        strategy: mathtutor::types::Strategy::BottomUp,
-    };
-    path::save_path(&conn, &p).await.expect("save_path");
-    (conn, p.id)
+async fn fresh_db_with_path() -> (Db, String) {
+    let db = common::empty_db().await;
+    common::seed_path(&db, common::PATH_ID, &[NO_LESSON_ATOM], Strategy::BottomUp).await;
+    (db, common::PATH_ID.into())
 }
 
-async fn event_kinds(conn: &Connection, path_id: &str) -> Vec<EventKind> {
-    event_log::load(conn, path_id)
+async fn event_kinds(db: &Db, path_id: &str) -> Vec<EventKind> {
+    event_log::load(db, path_id)
         .await
         .expect("load events")
         .iter()
         .map(|e| e.kind)
+        .filter(|k| *k != EventKind::PathCreated)
         .collect()
 }
 
 #[tokio::test]
 async fn first_store_on_lesson_less_atom_emits_authored_then_taught() {
-    let tmp = TempDir::new().unwrap();
-    let (conn, path_id) = fresh_db_with_path(&tmp).await;
+    let (db, path_id) = fresh_db_with_path().await;
 
-    store::cmd_lesson_upsert(&conn, NO_LESSON_ATOM, "body".into(), Some(&path_id), None)
+    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "body".into(), Some(&path_id), None)
         .await
         .expect("store");
 
     assert_eq!(
-        event_kinds(&conn, &path_id).await,
+        event_kinds(&db, &path_id).await,
         vec![EventKind::LessonAuthored, EventKind::LessonTaught],
     );
 }
 
 #[tokio::test]
 async fn second_store_on_same_atom_emits_amended_then_taught() {
-    // Upsert semantics: the SQL row is replaced, and the event log
-    // distinguishes the follow-up store from the initial authoring.
-    let tmp = TempDir::new().unwrap();
-    let (conn, path_id) = fresh_db_with_path(&tmp).await;
+    let (db, path_id) = fresh_db_with_path().await;
 
-    store::cmd_lesson_upsert(&conn, NO_LESSON_ATOM, "first".into(), Some(&path_id), None)
+    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "first".into(), Some(&path_id), None)
         .await
         .unwrap();
-    store::cmd_lesson_upsert(&conn, NO_LESSON_ATOM, "second".into(), Some(&path_id), None)
+    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "second".into(), Some(&path_id), None)
         .await
         .expect("second store succeeds (upsert)");
 
     assert_eq!(
-        event_kinds(&conn, &path_id).await,
+        event_kinds(&db, &path_id).await,
         vec![
             EventKind::LessonAuthored,
             EventKind::LessonTaught,
@@ -86,17 +64,13 @@ async fn second_store_on_same_atom_emits_amended_then_taught() {
 
 #[tokio::test]
 async fn quiz_create_after_delete_skips_tombstoned_id() {
-    // Regression: deleting a quiz tombstones it but leaves the
-    // `overlay_quizzes` row, so reusing the id would violate the
-    // UNIQUE constraint and wedge the atom.
-    let tmp = TempDir::new().unwrap();
-    let (conn, path_id) = fresh_db_with_path(&tmp).await;
+    let (db, path_id) = fresh_db_with_path().await;
 
-    store::cmd_lesson_upsert(&conn, NO_LESSON_ATOM, "body".into(), Some(&path_id), None)
+    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "body".into(), Some(&path_id), None)
         .await
         .unwrap();
     let first = store::cmd_quiz_create(
-        &conn,
+        &db,
         NO_LESSON_ATOM,
         Difficulty::Easy,
         "q1?".into(),
@@ -110,12 +84,12 @@ async fn quiz_create_after_delete_skips_tombstoned_id() {
     .unwrap();
     assert_eq!(first, format!("{NO_LESSON_ATOM}.q1"));
 
-    store::cmd_quiz_delete(&conn, &first, Some(&path_id), None)
+    store::cmd_quiz_delete(&db, &first, Some(&path_id), None)
         .await
         .unwrap();
 
     let second = store::cmd_quiz_create(
-        &conn,
+        &db,
         NO_LESSON_ATOM,
         Difficulty::Easy,
         "q2?".into(),
@@ -132,13 +106,10 @@ async fn quiz_create_after_delete_skips_tombstoned_id() {
 
 #[tokio::test]
 async fn store_on_shipped_lesson_atom_emits_amended() {
-    // The atom already has a lesson in the shipped curriculum, so
-    // even the first store is an amendment from the user's POV.
-    let tmp = TempDir::new().unwrap();
-    let (conn, path_id) = fresh_db_with_path(&tmp).await;
+    let (db, path_id) = fresh_db_with_path().await;
 
     store::cmd_lesson_upsert(
-        &conn,
+        &db,
         WITH_LESSON_ATOM,
         "override".into(),
         Some(&path_id),
@@ -148,7 +119,7 @@ async fn store_on_shipped_lesson_atom_emits_amended() {
     .expect("store");
 
     assert_eq!(
-        event_kinds(&conn, &path_id).await,
+        event_kinds(&db, &path_id).await,
         vec![EventKind::LessonAmended, EventKind::LessonTaught],
     );
 }

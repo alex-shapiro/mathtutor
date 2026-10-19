@@ -1,17 +1,10 @@
-//! Shared domain enums.
-//!
-//! Each provides serde for AYML round-trip, `argh::FromArgValue` for CLI
-//! parsing, and `Display` where format-string output is needed. Wire
-//! formats (`rename_all`) match the AYML and CLI conventions: lowercase
-//! for word-shaped variants, `snake_case` for compound ones.
+//! Shared domain enums for quiz ratings, difficulties, strategies, and formats.
 
 use serde::{Deserialize, Serialize};
 
 use crate::Error;
 
-/// FSRS grade for a quiz answer. The discriminants match the FSRS
-/// convention (Again=1, Hard=2, Good=3, Easy=4) and are the stable
-/// encoding written to the `events.rating` SQL column.
+/// FSRS recall rating for a quiz answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
 #[serde(rename_all = "lowercase")]
@@ -24,12 +17,7 @@ pub enum Rating {
 }
 
 impl Rating {
-    /// All ratings except `Again` count as a correct answer. `Hard`
-    /// means "got it right but with effort"; FSRS still schedules a
-    /// sooner re-presentation than `Good`/`Easy`, but the per-atom
-    /// walker treats it as correct enough to advance — otherwise a
-    /// `Hard` rating would re-surface the quiz immediately, even when
-    /// FSRS says wait.
+    /// Return `true` if the rating is `Hard`, `Good`, or `Easy`.
     pub fn is_correct(self) -> bool {
         !matches!(self, Rating::Again)
     }
@@ -79,7 +67,7 @@ impl argh::FromArgValue for Rating {
     }
 }
 
-/// Quiz difficulty. Every atom has at most one quiz per difficulty.
+/// Quiz difficulty level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
 #[serde(rename_all = "lowercase")]
@@ -105,8 +93,6 @@ impl std::fmt::Display for Difficulty {
     }
 }
 
-// argh::FromArgValue picks this up via a blanket impl for `T: FromStr
-// where T::Err: Display` — no separate CLI parser needed.
 impl std::str::FromStr for Difficulty {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Error> {
@@ -119,13 +105,7 @@ impl std::str::FromStr for Difficulty {
     }
 }
 
-/// How `mt path next` walks toward a path's targets. A mutable
-/// per-path navigation setting, not part of the path's intent.
-///
-/// - `BottomUp` (default): post-order DFS over prerequisites; never
-///   reaches an atom until all its prerequisites are complete.
-/// - `TopDown`: presents the next incomplete target directly, descending
-///   into prerequisites only via an explicit subpath.
+/// Learning path traversal strategy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
 #[serde(rename_all = "snake_case")]
@@ -150,9 +130,6 @@ impl std::fmt::Display for Strategy {
     }
 }
 
-// Accepts both the storage form (`bottom_up`) and the friendlier CLI
-// spelling (`bottom-up`). `argh::FromArgValue` picks this up via the
-// blanket `FromStr` impl.
 impl std::str::FromStr for Strategy {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Error> {
@@ -164,9 +141,7 @@ impl std::str::FromStr for Strategy {
     }
 }
 
-/// Quiz answer mode. Defaults to free-text; multiple-choice is
-/// reserved for the rare case where a definition is best taught as a
-/// distinguish-this-from-look-alikes.
+/// Quiz response format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
 #[serde(rename_all = "snake_case")]

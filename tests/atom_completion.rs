@@ -1,8 +1,4 @@
-//! Regression tests for `mt path next`'s per-atom completion walker.
-//!
-//! Each test builds an in-memory `Graph`, `PathFile`, and event log,
-//! then asserts on the `Action` returned by `scheduler::next_action`.
-//! No filesystem, no curriculum AYML — just the scheduler's contract.
+//! Unit tests for `scheduler::next_action` and `scheduler::is_atom_complete`.
 
 use chrono::{DateTime, Utc};
 
@@ -14,8 +10,6 @@ mod common;
 
 use common::{atom, cluster, graph_of, path_with, quiz, taught};
 
-/// Default empty due-quiz list for tests that don't exercise the FSRS
-/// scheduling path. `next_action` only inspects this slice for due cards.
 const NO_DUE: &[(String, DateTime<Utc>)] = &[];
 
 fn assert_create_lesson(action: &Action, expected_atom: &str) {
@@ -55,8 +49,6 @@ fn assert_present_lesson(action: &Action, expected_atom: &str) {
     }
 }
 
-// ── Walker contract ────────────────────────────────────────────────
-
 #[test]
 fn create_lesson_when_atom_has_none() {
     let g = graph_of(vec![atom("a", &[], None, vec![])]);
@@ -77,9 +69,6 @@ fn create_lesson_when_atom_has_none() {
 
 #[test]
 fn present_lesson_when_stored_but_not_taught_in_path() {
-    // Lesson body exists in the graph (perhaps authored under a prior
-    // path), but this path has no `LessonTaught` event yet — surface
-    // the stored body before any quiz work.
     let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
     let p = path_with(&["a"]);
     assert_present_lesson(
@@ -98,10 +87,6 @@ fn present_lesson_when_stored_but_not_taught_in_path() {
 
 #[test]
 fn lesson_authored_event_satisfies_taught_check() {
-    // Paths created before `LessonTaught` existed only have
-    // `LessonAuthored` events. Those must still register as "taught"
-    // so the scheduler doesn't re-present every lesson the user
-    // already authored in this path.
     let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
     let p = path_with(&["a"]);
     let events = vec![common::lesson_authored("a")];
@@ -192,10 +177,6 @@ fn keep_presenting_easy_after_again_rating() {
 
 #[test]
 fn advance_to_medium_after_hard_rating() {
-    // `hard` counts as a correct answer (the user got it right, just
-    // with effort) — FSRS handles re-presentation timing for hard, so
-    // the per-atom walker advances rather than re-surfacing the easy
-    // quiz immediately. Only `Again` triggers immediate re-presentation.
     let g = graph_of(vec![atom(
         "a",
         &[],
@@ -347,10 +328,6 @@ fn advance_to_next_target_lesson_after_first_complete() {
 
 #[test]
 fn does_not_advance_after_only_lesson_stored() {
-    // The exact regression: after `create_lesson` on `a`, `mt path next`
-    // must NOT jump to `b`'s lesson. With the present_lesson step in
-    // place, the precise next action is to re-surface `a`'s lesson
-    // (since this path has no `LessonTaught` for it yet).
     let g = graph_of(vec![
         atom("a", &[], Some("body"), vec![]),
         atom("b", &[], None, vec![]),
@@ -419,12 +396,8 @@ fn finishes_prereq_quizzes_before_target_lesson() {
     );
 }
 
-// ── Cluster expansion ──────────────────────────────────────────────
-
 #[test]
 fn cluster_target_descends_to_first_atom() {
-    // A path target may be a cluster, not an atom. The walker must
-    // descend into its children and surface the first one's work.
     let g = graph_of(vec![
         cluster("c", &["c.1", "c.2"]),
         atom("c.1", &[], None, vec![]),
@@ -447,11 +420,6 @@ fn cluster_target_descends_to_first_atom() {
 
 #[test]
 fn cluster_prereq_descends_before_target() {
-    // Prereqs may reference whole clusters (e.g. "this builds on
-    // la.5.3" — Cholesky). The walker must expand the cluster and
-    // finish its atoms before reaching the target. This mirrors the
-    // semantics the orphan check assumes when accepting cluster
-    // references as covering descendant atoms.
     let g = graph_of(vec![
         cluster("pre", &["pre.1", "pre.2"]),
         atom("pre.1", &[], None, vec![]),
@@ -475,8 +443,6 @@ fn cluster_prereq_descends_before_target() {
 
 #[test]
 fn cluster_prereq_advances_to_target_when_complete() {
-    // Once every atom inside the cluster prereq is complete, the
-    // walker must stop descending into it and pick up the target.
     let g = graph_of(vec![
         cluster("pre", &["pre.1"]),
         common::complete_atom("pre.1", &[]),
@@ -497,8 +463,6 @@ fn cluster_prereq_advances_to_target_when_complete() {
         "target",
     );
 }
-
-// ── is_atom_complete / atom_completed_at ───────────────────────────
 
 #[test]
 fn is_atom_complete_false_without_lesson() {
@@ -557,26 +521,19 @@ fn is_atom_complete_true_with_all_three_correct() {
     ));
 }
 
-// ── NextMode::New / NextMode::Due ──────────────────────────────────
-
-/// Build a due-cards slice with one entry pointing at `quiz_id`. The
-/// timestamp is arbitrary; `next_action` only inspects ordering, not
-/// absolute values.
-fn one_due(quiz_id: &str) -> Vec<(String, DateTime<Utc>)> {
+fn due_card(quiz_id: &str) -> Vec<(String, DateTime<Utc>)> {
     vec![(quiz_id.into(), Utc::now())]
 }
 
 #[test]
 fn new_mode_skips_due_card_and_returns_walker_action() {
-    // Atom `a` has a due card AND atom `b` still needs a lesson. Default
-    // mode would surface the due quiz; `New` skips it and walks targets.
     let g = graph_of(vec![
         atom("a", &[], Some("body"), vec![quiz("a.q1", Difficulty::Easy)]),
         atom("b", &[], None, vec![]),
     ]);
     let p = path_with(&["a", "b"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Good)];
-    let due = one_due("a.q1");
+    let due = due_card("a.q1");
     assert_create_quiz(
         &scheduler::next_action(
             &g,
@@ -602,7 +559,7 @@ fn due_mode_returns_earliest_due_card() {
     )]);
     let p = path_with(&["a"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Good)];
-    let due = one_due("a.q1");
+    let due = due_card("a.q1");
     assert_present_quiz(
         &scheduler::next_action(
             &g,
@@ -620,8 +577,6 @@ fn due_mode_returns_earliest_due_card() {
 
 #[test]
 fn due_mode_returns_done_when_no_card_is_due() {
-    // The walker would still have plenty to do here (create lesson on
-    // `a`), but `--due` only cares about cards already due.
     let g = graph_of(vec![atom("a", &[], None, vec![])]);
     let p = path_with(&["a"]);
     assert!(matches!(
@@ -660,8 +615,6 @@ fn from_flags_rejects_both_new_and_due() {
 
 #[test]
 fn new_mode_returns_done_when_walker_has_nothing_left() {
-    // Walker is empty AND a card is due. `New` ignores the due card and
-    // reports `done`.
     let g = graph_of(vec![atom(
         "a",
         &[],
@@ -679,7 +632,7 @@ fn new_mode_returns_done_when_walker_has_nothing_left() {
         common::answered("a.q2", Rating::Good),
         common::answered("a.q3", Rating::Good),
     ];
-    let due = one_due("a.q1");
+    let due = due_card("a.q1");
     assert!(matches!(
         scheduler::next_action(
             &g,

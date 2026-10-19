@@ -1,47 +1,42 @@
-//! Learning-path data, per-path storage, and `mt path new`/`mt path list`.
+//! Learning path records and path management commands.
 
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use libsql::{Connection, params};
+use serde::{Deserialize, Serialize};
 
-use crate::db;
+use crate::db::{Db, Op, ts};
 use crate::event_log;
 use crate::graph::{Graph, natural_id_cmp};
+use crate::schema::PathUpdate;
 use crate::types::Strategy;
+use crate::view::{Changes, PathSel, View, Want};
 use crate::{Error, Result};
 
-/// Per-path record: the learner's goal and targets (fixed at `mt path
-/// new`) plus the mutable navigation `strategy`. Learning history lives in
-/// the event log; the top-down subpath lives in the `path_subpath` table.
-///
-/// `targets` holds the IDs the learner chose verbatim (atoms or clusters).
-/// They are stored as given and expanded to atoms against the live graph
-/// by [`PathFile::resolve_targets`], so the resolved set tracks curriculum
-/// edits (e.g. an atom later split into a cluster).
-#[derive(Debug, Clone)]
+/// Stored metadata and configuration for a learning path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathFile {
     pub id: String,
     pub goal: String,
+    #[serde(with = "ts")]
     pub created_at: DateTime<Utc>,
+    #[serde(skip)]
+    pub updated_at: DateTime<Utc>,
     pub targets: Vec<String>,
     pub strategy: Strategy,
+    pub subpath: Vec<String>,
 }
 
 impl PathFile {
-    /// Expand the stored targets to a topo-sorted set of atom IDs against
-    /// `g`. Resolution runs on every load so cluster/area targets always
-    /// reflect the current curriculum. Errors if a target no longer
-    /// resolves to any atom (unknown ID or empty cluster).
+    /// Expand stored targets into a topologically sorted list of atom IDs.
     pub fn resolve_targets(&self, g: &Graph) -> Result<Vec<String>> {
         let atoms = g.expand_to_atoms(&self.targets)?;
         topo_sort(g, &atoms)
     }
 }
 
-// ── Storage layout ──────────────────────────────────────────────────
-
+/// Resolve the local Math Tutor home directory from `MATHTUTOR_HOME` or `$HOME/.mathtutor`.
 pub fn mt_home() -> Result<PathBuf> {
     if let Ok(p) = std::env::var("MATHTUTOR_HOME") {
         return Ok(PathBuf::from(p));
@@ -50,161 +45,95 @@ pub fn mt_home() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".mathtutor"))
 }
 
+/// Generate a unique path ID from `now` and a random 4-character suffix.
 pub fn generate_path_id(now: DateTime<Utc>) -> String {
-    format!("p_{}", now.format("%Y_%m_%d_%H%M%S"))
+    use std::hash::{BuildHasher, RandomState};
+    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+    let mut n = RandomState::new().hash_one(now);
+    let suffix: String = (0..4)
+        .map(|_| {
+            let c = ALPHABET[(n % 36) as usize] as char;
+            n /= 36;
+            c
+        })
+        .collect();
+    format!("p_{}_{suffix}", now.format("%Y_%m_%d_%H%M%S"))
 }
 
-// ── SQL helpers ─────────────────────────────────────────────────────
-
-/// # Panics
-/// Panics if `targets.len()` doesn't fit in `i64` (≈9e18 targets).
-pub async fn save_path(conn: &Connection, p: &PathFile) -> Result<()> {
-    conn.execute(
-        "INSERT INTO paths(id, goal, created_at, strategy) VALUES (?, ?, ?, ?)",
-        params![
-            p.id.as_str(),
-            p.goal.as_str(),
-            db::format_ts(p.created_at),
-            p.strategy.as_str(),
-        ],
-    )
-    .await?;
-    for (i, target) in p.targets.iter().enumerate() {
-        let position = i64::try_from(i).expect("position fits in i64");
-        conn.execute(
-            "INSERT INTO path_targets(path_id, target_id, position) VALUES (?, ?, ?)",
-            params![p.id.as_str(), target.as_str(), position],
-        )
-        .await?;
-    }
-    Ok(())
+/// Insert `p` and append its `path_created` event.
+pub fn insert(view: &View, changes: &mut Changes, p: &PathFile) -> Result<()> {
+    changes.op(Op::insert(p));
+    let mut created = event_log::path_created(p.id.clone());
+    created.ts = p.created_at;
+    changes.append(view, &created)
 }
 
-pub async fn load_path(conn: &Connection, id: &str) -> Result<PathFile> {
-    let mut rows = conn
-        .query(
-            "SELECT goal, created_at, strategy FROM paths WHERE id = ?",
-            params![id],
-        )
-        .await?;
-    let row = rows.next().await?.ok_or(Error::NoPath)?;
-    let goal: String = row.get(0)?;
-    let created_str: String = row.get(1)?;
-    let created_at = db::parse_ts(&created_str)?;
-    let strategy: Strategy = row.get::<String>(2)?.parse()?;
-
-    let mut rows = conn
-        .query(
-            "SELECT target_id FROM path_targets WHERE path_id = ? ORDER BY position ASC",
-            params![id],
-        )
-        .await?;
-    let mut targets = Vec::new();
-    while let Some(r) = rows.next().await? {
-        targets.push(r.get::<String>(0)?);
-    }
-
-    Ok(PathFile {
-        id: id.to_string(),
-        goal,
-        created_at,
-        targets,
-        strategy,
-    })
+/// Replace the stored subpath for `path_id`.
+pub fn set_subpath(changes: &mut Changes, path_id: &str, atoms: &[String]) {
+    let set = PathUpdate {
+        subpath: Some(atoms),
+        ..PathUpdate::default()
+    };
+    changes.op(Op::update::<PathFile>(&[path_id], &set));
 }
 
-/// "Most recent" = the path mentioned by the latest event, falling back
-/// to the newest row in `paths` if there are no events yet. Mirrors the
-/// old filesystem mtime semantic: a path the user is actively working in
-/// stays sticky regardless of creation order.
-pub async fn most_recent_id(conn: &Connection) -> Result<Option<String>> {
-    let mut rows = conn
-        .query(
-            "SELECT path_id FROM events ORDER BY id DESC LIMIT 1",
-            params![],
-        )
-        .await?;
-    if let Some(r) = rows.next().await? {
-        return Ok(Some(r.get(0)?));
-    }
-    let mut rows = conn
-        .query(
-            "SELECT id FROM paths ORDER BY created_at DESC LIMIT 1",
-            params![],
-        )
-        .await?;
-    Ok(match rows.next().await? {
-        Some(r) => Some(r.get(0)?),
-        None => None,
-    })
-}
-
-pub async fn resolve_id(conn: &Connection, explicit: Option<&str>) -> Result<String> {
-    if let Some(id) = explicit {
-        return Ok(id.to_string());
-    }
-    most_recent_id(conn).await?.ok_or(Error::NoPath)
-}
-
-// ── Commands ────────────────────────────────────────────────────────
-
+/// Create a new learning path and return its ID.
 pub async fn cmd_path_new(
-    conn: &Connection,
+    db: &Db,
     goal: &str,
     ids: &[String],
     strategy: Strategy,
     graph_dir: Option<&Path>,
 ) -> Result<String> {
     let g = Graph::load_default(graph_dir)?;
-    // Validate each ID resolves to at least one atom, but store the IDs
-    // verbatim — clusters are kept as-is and re-expanded on load so the
-    // target set tracks later curriculum edits.
+    // Validate that each target expands to at least 1 atom while storing cluster IDs unexpanded.
     g.expand_to_atoms(ids)?;
     let targets = dedup_preserving_order(ids);
 
     let now = Utc::now();
-    let id = generate_path_id(now);
-
     let p = PathFile {
-        id: id.clone(),
+        id: generate_path_id(now),
         goal: goal.to_string(),
         created_at: now,
+        updated_at: now,
         targets,
         strategy,
+        subpath: Vec::new(),
     };
-
-    let tx = conn.transaction().await?;
-    save_path(&tx, &p).await?;
-    event_log::append(&tx, &event_log::path_created(id.clone())).await?;
-    tx.commit().await?;
-
-    Ok(id)
+    let want = Want {
+        path: PathSel::None,
+        overlay: false,
+        all_paths: false,
+    };
+    db.transact(&want, |view, changes| insert(view, changes, &p))
+        .await?;
+    Ok(p.id)
 }
 
-/// Switch a path's traversal strategy. Mutates the `paths.strategy`
-/// column directly — strategy is navigation config, not learning history,
-/// so no event is logged. Switching to bottom-up leaves any stored
-/// subpath inert (the DFS ignores it) rather than clearing it.
+/// Update the traversal strategy for a learning path and return its ID.
 pub async fn cmd_path_strategy(
-    conn: &Connection,
+    db: &Db,
     explicit_id: Option<&str>,
     strategy: Strategy,
 ) -> Result<String> {
-    let id = resolve_id(conn, explicit_id).await?;
-    let changed = conn
-        .execute(
-            "UPDATE paths SET strategy = ? WHERE id = ?",
-            params![strategy.as_str(), id.as_str()],
-        )
-        .await?;
-    if changed == 0 {
-        return Err(Error::NoPath);
-    }
-    Ok(id)
+    let want = Want {
+        path: PathSel::from(explicit_id),
+        overlay: false,
+        all_paths: false,
+    };
+    db.transact(&want, |view, changes| {
+        let id = view.path()?.file.id.clone();
+        let set = PathUpdate {
+            strategy: Some(strategy),
+            ..PathUpdate::default()
+        };
+        changes.op(Op::update::<PathFile>(&[&id], &set));
+        Ok(id)
+    })
+    .await
 }
 
-/// Compact summary of one path. Same fields as `mt path state` shows
-/// for a single path, so callers can format both with the same logic.
+/// Summary of progress for a learning path.
 #[derive(Debug, serde::Serialize)]
 pub struct PathSummary {
     pub id: String,
@@ -221,53 +150,47 @@ struct PathListView {
     paths: Vec<PathSummary>,
 }
 
-/// List every path with goal, creation time, target count, and progress
-/// percent. AYML on stdout — same envelope conventions as `mt path next`.
-pub async fn cmd_path_list(conn: &Connection, graph_dir: Option<&Path>) -> Result<()> {
-    let summaries = list_summaries(conn, graph_dir).await?;
+/// Print all learning path summaries as AYML (`mt path list`).
+pub async fn cmd_path_list(db: &Db, graph_dir: Option<&Path>) -> Result<()> {
+    let summaries = list_summaries(db, graph_dir).await?;
     let view = PathListView { paths: summaries };
     let text = ayml::to_string(&view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
 }
 
-async fn list_summaries(conn: &Connection, graph_dir: Option<&Path>) -> Result<Vec<PathSummary>> {
-    let g = Graph::load_for_path(conn, graph_dir).await?;
-    let mut rows = conn
-        .query(
-            "SELECT id, goal, created_at FROM paths ORDER BY created_at ASC",
-            params![],
-        )
-        .await?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().await? {
-        let id: String = row.get(0)?;
-        let goal: String = row.get(1)?;
-        let created_str: String = row.get(2)?;
-        let created_at = db::parse_ts(&created_str)?;
-        let p = load_path(conn, &id).await?;
-        let progress = crate::progress::PathProgress::load(conn, &id).await?;
-        let atoms = p.resolve_targets(&g)?;
-        let targets = atoms.len();
-        let learned = atoms
-            .iter()
-            .filter(|a| crate::scheduler::is_atom_complete(&g, &progress, a))
-            .count();
-        let learned_pct = (learned * 100).checked_div(targets).unwrap_or(0);
-        out.push(PathSummary {
-            id,
-            goal,
-            strategy: p.strategy,
-            created_at,
-            targets,
-            learned,
-            learned_pct,
-        });
-    }
-    Ok(out)
+/// Compute progress summaries for all learning paths ordered by creation time.
+pub async fn list_summaries(db: &Db, graph_dir: Option<&Path>) -> Result<Vec<PathSummary>> {
+    let want = Want {
+        path: PathSel::None,
+        overlay: true,
+        all_paths: true,
+    };
+    let view = db.snapshot(&want).await?;
+    let g = view.graph(graph_dir)?;
+    view.paths
+        .iter()
+        .map(|p| {
+            let progress = p.progress();
+            let atoms = p.file.resolve_targets(&g)?;
+            let targets = atoms.len();
+            let learned = atoms
+                .iter()
+                .filter(|a| crate::scheduler::is_atom_complete(&g, &progress, a))
+                .count();
+            Ok(PathSummary {
+                id: p.file.id.clone(),
+                goal: p.file.goal.clone(),
+                strategy: p.file.strategy,
+                created_at: p.file.created_at,
+                targets,
+                learned,
+                learned_pct: (learned * 100).checked_div(targets).unwrap_or(0),
+            })
+        })
+        .collect()
 }
 
-/// Deduplicate `ids` while preserving first-seen order.
 fn dedup_preserving_order(ids: &[String]) -> Vec<String> {
     let mut seen = HashSet::new();
     ids.iter()
@@ -275,8 +198,6 @@ fn dedup_preserving_order(ids: &[String]) -> Vec<String> {
         .cloned()
         .collect()
 }
-
-// ── Topological sort over the user-supplied target atoms ───────────
 
 fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>> {
     let atom_set: HashSet<&str> = atoms.iter().map(String::as_str).collect();
@@ -294,10 +215,7 @@ fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>> {
         }
     }
 
-    // Kahn's algorithm with a min-heap frontier so topo ties break by
-    // natural id order: siblings come out `nn.1.1.1, nn.1.1.2, …` rather
-    // than `…1, …10, …2`. The heap keeps this O(n log n) with no per-
-    // comparison allocation (see `natural_id_cmp`).
+    // Use a min-heap ordered by `natural_id_cmp` to break topological ties deterministically.
     let mut frontier: BinaryHeap<NaturalOrd> = indegree
         .iter()
         .filter_map(|(k, &v)| if v == 0 { Some(NaturalOrd(k)) } else { None })
@@ -323,8 +241,7 @@ fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>> {
     Ok(result)
 }
 
-/// `&str` id wrapped to pop in natural order from a `BinaryHeap` (a
-/// max-heap), so `Ord` is reversed: the natural-smallest id is "greatest".
+// Reverse `natural_id_cmp` so `BinaryHeap` pops the smallest ID first.
 struct NaturalOrd<'a>(&'a str);
 
 impl Ord for NaturalOrd<'_> {
@@ -350,8 +267,6 @@ mod tests {
     use crate::graph::{FlatConcept, Graph};
     use std::collections::HashMap;
 
-    /// Build a graph from `(id, prerequisites)` pairs; other fields unused
-    /// by `topo_sort`.
     fn graph(nodes: &[(&str, &[&str])]) -> Graph {
         let by_id = nodes
             .iter()
@@ -373,10 +288,6 @@ mod tests {
 
     #[test]
     fn topo_sort_breaks_ties_in_natural_id_order() {
-        // The bug: lexicographic tie-breaking jumped `nn.1.1.1` straight to
-        // `nn.1.10.1`, skipping `nn.1.1.2`. With a prereq chain only along
-        // the `.1.1.x` spine, the independent `.1.10.1` must still sort
-        // after the lower-numbered siblings, not between `…1.1` and `…1.2`.
         let g = graph(&[
             ("nn.1.1.1", &[]),
             ("nn.1.1.2", &["nn.1.1.1"]),
@@ -393,8 +304,6 @@ mod tests {
 
     #[test]
     fn topo_sort_respects_prerequisites_over_id_order() {
-        // A lower-numbered atom that depends on a higher-numbered one must
-        // still come after it, regardless of natural id order.
         let g = graph(&[("nn.1.1.1", &["nn.1.9.1"]), ("nn.1.9.1", &[])]);
         let atoms = vec!["nn.1.1.1".to_string(), "nn.1.9.1".to_string()];
         let order = topo_sort(&g, &atoms).unwrap();

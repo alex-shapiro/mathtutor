@@ -1,32 +1,23 @@
-//! FSRS card state.
-//!
-//! Card state lives in two places:
-//!
-//! 1. In-memory step, [`apply_answer`], takes a previous [`CardState`]
-//!    plus a new rating/timestamp and produces the next state.
-//!
-//! 2. SQL helpers read and write the `cards` table, a write-through cache
-//!    of the latest FSRS state per `(path, quiz)` so the scheduler can
-//!    pick the earliest-due quiz with one indexed query. The event log
-//!    remains the source of truth; [`recompute`] rebuilds the cache by
-//!    replaying every `QuizAnswered` event for a path.
+//! FSRS spaced-repetition card state derived from path events.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
-use libsql::{Connection, params};
 
-use crate::db;
-use crate::event_log::{self, Event, EventKind};
+use crate::db::{self, Db, Op};
+use crate::event_log::{Event, EventKind};
+use crate::schema::{self, CardRecord, TaughtRow};
 use crate::types::Rating;
+use crate::view::Taught;
 use crate::{Error, Result};
 
 const DESIRED_RETENTION: f32 = 0.9;
 
-/// FSRS state for a single quiz card. The fields exist precisely when a
-/// card has been answered at least once. `apply_answer(None, …)` is the
-/// first step that produces a state, so every field is always populated.
+/// Maximum number of recent ratings retained per card, ordered newest first.
+pub const RECENT: usize = 10;
+
+/// FSRS memory and scheduling state for an answered quiz card.
 #[derive(Debug, Clone, Copy)]
 pub struct CardState {
     pub due: DateTime<Utc>,
@@ -35,25 +26,36 @@ pub struct CardState {
     pub difficulty: f32,
 }
 
-/// Row shape stored in the `cards` table.
 #[derive(Debug, Clone)]
 pub struct CardRow {
     pub path_id: String,
     pub quiz_id: String,
-    pub state: CardState,
+    pub state: Option<CardState>,
     pub reps: u32,
     pub lapses: u32,
+    pub presented: u32,
+    pub last_presented_at: Option<DateTime<Utc>>,
+    pub first_correct_at: Option<DateTime<Utc>>,
+    pub recent: Vec<Rating>,
 }
 
-// ── Pure FSRS step (no I/O) ────────────────────────────────────────
+impl CardRow {
+    pub fn new(path_id: &str, quiz_id: &str) -> Self {
+        Self {
+            path_id: path_id.to_string(),
+            quiz_id: quiz_id.to_string(),
+            state: None,
+            reps: 0,
+            lapses: 0,
+            presented: 0,
+            last_presented_at: None,
+            first_correct_at: None,
+            recent: Vec::new(),
+        }
+    }
+}
 
-/// One FSRS step: given the previous state (or none, for the first
-/// answer), apply this rating at this timestamp and return the next
-/// state.
-///
-/// `interval` is converted from FSRS's fractional days to whole seconds
-/// (with a 60-second floor) so sub-day relearning intervals retain their
-/// precision and zero-interval scheduling can't happen.
+/// Computes the next FSRS card state for `rating` at `ts`, with a minimum interval of 60 seconds.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -93,241 +95,136 @@ pub fn apply_answer(
     })
 }
 
-// ── SQL: read ──────────────────────────────────────────────────────
-
-/// Read `(reps, lapses)` for one `(path, quiz)` pair without parsing
-/// the FSRS state columns. Callers that only need answer counts should
-/// prefer this over [`read_card`].
-pub async fn read_counts(
-    conn: &Connection,
-    path_id: &str,
-    quiz_id: &str,
-) -> Result<Option<(u32, u32)>> {
-    let mut rows = conn
-        .query(
-            "SELECT reps, lapses FROM cards WHERE path_id = ? AND quiz_id = ?",
-            params![path_id, quiz_id],
-        )
-        .await?;
-    let Some(row) = rows.next().await? else {
-        return Ok(None);
-    };
-    let reps: i64 = row.get(0)?;
-    let lapses: i64 = row.get(1)?;
-    Ok(Some((
-        u32::try_from(reps).map_err(|_| Error::CardsCorrupt(format!("invalid reps {reps}")))?,
-        u32::try_from(lapses)
-            .map_err(|_| Error::CardsCorrupt(format!("invalid lapses {lapses}")))?,
-    )))
-}
-
-/// Quiz ids whose card has at least one non-`Again` answer on this
-/// path. `reps > lapses` because `lapses` only increments on `Again`.
-pub async fn correct_quiz_ids(conn: &Connection, path_id: &str) -> Result<HashSet<String>> {
-    let mut rows = conn
-        .query(
-            "SELECT quiz_id FROM cards WHERE path_id = ? AND reps > lapses",
-            params![path_id],
-        )
-        .await?;
-    let mut out = HashSet::new();
-    while let Some(row) = rows.next().await? {
-        out.insert(row.get(0)?);
-    }
-    Ok(out)
-}
-
-/// Load the cached row for one `(path, quiz)` pair, if present.
-pub async fn read_card(conn: &Connection, path_id: &str, quiz_id: &str) -> Result<Option<CardRow>> {
-    let mut rows = conn
-        .query(
-            "SELECT path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses \
-             FROM cards WHERE path_id = ? AND quiz_id = ?",
-            params![path_id, quiz_id],
-        )
-        .await?;
-    let Some(row) = rows.next().await? else {
-        return Ok(None);
-    };
-    Ok(Some(row_to_card(&row)?))
-}
-
-/// Return every `(quiz_id, due_at)` pair whose `due_at <= now` for the
-/// given path, sorted oldest-due first. The scheduler uses this to pick
-/// the earliest-due quiz without folding the event log.
-pub async fn due_quizzes(
-    conn: &Connection,
-    path_id: &str,
-    now: DateTime<Utc>,
-) -> Result<Vec<(String, DateTime<Utc>)>> {
-    let mut rows = conn
-        .query(
-            "SELECT quiz_id, due_at FROM cards \
-             WHERE path_id = ? AND due_at <= ? ORDER BY due_at ASC",
-            params![path_id, db::format_ts(now)],
-        )
-        .await?;
-    let mut out = Vec::new();
-    while let Some(row) = rows.next().await? {
-        let quiz_id: String = row.get(0)?;
-        let due_str: String = row.get(1)?;
-        out.push((quiz_id, db::parse_ts(&due_str)?));
-    }
-    Ok(out)
-}
-
-// ── SQL: write-through cache update ────────────────────────────────
-
-/// Apply one `QuizAnswered` event to the cards cache. Reads the previous
-/// row (if any), folds the new rating through [`apply_answer`], and upserts
-/// the result with `reps` and `lapses` incremented accordingly.
-///
-/// Called from [`event_log::append`] when a `QuizAnswered` event lands.
-pub async fn apply_answer_to_cache(
-    conn: &Connection,
-    path_id: &str,
-    quiz_id: &str,
-    rating: Rating,
-    ts: DateTime<Utc>,
-) -> Result<()> {
-    let prev = read_card(conn, path_id, quiz_id).await?;
-    let next = apply_answer(prev.as_ref().map(|r| &r.state), rating, ts)?;
-
-    let reps = prev.as_ref().map_or(0, |r| r.reps) + 1;
-    let lapses = prev.as_ref().map_or(0, |r| r.lapses) + u32::from(rating == Rating::Again);
-
-    upsert_card_row(conn, path_id, quiz_id, &next, reps, lapses).await
-}
-
-async fn upsert_card_row(
-    conn: &Connection,
-    path_id: &str,
-    quiz_id: &str,
-    state: &CardState,
-    reps: u32,
-    lapses: u32,
-) -> Result<()> {
-    conn.execute(
-        "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
-         ON CONFLICT(path_id, quiz_id) DO UPDATE SET \
-            stability = excluded.stability, \
-            difficulty = excluded.difficulty, \
-            due_at = excluded.due_at, \
-            last_reviewed_at = excluded.last_reviewed_at, \
-            reps = excluded.reps, \
-            lapses = excluded.lapses",
-        params![
-            path_id,
-            quiz_id,
-            f64::from(state.stability),
-            f64::from(state.difficulty),
-            db::format_ts(state.due),
-            db::format_ts(state.last_review),
-            i64::from(reps),
-            i64::from(lapses),
-        ],
-    )
-    .await?;
-    Ok(())
-}
-
-/// Drop every cached row for `path_id` and rebuild from the event log.
-/// Use after a suspected cache corruption or a schema-altering migration.
-///
-/// The replay is wrapped in a transaction so concurrent `QuizAnswered`
-/// appends can't slip in between the snapshot we fold and the rows we
-/// write back, and a mid-rebuild failure leaves the existing cache in
-/// place rather than half-erased.
-pub async fn recompute(conn: &Connection, path_id: &str) -> Result<()> {
-    let tx = conn.transaction().await?;
-    let events = event_log::load(&tx, path_id).await?;
-    let rebuilt = fold_history(path_id, &events)?;
-    tx.execute("DELETE FROM cards WHERE path_id = ?", params![path_id])
-        .await?;
-    for row in &rebuilt {
-        upsert_card_row(
-            &tx,
-            &row.path_id,
-            &row.quiz_id,
-            &row.state,
-            row.reps,
-            row.lapses,
-        )
-        .await?;
-    }
-    tx.commit().await?;
-    Ok(())
-}
-
-/// Fold every `QuizAnswered` event for `path_id` into one [`CardRow`] per
-/// quiz. The inverse of `apply_answer_to_cache`: same FSRS step, applied
-/// in chronological order, but in memory and one quiz at a time so a
-/// full rebuild does K upserts instead of N.
-fn fold_history(path_id: &str, events: &[Event]) -> Result<Vec<CardRow>> {
-    // Group answered events per quiz, in event-log order. The log is
-    // pre-sorted chronologically.
-    let mut history: HashMap<String, Vec<(DateTime<Utc>, Rating)>> = HashMap::new();
-    for e in events {
-        if e.kind != EventKind::QuizAnswered {
-            continue;
+pub fn apply_event(c: &mut CardRow, e: &Event) -> Result<()> {
+    match (e.kind, e.payload.rating) {
+        (EventKind::QuizPresented, _) => {
+            c.presented += 1;
+            c.last_presented_at = Some(e.ts);
         }
-        let (Some(quiz), Some(rating)) = (e.quiz.as_deref(), e.payload.rating) else {
-            continue;
-        };
-        history
-            .entry(quiz.to_string())
-            .or_default()
-            .push((e.ts, rating));
-    }
-
-    let mut out = Vec::with_capacity(history.len());
-    for (quiz_id, ratings) in history {
-        let mut state: Option<CardState> = None;
-        let mut reps: u32 = 0;
-        let mut lapses: u32 = 0;
-        for (ts, rating) in ratings {
-            state = Some(apply_answer(state.as_ref(), rating, ts)?);
-            reps += 1;
+        (EventKind::QuizAnswered, Some(rating)) => {
+            c.state = Some(apply_answer(c.state.as_ref(), rating, e.ts)?);
+            c.reps += 1;
             if rating == Rating::Again {
-                lapses += 1;
+                c.lapses += 1;
+            } else if c.first_correct_at.is_none() {
+                c.first_correct_at = Some(e.ts);
             }
+            c.recent.insert(0, rating);
+            c.recent.truncate(RECENT);
         }
-        out.push(CardRow {
-            path_id: path_id.to_string(),
-            quiz_id,
-            state: state.expect("at least one answered event in the group"),
-            reps,
-            lapses,
-        });
+        _ => {}
     }
-    Ok(out)
+    Ok(())
 }
 
-// ── helpers ────────────────────────────────────────────────────────
+impl From<&CardRow> for CardRecord {
+    fn from(c: &CardRow) -> Self {
+        Self {
+            path_id: c.path_id.clone(),
+            quiz_id: c.quiz_id.clone(),
+            stability: c.state.map(|s| s.stability),
+            difficulty: c.state.map(|s| s.difficulty),
+            due_at: c.state.map(|s| s.due),
+            last_reviewed_at: c.state.map(|s| s.last_review),
+            reps: c.reps,
+            lapses: c.lapses,
+            presented: c.presented,
+            last_presented_at: c.last_presented_at,
+            first_correct_at: c.first_correct_at,
+            recent: c.recent.clone(),
+        }
+    }
+}
 
-#[allow(clippy::cast_possible_truncation)]
-fn row_to_card(row: &libsql::Row) -> Result<CardRow> {
-    let path_id: String = row.get(0)?;
-    let quiz_id: String = row.get(1)?;
-    let stability_f: f64 = row.get(2)?;
-    let difficulty_f: f64 = row.get(3)?;
-    let due_str: String = row.get(4)?;
-    let last_reviewed_str: String = row.get(5)?;
-    let reps: i64 = row.get(6)?;
-    let lapses: i64 = row.get(7)?;
-    Ok(CardRow {
-        path_id,
-        quiz_id,
-        state: CardState {
-            stability: stability_f as f32,
-            difficulty: difficulty_f as f32,
-            due: db::parse_ts(&due_str)?,
-            last_review: db::parse_ts(&last_reviewed_str)?,
-        },
-        reps: u32::try_from(reps)
-            .map_err(|_| Error::CardsCorrupt(format!("invalid reps {reps}")))?,
-        lapses: u32::try_from(lapses)
-            .map_err(|_| Error::CardsCorrupt(format!("invalid lapses {lapses}")))?,
-    })
+impl TryFrom<CardRecord> for CardRow {
+    type Error = Error;
+
+    fn try_from(r: CardRecord) -> Result<Self> {
+        let bad =
+            |what: &str| Error::CardsCorrupt(format!("{what} in {}/{}", r.path_id, r.quiz_id));
+        let state = match (r.stability, r.difficulty, r.due_at, r.last_reviewed_at) {
+            (Some(stability), Some(difficulty), Some(due), Some(last_review)) => Some(CardState {
+                due,
+                last_review,
+                stability,
+                difficulty,
+            }),
+            (None, None, None, None) => None,
+            _ => return Err(bad("partial FSRS state")),
+        };
+        if r.lapses > r.reps {
+            return Err(bad("lapses > reps"));
+        }
+        Ok(Self {
+            path_id: r.path_id,
+            quiz_id: r.quiz_id,
+            state,
+            reps: r.reps,
+            lapses: r.lapses,
+            presented: r.presented,
+            last_presented_at: r.last_presented_at,
+            first_correct_at: r.first_correct_at,
+            recent: r.recent,
+        })
+    }
+}
+
+/// Rebuilds the `cards` and `taught` rows for `path_id` from its event stream in a single transaction.
+pub async fn recompute(db: &Db, path_id: &str) -> Result<()> {
+    db::retry(|| recompute_once(db, path_id)).await
+}
+
+async fn recompute_once(db: &Db, path_id: &str) -> Result<()> {
+    let mut op = Op::read_stream(schema::events_stream(path_id), 0);
+    let (txn, mut results) = db.begin(std::slice::from_ref(&op)).await?;
+    let mut events = Vec::new();
+    loop {
+        let page = results.swap_remove(0);
+        let next = op.next_page(&page);
+        events.extend(page.records::<Event>()?);
+        let Some(next) = next else { break };
+        results = txn.ops(std::slice::from_ref(&next)).await?;
+        op = next;
+    }
+    let (cards, taught) = fold_history(path_id, &events)?;
+    let mut ops = vec![
+        Op::delete_rows::<CardRecord>(&[path_id]),
+        Op::delete_rows::<TaughtRow>(&[path_id]),
+    ];
+    ops.extend(cards.iter().map(|c| Op::upsert(&CardRecord::from(c))));
+    ops.extend(
+        taught
+            .into_iter()
+            .map(|(atom_id, t)| Op::upsert(&t.into_row(path_id, atom_id))),
+    );
+    txn.commit(&ops).await
+}
+
+pub fn fold_history(
+    path_id: &str,
+    events: &[Event],
+) -> Result<(Vec<CardRow>, BTreeMap<String, Taught>)> {
+    let mut cards: HashMap<String, CardRow> = HashMap::new();
+    let mut taught: BTreeMap<String, Taught> = BTreeMap::new();
+    for e in events {
+        match (e.kind, e.quiz.as_deref(), e.atom.as_deref()) {
+            (EventKind::QuizPresented | EventKind::QuizAnswered, Some(quiz), _) => {
+                let c = cards
+                    .entry(quiz.to_string())
+                    .or_insert_with(|| CardRow::new(path_id, quiz));
+                apply_event(c, e)?;
+            }
+            (EventKind::LessonTaught | EventKind::LessonAuthored, _, Some(atom)) => {
+                let t = taught.entry(atom.to_string()).or_default();
+                if e.kind == EventKind::LessonTaught {
+                    t.count += 1;
+                    t.last_at = Some(e.ts);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut cards: Vec<CardRow> = cards.into_values().collect();
+    cards.sort_by(|a, b| a.quiz_id.cmp(&b.quiz_id));
+    Ok((cards, taught))
 }

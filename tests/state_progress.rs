@@ -1,12 +1,9 @@
-//! Tests for `state::compute_progress` — the per-path target and
-//! reachable-atom counters surfaced by `mt path state` and the MCP
-//! `get_state` tool.
+//! Unit and integration tests for `state::compute_progress` and `state::compute_state`.
 
 use chrono::{Duration, Utc};
-use libsql::params;
+use mathtutor::cards::{CardRow, CardState};
 use mathtutor::progress::PathProgress;
 use mathtutor::state;
-use tempfile::TempDir;
 
 mod common;
 
@@ -31,8 +28,6 @@ fn target_complete_counts_toward_both_targets_and_reachable() {
 
 #[test]
 fn prereq_complete_counts_toward_reachable_only() {
-    // Targets only count completed targets; prereqs that aren't also
-    // targets contribute only to `reachable.learned`.
     let g = graph_of(vec![
         complete_atom("pre", &[]),
         complete_atom("target", &["pre"]),
@@ -50,9 +45,6 @@ fn prereq_complete_counts_toward_reachable_only() {
 
 #[test]
 fn taught_counts_lesson_taught_in_path_regardless_of_quiz_progress() {
-    // Lesson presented but no quizzes answered yet: the atom is taught
-    // but not learned. Reachable.taught must reflect lesson exposure
-    // independent of completion.
     let g = graph_of(vec![complete_atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
@@ -71,7 +63,7 @@ fn empty_path_yields_zero_progress_without_division_panic() {
     let (t, r) = state::compute_progress(&g, &p, &PathProgress::default()).unwrap();
     assert_eq!(t.total, 0);
     assert_eq!(t.learned, 0);
-    assert_eq!(t.learned_pct, 0, "no targets must not divide by zero");
+    assert_eq!(t.learned_pct, 0, "zero targets must not divide by zero");
     assert_eq!(r.total, 0);
     assert_eq!(r.taught, 0);
     assert_eq!(r.learned, 0);
@@ -79,7 +71,6 @@ fn empty_path_yields_zero_progress_without_division_panic() {
 
 #[test]
 fn reachable_includes_transitive_prereqs() {
-    // a ← b ← c (target). Reachable should be {a, b, c} = 3.
     let g = graph_of(vec![
         empty_atom("a", &[]),
         empty_atom("b", &["a"]),
@@ -93,7 +84,6 @@ fn reachable_includes_transitive_prereqs() {
 
 #[test]
 fn learned_pct_rounds_down() {
-    // 1 of 3 targets learned → 33 (integer division), not 34.
     let g = graph_of(vec![
         complete_atom("a", &[]),
         complete_atom("b", &[]),
@@ -107,14 +97,33 @@ fn learned_pct_rounds_down() {
     assert_eq!(t.learned_pct, 33);
 }
 
-// ── past_due ────────────────────────────────────────────────────────
+async fn seed_card(
+    db: &mathtutor::db::Db,
+    quiz_id: &str,
+    due: chrono::DateTime<Utc>,
+    reviewed: chrono::DateTime<Utc>,
+) {
+    let card = CardRow {
+        state: Some(CardState {
+            due,
+            last_review: reviewed,
+            stability: 1.0,
+            difficulty: 5.0,
+        }),
+        reps: 1,
+        ..CardRow::new(PATH_ID, quiz_id)
+    };
+    common::write(db, PATH_ID, |_, changes| {
+        changes.set_card(card.clone());
+    })
+    .await;
+}
 
 #[tokio::test]
 async fn compute_state_past_due_is_zero_on_fresh_path() {
-    let tmp = TempDir::new().unwrap();
-    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    let db = common::fresh_db(PATH_ID).await;
 
-    let s = state::compute_state(&conn, Some(PATH_ID), None)
+    let s = state::compute_state(&db, Some(PATH_ID), None)
         .await
         .expect("compute_state");
     assert_eq!(s.past_due, 0);
@@ -122,30 +131,14 @@ async fn compute_state_past_due_is_zero_on_fresh_path() {
 
 #[tokio::test]
 async fn compute_state_past_due_excludes_future_cards() {
-    // Cards exist but every `due_at` is strictly in the future, so the
-    // learner is caught up.
-    let tmp = TempDir::new().unwrap();
-    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    let db = common::fresh_db(PATH_ID).await;
     let now = Utc::now();
 
     for (quiz_id, offset_secs) in [("q.a", 60_i64), ("q.b", 3600), ("q.c", 86_400)] {
-        let due = now + Duration::seconds(offset_secs);
-        conn.execute(
-            "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, \
-                               last_reviewed_at, reps, lapses) \
-             VALUES (?, ?, 1.0, 5.0, ?, ?, 1, 0)",
-            params![
-                PATH_ID,
-                quiz_id,
-                mathtutor::db::format_ts(due),
-                mathtutor::db::format_ts(now),
-            ],
-        )
-        .await
-        .unwrap();
+        seed_card(&db, quiz_id, now + Duration::seconds(offset_secs), now).await;
     }
 
-    let s = state::compute_state(&conn, Some(PATH_ID), None)
+    let s = state::compute_state(&db, Some(PATH_ID), None)
         .await
         .expect("compute_state");
     assert_eq!(s.past_due, 0);
@@ -153,9 +146,7 @@ async fn compute_state_past_due_excludes_future_cards() {
 
 #[tokio::test]
 async fn compute_state_past_due_counts_overdue_cards() {
-    // Two overdue cards plus one not-yet-due card ⇒ past_due == 2.
-    let tmp = TempDir::new().unwrap();
-    let conn = common::fresh_db(&tmp, PATH_ID).await;
+    let db = common::fresh_db(PATH_ID).await;
     let now = Utc::now();
 
     for (quiz_id, offset_secs) in [
@@ -164,22 +155,10 @@ async fn compute_state_past_due_counts_overdue_cards() {
         ("q.future", 3600),
     ] {
         let due = now + Duration::seconds(offset_secs);
-        conn.execute(
-            "INSERT INTO cards(path_id, quiz_id, stability, difficulty, due_at, \
-                               last_reviewed_at, reps, lapses) \
-             VALUES (?, ?, 1.0, 5.0, ?, ?, 1, 0)",
-            params![
-                PATH_ID,
-                quiz_id,
-                mathtutor::db::format_ts(due),
-                mathtutor::db::format_ts(due - Duration::seconds(1)),
-            ],
-        )
-        .await
-        .unwrap();
+        seed_card(&db, quiz_id, due, due - Duration::seconds(1)).await;
     }
 
-    let s = state::compute_state(&conn, Some(PATH_ID), None)
+    let s = state::compute_state(&db, Some(PATH_ID), None)
         .await
         .expect("compute_state");
     assert_eq!(s.past_due, 2);
@@ -187,8 +166,6 @@ async fn compute_state_past_due_counts_overdue_cards() {
 
 #[test]
 fn write_state_emits_past_due_line() {
-    // CLI output must include a "past due:" line so a learner sees the
-    // backlog without having to invoke the scheduler.
     let mut buf = Vec::new();
     let s = state::StateSummary {
         path: PATH_ID.into(),

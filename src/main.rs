@@ -1,6 +1,5 @@
 use std::process::ExitCode;
 
-use libsql::Connection;
 use mathtutor::cli;
 #[cfg(feature = "mcp")]
 use mathtutor::cli::McpOp;
@@ -8,8 +7,8 @@ use mathtutor::cli::{Cmd, GraphOp, LessonOp, Mt, PathOp, QuizOp, SubpathOp};
 #[cfg(feature = "mcp")]
 use mathtutor::mcp;
 use mathtutor::{
-    Result, answer, db, discover, graph, instruct, migrate, overlay, path, scheduler, state, store,
-    subpath, syllabus, tree,
+    Error, Result, answer, db, discover, graph, import, instruct, overlay, path, scheduler, state,
+    store, subpath, syllabus, tree,
 };
 
 #[cfg(feature = "mcp")]
@@ -29,9 +28,6 @@ async fn real_main() -> ExitCode {
 
     init_tracing(is_mcp(&cli.cmd));
 
-    // `mt graph check` has its own success-vs-issues exit logic and
-    // prints its report independently handled outside the unified
-    // dispatch.
     if let Cmd::Graph(g) = &cli.cmd
         && let GraphOp::Check(c) = &g.op
     {
@@ -51,7 +47,6 @@ async fn real_main() -> ExitCode {
         };
     }
 
-    // `mt instruct` is read-only and doesn't touch the database.
     if matches!(cli.cmd, Cmd::Instruct(_)) {
         return match instruct::cmd_instruct() {
             Ok(()) => ExitCode::SUCCESS,
@@ -62,9 +57,6 @@ async fn real_main() -> ExitCode {
         };
     }
 
-    // `mt mcp` owns its own DB lifecycle (long-running, background sync
-    // task, graceful shutdown) so it sits outside the per-command DB
-    // setup the rest of the dispatch block does.
     #[cfg(feature = "mcp")]
     if let Cmd::Mcp(c) = cli.cmd {
         if let Some(McpOp::Tools(_)) = c.op {
@@ -100,37 +92,18 @@ async fn real_main() -> ExitCode {
         };
     }
 
-    let cfg = match db::DbConfig::from_env() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(2);
-        }
+    let db = match db::DbConfig::from_env() {
+        Ok(cfg) => db::Db::open(&cfg).await,
+        Err(e) => Err(e),
     };
-    let db = match db::open(&cfg).await {
+    let db = match db {
         Ok(db) => db,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::from(2);
         }
     };
-    // Pull the latest remote state before running.
-    db::maybe_sync(&db, &cfg).await;
-    let conn = match db::connect(&db).await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(2);
-        }
-    };
-
-    let modifies_state = mutating(&cli.cmd);
-    let (result, err_code) = dispatch(&conn, cli.cmd).await;
-    // Push to the Turso replica after a successful state change.
-    // Failure is non-fatal; libSQL catches up later.
-    if modifies_state && result.is_ok() {
-        db::maybe_sync(&db, &cfg).await;
-    }
+    let (result, err_code) = dispatch(&db, cli.cmd).await;
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -140,27 +113,7 @@ async fn real_main() -> ExitCode {
     }
 }
 
-/// Commands that write to the database. `mt path next` mutates because
-/// it auto-logs `quiz_presented` / `lesson_taught`; read-only path
-/// queries (`list`, `state`, `tree`) and the operator-only graph
-/// inspectors (`show`, `list`, `dump`) don't trigger a foreground sync.
-fn mutating(cmd: &Cmd) -> bool {
-    match cmd {
-        Cmd::Path(p) => matches!(
-            p.op,
-            PathOp::New(_) | PathOp::Next(_) | PathOp::Strategy(_) | PathOp::Subpath(_)
-        ),
-        Cmd::Lesson(_) | Cmd::Quiz(_) | Cmd::MigrateFromAyml(_) => true,
-        Cmd::Graph(_) | Cmd::Instruct(_) => false,
-        #[cfg(feature = "mcp")]
-        Cmd::Mcp(_) => false,
-    }
-}
-
-/// CLI helper: treat empty strings (e.g. `MT_API_KEY=`) as "not set" so
-/// the env-var fallback doesn't accidentally feed an empty token into
-/// the constant-time bearer compare.
-#[cfg(feature = "mcp")]
+/// Filters out empty strings so unset environment variables do not match empty bearer tokens.
 fn nonempty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.is_empty())
 }
@@ -175,10 +128,6 @@ fn is_mcp(_cmd: &Cmd) -> bool {
     false
 }
 
-/// Install the global `tracing` subscriber. CLI commands run quietly
-/// (only `warn`+); `mt mcp` opts into `info`-level logs from our crate,
-/// `rmcp`, and `tower_http` so request-level events from the long-
-/// running server show up by default. `RUST_LOG` overrides either side.
 fn init_tracing(verbose: bool) {
     let default_filter = if verbose {
         "mathtutor=info,rmcp=info,tower_http=info,warn"
@@ -193,31 +142,37 @@ fn init_tracing(verbose: bool) {
         .init();
 }
 
-/// Run the chosen subcommand. Returns the result plus the exit code to
-/// use on failure. Most commands exit `2` (config / IO / validation),
-/// `mt path next` / `mt path state` / `mt path tree` / `mt graph dump`
-/// exit `1` to distinguish "scheduling / state read failure" from
-/// "you held it wrong."
 #[allow(clippy::too_many_lines)]
-async fn dispatch(conn: &Connection, cmd: Cmd) -> (Result<()>, u8) {
+async fn dispatch(db: &db::Db, cmd: Cmd) -> (Result<()>, u8) {
     match cmd {
         Cmd::Instruct(_) => unreachable!("handled before dispatch"),
+        Cmd::ImportTurso(c) => match c.url.or_else(|| nonempty(std::env::var("TURSO_URL").ok())) {
+            Some(url) => (
+                import::cmd_import_turso(
+                    db,
+                    &url,
+                    nonempty(std::env::var("TURSO_AUTH_TOKEN").ok()),
+                )
+                .await,
+                1,
+            ),
+            None => (Err(Error::MissingTursoUrl), 2),
+        },
         #[cfg(feature = "mcp")]
         Cmd::Mcp(_) => unreachable!("handled before dispatch"),
-        Cmd::Path(p) => dispatch_path(conn, p.op).await,
-        Cmd::Graph(g) => dispatch_graph(conn, g.op).await,
-        Cmd::Lesson(l) => dispatch_lesson(conn, l.op).await,
-        Cmd::Quiz(q) => dispatch_quiz(conn, q.op).await,
-        Cmd::MigrateFromAyml(c) => (migrate::cmd_migrate(conn, c.from.as_deref()).await, 2),
+        Cmd::Path(p) => dispatch_path(db, p.op).await,
+        Cmd::Graph(g) => dispatch_graph(db, g.op).await,
+        Cmd::Lesson(l) => dispatch_lesson(db, l.op).await,
+        Cmd::Quiz(q) => dispatch_quiz(db, q.op).await,
     }
 }
 
-async fn dispatch_path(conn: &Connection, op: PathOp) -> (Result<()>, u8) {
+async fn dispatch_path(db: &db::Db, op: PathOp) -> (Result<()>, u8) {
     match op {
-        PathOp::List(c) => (path::cmd_path_list(conn, c.graph.as_deref()).await, 1),
+        PathOp::List(c) => (path::cmd_path_list(db, c.graph.as_deref()).await, 1),
         PathOp::New(c) => {
             let targets = cli::flatten_ids(&c.targets);
-            let r = path::cmd_path_new(conn, &c.goal, &targets, c.strategy, c.graph.as_deref())
+            let r = path::cmd_path_new(db, &c.goal, &targets, c.strategy, c.graph.as_deref())
                 .await
                 .map(|id| {
                     eprintln!("created path: {id}");
@@ -225,45 +180,45 @@ async fn dispatch_path(conn: &Connection, op: PathOp) -> (Result<()>, u8) {
             (r, 2)
         }
         PathOp::State(c) => (
-            state::cmd_path_state(conn, c.path.as_deref(), c.graph.as_deref()).await,
+            state::cmd_path_state(db, c.path.as_deref(), c.graph.as_deref()).await,
             1,
         ),
         PathOp::Next(c) => match scheduler::NextMode::from_flags(c.new, c.due) {
             Err(e) => (Err(e), 2),
             Ok(mode) => (
-                scheduler::cmd_path_next(conn, c.path.as_deref(), c.graph.as_deref(), mode).await,
+                scheduler::cmd_path_next(db, c.path.as_deref(), c.graph.as_deref(), mode).await,
                 1,
             ),
         },
         PathOp::Strategy(c) => {
-            let r = path::cmd_path_strategy(conn, c.path.as_deref(), c.strategy)
+            let r = path::cmd_path_strategy(db, c.path.as_deref(), c.strategy)
                 .await
                 .map(|id| eprintln!("path {id}: strategy → {}", c.strategy));
             (r, 2)
         }
-        PathOp::Subpath(c) => dispatch_subpath(conn, c.op).await,
+        PathOp::Subpath(c) => dispatch_subpath(db, c.op).await,
         PathOp::Syllabus(c) => (
-            syllabus::cmd_path_syllabus(conn, c.path.as_deref(), c.n, c.graph.as_deref()).await,
+            syllabus::cmd_path_syllabus(db, c.path.as_deref(), c.n, c.graph.as_deref()).await,
             1,
         ),
         PathOp::Tree(c) => (
-            tree::cmd_path_tree(conn, c.path.as_deref(), c.graph.as_deref()).await,
+            tree::cmd_path_tree(db, c.path.as_deref(), c.graph.as_deref()).await,
             1,
         ),
     }
 }
 
-async fn dispatch_subpath(conn: &Connection, op: SubpathOp) -> (Result<()>, u8) {
+async fn dispatch_subpath(db: &db::Db, op: SubpathOp) -> (Result<()>, u8) {
     match op {
         SubpathOp::Set(c) => {
             let atoms = cli::flatten_ids(&c.atoms);
-            let r = subpath::cmd_subpath_set(conn, c.path.as_deref(), &atoms, c.graph.as_deref())
+            let r = subpath::cmd_subpath_set(db, c.path.as_deref(), &atoms, c.graph.as_deref())
                 .await
                 .map(|id| eprintln!("path {id}: subpath set ({} atoms)", atoms.len()));
             (r, 2)
         }
         SubpathOp::Clear(c) => {
-            let r = subpath::cmd_subpath_clear(conn, c.path.as_deref())
+            let r = subpath::cmd_subpath_clear(db, c.path.as_deref())
                 .await
                 .map(|id| eprintln!("path {id}: subpath cleared"));
             (r, 2)
@@ -271,28 +226,28 @@ async fn dispatch_subpath(conn: &Connection, op: SubpathOp) -> (Result<()>, u8) 
     }
 }
 
-async fn dispatch_graph(conn: &Connection, op: GraphOp) -> (Result<()>, u8) {
+async fn dispatch_graph(db: &db::Db, op: GraphOp) -> (Result<()>, u8) {
     match op {
         GraphOp::Check(_) => unreachable!("handled before dispatch"),
         GraphOp::Show(c) => (
-            discover::cmd_graph_show(conn, &c.id, c.path.as_deref(), c.graph.as_deref()).await,
+            discover::cmd_graph_show(db, &c.id, c.path.as_deref(), c.graph.as_deref()).await,
             2,
         ),
         GraphOp::List(c) => (
-            discover::cmd_graph_list(conn, c.id.as_deref(), c.path.as_deref(), c.graph.as_deref())
+            discover::cmd_graph_list(db, c.id.as_deref(), c.path.as_deref(), c.graph.as_deref())
                 .await,
             2,
         ),
-        GraphOp::Dump(_) => (overlay::cmd_graph_dump(conn).await, 1),
+        GraphOp::Dump(_) => (overlay::cmd_graph_dump(db).await, 1),
     }
 }
 
-async fn dispatch_lesson(conn: &Connection, op: LessonOp) -> (Result<()>, u8) {
+async fn dispatch_lesson(db: &db::Db, op: LessonOp) -> (Result<()>, u8) {
     match op {
         LessonOp::Upsert(c) => {
             let atom = c.atom.clone();
             let r = store::cmd_lesson_upsert(
-                conn,
+                db,
                 &c.atom,
                 c.body,
                 c.path.as_deref(),
@@ -307,11 +262,11 @@ async fn dispatch_lesson(conn: &Connection, op: LessonOp) -> (Result<()>, u8) {
     }
 }
 
-async fn dispatch_quiz(conn: &Connection, op: QuizOp) -> (Result<()>, u8) {
+async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> (Result<()>, u8) {
     match op {
         QuizOp::Create(c) => {
             let r = store::cmd_quiz_create(
-                conn,
+                db,
                 &c.atom,
                 c.difficulty,
                 c.question,
@@ -330,7 +285,7 @@ async fn dispatch_quiz(conn: &Connection, op: QuizOp) -> (Result<()>, u8) {
         QuizOp::Update(c) => {
             let quiz = c.quiz.clone();
             let r = store::cmd_quiz_update(
-                conn,
+                db,
                 &c.quiz,
                 c.question,
                 c.answer,
@@ -348,7 +303,7 @@ async fn dispatch_quiz(conn: &Connection, op: QuizOp) -> (Result<()>, u8) {
         }
         QuizOp::Delete(c) => {
             let quiz = c.quiz.clone();
-            let r = store::cmd_quiz_delete(conn, &c.quiz, c.path.as_deref(), c.graph.as_deref())
+            let r = store::cmd_quiz_delete(db, &c.quiz, c.path.as_deref(), c.graph.as_deref())
                 .await
                 .map(|()| {
                     eprintln!("deleted quiz: {quiz}");
@@ -359,7 +314,7 @@ async fn dispatch_quiz(conn: &Connection, op: QuizOp) -> (Result<()>, u8) {
             let quiz = c.quiz.clone();
             let rating = c.rating;
             let r = answer::cmd_quiz_answer(
-                conn,
+                db,
                 &c.quiz,
                 c.rating,
                 c.user_answer,

@@ -1,37 +1,32 @@
-//! `mt path tree`: hierarchical view of the active path.
-//!
-//! Renders every atom reachable from the path's targets — targets plus
-//! the transitive closure of their prerequisites — at its natural cluster
-//! location, walking areas in manifest order so foundations appear first.
-//! Each atom shows its `[LEMH]` state badge; targets are flagged with `*`,
-//! and the scheduler's next atom with `← NEXT`.
+//! Hierarchical tree view of a learning path (`mt path tree`).
 
 use std::collections::HashSet;
 use std::path::Path;
 
 use chrono::Utc;
-use libsql::Connection;
 
 use crate::Result;
-use crate::cards;
+use crate::db::Db;
 use crate::graph::{self, FlatConcept, Graph, natural_id_cmp};
-use crate::path::{load_path, resolve_id};
 use crate::progress::PathProgress;
 use crate::scheduler;
 use crate::types::Difficulty;
+use crate::view::Want;
 
+/// Render the prerequisite tree for `explicit_id` (or the latest path) to stdout (`mt path tree`).
 pub async fn cmd_path_tree(
-    conn: &Connection,
+    db: &Db,
     explicit_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let id = resolve_id(conn, explicit_id).await?;
-    let p = load_path(conn, &id).await?;
-    let g = Graph::load_for_path(conn, graph_dir).await?;
+    let view = db.snapshot(&Want::path(explicit_id)).await?;
+    let ps = view.path()?;
+    let p = &ps.file;
+    let g = view.graph(graph_dir)?;
     let manifest = graph::load_manifest_default(graph_dir)?;
-    let progress = PathProgress::load(conn, &id).await?;
-    let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
-    let subpath = crate::subpath::load_resolved(conn, &id, &g).await?;
+    let progress = ps.progress();
+    let due = ps.due(Utc::now());
+    let subpath = crate::subpath::resolved(p, &g)?;
     let target_atoms = p.resolve_targets(&g)?;
 
     let targets: HashSet<String> = target_atoms.iter().cloned().collect();
@@ -40,7 +35,7 @@ pub async fn cmd_path_tree(
     let spine = build_spine(&g, &reachable);
     let next_atom = scheduler::next_action(
         &g,
-        &p,
+        p,
         &target_atoms,
         &progress,
         &due,
@@ -114,10 +109,7 @@ pub async fn cmd_path_tree(
     Ok(())
 }
 
-/// Cluster IDs (and atom IDs) needed to root every reachable atom in the
-/// hierarchy. Walks each atom up via id-prefix (`la.5.4.7` → `la.5.4` →
-/// `la.5`), keeping only ancestors that exist in the graph (the area's
-/// own bare prefix `la` lives in the manifest, not the graph).
+/// Return all atom and ancestor cluster IDs for `atoms` in `g`.
 pub fn build_spine<'a, I>(g: &Graph, atoms: I) -> HashSet<String>
 where
     I: IntoIterator<Item = &'a String>,
@@ -149,7 +141,6 @@ fn top_level_in_area<'a>(g: &'a Graph, prefix: &str) -> Vec<&'a FlatConcept> {
             parts.len() == 2 && parts[0] == prefix
         })
         .collect();
-    // Natural-numeric sort so `tx.2` comes before `tx.10`, not after.
     out.sort_by(|a, b| natural_id_cmp(&a.id, &b.id));
     out
 }
@@ -171,8 +162,6 @@ fn render_node(
 
     if c.children_ids.is_empty() {
         let badge = state_badge(progress, c);
-        // A target outranks the subpath marker (the subpath's tail is a
-        // target, and `*` is the more important flag there).
         let star = if targets.contains(&c.id) {
             " *"
         } else if subpath.contains(&c.id) {
@@ -212,9 +201,8 @@ fn render_node(
     }
 }
 
+/// Format the `[LEMH]` completion badge for `c` in `progress`.
 pub fn state_badge(progress: &PathProgress, c: &FlatConcept) -> String {
-    // The `L` slot reflects "taught in this path" (per-path), not just
-    // "lesson body exists in the graph" (cross-path / authored anywhere).
     let lesson = if progress.lesson_taught(&c.id) {
         'L'
     } else {

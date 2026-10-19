@@ -1,24 +1,23 @@
-//! Learning path progress summary
+//! Learning path progress summary (`mt path state`).
 
 use std::collections::HashSet;
 use std::io::{self, Write};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use libsql::{Connection, params};
 use serde::Serialize;
 
 use crate::Result;
-use crate::cards;
-use crate::db;
+use crate::db::Db;
 use crate::graph::{FlatConcept, Graph};
-use crate::path::{PathFile, load_path, resolve_id};
+use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::scheduler;
 use crate::subpath;
 use crate::types::Strategy;
+use crate::view::{PathState, Want};
 
-/// Per-path progress snapshot returned by `compute_state`.
+/// Progress summary for a learning path.
 #[derive(Debug, Serialize)]
 pub struct StateSummary {
     pub path: String,
@@ -27,12 +26,8 @@ pub struct StateSummary {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub targets: TargetProgress,
-    /// Prerequisite-graph coverage. Omitted under the top-down strategy,
-    /// where prerequisites are not required and the count would mislead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reachable: Option<ReachProgress>,
-    /// The active top-down subpath's remaining (incomplete) atoms, in
-    /// order. Empty when none is set or all are complete.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub subpath: Vec<AtomRef>,
     pub past_due: usize,
@@ -42,7 +37,7 @@ pub struct StateSummary {
     pub next: Option<AtomRef>,
 }
 
-/// Completion of the learning path's explicit target atoms
+/// Completion counts for explicit path target atoms.
 #[derive(Debug, Serialize)]
 pub struct TargetProgress {
     pub total: usize,
@@ -50,7 +45,7 @@ pub struct TargetProgress {
     pub learned_pct: usize,
 }
 
-/// Completion across learning path targets & prerequisites
+/// Completion counts across reachable atoms in a bottom-up path.
 #[derive(Debug, Serialize)]
 pub struct ReachProgress {
     pub total: usize,
@@ -58,26 +53,28 @@ pub struct ReachProgress {
     pub learned: usize,
 }
 
+/// Identifier and display name of an atom.
 #[derive(Debug, Serialize)]
 pub struct AtomRef {
     pub id: String,
     pub name: String,
 }
 
+/// Print the progress summary for a learning path (`mt path state`).
+///
 /// # Panics
-/// Panics on stdout write failure (e.g. broken pipe), matching `println!`.
+/// Panics if writing to stdout fails.
 pub async fn cmd_path_state(
-    conn: &Connection,
+    db: &Db,
     explicit_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let s = compute_state(conn, explicit_id, graph_dir).await?;
+    let s = compute_state(db, explicit_id, graph_dir).await?;
     write_state(&mut io::stdout(), &s).expect("write to stdout");
     Ok(())
 }
 
-/// Render the human-readable summary to `w`. Splits the formatting
-/// from the print path so callers (e.g. tests) can capture output.
+/// Format `s` as human-readable text to `w`.
 pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
     writeln!(w, "{:13}{}", "path:", s.path)?;
     writeln!(w, "{:13}{}", "goal:", s.goal)?;
@@ -121,25 +118,27 @@ pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
     Ok(())
 }
 
+/// Compute the progress summary for `explicit_id` (or the latest path).
 pub async fn compute_state(
-    conn: &Connection,
+    db: &Db,
     explicit_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<StateSummary> {
-    let id = resolve_id(conn, explicit_id).await?;
-    let p = load_path(conn, &id).await?;
-    let g = Graph::load_for_path(conn, graph_dir).await?;
-    let progress = PathProgress::load(conn, &id).await?;
-    let due = cards::due_quizzes(conn, &id, Utc::now()).await?;
+    let view = db.snapshot(&Want::path(explicit_id)).await?;
+    let ps = view.path()?;
+    let p = ps.file.clone();
+    let g = view.graph(graph_dir)?;
+    let progress = ps.progress();
+    let due = ps.due(Utc::now());
 
-    let subpath_ids = subpath::load_resolved(conn, &id, &g).await?;
+    let subpath_ids = subpath::resolved(&p, &g)?;
     let target_atoms = p.resolve_targets(&g)?;
 
     let reachable = g.reachable_atoms(&target_atoms);
     let complete = complete_set(&g, &reachable, &progress);
     let (targets, reach) = counters(&target_atoms, &reachable, &complete, &progress);
 
-    let updated_at = latest_event_ts(conn, &id).await?.unwrap_or(p.created_at);
+    let updated_at = p.updated_at;
     let next = scheduler::next_action(
         &g,
         &p,
@@ -151,18 +150,13 @@ pub async fn compute_state(
     )
     .atom_id()
     .and_then(|id| atom_ref(&g, id));
-    let most_recent = most_recent_completed_target(conn, &id, &g, &target_atoms, &complete)
-        .await?
-        .map(atom_ref_of);
+    let most_recent =
+        most_recent_completed_target(ps, &g, &target_atoms, &complete).map(atom_ref_of);
 
-    // Prerequisites aren't required under top-down, so the reachable-graph
-    // denominator would mislead; report the subpath instead.
     let reachable = match p.strategy {
         Strategy::BottomUp => Some(reach),
         Strategy::TopDown => None,
     };
-    // Only the atoms still to teach on the subpath — completed ones have
-    // already drained out of the route.
     let subpath = subpath_ids
         .iter()
         .filter(|a| !scheduler::is_atom_complete(&g, &progress, a))
@@ -184,9 +178,7 @@ pub async fn compute_state(
     })
 }
 
-/// Count completed targets and completed reachable atoms. Resolves the
-/// path's stored targets to atoms against `g` (see
-/// [`PathFile::resolve_targets`]) before counting.
+/// Compute target and reachable completion counters for `p`.
 pub fn compute_progress(
     g: &Graph,
     p: &PathFile,
@@ -240,95 +232,22 @@ fn counters(
     )
 }
 
-async fn latest_event_ts(conn: &Connection, path_id: &str) -> Result<Option<DateTime<Utc>>> {
-    let mut rows = conn
-        .query(
-            "SELECT MAX(ts) FROM events WHERE path_id = ?",
-            params![path_id],
-        )
-        .await?;
-    let Some(row) = rows.next().await? else {
-        return Ok(None);
-    };
-    let raw: Option<String> = row.get(0)?;
-    raw.map(|s| db::parse_ts(&s)).transpose()
-}
-
-/// Target whose three first-correct answers are the most recent;
-/// `None` when no target is fully complete.
-async fn most_recent_completed_target<'a>(
-    conn: &Connection,
-    path_id: &str,
+fn most_recent_completed_target<'a>(
+    ps: &PathState,
     g: &'a Graph,
     targets: &[String],
     complete: &HashSet<String>,
-) -> Result<Option<&'a FlatConcept>> {
-    let completed: Vec<&FlatConcept> = targets
+) -> Option<&'a FlatConcept> {
+    targets
         .iter()
         .filter(|a| complete.contains(a.as_str()))
         .filter_map(|a| g.by_id.get(a.as_str()))
-        .collect();
-    if completed.is_empty() {
-        return Ok(None);
-    }
-    let quiz_ids: Vec<&str> = completed
-        .iter()
-        .flat_map(|c| c.quizzes.iter().map(|q| q.id.as_str()))
-        .collect();
-    let first_correct = load_first_correct(conn, path_id, &quiz_ids).await?;
-
-    // `is_atom_complete` guarantees a logged correct answer for every
-    // quiz, so the SQL returns a row for each id.
-    Ok(completed.into_iter().max_by_key(|c| {
-        c.quizzes
-            .iter()
-            .map(|q| first_correct[q.id.as_str()])
-            .max()
-            .expect("complete atom has three quizzes")
-    }))
-}
-
-/// `SQLite`'s default `SQLITE_MAX_VARIABLE_NUMBER` is 999; we bind one
-/// placeholder for `path_id` plus one per `quiz_id`, so cap each chunk
-/// at 900 ids for headroom.
-const MAX_IN_PARAMS: usize = 900;
-
-async fn load_first_correct(
-    conn: &Connection,
-    path_id: &str,
-    quiz_ids: &[&str],
-) -> Result<std::collections::HashMap<String, DateTime<Utc>>> {
-    let mut out = std::collections::HashMap::with_capacity(quiz_ids.len());
-    for chunk in quiz_ids.chunks(MAX_IN_PARAMS) {
-        load_first_correct_chunk(conn, path_id, chunk, &mut out).await?;
-    }
-    Ok(out)
-}
-
-async fn load_first_correct_chunk(
-    conn: &Connection,
-    path_id: &str,
-    quiz_ids: &[&str],
-    out: &mut std::collections::HashMap<String, DateTime<Utc>>,
-) -> Result<()> {
-    let placeholders = vec!["?"; quiz_ids.len()].join(",");
-    // rating > 1 implies a real quiz answer
-    let sql = format!(
-        "SELECT quiz_id, MIN(ts) FROM events \
-         WHERE path_id = ? AND kind = 'quiz_answered' AND rating > 1 \
-           AND quiz_id IN ({placeholders}) \
-         GROUP BY quiz_id"
-    );
-    let params: Vec<libsql::Value> = std::iter::once(libsql::Value::from(path_id))
-        .chain(quiz_ids.iter().map(|&q| libsql::Value::from(q)))
-        .collect();
-    let mut rows = conn.query(&sql, params).await?;
-    while let Some(row) = rows.next().await? {
-        let quiz_id: String = row.get(0)?;
-        let ts: String = row.get(1)?;
-        out.insert(quiz_id, db::parse_ts(&ts)?);
-    }
-    Ok(())
+        .max_by_key(|c| {
+            c.quizzes
+                .iter()
+                .filter_map(|q| ps.cards.get(&q.id)?.first_correct_at)
+                .max()
+        })
 }
 
 fn atom_ref(g: &Graph, id: &str) -> Option<AtomRef> {

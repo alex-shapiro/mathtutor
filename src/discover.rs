@@ -1,63 +1,59 @@
-//! `mt graph show` and `mt graph list`: read-only curriculum lookup.
-//! Both emit AYML on stdout so callers parse them the same way as
-//! `mt path next`.
+//! Read-only curriculum lookup (`mt graph show` and `mt graph list`).
 
 use std::path::Path;
 
-use libsql::Connection;
 use serde::Serialize;
 
+use crate::db::Db;
 use crate::graph::{self, FlatConcept, Graph, Manifest};
 use crate::progress::PathProgress;
 use crate::scheduler;
+use crate::view::{PathState, Want};
 use crate::{Error, Result};
 
-// ── Commands ───────────────────────────────────────────────────────
-
-/// Read-only `mt graph show`. When `path_id` is set, atom output is
-/// enriched with per-path status (`lesson_taught`, `complete`).
 pub async fn cmd_graph_show(
-    conn: &Connection,
+    db: &Db,
     id: &str,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
-    let g = if path_id.is_some() {
-        Graph::load_for_path(conn, graph_dir).await?
-    } else {
-        Graph::load_default(graph_dir)?
-    };
+    let (g, progress) = graph_for(db, path_id, graph_dir).await?;
     let mut view = show_view(&g, id)?;
-    if let Some(pid) = path_id {
-        let progress = PathProgress::load(conn, pid).await?;
+    if let Some(progress) = progress {
         enrich_show_view(&mut view, &g, &progress, id);
     }
     emit(&view)
 }
 
-/// Read-only `mt graph list`. When `path_id` is set, atom children are
-/// enriched with per-path status.
+/// Loads the merged graph and path progress when `path_id` is provided, or the base curriculum graph otherwise.
+pub async fn graph_for(
+    db: &Db,
+    path_id: Option<&str>,
+    graph_dir: Option<&Path>,
+) -> Result<(std::sync::Arc<Graph>, Option<PathProgress>)> {
+    let Some(pid) = path_id else {
+        return Ok((std::sync::Arc::new(Graph::load_default(graph_dir)?), None));
+    };
+    let view = db.snapshot(&Want::path(Some(pid))).await?;
+    let progress = view.path().map(PathState::progress).unwrap_or_default();
+    Ok((view.graph(graph_dir)?, Some(progress)))
+}
+
 pub async fn cmd_graph_list(
-    conn: &Connection,
+    db: &Db,
     id: Option<&str>,
     path_id: Option<&str>,
     graph_dir: Option<&Path>,
 ) -> Result<()> {
     let manifest = graph::load_manifest_default(graph_dir)?;
-    let g = if path_id.is_some() {
-        Graph::load_for_path(conn, graph_dir).await?
-    } else {
-        Graph::load_default(graph_dir)?
-    };
+    let (g, progress) = graph_for(db, path_id, graph_dir).await?;
     let mut view = list_view(&g, &manifest, id)?;
-    if let Some(pid) = path_id {
-        let progress = PathProgress::load(conn, pid).await?;
+    if let Some(progress) = progress {
         enrich_list_view(&mut view, &g, &progress);
     }
     emit(&view)
 }
 
-/// Build the `mt graph show` view for `id` (an atom or cluster).
 pub fn show_view(g: &Graph, id: &str) -> Result<ShowView> {
     let c = g
         .by_id
@@ -66,8 +62,6 @@ pub fn show_view(g: &Graph, id: &str) -> Result<ShowView> {
     Ok(ShowView::Concept(concept_view(g, c)))
 }
 
-/// Build the `mt graph list` view: the top-level area set for `None`, else
-/// the children of the cluster `id`.
 pub fn list_view(g: &Graph, manifest: &Manifest, id: Option<&str>) -> Result<ListView> {
     let Some(id) = id else {
         return Ok(ListView::Areas(areas_view(manifest)));
@@ -79,23 +73,18 @@ pub fn list_view(g: &Graph, manifest: &Manifest, id: Option<&str>) -> Result<Lis
     Ok(ListView::Children(children_list_view(g, c)))
 }
 
-/// Output of [`show_view`]. AYML serialization stays flat (one record per
-/// call) via `#[serde(untagged)]`.
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum ShowView {
     Concept(ConceptView),
 }
 
-/// Output of [`list_view`].
 #[derive(Serialize)]
 #[serde(untagged)]
 pub enum ListView {
     Areas(AreasView),
     Children(ChildrenListView),
 }
-
-// ── Views (AYML wire shapes) ──────────────────────────────────────
 
 #[derive(Serialize)]
 pub struct AreasView {
@@ -121,17 +110,10 @@ pub struct ChildBrief {
     pub id: String,
     pub name: String,
     pub is_atom: bool,
-    /// Per-path status. Populated only when `--path P` (or MCP
-    /// `path_id`) is supplied; omitted from output otherwise so the
-    /// path-less shape stays byte-identical to the pre-overlay format.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<AtomStatus>,
 }
 
-/// Per-path status fields shared by `mt graph show` and `mt graph
-/// list` when `--path P` is set. `lesson_taught` is true once the path
-/// has logged `LessonTaught` for the atom; `complete` reflects the
-/// scheduler's `is_atom_complete` invariant.
 #[derive(Serialize, Debug, Clone, Copy)]
 pub struct AtomStatus {
     pub lesson_taught: bool,
@@ -155,7 +137,6 @@ pub struct AtomView {
     pub prerequisites: Vec<ChildBrief>,
     pub has_lesson: bool,
     pub quizzes: usize,
-    /// Set when `--path P` is supplied. See [`ChildBrief::status`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<AtomStatus>,
 }
@@ -171,8 +152,6 @@ pub struct ClusterView {
     pub children: Vec<ChildBrief>,
     pub atomic_descendants: usize,
 }
-
-// ── View builders ─────────────────────────────────────────────────
 
 fn areas_view(manifest: &Manifest) -> AreasView {
     AreasView {
@@ -238,8 +217,6 @@ fn concept_view(g: &Graph, c: &FlatConcept) -> ConceptView {
         })
     }
 }
-
-// ── Helpers ───────────────────────────────────────────────────────
 
 fn child_brief(c: &FlatConcept) -> ChildBrief {
     ChildBrief {
