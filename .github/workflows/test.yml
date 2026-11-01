@@ -14,11 +14,6 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Load Baserunna deploy key
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.BASERUNNA_DEPLOY_KEY }}
-
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 

@@ -114,7 +114,7 @@ impl Edit {
                 new: false,
             } => vec![
                 Op::upsert(&QuizRow::new(atom_id, quiz)),
-                Op::delete_row::<RemovedQuizRow>(&[&quiz.id]),
+                Op::delete_row::<RemovedQuizRow>(&quiz.id),
             ],
             Edit::Remove { atom_id, quiz_id } => vec![Op::upsert(&RemovedQuizRow {
                 quiz_id: quiz_id.clone(),

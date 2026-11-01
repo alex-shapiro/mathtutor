@@ -1,5 +1,11 @@
 //! Integration tests for database initialization, streams, concurrency, and caching.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use baserunna_client::api::ListTablesQuery;
+use baserunna_client::bytes::Bytes;
+use baserunna_client::{BoxFuture, Client, HttpTransport, Transport, TransportError, http};
 use chrono::{Duration, Utc};
 use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, Event, EventKind, EventPayload};
@@ -26,26 +32,12 @@ const TABLES: [&str; 10] = [
 ];
 
 async fn table_names(cfg: &DbConfig) -> Vec<String> {
-    #[derive(serde::Deserialize)]
-    struct Tables {
-        tables: Vec<Table>,
-    }
-    #[derive(serde::Deserialize)]
-    struct Table {
-        name: String,
-    }
-    let r: Tables = reqwest::Client::new()
-        .get(format!("{}/v1/dbs/{}/tables", cfg.url, cfg.db))
-        .bearer_auth(&cfg.token)
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let mut names: Vec<String> = r.tables.into_iter().map(|t| t.name).collect();
+    let client = Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
+    let page = client
+        .db(&cfg.db)
+        .list_tables(ListTablesQuery::default())
+        .await;
+    let mut names: Vec<String> = page.unwrap().tables.into_iter().map(|t| t.name).collect();
     names.sort();
     names
 }
@@ -287,13 +279,34 @@ async fn recompute_reproduces_incremental_rows_exactly() {
     assert_eq!(q1.recent, [Rating::Good, Rating::Again]);
 }
 
-fn counting(db: Db) -> (Db, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
-    let received = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let r = received.clone();
-    let db = db.observed(std::sync::Arc::new(move |s: mathtutor::db::Sample| {
-        r.fetch_add(s.received_bytes, std::sync::atomic::Ordering::Relaxed);
-    }));
-    (db, received)
+/// Transport that counts the response bytes it receives.
+struct Counting {
+    inner: HttpTransport,
+    received: Arc<AtomicUsize>,
+}
+
+impl Transport for Counting {
+    fn send(
+        &self,
+        req: http::Request<Bytes>,
+    ) -> BoxFuture<'_, Result<http::Response<Bytes>, TransportError>> {
+        Box::pin(async move {
+            let resp = self.inner.send(req).await?;
+            self.received
+                .fetch_add(resp.body().len(), Ordering::Relaxed);
+            Ok(resp)
+        })
+    }
+}
+
+fn counting(cfg: &DbConfig) -> (Db, Arc<AtomicUsize>) {
+    let received = Arc::new(AtomicUsize::new(0));
+    let inner = cfg.transport().unwrap();
+    let t = Counting {
+        inner,
+        received: received.clone(),
+    };
+    (Db::with_transport(cfg, t), received)
 }
 
 #[tokio::test]
@@ -307,7 +320,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
     })
     .await;
 
-    let (reader, received) = counting(Db::connect(&cfg).unwrap());
+    let (reader, received) = counting(&cfg);
     let read = |db: &Db| {
         let db = db.clone();
         async move {
@@ -321,7 +334,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
         first.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
         Some(body.as_str())
     );
-    let cold = received.swap(0, std::sync::atomic::Ordering::Relaxed);
+    let cold = received.swap(0, Ordering::Relaxed);
     assert!(
         cold > 20_000,
         "first read downloads the overlay ({cold} bytes)"
@@ -332,7 +345,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
         second.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
         Some(body.as_str())
     );
-    let warm = received.swap(0, std::sync::atomic::Ordering::Relaxed);
+    let warm = received.swap(0, Ordering::Relaxed);
     assert!(
         warm < 2_000,
         "a valid cache skips the overlay ({warm} bytes)"
@@ -393,7 +406,8 @@ async fn quiz_ids_stay_unique_when_clients_author_concurrently() {
 #[tokio::test]
 async fn own_overlay_writes_keep_the_cache_valid() {
     let cfg = common::fresh_config();
-    let (db, received) = counting(Db::open(&cfg).await.unwrap());
+    Db::open(&cfg).await.unwrap();
+    let (db, received) = counting(&cfg);
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
     let body = "y".repeat(20_000);
     store::cmd_lesson_upsert(&db, "fnd.1.1.1", body.clone(), Some(PATH_ID), None)
@@ -415,13 +429,13 @@ async fn own_overlay_writes_keep_the_cache_valid() {
     store::cmd_quiz_delete(&db, &quiz, Some(PATH_ID), None)
         .await
         .unwrap();
-    received.store(0, std::sync::atomic::Ordering::Relaxed);
+    received.store(0, Ordering::Relaxed);
 
     let view = db
         .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
         .await
         .unwrap();
-    let warm = received.load(std::sync::atomic::Ordering::Relaxed);
+    let warm = received.load(Ordering::Relaxed);
     assert!(
         warm < 2_000,
         "the writer's cache stays valid ({warm} bytes)"
@@ -452,7 +466,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         .unwrap();
     drop(first);
 
-    let (second, received) = counting(Db::connect(&cfg).unwrap());
+    let (second, received) = counting(&cfg);
     let view = second
         .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
         .await
@@ -461,7 +475,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
         Some(body.as_str())
     );
-    let warm = received.swap(0, std::sync::atomic::Ordering::Relaxed);
+    let warm = received.swap(0, Ordering::Relaxed);
     assert!(warm < 2_000, "the disk copy was used ({warm} bytes)");
 
     let other = Db::connect(&DbConfig {

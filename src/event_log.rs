@@ -165,7 +165,7 @@ pub async fn load(db: &Db, path_id: &str) -> Result<Vec<Event>> {
     let mut op = Op::read_stream(schema::events_stream(path_id), 0);
     let mut out = Vec::new();
     loop {
-        let page = db.read_one(op.clone()).await?;
+        let page = db.client.read_one(op.clone()).await?;
         let next = op.next_page(&page);
         out.extend(page.records::<Event>()?);
         match next {

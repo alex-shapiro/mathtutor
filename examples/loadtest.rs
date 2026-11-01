@@ -11,7 +11,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mathtutor::db::{Db, DbConfig, RequestKind, Sample};
+use mathtutor::db::client::api::{self, Endpoint as _, Histogram, Metrics};
+use mathtutor::db::client::bytes::Bytes;
+use mathtutor::db::client::{BoxFuture, Route, Transport, TransportError, http};
+use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, EventKind};
 use mathtutor::graph::{Graph, Quiz};
 use mathtutor::overlay;
@@ -19,7 +22,104 @@ use mathtutor::scheduler::Action;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
 use mathtutor::view::Want;
 use mathtutor::{answer, cards, path, scheduler, state, store, syllabus};
-use serde::Deserialize;
+
+/// Baserunna request kind, named after its endpoint.
+type RequestKind = &'static str;
+
+fn kind(method: &http::Method, route: &str) -> RequestKind {
+    match route {
+        r if r == api::Txn::ROUTE => "txn",
+        r if r == api::BeginTxn::ROUTE => "begin",
+        r if r == api::TxnOps::ROUTE => "ops",
+        r if r == api::CommitTxn::ROUTE => "commit",
+        r if r == api::AbortTxn::ROUTE && method == http::Method::DELETE => "abort",
+        r if r == api::GetCommit::ROUTE => "status",
+        r if r == api::CreateDb::ROUTE || r == api::CreateTable::ROUTE => "create",
+        _ => "other",
+    }
+}
+
+/// One request to the server.
+#[derive(Debug, Clone)]
+struct Sample {
+    kind: RequestKind,
+    status: u16,
+    elapsed: Duration,
+    server: Option<ServerTiming>,
+    sent_bytes: usize,
+    received_bytes: usize,
+}
+
+/// Durations from a `Server-Timing` response header.
+#[derive(Debug, Clone, Copy, Default)]
+struct ServerTiming {
+    total: Duration,
+    store: Duration,
+    store_calls: u32,
+    commit: Duration,
+    wait: Duration,
+}
+
+impl ServerTiming {
+    fn parse(v: &str) -> Self {
+        let mut t = Self::default();
+        for metric in v.split(',') {
+            let mut parts = metric.trim().split(';');
+            let name = parts.next().unwrap_or_default();
+            let (mut dur, mut desc) = (Duration::ZERO, 0);
+            for p in parts {
+                if let Some(ms) = p.strip_prefix("dur=").and_then(|d| d.parse::<f64>().ok()) {
+                    dur = Duration::from_secs_f64(ms / 1000.0);
+                } else if let Some(n) = p.strip_prefix("desc=").and_then(|d| d.parse().ok()) {
+                    desc = n;
+                }
+            }
+            match name {
+                "total" => t.total = dur,
+                "store" => (t.store, t.store_calls) = (dur, desc),
+                "commit" => t.commit = dur,
+                "wait" => t.wait = dur,
+                _ => {}
+            }
+        }
+        t
+    }
+}
+
+/// Transport that reports each response to an observer.
+struct Observed<T> {
+    inner: T,
+    observe: Arc<dyn Fn(Sample) + Send + Sync>,
+}
+
+impl<T: Transport> Transport for Observed<T> {
+    fn send(
+        &self,
+        req: http::Request<Bytes>,
+    ) -> BoxFuture<'_, Result<http::Response<Bytes>, TransportError>> {
+        Box::pin(async move {
+            let route = req.extensions().get::<Route>().map_or("", |r| r.0);
+            let kind = kind(req.method(), route);
+            let sent_bytes = req.body().len();
+            let started = Instant::now();
+            let resp = self.inner.send(req).await?;
+            let server = resp
+                .headers()
+                .get("server-timing")
+                .and_then(|v| v.to_str().ok())
+                .map(ServerTiming::parse);
+            (self.observe)(Sample {
+                kind,
+                status: resp.status().as_u16(),
+                elapsed: started.elapsed(),
+                server,
+                sent_bytes,
+                received_bytes: resp.body().len(),
+            });
+            Ok(resp)
+        })
+    }
+}
 
 fn env<T: std::str::FromStr>(k: &str, default: T) -> T {
     std::env::var(k)
@@ -157,43 +257,10 @@ impl Stats {
     }
 }
 
-#[derive(Deserialize)]
-struct Metrics {
-    node: String,
-    cpu: Cpu,
-    store: BTreeMap<String, Histogram>,
-    commits: Commits,
-    lag: Histogram,
-    routes: BTreeMap<String, Histogram>,
-}
-
-#[derive(Deserialize)]
-struct Cpu {
-    process_ms: Option<f64>,
-    steal_ms: Option<f64>,
-}
-
-#[derive(Deserialize)]
-struct Histogram {
-    count: u64,
-    mean_ms: Option<f64>,
-    p50_ms: Option<f64>,
-    p90_ms: Option<f64>,
-    p99_ms: Option<f64>,
-    max_ms: Option<f64>,
-    errors: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct Commits {
-    #[serde(flatten)]
-    latency: Histogram,
-    txns_per_batch: f64,
-    max_txns_per_batch: u64,
-}
-
 fn print_server(m: &Metrics, before: Option<&Metrics>, secs: f64) {
-    let delta = |f: fn(&Cpu) -> Option<f64>| Some((f(&m.cpu)? - f(&before?.cpu)?) / (secs * 10.0));
+    let delta = |f: fn(&api::Cpu) -> Option<u64>| {
+        Some((f(&m.cpu)? as f64 - f(&before?.cpu)? as f64) / (secs * 10.0))
+    };
     if let (Some(cpu), Some(steal)) = (delta(|c| c.process_ms), delta(|c| c.steal_ms)) {
         println!("\nserver cpu: process {cpu:.0}% of a core, host steal {steal:.0}%");
     }
@@ -535,7 +602,7 @@ async fn main() {
     let targets = Arc::new(targets());
     let stats = Arc::new(Mutex::new(Stats::default()));
 
-    let observer = {
+    let observer: Arc<dyn Fn(Sample) + Send + Sync> = {
         let stats = stats.clone();
         Arc::new(move |x: Sample| stats.lock().unwrap().observe(&x))
     };
@@ -562,10 +629,12 @@ async fn main() {
             ..base.clone()
         };
         let db_name = db;
-        let db = Db::open(&cfg)
-            .await
-            .expect("open")
-            .observed(observer.clone());
+        Db::open(&cfg).await.expect("open");
+        let transport = Observed {
+            inner: cfg.transport().expect("transport"),
+            observe: observer.clone(),
+        };
+        let db = Db::with_transport(&cfg, transport);
         if seed_atoms > 0 {
             seed(&db, seed_atoms, lesson_bytes).await;
         }
@@ -582,23 +651,16 @@ async fn main() {
     }
 
     let metrics: bool = env("LT_METRICS", 1u8) == 1;
-    let http = reqwest::Client::new();
-    let metrics_url = format!("{}/v1/admin/metrics", base.url.trim_end_matches('/'));
+    let admin = Db::connect(&base).expect("connect").client().clone();
     let server_metrics = |reset: bool| {
-        let (http, url, token) = (http.clone(), metrics_url.clone(), base.token.clone());
+        let admin = admin.clone();
         async move {
-            let method = if reset {
-                reqwest::Method::DELETE
+            let m = if reset {
+                admin.reset_metrics().await
             } else {
-                reqwest::Method::GET
+                admin.metrics().await
             };
-            let r = http
-                .request(method, url)
-                .bearer_auth(token)
-                .send()
-                .await
-                .ok()?;
-            r.json::<Metrics>().await.ok()
+            m.inspect_err(|e| println!("server metrics: {e}")).ok()
         }
     };
     for &n in &steps {
@@ -646,4 +708,29 @@ async fn main() {
         }
     }
     verify(&base, &ledger).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_timing_parses_every_metric() {
+        let t = ServerTiming::parse(
+            "total;dur=80.5, store;dur=75.2;desc=2, commit;dur=74.9, wait;dur=1.5",
+        );
+        assert_eq!(t.total, Duration::from_micros(80_500));
+        assert_eq!((t.store, t.store_calls), (Duration::from_micros(75_200), 2));
+        assert_eq!(t.commit, Duration::from_micros(74_900));
+        assert_eq!(t.wait, Duration::from_micros(1_500));
+    }
+
+    #[test]
+    fn requests_are_named_after_their_endpoint() {
+        let post = http::Method::POST;
+        assert_eq!(kind(&post, api::CommitTxn::ROUTE), "commit");
+        assert_eq!(kind(&http::Method::DELETE, api::AbortTxn::ROUTE), "abort");
+        assert_eq!(kind(&post, api::Txn::ROUTE), "txn");
+        assert_eq!(kind(&http::Method::GET, api::GetCommit::ROUTE), "status");
+    }
 }

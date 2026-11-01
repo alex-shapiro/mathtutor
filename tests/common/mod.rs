@@ -22,6 +22,10 @@ use mathtutor::view::{Changes, PathSel, PathState, View, Want};
 
 pub const PATH_ID: &str = "p_test";
 
+// Compiles only if the test server and mathtutor share one API crate, so tests run against the client that ships.
+const _: fn(&baserunna::error::Error) -> mathtutor::db::client::api::ApiError =
+    baserunna::api::api_error;
+
 struct Server {
     url: String,
     token: String,
@@ -71,29 +75,11 @@ fn start_server() -> Server {
 }
 
 async fn sign_up(url: &str) -> String {
-    #[derive(serde::Serialize)]
-    struct Credentials<'a> {
-        email: &'a str,
-        password: &'a str,
-    }
-    #[derive(serde::Deserialize)]
-    struct Session {
-        token: String,
-    }
-    let creds = Credentials {
-        email: "admin@test.dev",
-        password: "password-123",
-    };
-    reqwest::Client::new()
-        .post(format!("{url}/v1/auth/signup"))
-        .json(&creds)
-        .send()
+    let client = baserunna_client::Client::new(baserunna_client::HttpTransport::new(url));
+    client
+        .sign_up("admin@test.dev", "password-123")
         .await
-        .and_then(reqwest::Response::error_for_status)
         .expect("sign up")
-        .json::<Session>()
-        .await
-        .expect("session")
         .token
 }
 

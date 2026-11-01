@@ -4,12 +4,12 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::db::{Db, Op, Row, ts};
-use crate::error::Error;
+use crate::db::client::api::{Column, ColumnType, ErrorCode, NewTable};
+use crate::db::{Op, Row, client, ts};
 use crate::path::PathFile;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 
-const VERSION: u64 = 1;
+const VERSION: &str = "1";
 const VERSION_KEY: &str = "schema_version";
 
 /// Return the stream key for the event log of `path_id`.
@@ -185,172 +185,157 @@ impl Row for OAuthRefreshToken {
     const TABLE: &'static str = "oauth_refresh_tokens";
 }
 
-#[derive(Serialize)]
-struct Table {
-    name: &'static str,
-    primary_key: &'static [&'static str],
-    columns: &'static [Column],
+fn table(name: &str, primary_key: &[&str], columns: Vec<Column>) -> NewTable {
+    NewTable {
+        name: name.into(),
+        columns,
+        primary_key: primary_key.iter().map(|c| (*c).to_string()).collect(),
+        indexes: Vec::new(),
+        if_not_exists: true,
+    }
 }
 
-#[derive(Serialize)]
-struct Column {
-    name: &'static str,
-    #[serde(rename = "type")]
-    ty: ColumnType,
-    nullable: bool,
+fn string(name: &str) -> Column {
+    Column::new(name, ColumnType::String)
 }
 
-#[derive(Serialize, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-enum ColumnType {
-    String,
-    Int,
-    Float,
-    Json,
+fn string_or_null(name: &str) -> Column {
+    Column::nullable(name, ColumnType::String)
 }
 
-const fn col(name: &'static str, ty: ColumnType, nullable: bool) -> Column {
-    Column { name, ty, nullable }
+fn int(name: &str) -> Column {
+    Column::new(name, ColumnType::Int)
 }
 
-const fn string(name: &'static str) -> Column {
-    col(name, ColumnType::String, false)
+fn float_or_null(name: &str) -> Column {
+    Column::nullable(name, ColumnType::Float)
 }
 
-const fn string_or_null(name: &'static str) -> Column {
-    col(name, ColumnType::String, true)
+fn json(name: &str) -> Column {
+    Column::new(name, ColumnType::Json)
 }
 
-const fn int(name: &'static str) -> Column {
-    col(name, ColumnType::Int, false)
+fn token_columns() -> Vec<Column> {
+    vec![
+        string("token"),
+        string("client_id"),
+        string_or_null("scope"),
+        string("expires_at"),
+    ]
 }
 
-const fn float_or_null(name: &'static str) -> Column {
-    col(name, ColumnType::Float, true)
+/// Returns the definition of every table.
+pub fn tables() -> Vec<NewTable> {
+    vec![
+        table(
+            PathFile::TABLE,
+            &["id"],
+            vec![
+                string("id"),
+                string("goal"),
+                string("created_at"),
+                string("strategy"),
+                json("targets"),
+                json("subpath"),
+            ],
+        ),
+        table(
+            LessonRow::TABLE,
+            &["atom_id"],
+            vec![string("atom_id"), string("body")],
+        ),
+        table(
+            QuizRow::TABLE,
+            &["quiz_id"],
+            vec![
+                string("quiz_id"),
+                string("atom_id"),
+                string("difficulty"),
+                string_or_null("kind"),
+                string("question"),
+                string("answer"),
+                string_or_null("rubric"),
+            ],
+        ),
+        table(
+            RemovedQuizRow::TABLE,
+            &["quiz_id"],
+            vec![string("quiz_id"), string("atom_id")],
+        ),
+        table(
+            CardRecord::TABLE,
+            &["path_id", "quiz_id"],
+            vec![
+                string("path_id"),
+                string("quiz_id"),
+                float_or_null("stability"),
+                float_or_null("difficulty"),
+                string_or_null("due_at"),
+                string_or_null("last_reviewed_at"),
+                int("reps"),
+                int("lapses"),
+                int("presented"),
+                string_or_null("last_presented_at"),
+                string_or_null("first_correct_at"),
+                json("recent"),
+            ],
+        ),
+        table(
+            TaughtRow::TABLE,
+            &["path_id", "atom_id"],
+            vec![
+                string("path_id"),
+                string("atom_id"),
+                int("count"),
+                string_or_null("last_at"),
+            ],
+        ),
+        table(
+            OAuthClient::TABLE,
+            &["client_id"],
+            vec![
+                string("client_id"),
+                string_or_null("client_name"),
+                json("redirect_uris"),
+                string("created_at"),
+            ],
+        ),
+        table(
+            OAuthCode::TABLE,
+            &["code"],
+            vec![
+                string("code"),
+                string("client_id"),
+                string("redirect_uri"),
+                string_or_null("scope"),
+                string("code_challenge"),
+                string("code_challenge_method"),
+                string_or_null("resource"),
+                string("expires_at"),
+                string_or_null("used_at"),
+            ],
+        ),
+        table(OAuthAccessToken::TABLE, &["token"], token_columns()),
+        table(OAuthRefreshToken::TABLE, &["token"], token_columns()),
+    ]
 }
-
-const fn json(name: &'static str) -> Column {
-    col(name, ColumnType::Json, false)
-}
-
-const TABLES: &[Table] = &[
-    Table {
-        name: PathFile::TABLE,
-        primary_key: &["id"],
-        columns: &[
-            string("id"),
-            string("goal"),
-            string("created_at"),
-            string("strategy"),
-            json("targets"),
-            json("subpath"),
-        ],
-    },
-    Table {
-        name: LessonRow::TABLE,
-        primary_key: &["atom_id"],
-        columns: &[string("atom_id"), string("body")],
-    },
-    Table {
-        name: QuizRow::TABLE,
-        primary_key: &["quiz_id"],
-        columns: &[
-            string("quiz_id"),
-            string("atom_id"),
-            string("difficulty"),
-            string_or_null("kind"),
-            string("question"),
-            string("answer"),
-            string_or_null("rubric"),
-        ],
-    },
-    Table {
-        name: RemovedQuizRow::TABLE,
-        primary_key: &["quiz_id"],
-        columns: &[string("quiz_id"), string("atom_id")],
-    },
-    Table {
-        name: CardRecord::TABLE,
-        primary_key: &["path_id", "quiz_id"],
-        columns: &[
-            string("path_id"),
-            string("quiz_id"),
-            float_or_null("stability"),
-            float_or_null("difficulty"),
-            string_or_null("due_at"),
-            string_or_null("last_reviewed_at"),
-            int("reps"),
-            int("lapses"),
-            int("presented"),
-            string_or_null("last_presented_at"),
-            string_or_null("first_correct_at"),
-            json("recent"),
-        ],
-    },
-    Table {
-        name: TaughtRow::TABLE,
-        primary_key: &["path_id", "atom_id"],
-        columns: &[
-            string("path_id"),
-            string("atom_id"),
-            int("count"),
-            string_or_null("last_at"),
-        ],
-    },
-    Table {
-        name: OAuthClient::TABLE,
-        primary_key: &["client_id"],
-        columns: &[
-            string("client_id"),
-            string_or_null("client_name"),
-            json("redirect_uris"),
-            string("created_at"),
-        ],
-    },
-    Table {
-        name: OAuthCode::TABLE,
-        primary_key: &["code"],
-        columns: &[
-            string("code"),
-            string("client_id"),
-            string("redirect_uri"),
-            string_or_null("scope"),
-            string("code_challenge"),
-            string("code_challenge_method"),
-            string_or_null("resource"),
-            string("expires_at"),
-            string_or_null("used_at"),
-        ],
-    },
-    Table {
-        name: OAuthAccessToken::TABLE,
-        primary_key: &["token"],
-        columns: TOKEN_COLUMNS,
-    },
-    Table {
-        name: OAuthRefreshToken::TABLE,
-        primary_key: &["token"],
-        columns: TOKEN_COLUMNS,
-    },
-];
-
-const TOKEN_COLUMNS: &[Column] = &[
-    string("token"),
-    string("client_id"),
-    string_or_null("scope"),
-    string("expires_at"),
-];
 
 /// Ensure that the database and all required tables exist.
-pub async fn ensure(db: &Db) -> Result<()> {
-    match db.read(&[Op::get(VERSION_KEY)]).await {
-        Ok(r) if r[0].value().and_then(|v| v.parse().ok()) == Some(VERSION) => return Ok(()),
-        Ok(_) => {}
-        Err(Error::Api(e)) if e.status == 404 => db.create_database().await?,
-        Err(e) => return Err(e),
+pub async fn ensure(db: &client::Db) -> Result<()> {
+    let current = match db.read_one(Op::get(VERSION_KEY)).await {
+        Ok(r) => r.entry()?.and_then(|e| e.value.data().cloned()),
+        Err(e) if e.code() == Some(ErrorCode::NotFound) => {
+            db.ensure().await?;
+            None
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if current.as_deref() == Some(VERSION.as_bytes()) {
+        return Ok(());
     }
-    for t in TABLES {
-        db.create_table(t).await?;
+    for t in tables() {
+        db.create_table(&t).await?;
     }
-    db.write(&[Op::put(VERSION_KEY, VERSION.to_string())]).await
+    db.write(&[Op::put(VERSION_KEY, VERSION)]).await?;
+    Ok(())
 }

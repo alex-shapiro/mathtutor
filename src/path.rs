@@ -74,7 +74,7 @@ pub fn set_subpath(changes: &mut Changes, path_id: &str, atoms: &[String]) {
         subpath: Some(atoms),
         ..PathUpdate::default()
     };
-    changes.op(Op::update::<PathFile>(&[path_id], &set));
+    changes.op(Op::update::<PathFile>(path_id, &set));
 }
 
 /// Create a new learning path and return its ID.
@@ -127,7 +127,7 @@ pub async fn cmd_path_strategy(
             strategy: Some(strategy),
             ..PathUpdate::default()
         };
-        changes.op(Op::update::<PathFile>(&[&id], &set));
+        changes.op(Op::update::<PathFile>(&id, &set));
         Ok(id)
     })
     .await

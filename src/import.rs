@@ -9,7 +9,8 @@ use serde_json::{Map, Value as Json};
 
 use crate::answer::atom_from_quiz_id;
 use crate::cards::{self, CardState};
-use crate::db::{Db, Op, PAGE, ts};
+use crate::db::client::api::PAGE_MAX;
+use crate::db::{Db, Op, ts};
 use crate::event_log::{Event, EventKind, EventPayload};
 use crate::graph::Quiz;
 use crate::overlay::Edit;
@@ -466,7 +467,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
 }
 
 async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
-    let existing = db.read_one(Op::get_row::<PathFile>(&[&p.id])).await?;
+    let existing = db.client.read_one(Op::get_row::<PathFile>(&p.id)).await?;
     if existing.row::<PathFile>()?.is_some() {
         return Ok(false);
     }
@@ -476,8 +477,12 @@ async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
         Op::insert(p),
         Op::put(activity_key(&p.id), ts::format(latest)),
     ];
-    ops.extend(events.chunks(PAGE).map(|c| Op::append(stream.clone(), c)));
-    db.write(&ops).await?;
+    ops.extend(
+        events
+            .chunks(PAGE_MAX)
+            .map(|c| Op::append(stream.clone(), c)),
+    );
+    db.client.write(&ops).await?;
     Ok(true)
 }
 

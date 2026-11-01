@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
 
-use crate::db::{self, Db, Op};
+use crate::db::client::Txn;
+use crate::db::{Db, Op};
 use crate::event_log::{Event, EventKind};
 use crate::schema::{self, CardRecord, TaughtRow};
 use crate::types::Rating;
@@ -171,33 +172,38 @@ impl TryFrom<CardRecord> for CardRow {
 
 /// Rebuilds the `cards` and `taught` rows for `path_id` from its event stream in a single transaction.
 pub async fn recompute(db: &Db, path_id: &str) -> Result<()> {
-    db::retry(|| recompute_once(db, path_id)).await
+    let mut retry = db.client.retry();
+    loop {
+        let mut txn = db.client.begin();
+        let r = recompute_in(&mut txn, path_id).await;
+        if retry.finish(txn, r).await?.is_some() {
+            return Ok(());
+        }
+    }
 }
 
-async fn recompute_once(db: &Db, path_id: &str) -> Result<()> {
+async fn recompute_in(txn: &mut Txn, path_id: &str) -> Result<()> {
     let mut op = Op::read_stream(schema::events_stream(path_id), 0);
-    let (txn, mut results) = db.begin(std::slice::from_ref(&op)).await?;
     let mut events = Vec::new();
     loop {
-        let page = results.swap_remove(0);
+        let page = txn.run_one(op.clone()).await?;
         let next = op.next_page(&page);
         events.extend(page.records::<Event>()?);
         let Some(next) = next else { break };
-        results = txn.ops(std::slice::from_ref(&next)).await?;
         op = next;
     }
     let (cards, taught) = fold_history(path_id, &events)?;
-    let mut ops = vec![
-        Op::delete_rows::<CardRecord>(&[path_id]),
-        Op::delete_rows::<TaughtRow>(&[path_id]),
-    ];
-    ops.extend(cards.iter().map(|c| Op::upsert(&CardRecord::from(c))));
-    ops.extend(
+    txn.write([
+        Op::delete_rows::<CardRecord>(path_id),
+        Op::delete_rows::<TaughtRow>(path_id),
+    ]);
+    txn.write(cards.iter().map(|c| Op::upsert(&CardRecord::from(c))));
+    txn.write(
         taught
             .into_iter()
             .map(|(atom_id, t)| Op::upsert(&t.into_row(path_id, atom_id))),
     );
-    txn.commit(&ops).await
+    Ok(())
 }
 
 pub fn fold_history(

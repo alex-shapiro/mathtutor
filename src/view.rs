@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex, Weak};
 use chrono::{DateTime, Utc};
 
 use crate::cards::{self, CardRow};
-use crate::db::{self, Db, Op, OpResult, Txn, ts};
+use crate::db::client::{Entry, Txn};
+use crate::db::{Db, Op, OpResult, ts};
 use crate::event_log::{Event, EventKind};
 use crate::graph::Graph;
 use crate::overlay::{Edit, Overlay};
@@ -19,7 +20,6 @@ use crate::schema::{
 };
 use crate::{Error, Result};
 
-const RETRY_FOR: std::time::Duration = std::time::Duration::from_secs(30);
 const OVERLAY_VERSION_KEY: &str = "overlay_version";
 
 pub(crate) type CachedOverlay = (u64, Arc<Overlay>);
@@ -275,7 +275,7 @@ impl Changes {
         let mut ops = self.ops;
         if !self.overlay.is_empty() {
             ops.extend(self.overlay.iter().flat_map(Edit::ops));
-            ops.push(Op::increment(OVERLAY_VERSION_KEY));
+            ops.push(Op::increment(OVERLAY_VERSION_KEY, 1));
         }
         ops.extend(
             self.cards
@@ -299,9 +299,9 @@ impl Db {
     /// Load `want` from a strong read snapshot without starting a write transaction.
     pub async fn snapshot(&self, want: &Want) -> Result<View> {
         let mut plan = Plan::new(want, self.hint(), self.cached_overlay());
-        let mut results = self.read(&plan.ops()).await?;
+        let mut results = self.client.read(&plan.ops()).await?;
         while let Some(more) = plan.absorb(results)? {
-            results = self.read(&more).await?;
+            results = self.client.read(&more).await?;
         }
         self.remember(&plan);
         Ok(plan.view)
@@ -313,45 +313,38 @@ impl Db {
         want: &Want,
         mut f: impl FnMut(&View, &mut Changes) -> Result<T>,
     ) -> Result<T> {
-        let started = std::time::Instant::now();
-        let mut attempt = 0;
-        loop {
-            match self.attempt(want, &mut f).await {
-                Err(e) if db::is_retryable(&e) && started.elapsed() < RETRY_FOR => {
-                    attempt += 1;
-                    tokio::time::sleep(db::backoff(attempt)).await;
-                }
-                r => return r,
+        let mut retry = self.client.retry();
+        let (out, plan, edits) = loop {
+            let mut txn = self.client.begin();
+            let r = self.attempt(&mut txn, want, &mut f).await;
+            if let Some(r) = retry.finish(txn, r).await? {
+                break r;
             }
-        }
-    }
-
-    async fn attempt<T>(
-        &self,
-        want: &Want,
-        f: &mut impl FnMut(&View, &mut Changes) -> Result<T>,
-    ) -> Result<T> {
-        let mut plan = Plan::new(want, self.hint(), self.cached_overlay());
-        let (txn, mut results) = self.begin(&plan.ops()).await?;
-        loop {
-            match plan.absorb(results) {
-                Ok(Some(more)) => results = txn.ops(&more).await?,
-                Ok(None) => break,
-                Err(e) => return abort(txn, e).await,
-            }
-        }
-        let mut changes = Changes::default();
-        let out = match f(&plan.view, &mut changes) {
-            Ok(out) => out,
-            Err(e) => return abort(txn, e).await,
         };
-        let edits = changes.overlay.clone();
-        txn.commit(&changes.into_ops()).await?;
         self.remember(&plan);
         if !edits.is_empty() {
             self.remember_edits(&plan, &edits);
         }
         Ok(out)
+    }
+
+    /// Reads `want` in `txn` and queues the writes of `f`.
+    async fn attempt<T>(
+        &self,
+        txn: &mut Txn,
+        want: &Want,
+        f: &mut impl FnMut(&View, &mut Changes) -> Result<T>,
+    ) -> Result<(T, Plan, Vec<Edit>)> {
+        let mut plan = Plan::new(want, self.hint(), self.cached_overlay());
+        let mut results = txn.run(&plan.ops()).await?;
+        while let Some(more) = plan.absorb(results)? {
+            results = txn.run(&more).await?;
+        }
+        let mut changes = Changes::default();
+        let out = f(&plan.view, &mut changes)?;
+        let edits = changes.overlay.clone();
+        txn.write(changes.into_ops());
+        Ok((out, plan, edits))
     }
 
     fn hint(&self) -> Option<String> {
@@ -404,11 +397,6 @@ impl Db {
     }
 }
 
-async fn abort<T>(txn: Txn, e: Error) -> Result<T> {
-    txn.abort().await;
-    Err(e)
-}
-
 #[derive(Debug)]
 enum PathRow {
     Unread,
@@ -454,24 +442,35 @@ struct Plan {
 
 fn path_reads(id: &str) -> [(Slot, Op); 3] {
     [
-        (Slot::PathRow, Op::get_row::<PathFile>(&[id])),
-        (Slot::Cards, Op::query::<CardRecord>(&[id])),
-        (Slot::Taught, Op::query::<TaughtRow>(&[id])),
+        (Slot::PathRow, Op::get_row::<PathFile>(id)),
+        (Slot::Cards, Op::query::<CardRecord>(id)),
+        (Slot::Taught, Op::query::<TaughtRow>(id)),
     ]
 }
 
 fn overlay_reads() -> [(Slot, Op); 3] {
     [
-        (Slot::Lessons, Op::query::<LessonRow>(&[])),
-        (Slot::Quizzes, Op::query::<QuizRow>(&[])),
-        (Slot::Removed, Op::query::<RemovedQuizRow>(&[])),
+        (Slot::Lessons, Op::query::<LessonRow>(())),
+        (Slot::Quizzes, Op::query::<QuizRow>(())),
+        (Slot::Removed, Op::query::<RemovedQuizRow>(())),
     ]
 }
 
-fn parse_activity(key: &str, value: Option<&str>) -> Result<DateTime<Utc>> {
-    value
-        .ok_or_else(|| Error::BadRow(format!("{key}: not UTF-8")))
-        .and_then(|v| ts::parse(v).map_err(|e| Error::BadRow(format!("{key}: {e}"))))
+/// Returns the key and value of `e` as UTF-8.
+fn text(e: &Entry) -> Result<(&str, &str)> {
+    let key = std::str::from_utf8(&e.key)
+        .map_err(|_| Error::BadRow(format!("{:?}: key is not UTF-8", e.key)))?;
+    let value = e.value.data().and_then(|d| std::str::from_utf8(d).ok());
+    Ok((
+        key,
+        value.ok_or_else(|| Error::BadRow(format!("{key}: not UTF-8")))?,
+    ))
+}
+
+fn parse_activity(e: &Entry) -> Result<(&str, DateTime<Utc>)> {
+    let (key, value) = text(e)?;
+    let at = ts::parse(value).map_err(|err| Error::BadRow(format!("{key}: {err}")))?;
+    Ok((key.strip_prefix(ACTIVITY_PREFIX).unwrap_or(key), at))
 }
 
 impl Plan {
@@ -485,9 +484,9 @@ impl Plan {
         }
         let recent = want.path == PathSel::Recent;
         if want.all_paths {
-            pending.push((Slot::Paths, Op::query::<PathFile>(&[])));
-            pending.push((Slot::AllCards, Op::query::<CardRecord>(&[])));
-            pending.push((Slot::AllTaught, Op::query::<TaughtRow>(&[])));
+            pending.push((Slot::Paths, Op::query::<PathFile>(())));
+            pending.push((Slot::AllCards, Op::query::<CardRecord>(())));
+            pending.push((Slot::AllTaught, Op::query::<TaughtRow>(())));
         }
         if want.all_paths || recent {
             pending.push((Slot::Activity, Op::scan(ACTIVITY_PREFIX)));
@@ -536,10 +535,12 @@ impl Plan {
             }
             match slot {
                 Slot::OverlayVersion => {
-                    let v = r
-                        .value()
-                        .map_or(Ok(0), str::parse)
-                        .map_err(|e| Error::BadRow(format!("{OVERLAY_VERSION_KEY}: {e}")))?;
+                    let v = match r.entry()? {
+                        Some(e) => text(&e)?.1.parse().map_err(|err| {
+                            Error::BadRow(format!("{OVERLAY_VERSION_KEY}: {err}"))
+                        })?,
+                        None => 0,
+                    };
                     self.overlay_version = Some(v);
                     match self.cache.take() {
                         Some((cached, overlay)) if cached == v => {
@@ -562,16 +563,15 @@ impl Plan {
                     self.path_row = r.row()?.map_or(PathRow::Missing, PathRow::Found);
                 }
                 Slot::Activity => {
-                    for item in r.items() {
-                        let at = parse_activity(&item.key, item.value.as_deref())?;
-                        let id = item.key.strip_prefix(ACTIVITY_PREFIX).unwrap_or(&item.key);
+                    for e in r.scan_page()?.entries {
+                        let (id, at) = parse_activity(&e)?;
                         self.activity.insert(id.to_string(), at);
                     }
                 }
                 Slot::PathActivity => {
-                    if let (Some(id), Some(at)) = (&self.path_id, r.value()) {
-                        let at = parse_activity(&activity_key(id), Some(at))?;
-                        self.activity.insert(id.clone(), at);
+                    if let Some(e) = r.entry()? {
+                        let (id, at) = parse_activity(&e)?;
+                        self.activity.insert(id.to_string(), at);
                     }
                 }
             }

@@ -45,16 +45,13 @@ pub enum Error {
     Fsrs(String),
 
     #[error("baserunna: {0}")]
-    Api(crate::db::ApiError),
+    Baserunna(#[from] baserunna_client::Error),
 
-    #[error("baserunna: {0}")]
+    #[error("http: {0}")]
     Http(#[from] reqwest::Error),
 
     #[error("BASERUNNA_TOKEN not set; create an API key on the Baserunna server")]
     MissingToken,
-
-    #[error("unexpected response: {0}")]
-    BadResponse(String),
 
     #[error("malformed row: {0}")]
     BadRow(String),
@@ -122,4 +119,13 @@ pub enum Error {
 
     #[error("mcp server: {0}")]
     Serve(#[source] std::io::Error),
+}
+
+impl baserunna_client::TxnError for Error {
+    fn client_error(&self) -> Option<&baserunna_client::Error> {
+        match self {
+            Error::Baserunna(e) => Some(e),
+            _ => None,
+        }
+    }
 }

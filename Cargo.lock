@@ -244,11 +244,15 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 [[package]]
 name = "baserunna"
 version = "0.1.0"
-source = "git+ssh://git@github.com/alex-shapiro/baserunna.git?rev=ac40ba6d3de6eab4da7fc13162d75ba5f3c244c5#ac40ba6d3de6eab4da7fc13162d75ba5f3c244c5"
+source = "git+https://github.com/alex-shapiro/baserunna.git?rev=32d744a5efa926730a3e0ab188757cd20e73330a#32d744a5efa926730a3e0ab188757cd20e73330a"
 dependencies = [
  "aws-lc-rs",
  "axum",
+ "baserunna-api",
+ "baserunna-client",
  "bytes",
+ "crc32c",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -260,6 +264,32 @@ dependencies = [
  "tokio",
  "tower",
  "zstd",
+]
+
+[[package]]
+name = "baserunna-api"
+version = "0.1.0"
+source = "git+https://github.com/alex-shapiro/baserunna.git?rev=32d744a5efa926730a3e0ab188757cd20e73330a#32d744a5efa926730a3e0ab188757cd20e73330a"
+dependencies = [
+ "bytes",
+ "http",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+]
+
+[[package]]
+name = "baserunna-client"
+version = "0.1.0"
+source = "git+https://github.com/alex-shapiro/baserunna.git?rev=32d744a5efa926730a3e0ab188757cd20e73330a#32d744a5efa926730a3e0ab188757cd20e73330a"
+dependencies = [
+ "baserunna-api",
+ "bytes",
+ "http",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -809,6 +839,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "crc32c"
+version = "0.6.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a47af21622d091a8f0fb295b88bc886ac74efcc613efc19f5d0b21de5c89e47"
+dependencies = [
+ "rustc_version",
 ]
 
 [[package]]
@@ -2707,6 +2746,7 @@ dependencies = [
  "ayml",
  "base64",
  "baserunna",
+ "baserunna-client",
  "chrono",
  "fsrs",
  "hmac",

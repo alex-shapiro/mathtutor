@@ -768,12 +768,16 @@ fn error_kind(e: &Error) -> &'static str {
         Error::CardsCorrupt(_) => "cards_corrupt",
         Error::NoHome => "no_home",
         Error::FileIo { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => "io",
-        Error::Api(_) | Error::Http(_) | Error::MissingToken => "database",
-        Error::BadResponse(_) | Error::BadRow(_) | Error::BadEvent(_) => "corrupt",
+        Error::Baserunna(baserunna_client::Error::Decode { .. })
+        | Error::BadRow(_)
+        | Error::BadEvent(_) => "corrupt",
+        Error::Baserunna(_) | Error::MissingToken => "database",
         Error::Json(_) => "json",
         Error::Fsrs(_) => "fsrs",
         Error::ConflictingFlags(_, _) => "conflicting_flags",
-        Error::MissingTursoUrl | Error::Turso(_) | Error::ImportMismatch(_) => "import",
+        Error::MissingTursoUrl | Error::Turso(_) | Error::ImportMismatch(_) | Error::Http(_) => {
+            "import"
+        }
         Error::MissingAuth
         | Error::BadBindAddr { .. }
         | Error::BadPublicUrl { .. }
