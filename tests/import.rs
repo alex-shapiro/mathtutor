@@ -629,6 +629,26 @@ async fn malformed_history_fails_before_the_import_claims_the_target() {
 }
 
 #[tokio::test]
+async fn repeated_import_reports_a_late_event_on_a_path_without_a_stream() {
+    let db = common::empty_db().await;
+    let mut late_events = events();
+    late_events.push(event("p_c", 50, EventKind::LessonTaught, Some("a"), None));
+    let mut with_late_event = legacy();
+    with_late_event.set("events", EVENT_COLUMNS, rows_of_events(&late_events));
+    let url = serve_snapshots(vec![legacy(), with_late_event]).await;
+    let turso = Turso::new(&url, Some(TOKEN.into())).unwrap();
+    import::import(&turso, &db).await.expect("first");
+
+    let r = import::import(&turso, &db).await.expect("repeat");
+
+    assert!(
+        r.mismatches.iter().any(|m| m.starts_with("p_c:")),
+        "{:?}",
+        r.mismatches
+    );
+}
+
+#[tokio::test]
 async fn import_fails_when_the_libsql_snapshot_cannot_begin() {
     let db = common::empty_db().await;
     let mut tables = legacy();

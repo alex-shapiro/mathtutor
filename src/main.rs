@@ -133,7 +133,9 @@ fn report_failure(e: &Error) -> ExitCode {
 /// Returns the safe next step after `cmd` fails with an unknown outcome.
 fn unknown_outcome_recovery(cmd: &Cmd) -> &'static str {
     match cmd {
-        Cmd::ImportTurso(_) => "run `mt import-turso` again",
+        Cmd::ImportTurso(_) => {
+            "run `mt import-turso` again; a report that the import already completed means that it succeeded"
+        }
         Cmd::Path(p) if matches!(p.op, PathOp::New(_)) => {
             "run `mt path list` and create the path only if it is absent"
         }

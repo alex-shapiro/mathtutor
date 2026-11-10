@@ -3,10 +3,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::Result;
+use crate::db::client::api::ErrorCode;
 use crate::db::{Db, Op, ts};
 use crate::schema;
 use crate::types::Rating;
+use crate::{Error, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -161,11 +162,15 @@ pub fn quiz_answered(
     }
 }
 
+/// Returns the events of `path_id` in order, or an empty list if the path has no event stream.
 pub async fn load(db: &Db, path_id: &str) -> Result<Vec<Event>> {
     let mut op = Op::read_stream(schema::events_stream(path_id), 0);
     let mut out = Vec::new();
     loop {
-        let page = db.read_one(op.clone()).await?;
+        let page = match db.read_one(op.clone()).await {
+            Err(Error::Baserunna(e)) if e.code() == Some(ErrorCode::NotFound) => return Ok(out),
+            other => other?,
+        };
         let next = op.next_page(&page);
         out.extend(page.records::<Event>()?);
         match next {

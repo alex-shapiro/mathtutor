@@ -11,9 +11,9 @@ use serde_json::{Map, Value as Json};
 use crate::answer::atom_from_quiz_id;
 use crate::cards::{self, CardState};
 use crate::db::client::Txn;
-use crate::db::client::api::{ErrorCode, PAGE_MAX};
+use crate::db::client::api::PAGE_MAX;
 use crate::db::{Db, Op, ts};
-use crate::event_log::{Event, EventKind, EventPayload};
+use crate::event_log::{self, Event, EventKind, EventPayload};
 use crate::graph::Quiz;
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
@@ -535,7 +535,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         } else {
             report.skipped += 1;
         }
-        if !events.is_empty() {
+        if !event_log::load(db, &p.id).await?.is_empty() {
             cards::recompute(db, &p.id).await?;
         }
     }
@@ -617,10 +617,7 @@ async fn verify(
         out.push(format!("{path_id}: path missing from Baserunna"));
         return Ok(out);
     };
-    let stored = match crate::event_log::load(db, path_id).await {
-        Err(Error::Baserunna(e)) if e.code() == Some(ErrorCode::NotFound) => Vec::new(),
-        other => other?,
-    };
+    let stored = event_log::load(db, path_id).await?;
     if serde_json::to_value(&stored)? != serde_json::to_value(events)? {
         out.push(format!(
             "{path_id}: {} events stored and {} in libSQL, or their contents differ",
