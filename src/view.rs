@@ -1,6 +1,6 @@
 //! Transactional database snapshots and atomic write sets.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 
@@ -215,6 +215,7 @@ pub struct Changes {
     cards: BTreeMap<(String, String), CardRow>,
     taught: BTreeMap<(String, String), Taught>,
     events: BTreeMap<String, Vec<Event>>,
+    active_paths: BTreeSet<String>,
 }
 
 impl Changes {
@@ -226,6 +227,11 @@ impl Changes {
     /// Set the updated [`CardRow`] for its `(path_id, quiz_id)` pair.
     pub fn set_card(&mut self, c: CardRow) {
         self.cards.insert((c.path_id.clone(), c.quiz_id.clone()), c);
+    }
+
+    /// Makes `path_id` the most recent path.
+    pub fn touch_path(&mut self, path_id: &str) {
+        self.active_paths.insert(path_id.to_string());
     }
 
     /// Record an overlay [`Edit`].
@@ -259,6 +265,7 @@ impl Changes {
             }
             ProjectionTarget::None => {}
         }
+        self.touch_path(&e.path);
         self.events
             .entry(e.path.clone())
             .or_default()
@@ -282,8 +289,10 @@ impl Changes {
                 .into_iter()
                 .map(|((path_id, atom_id), t)| Op::upsert(&t.into_row(&path_id, atom_id))),
         );
+        for path_id in &self.active_paths {
+            ops.push(Op::put(activity_key(path_id), ts::format(Utc::now())));
+        }
         for (path_id, events) in self.events {
-            ops.push(Op::put(activity_key(&path_id), ts::format(Utc::now())));
             ops.push(Op::append(events_stream(&path_id), &events));
         }
         ops

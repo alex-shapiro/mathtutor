@@ -451,6 +451,45 @@ async fn own_overlay_writes_keep_the_cache_valid() {
     assert_eq!(format!("{:?}", fresh.atoms), format!("{:?}", stored.atoms));
 }
 
+#[tokio::test]
+async fn path_next_makes_its_path_the_most_recent_even_without_an_event() {
+    let db = common::empty_db().await;
+    let graph = mathtutor::graph::Graph::load_default(None).unwrap();
+    let mut lessonless: Vec<&String> = graph
+        .by_id
+        .iter()
+        .filter(|(_, c)| {
+            c.children_ids.is_empty() && c.lesson.is_none() && c.prerequisites.is_empty()
+        })
+        .map(|(id, _)| id)
+        .collect();
+    lessonless.sort();
+    let target = lessonless[0].as_str();
+    common::seed_path(&db, "p_a_older", &[target], Strategy::BottomUp).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    common::seed_path(&db, "p_z_newer", &[target], Strategy::BottomUp).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+    let envelope = mathtutor::scheduler::compute_next(
+        &db,
+        Some("p_a_older"),
+        None,
+        mathtutor::scheduler::NextMode::Default,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        serde_json::to_value(&envelope).unwrap()["action"],
+        "create_lesson"
+    );
+    let view = db
+        .snapshot(&mathtutor::view::Want::path(None))
+        .await
+        .unwrap();
+    assert_eq!(view.path().unwrap().file.id, "p_a_older");
+}
+
 struct DisconnectedTransport;
 
 impl Transport for DisconnectedTransport {
