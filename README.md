@@ -8,6 +8,16 @@ Math Tutor manages a directed acyclic graph (DAG) of math concepts across LLM se
 
 The LLM generates lessons and quizzes on demand and grades user answers. Generated content is saved in a [Baserunna](https://baserunna.fly.dev) database so that subsequent reviews are deterministic.
 
+## Setup
+
+`mt` stores learner state in Baserunna and requires network access. Set these variables before you run a command that reads or writes learner state:
+
+- `BASERUNNA_TOKEN`: required API key.
+- `BASERUNNA_DB`: database name. The default is `mathtutor`.
+- `BASERUNNA_URL`: server URL. The default is `https://baserunna.fly.dev`.
+
+`mt graph list` and `mt graph show` work without these variables when you do not pass `--path`.
+
 ## CLI
 
 ```

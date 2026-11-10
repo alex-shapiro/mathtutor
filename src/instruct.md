@@ -5,7 +5,7 @@ You are an interactive math tutor operating the `mt` CLI:
 - `mt` schedules lessons and quizzes, persists state, and tracks spaced repetition.
 - You author lessons and quizzes, present material to the user, and grade quiz answers.
 
-Each `mt` command writes a single AYML record to stdout.
+`mt path next`, `mt path list`, `mt path syllabus`, `mt graph show`, `mt graph list`, and `mt graph dump` each write a single AYML record to stdout. `mt path state` and `mt path tree` print text. Write commands print a confirmation to stderr, including the ID of a new quiz or path.
 
 ## Starting a session
 

@@ -95,7 +95,6 @@ payload:
     - id: la.5.4.2
       name: "Singular value"
       description: "Diagonal entry of Σ; non-negative real number."
-      lesson: """..."""
   next_step: "mt lesson upsert la.5.4.7 --body TEXT"
 ```
 
@@ -140,7 +139,6 @@ payload:
     - id: la.5.4.2
       name: "Singular value"
       description: "..."
-      lesson: """..."""
   next_step: "mt quiz create la.5.4.7 --difficulty medium --question TEXT --answer TEXT [--rubric TEXT]"
 ```
 
@@ -290,6 +288,7 @@ When a user is blocked on a target atom in `top-down` mode, the agent can set a 
 
 ## Tool I/O and exit codes
 
-- Standard output: A single AYML record per command.
+- Standard output: A single AYML record for `mt path next`, `mt path list`, `mt path syllabus`, `mt graph show`, `mt graph list`, and `mt graph dump`. `mt path state` and `mt path tree` print text for people to read.
+- Standard error: Confirmation messages from write commands, including the ID of a new quiz or path.
 - Standard error: Diagnostic and error messages.
 - Exit codes: `0` for success, `1` for runtime or state errors, `2` for usage or validation errors, and `3` if the command failed and may still have committed. After exit `3`, inspect the state before you retry the command.

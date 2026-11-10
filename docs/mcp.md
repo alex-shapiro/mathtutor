@@ -11,7 +11,7 @@
 
 ### Tool conventions
 
-- **`path_id`**: Required for all path-scoped tools (`AnswerQuiz`, `UpsertLesson`, `CreateQuiz`, `UpdateQuiz`, `DeleteQuiz`, `GetNext`, `GetState`, `GetTree`, `GetSyllabus`, `SetStrategy`, `SetSubpath`, `ClearSubpath`). Optional for curriculum inspection tools (`GetItem`, `GetChildren`); when omitted, those tools return static curriculum data without path completion state.
+- **`path_id`**: Required for all path-scoped tools (`answer_quiz`, `upsert_lesson`, `create_quiz`, `update_quiz`, `delete_quiz`, `get_next`, `get_state`, `get_tree`, `get_syllabus`, `set_strategy`, `subpath_set`, `subpath_clear`). Optional for curriculum inspection tools (`get_item`, `get_children`); when omitted, those tools return static curriculum data without path completion state.
 - **Return format**: All tools return JSON. Business logic errors return a `CallToolResult` with `isError: true`.
 
 ### Prompt
