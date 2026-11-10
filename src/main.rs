@@ -40,20 +40,14 @@ async fn real_main() -> ExitCode {
                     ExitCode::from(1)
                 }
             }
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::from(2)
-            }
+            Err(e) => report_failure(&e),
         };
     }
 
     if matches!(cli.cmd, Cmd::Instruct(_)) {
         return match instruct::cmd_instruct() {
             Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::from(1)
-            }
+            Err(e) => report_failure(&e),
         };
     }
 
@@ -62,10 +56,7 @@ async fn real_main() -> ExitCode {
         if let Some(McpOp::Tools(_)) = c.op {
             return match mcp::print_tools() {
                 Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    ExitCode::from(2)
-                }
+                Err(e) => report_failure(&e),
             };
         }
         let auth = mcp::AuthConfig {
@@ -78,17 +69,11 @@ async fn real_main() -> ExitCode {
         };
         let cfg = match db::DbConfig::from_env() {
             Ok(c) => c,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(2);
-            }
+            Err(e) => return report_failure(&e),
         };
         return match mcp::run(&c.addr, auth, cfg, c.graph).await {
             Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::from(2)
-            }
+            Err(e) => report_failure(&e),
         };
     }
 
@@ -98,19 +83,21 @@ async fn real_main() -> ExitCode {
     };
     let db = match db {
         Ok(db) => db,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(2);
-        }
+        Err(e) => return report_failure(&e),
     };
-    let (result, err_code) = dispatch(&db, cli.cmd).await;
-    match result {
+    match dispatch(&db, cli.cmd).await {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::from(err_code)
-        }
+        Err(e) => report_failure(&e),
     }
+}
+
+/// Prints `e` to stderr and returns its exit code.
+fn report_failure(e: &Error) -> ExitCode {
+    eprintln!("error: {e}");
+    if e.outcome_is_unknown() {
+        eprintln!("the command may have been applied; check the state before you retry it");
+    }
+    ExitCode::from(e.exit_code())
 }
 
 /// Filters out empty strings so unset environment variables do not match empty bearer tokens.
@@ -143,21 +130,17 @@ fn init_tracing(verbose: bool) {
 }
 
 #[allow(clippy::too_many_lines)]
-async fn dispatch(db: &db::Db, cmd: Cmd) -> (Result<()>, u8) {
+async fn dispatch(db: &db::Db, cmd: Cmd) -> Result<()> {
     match cmd {
         Cmd::Instruct(_) => unreachable!("handled before dispatch"),
-        Cmd::ImportTurso(c) => match c.url.or_else(|| nonempty(std::env::var("TURSO_URL").ok())) {
-            Some(url) => (
-                import::cmd_import_turso(
-                    db,
-                    &url,
-                    nonempty(std::env::var("TURSO_AUTH_TOKEN").ok()),
-                )
-                .await,
-                1,
-            ),
-            None => (Err(Error::MissingTursoUrl), 2),
-        },
+        Cmd::ImportTurso(c) => {
+            let url = c
+                .url
+                .or_else(|| nonempty(std::env::var("TURSO_URL").ok()))
+                .ok_or(Error::MissingTursoUrl)?;
+            import::cmd_import_turso(db, &url, nonempty(std::env::var("TURSO_AUTH_TOKEN").ok()))
+                .await
+        }
         #[cfg(feature = "mcp")]
         Cmd::Mcp(_) => unreachable!("handled before dispatch"),
         Cmd::Path(p) => dispatch_path(db, p.op).await,
@@ -167,124 +150,94 @@ async fn dispatch(db: &db::Db, cmd: Cmd) -> (Result<()>, u8) {
     }
 }
 
-async fn dispatch_path(db: &db::Db, op: PathOp) -> (Result<()>, u8) {
+async fn dispatch_path(db: &db::Db, op: PathOp) -> Result<()> {
     match op {
-        PathOp::List(c) => (path::cmd_path_list(db, c.graph.as_deref()).await, 1),
+        PathOp::List(c) => path::cmd_path_list(db, c.graph.as_deref()).await,
         PathOp::New(c) => {
             let targets = cli::flatten_ids(&c.targets);
-            let r = path::cmd_path_new(db, &c.goal, &targets, c.strategy, c.graph.as_deref())
+            path::cmd_path_new(db, &c.goal, &targets, c.strategy, c.graph.as_deref())
                 .await
                 .map(|id| {
                     eprintln!("created path: {id}");
-                });
-            (r, 2)
+                })
         }
-        PathOp::State(c) => (
-            state::cmd_path_state(db, c.path.as_deref(), c.graph.as_deref()).await,
-            1,
-        ),
-        PathOp::Next(c) => match scheduler::NextMode::from_flags(c.new, c.due) {
-            Err(e) => (Err(e), 2),
-            Ok(mode) => (
-                scheduler::cmd_path_next(db, c.path.as_deref(), c.graph.as_deref(), mode).await,
-                1,
-            ),
-        },
-        PathOp::Strategy(c) => {
-            let r = path::cmd_path_strategy(db, c.path.as_deref(), c.strategy)
-                .await
-                .map(|id| eprintln!("path {id}: strategy → {}", c.strategy));
-            (r, 2)
+        PathOp::State(c) => state::cmd_path_state(db, c.path.as_deref(), c.graph.as_deref()).await,
+        PathOp::Next(c) => {
+            let mode = scheduler::NextMode::from_flags(c.new, c.due)?;
+            scheduler::cmd_path_next(db, c.path.as_deref(), c.graph.as_deref(), mode).await
         }
+        PathOp::Strategy(c) => path::cmd_path_strategy(db, c.path.as_deref(), c.strategy)
+            .await
+            .map(|id| eprintln!("path {id}: strategy → {}", c.strategy)),
         PathOp::Subpath(c) => dispatch_subpath(db, c.op).await,
-        PathOp::Syllabus(c) => (
-            syllabus::cmd_path_syllabus(db, c.path.as_deref(), c.n, c.graph.as_deref()).await,
-            1,
-        ),
-        PathOp::Tree(c) => (
-            tree::cmd_path_tree(db, c.path.as_deref(), c.graph.as_deref()).await,
-            1,
-        ),
+        PathOp::Syllabus(c) => {
+            syllabus::cmd_path_syllabus(db, c.path.as_deref(), c.n, c.graph.as_deref()).await
+        }
+        PathOp::Tree(c) => tree::cmd_path_tree(db, c.path.as_deref(), c.graph.as_deref()).await,
     }
 }
 
-async fn dispatch_subpath(db: &db::Db, op: SubpathOp) -> (Result<()>, u8) {
+async fn dispatch_subpath(db: &db::Db, op: SubpathOp) -> Result<()> {
     match op {
         SubpathOp::Set(c) => {
             let atoms = cli::flatten_ids(&c.atoms);
-            let r = subpath::cmd_subpath_set(db, c.path.as_deref(), &atoms, c.graph.as_deref())
+            subpath::cmd_subpath_set(db, c.path.as_deref(), &atoms, c.graph.as_deref())
                 .await
-                .map(|id| eprintln!("path {id}: subpath set ({} atoms)", atoms.len()));
-            (r, 2)
+                .map(|id| eprintln!("path {id}: subpath set ({} atoms)", atoms.len()))
         }
-        SubpathOp::Clear(c) => {
-            let r = subpath::cmd_subpath_clear(db, c.path.as_deref())
-                .await
-                .map(|id| eprintln!("path {id}: subpath cleared"));
-            (r, 2)
-        }
+        SubpathOp::Clear(c) => subpath::cmd_subpath_clear(db, c.path.as_deref())
+            .await
+            .map(|id| eprintln!("path {id}: subpath cleared")),
     }
 }
 
-async fn dispatch_graph(db: &db::Db, op: GraphOp) -> (Result<()>, u8) {
+async fn dispatch_graph(db: &db::Db, op: GraphOp) -> Result<()> {
     match op {
         GraphOp::Check(_) => unreachable!("handled before dispatch"),
-        GraphOp::Show(c) => (
-            discover::cmd_graph_show(db, &c.id, c.path.as_deref(), c.graph.as_deref()).await,
-            2,
-        ),
-        GraphOp::List(c) => (
+        GraphOp::Show(c) => {
+            discover::cmd_graph_show(db, &c.id, c.path.as_deref(), c.graph.as_deref()).await
+        }
+        GraphOp::List(c) => {
             discover::cmd_graph_list(db, c.id.as_deref(), c.path.as_deref(), c.graph.as_deref())
-                .await,
-            2,
-        ),
-        GraphOp::Dump(_) => (overlay::cmd_graph_dump(db).await, 1),
+                .await
+        }
+        GraphOp::Dump(_) => overlay::cmd_graph_dump(db).await,
     }
 }
 
-async fn dispatch_lesson(db: &db::Db, op: LessonOp) -> (Result<()>, u8) {
+async fn dispatch_lesson(db: &db::Db, op: LessonOp) -> Result<()> {
     match op {
         LessonOp::Upsert(c) => {
             let atom = c.atom.clone();
-            let r = store::cmd_lesson_upsert(
-                db,
-                &c.atom,
-                c.body,
-                c.path.as_deref(),
-                c.graph.as_deref(),
-            )
-            .await
-            .map(|()| {
-                eprintln!("upserted lesson: {atom}");
-            });
-            (r, 2)
+            store::cmd_lesson_upsert(db, &c.atom, c.body, c.path.as_deref(), c.graph.as_deref())
+                .await
+                .map(|()| {
+                    eprintln!("upserted lesson: {atom}");
+                })
         }
     }
 }
 
-async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> (Result<()>, u8) {
+async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> Result<()> {
     match op {
-        QuizOp::Create(c) => {
-            let r = store::cmd_quiz_create(
-                db,
-                &c.atom,
-                c.difficulty,
-                c.question,
-                c.answer,
-                c.rubric,
-                c.quiz_type,
-                c.path.as_deref(),
-                c.graph.as_deref(),
-            )
-            .await
-            .map(|qid| {
-                eprintln!("created quiz: {qid}");
-            });
-            (r, 2)
-        }
+        QuizOp::Create(c) => store::cmd_quiz_create(
+            db,
+            &c.atom,
+            c.difficulty,
+            c.question,
+            c.answer,
+            c.rubric,
+            c.quiz_type,
+            c.path.as_deref(),
+            c.graph.as_deref(),
+        )
+        .await
+        .map(|qid| {
+            eprintln!("created quiz: {qid}");
+        }),
         QuizOp::Update(c) => {
             let quiz = c.quiz.clone();
-            let r = store::cmd_quiz_update(
+            store::cmd_quiz_update(
                 db,
                 &c.quiz,
                 c.question,
@@ -298,22 +251,20 @@ async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> (Result<()>, u8) {
             .await
             .map(|()| {
                 eprintln!("updated quiz: {quiz}");
-            });
-            (r, 2)
+            })
         }
         QuizOp::Delete(c) => {
             let quiz = c.quiz.clone();
-            let r = store::cmd_quiz_delete(db, &c.quiz, c.path.as_deref(), c.graph.as_deref())
+            store::cmd_quiz_delete(db, &c.quiz, c.path.as_deref(), c.graph.as_deref())
                 .await
                 .map(|()| {
                     eprintln!("deleted quiz: {quiz}");
-                });
-            (r, 2)
+                })
         }
         QuizOp::Answer(c) => {
             let quiz = c.quiz.clone();
             let rating = c.rating;
-            let r = answer::cmd_quiz_answer(
+            answer::cmd_quiz_answer(
                 db,
                 &c.quiz,
                 c.rating,
@@ -324,8 +275,7 @@ async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> (Result<()>, u8) {
             .await
             .map(|()| {
                 eprintln!("recorded {rating} for {quiz}");
-            });
-            (r, 2)
+            })
         }
     }
 }

@@ -220,7 +220,7 @@ User state is stored in a Baserunna database configured via `BASERUNNA_DB` (defa
 | `activity/<path id>` | Key                      | Timestamp of the latest event on a path                   |
 | `overlay_version`    | Key                      | Monotonic counter incremented on every overlay write      |
 
-Each command executes as a serializable transaction that reads state in a snapshot and commits writes with optimistic concurrency control. If a write conflict occurs, the transaction is retried. If a commit's response is lost, the client asks Baserunna whether it applied, so every command applies exactly once. The client caches the overlay in memory and under `$MATHTUTOR_HOME` (default `~/.mathtutor`), and reloads it only when `overlay_version` changes.
+Each command executes as a serializable transaction that reads state in a snapshot and commits writes with optimistic concurrency control. If a write conflict occurs, the transaction is retried. If a commit's response is lost, the client asks Baserunna whether the commit applied. If Baserunna cannot answer, the command exits with code `3` because its outcome is unknown. The client caches the overlay in memory and under `$MATHTUTOR_HOME` (default `~/.mathtutor`), and reloads it only when `overlay_version` changes.
 
 `mt import-turso` migrates an existing libSQL database to Baserunna by reading a consistent snapshot, writing the paths, overlay, and events, rebuilding `cards` and `taught` from the event streams, and verifying the rebuilt cards against the source rows.
 
@@ -292,4 +292,4 @@ When a user is blocked on a target atom in `top-down` mode, the agent can set a 
 
 - Standard output: A single AYML record per command.
 - Standard error: Diagnostic and error messages.
-- Exit codes: `0` for success, `1` for runtime or state errors, `2` for usage or validation errors.
+- Exit codes: `0` for success, `1` for runtime or state errors, `2` for usage or validation errors, and `3` if the command failed and may still have committed. After exit `3`, inspect the state before you retry the command.

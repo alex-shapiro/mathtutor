@@ -771,6 +771,7 @@ fn error_kind(e: &Error) -> &'static str {
         Error::Baserunna(baserunna_client::Error::Decode { .. })
         | Error::BadRow(_)
         | Error::BadEvent(_) => "corrupt",
+        e if e.outcome_is_unknown() => "outcome_unknown",
         Error::Baserunna(_) | Error::MissingToken => "database",
         Error::Json(_) => "json",
         Error::Fsrs(_) => "fsrs",

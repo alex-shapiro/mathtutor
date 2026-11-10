@@ -86,7 +86,7 @@ pub enum Error {
     #[error("atom '{0}' appears more than once in the subpath")]
     SubpathDuplicateAtom(String),
 
-    #[error("cards cache corrupt: {0}")]
+    #[error("card row corrupt: {0}")]
     CardsCorrupt(String),
 
     #[error("TURSO_URL not set; pass --url")]
@@ -121,11 +121,84 @@ pub enum Error {
     Serve(#[source] std::io::Error),
 }
 
+impl Error {
+    /// Returns the process exit code documented in `docs/design.md`.
+    pub fn exit_code(&self) -> u8 {
+        if self.outcome_is_unknown() {
+            return 3;
+        }
+        match self {
+            Error::UnknownId(_)
+            | Error::EmptyCluster(_)
+            | Error::Cycle
+            | Error::NotAtom(_)
+            | Error::AtomNotFound(_)
+            | Error::InvalidRating(_)
+            | Error::InvalidDifficulty(_)
+            | Error::InvalidQuizType(_)
+            | Error::InvalidStrategy(_)
+            | Error::SubpathNotTopDown
+            | Error::SubpathEmpty
+            | Error::SubpathTailNotTarget(_)
+            | Error::SubpathDuplicateAtom(_)
+            | Error::ConflictingFlags(_, _)
+            | Error::MissingToken
+            | Error::MissingTursoUrl
+            | Error::MissingAuth
+            | Error::BadBindAddr(_)
+            | Error::BadPublicUrl(_) => 2,
+            Error::FileIo { .. }
+            | Error::AymlParse { .. }
+            | Error::AymlSerialize(_)
+            | Error::NoPath
+            | Error::NoHome
+            | Error::NoLesson(_)
+            | Error::Fsrs(_)
+            | Error::Baserunna(_)
+            | Error::Http(_)
+            | Error::BadRow(_)
+            | Error::BadEvent(_)
+            | Error::Json(_)
+            | Error::CardsCorrupt(_)
+            | Error::Turso(_)
+            | Error::ImportMismatch(_)
+            | Error::Bind { .. }
+            | Error::Serve(_) => 1,
+        }
+    }
+
+    /// Returns true if the failed command may have committed its writes.
+    pub fn outcome_is_unknown(&self) -> bool {
+        matches!(
+            self,
+            Error::Baserunna(e) if e.outcome() == baserunna_client::api::Outcome::Unknown
+        )
+    }
+}
+
 impl baserunna_client::TxnError for Error {
     fn client_error(&self) -> Option<&baserunna_client::Error> {
         match self {
             Error::Baserunna(e) => Some(e),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use baserunna_client::TransportError;
+
+    #[test]
+    fn exit_codes_separate_usage_state_and_unknown_outcomes() {
+        assert_eq!(Error::UnknownId("x".into()).exit_code(), 2);
+        assert_eq!(Error::NoPath.exit_code(), 1);
+        let unsent = baserunna_client::Error::Transport(TransportError::NotSent("refused".into()));
+        assert_eq!(Error::Baserunna(unsent).exit_code(), 1);
+        let lost = baserunna_client::Error::Transport(TransportError::Unknown("reset".into()));
+        let lost = Error::Baserunna(lost);
+        assert!(lost.outcome_is_unknown());
+        assert_eq!(lost.exit_code(), 3);
     }
 }

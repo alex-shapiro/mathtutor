@@ -115,4 +115,4 @@ All target atoms on the path are complete. Inform the user and offer to start a 
 
 ## Errors
 
-`mt` prints errors to stderr and exits with a non-zero status code. Report the error message to the user and recover by inspecting the curriculum or path state.
+`mt` prints errors to stderr and exits with a non-zero status code. Report the error message to the user and recover by inspecting the curriculum or path state. Exit code 3 means that the command may have been applied. Run `mt path state` before you retry it, because a repeated `mt quiz answer` records a second review.
