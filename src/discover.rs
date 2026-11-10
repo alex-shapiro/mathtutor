@@ -1,4 +1,4 @@
-//! Read-only curriculum lookup (`mt graph show` and `mt graph list`).
+//! Read-only curriculum lookup for `mt graph show` and `mt graph list`.
 
 use std::path::Path;
 

@@ -19,7 +19,7 @@ use crate::{Error, Result};
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
-/// Compute the next action for `path_id` and print its AYML envelope (`mt path next`).
+/// Compute the next action for `path_id` and print its AYML envelope for `mt path next`.
 pub async fn cmd_path_next(
     db: &Db,
     path_id: Option<&str>,

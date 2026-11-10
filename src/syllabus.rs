@@ -1,4 +1,4 @@
-//! Upcoming untaught lesson preview (`mt path syllabus`).
+//! Upcoming untaught lesson preview for `mt path syllabus`.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -33,7 +33,7 @@ pub struct SyllabusAtom {
     pub description: Option<String>,
 }
 
-/// Print the upcoming syllabus as AYML (`mt path syllabus`).
+/// Print the upcoming syllabus as AYML for `mt path syllabus`.
 pub async fn cmd_path_syllabus(
     db: &Db,
     explicit_id: Option<&str>,
@@ -46,7 +46,7 @@ pub async fn cmd_path_syllabus(
     Ok(())
 }
 
-/// Compute up to `n` upcoming untaught atoms for `explicit_id` (or the latest path).
+/// Compute up to `n` upcoming untaught atoms for `explicit_id` or the latest path.
 pub async fn compute_syllabus(
     db: &Db,
     explicit_id: Option<&str>,

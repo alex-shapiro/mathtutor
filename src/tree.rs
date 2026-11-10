@@ -1,4 +1,4 @@
-//! Hierarchical tree view of a learning path (`mt path tree`).
+//! Hierarchical tree view of a learning path for `mt path tree`.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -13,7 +13,7 @@ use crate::scheduler;
 use crate::types::Difficulty;
 use crate::view::Want;
 
-/// Render the prerequisite tree for `explicit_id` (or the latest path) to stdout (`mt path tree`).
+/// Render the prerequisite tree for `explicit_id` or the latest path to stdout for `mt path tree`.
 pub async fn cmd_path_tree(
     db: &Db,
     explicit_id: Option<&str>,

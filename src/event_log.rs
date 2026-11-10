@@ -1,4 +1,4 @@
-//! Per-path learning event stream (`events.<path id>`).
+//! Per-path `events.<path id>` learning event stream.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

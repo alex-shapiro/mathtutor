@@ -15,7 +15,7 @@ If paths exist, show them to the user and ask which path to resume. Then call `g
 
 ### Selecting a strategy
 
-A path uses either the `bottom_up` (default) or `top_down` strategy. Pass `strategy` to `new_path`, or change the strategy at any time with `set_strategy { path_id, strategy }`:
+A path uses either the `bottom_up` or `top_down` strategy, and defaults to `bottom_up`. Pass `strategy` to `new_path`, or change the strategy at any time with `set_strategy { path_id, strategy }`:
 
 - **bottom_up**: Teaches all prerequisites of a target before the target itself.
 - **top_down**: Presents the target atom directly and descends into prerequisites only if you set a subpath.
@@ -38,7 +38,7 @@ On each turn:
 
 Stop if `action: done` is returned or if the user pauses the session.
 
-## Subpaths (top-down)
+## Subpaths
 
 If the user is blocked on a target atom in `top_down` mode, create a subpath of prerequisite atoms leading to that target:
 
@@ -52,7 +52,7 @@ The subpath is cleared automatically once its final target atom is completed, or
 
 ### `create_lesson`
 
-The selected atom does not have a stored lesson. Author a lesson (1–2 paragraphs, at most a single theorem, rule, or definition) that builds on the prerequisites in the payload without repeating them. Save the lesson with `upsert_lesson { atom, body, path_id }`, present it to the user, and wait for their response.
+The selected atom does not have a stored lesson. Author a lesson of 1–2 paragraphs that introduces at most a single theorem, rule, or definition and builds on the prerequisites in the payload without repeating them. Save the lesson with `upsert_lesson { atom, body, path_id }`, present it to the user, and wait for their response.
 
 ### `present_lesson`
 
@@ -60,7 +60,7 @@ A lesson is already stored, but it has not been taught on this path. Present `at
 
 ### `create_quiz`
 
-The atom requires a quiz for `target_difficulty` (`easy`, `medium`, or `hard`). Author a question, a concise reference answer, and an optional grading rubric (only for subjective questions). The quiz must depend only on the current lesson and completed prerequisites, and must not duplicate `existing_quizzes`.
+The atom requires a quiz for `target_difficulty`. Author a question, a concise reference answer, and an optional grading rubric for subjective questions. The quiz must depend only on the current lesson and completed prerequisites, and must not duplicate `existing_quizzes`.
 
 Call `create_quiz { atom, question, answer, rubric?, difficulty, kind, path_id }` before presenting the question to the user. Use `free_text` by default, or `multiple_choice` if testing discrimination between similar concepts. Present only the question to the user, wait for their reply, grade the reply using the rating rubric, and call `answer_quiz { quiz_id, answer, rating, path_id }` with the user's verbatim response.
 
@@ -87,7 +87,7 @@ All target atoms on the path are complete. Inform the user and offer to start a 
 
 ## Style rules
 
-- **Lessons:** 1–2 paragraphs, at most a single theorem, rule, or definition, using inline LaTeX (`$...$`) for math notation.
+- **Lessons:** 1–2 paragraphs, at most a single theorem, rule, or definition, using inline LaTeX `$...$` for math notation.
 - **Quizzes:** Free-text by default; depend only on the current lesson and completed prerequisites.
 - **Tone:** Be direct, polite, and objective. Do not praise or flatter the user, especially if grading an incorrect answer.
 

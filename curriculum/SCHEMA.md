@@ -4,8 +4,8 @@ The curriculum graph is stored in [AYML](https://crates.io/crates/ayml) files un
 
 ## Versioning
 
-- **`schema_version: 2`** (current): Uses recursive `children:` lists at arbitrary depth.
-- **`schema_version: 1`** (legacy): Uses fixed-depth `topics:` and `leaves:` keys.
+- **`schema_version: 2`**: Current version. Uses recursive `children:` lists at arbitrary depth.
+- **`schema_version: 1`**: Legacy version. Uses fixed-depth `topics:` and `leaves:` keys.
 
 ## Files
 
@@ -64,26 +64,26 @@ A node is an **atom** if `children` is omitted or empty. A node with non-empty `
 
 | Field              | Required | Description                             |
 | ------------------ | -------- | --------------------------------------- |
-| `schema_version`   | Yes      | `2` (or `1` for legacy files)           |
+| `schema_version`   | Yes      | `2`, or `1` for legacy files            |
 | `area`             | Yes      | Area slug matching the manifest         |
 | `prefix`           | Yes      | ID prefix matching the manifest         |
 | `summary`          | Yes      | Short area description                  |
 | `motivation`       | Yes      | Multi-line area motivation              |
 | `cross_references` | No       | Related area slugs                      |
 | `children`         | Yes (v2) | Top-level nodes in the area             |
-| `topics`           | Yes (v1) | Legacy three-level hierarchy (v1 only)  |
+| `topics`           | Yes (v1) | Legacy three-level hierarchy            |
 
 ### Node fields
 
 | Field           | Required    | Description                                                    |
 | --------------- | ----------- | -------------------------------------------------------------- |
-| `id`            | Yes         | Dot-separated identifier (for example, `fnd.1.1.5`)            |
+| `id`            | Yes         | Dot-separated identifier, such as `fnd.1.1.5`                  |
 | `name`          | Yes         | Node title                                                     |
-| `description`   | Recommended | Scope summary (for clusters) or concept summary (for atoms)    |
-| `prerequisites` | No          | Direct prerequisite node IDs (atoms or clusters)               |
+| `description`   | Recommended | Cluster scope summary or atom concept summary                  |
+| `prerequisites` | No          | Direct prerequisite atom or cluster IDs                        |
 | `children`      | No          | Child nodes; omit or set to `[]` for an atom                   |
 | `terminal`      | No          | Set to `true` on leaf atoms that do not have dependents        |
-| `lesson`        | No          | Inline Markdown lesson body (1–2 paragraphs)                   |
+| `lesson`        | No          | Inline Markdown lesson body of 1–2 paragraphs                  |
 | `quizzes`       | No          | Inline quiz definitions                                        |
 
 Inline quiz format:
@@ -104,6 +104,6 @@ quizzes:
 
 ## ID rules
 
-- Every ID starts with the area `prefix`, followed by dot-separated positive integers without leading zeros (for example, `la.5.4.7`).
+- Every ID starts with the area `prefix`, followed by dot-separated positive integers without leading zeros, such as `la.5.4.7`.
 - Each child ID appends a single segment to its parent ID.
 - IDs are globally unique, permanent, and never reused after deletion.

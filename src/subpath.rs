@@ -15,7 +15,7 @@ pub fn resolved(p: &PathFile, g: &Graph) -> Result<Vec<String>> {
     g.expand_to_atoms(&p.subpath)
 }
 
-/// Validate `atoms` and store them as the subpath for a top-down path (`mt path subpath set`).
+/// Validate `atoms` and store them as the subpath for a top-down path for `mt path subpath set`.
 pub async fn cmd_subpath_set(
     db: &Db,
     explicit_id: Option<&str>,
@@ -51,7 +51,7 @@ pub async fn cmd_subpath_set(
     .await
 }
 
-/// Clear the stored subpath for a learning path (`mt path subpath clear`).
+/// Clear the stored subpath for a learning path for `mt path subpath clear`.
 pub async fn cmd_subpath_clear(db: &Db, explicit_id: Option<&str>) -> Result<String> {
     let want = Want {
         path: PathSel::from(explicit_id),

@@ -749,7 +749,9 @@ fn walk_validate(
             report.issues.push(CheckIssue {
                 area: Some(area_slug.to_string()),
                 node: Some(n.id.clone()),
-                message: format!("id segment '{seg}' is not a positive integer (no leading zeros)"),
+                message: format!(
+                    "id segment '{seg}' is not a positive integer without leading zeros"
+                ),
             });
         }
     }

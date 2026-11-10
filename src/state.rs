@@ -1,4 +1,4 @@
-//! Learning path progress summary (`mt path state`).
+//! Learning path progress summary for `mt path state`.
 
 use std::collections::HashSet;
 use std::io::{self, Write};
@@ -60,7 +60,7 @@ pub struct AtomRef {
     pub name: String,
 }
 
-/// Print the progress summary for a learning path (`mt path state`).
+/// Print the progress summary for a learning path for `mt path state`.
 ///
 /// # Panics
 /// Panics if writing to stdout fails.
@@ -118,7 +118,7 @@ pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
     Ok(())
 }
 
-/// Compute the progress summary for `explicit_id` (or the latest path).
+/// Compute the progress summary for `explicit_id` or the latest path.
 pub async fn compute_state(
     db: &Db,
     explicit_id: Option<&str>,

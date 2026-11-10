@@ -23,7 +23,7 @@ pub struct DbConfig {
 }
 
 impl DbConfig {
-    /// Read `BASERUNNA_URL`, `BASERUNNA_TOKEN` (required), and `BASERUNNA_DB` from the environment.
+    /// Read `BASERUNNA_URL`, `BASERUNNA_TOKEN`, and `BASERUNNA_DB` from the environment.
     pub fn from_env() -> Result<Self> {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         Ok(Self {

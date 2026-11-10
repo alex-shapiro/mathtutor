@@ -1,4 +1,4 @@
-//! Streamable HTTP MCP server (`mt mcp`).
+//! Streamable HTTP MCP server for `mt mcp`.
 
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -4,7 +4,7 @@ This document defines the authoring rules for `curriculum/graph/areas/*.ayml`. T
 
 ## Atoms
 
-Every atom must be a prerequisite for a downstream AI/ML concept, or be explicitly marked as a terminal endpoint (`terminal: true`). Do not add duplicate atoms across areas; place each concept in a single canonical location and reference its ID from dependent nodes.
+Every atom must be a prerequisite for a downstream AI/ML concept, or set `terminal: true` as a leaf endpoint. Do not add duplicate atoms across areas. Place each concept in a single canonical location and reference its ID from dependent nodes.
 
 ## Prerequisites
 
@@ -17,7 +17,7 @@ Cross-area prerequisites are supported and encouraged.
 
 ## Orphans
 
-`mt graph check` reports any atom that is not referenced as a prerequisite (directly or through an ancestor cluster) and is not marked with `terminal: true`. To resolve an orphan:
+`mt graph check` reports any atom that is not referenced as a direct or cluster prerequisite and does not set `terminal: true`. To resolve an orphan:
 
 1. Add a prerequisite edge from the downstream consumer if a dependency was omitted.
 2. Delete the atom if it is not required by any target topic in the curriculum.

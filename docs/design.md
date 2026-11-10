@@ -1,6 +1,6 @@
 # Math Tutor Design
 
-Math Tutor manages math learning through a directed acyclic graph (DAG) of lessons and quizzes with spaced repetition. The curriculum graph is compiled into the `mt` binary, and user state is stored in a [Baserunna](https://baserunna.fly.dev) database. Curriculum files and CLI output use [AYML](https://crates.io/crates/ayml).
+Math Tutor manages math learning through a directed acyclic graph (DAG) of lessons and quizzes with spaced repetition. The curriculum graph is compiled into the `mt` binary. User state is stored in a [Baserunna](https://baserunna.fly.dev) database. Curriculum files and CLI output use [AYML](https://crates.io/crates/ayml).
 
 ## Responsibilities
 
@@ -9,7 +9,7 @@ Math Tutor manages math learning through a directed acyclic graph (DAG) of lesso
 - `mt` manages scheduling, persistence, graph validation, and the user overlay.
 - The agent authors lessons and quizzes, presents material to the user, and grades responses.
 
-`mt path next` selects the next action, and the agent presents the material. If a lesson or quiz is required for the first time, the agent authors it and saves it with `mt lesson upsert` or `mt quiz create`. All authored content is written to the user overlay so that subsequent presentations are deterministic.
+`mt path next` selects the next action for the agent to present. If a lesson or quiz is required for the first time, the agent authors it and saves it with `mt lesson upsert` or `mt quiz create`. All authored content is written to the user overlay so that subsequent presentations are deterministic.
 
 Each atom represents a single concept. A lesson is 1–2 paragraphs and introduces at most a single theorem, rule, or definition. Quizzes depend only on the current lesson and completed prerequisites.
 
@@ -50,20 +50,20 @@ mt instruct
 mt import-turso [--url URL]
 ```
 
-If `--path P` is provided to `mt graph show` or `mt graph list`, the output includes per-path completion fields (`lesson_taught`, `complete`).
+If `--path P` is provided to `mt graph show` or `mt graph list`, the output includes the `lesson_taught` and `complete` fields for that path.
 
 ### Target ID resolution
 
-Each `--targets` entry is either an atom ID (a leaf node, such as `tx.1.1`) or a cluster ID (a non-leaf node, such as `tx.1`, which expands to all atomic descendants).
+Each `--targets` entry is either an atom ID, such as `tx.1.1`, or a cluster ID, such as `tx.1`. A cluster ID expands to all of its atomic descendants.
 
-`mt path new` validates that each entry expands to at least a single atom and stores the raw IDs in the `paths` table. Target IDs and subpath IDs are expanded to a deduplicated, topologically sorted list of atoms whenever the path is loaded. If an atom is later split into a cluster in the curriculum, the stored ID is expanded to the new descendant atoms.
+`mt path new` validates that each entry expands to at least a single atom and stores the raw IDs in the `paths` table. Target IDs and subpath IDs are expanded to a deduplicated, topologically sorted list of atoms each time the path is loaded. If an atom is later split into a cluster in the curriculum, the stored ID expands to the new descendant atoms.
 
 ## Atom lifecycle
 
 1. **Untaught.** The atom exists in the curriculum without user overlay content.
 2. **Lesson stored.** A lesson body exists in the curriculum or is saved to the overlay via `mt lesson upsert`.
 3. **Lesson taught.** The path event log contains `lesson_taught` or `lesson_authored` for the atom.
-4. **Quiz stored.** For each difficulty slot (`easy`, `medium`, `hard`), the agent saves a quiz via `mt quiz create` if prompted by `create_quiz`.
+4. **Quiz stored.** For each difficulty slot, the agent saves a quiz via `mt quiz create` if prompted by `create_quiz`.
 5. **Quiz answered.** If `mt path next` returns `present_quiz`, the agent presents the question, grades the user response, and records the result with `mt quiz answer`.
 
 ## `mt path next` output
@@ -100,7 +100,7 @@ payload:
 
 ### `present_lesson`
 
-A lesson exists in the merged graph, but it has not been taught on this path. `mt path next` appends a `lesson_taught` event when it emits this action. The agent presents the lesson and then calls `mt path next`.
+A lesson exists in the merged graph, but it has not been taught on this path. `mt path next` appends a `lesson_taught` event if it emits this action. The agent presents the lesson and then calls `mt path next`.
 
 ```yaml
 action: present_lesson
@@ -185,7 +185,7 @@ payload:
 
 ## `mt path syllabus` output
 
-`mt path syllabus` lists upcoming atoms with untaught lessons in scheduled teaching order. Lesson bodies are omitted, and an atom is removed from the syllabus as soon as its lesson is taught, even if its quizzes are incomplete.
+`mt path syllabus` lists upcoming atoms with untaught lessons in scheduled teaching order. The output omits lesson bodies. An atom leaves the syllabus as soon as its lesson is taught, even if its quizzes are incomplete.
 
 ```yaml
 schema_version: 1
@@ -202,7 +202,7 @@ atoms:
 
 The curriculum graph is embedded into the binary at build time from `curriculum/graph/`. Use `--graph DIR` or `MT_GRAPH` to load an external curriculum directory instead.
 
-User state is stored in a Baserunna database configured via `BASERUNNA_DB` (default `mathtutor`), `BASERUNNA_URL` (default `https://baserunna.fly.dev`), and `BASERUNNA_TOKEN`.
+User state is stored in a Baserunna database configured via `BASERUNNA_DB`, `BASERUNNA_URL`, and `BASERUNNA_TOKEN`. `BASERUNNA_DB` defaults to `mathtutor`, and `BASERUNNA_URL` defaults to `https://baserunna.fly.dev`.
 
 | Data                 | Storage type             | Purpose                                                   |
 | -------------------- | ------------------------ | --------------------------------------------------------- |
@@ -210,15 +210,15 @@ User state is stored in a Baserunna database configured via `BASERUNNA_DB` (defa
 | `events.<path id>`   | Stream                   | Append-only learning history for a path                   |
 | `cards`              | Table, by `(path, quiz)` | Derived FSRS card state and answer statistics             |
 | `taught`             | Table, by `(path, atom)` | Derived set of lessons taught on a path                   |
-| `lessons`            | Table, by atom ID        | User-authored lesson bodies (overlay)                     |
-| `quizzes`            | Table, by quiz ID        | User-authored or updated quizzes (overlay)                |
-| `removed_quizzes`    | Table, by quiz ID        | Deleted quiz tombstones (overlay)                         |
+| `lessons`            | Table, by atom ID        | User-authored lesson bodies in the overlay                |
+| `quizzes`            | Table, by quiz ID        | User-authored or updated quizzes in the overlay           |
+| `removed_quizzes`    | Table, by quiz ID        | Deleted quiz tombstones in the overlay                    |
 | `activity/<path id>` | Key                      | Timestamp of the latest write for a path                  |
 | `overlay_version`    | Key                      | Random token replaced on every overlay write              |
 
-Each write command executes as a serializable transaction that reads a snapshot and commits with optimistic concurrency control. Read commands read the latest state without a transaction. A command without `--path` selects the most recent path once, before its first attempt. If a write conflict occurs, the transaction is retried. If a commit response is lost, the client queries Baserunna for the commit status; if the status is unavailable, the command exits with code `3` because its outcome is unknown. The client caches the overlay in memory and under `$MATHTUTOR_HOME` (default `~/.mathtutor`), and reloads it only if `overlay_version` changes.
+Each write command executes as a serializable transaction that reads a snapshot and commits with optimistic concurrency control. Read commands read the latest state without a transaction. A command without `--path` selects the most recent path once, before its first attempt. If a write conflict occurs, the transaction is retried. If a commit response is lost, the client queries Baserunna for the commit status. If the status is unavailable, the command exits with code `3` because its outcome is unknown. The client caches the overlay in memory and under `$MATHTUTOR_HOME`, which defaults to `~/.mathtutor`. It reloads the overlay only if `overlay_version` changes.
 
-`mt import-turso` migrates a libSQL database into an empty Baserunna database. It reads a consistent snapshot, writes the paths, overlay, events, and OAuth clients, and rebuilds `cards` and `taught` from the event streams. It then verifies the paths, overlay, events, and cards against a fresh read of the source rows. While an import is open, reads and writes of learner state are blocked. An import with mismatches stays open so that it can be resumed; if mismatches remain, delete the database and run the import again. Once an import completes with zero mismatches, subsequent runs are rejected to preserve newer data.
+`mt import-turso` migrates a libSQL database into an empty Baserunna database. It reads a consistent snapshot, writes the paths, overlay, events, and OAuth clients, and rebuilds `cards` and `taught` from the event streams. It then verifies the paths, overlay, events, and cards against a fresh read of the source rows. While an import is open, reads and writes of learner state are blocked. An import with mismatches stays open so that it can be resumed. If mismatches remain, delete the database and run the import again. Once an import completes with zero mismatches, subsequent runs are rejected to preserve newer data.
 
 ## User overlay
 
@@ -230,7 +230,7 @@ User-authored lessons and quizzes are stored in the database overlay and shared 
 
 ## Event log
 
-Each path records learning activity in an append-only stream (`events.<path id>`) with UTC RFC 3339 timestamps. `cards` and `taught` are materialized projections of the event stream.
+Each path records learning activity in an append-only `events.<path id>` stream with UTC RFC 3339 timestamps. `cards` and `taught` are materialized projections of the event stream.
 
 ```yaml
 - ts: 2026-05-09T18:42:01Z
@@ -261,7 +261,7 @@ Each quiz on a path has an FSRS card whose state is derived from its `quiz_answe
 
 `mt path next` selects actions in the following order:
 
-1. If a quiz card in the path is due for review (and `--new` is not set), return `present_quiz` for the earliest-due card.
+1. If a quiz card in the path is due for review and `--new` is omitted, return `present_quiz` for the earliest-due card.
 2. Otherwise, select the first incomplete atom in the active strategy order and return the first applicable action:
    - `create_lesson` if the atom does not have a lesson.
    - `present_lesson` if the lesson has not been taught on this path.
@@ -269,18 +269,18 @@ Each quiz on a path has an FSRS card whose state is derived from its `quiz_answe
    - `present_quiz` if a quiz has not been answered with `hard`, `good`, or `easy`.
 3. Otherwise, return `done`.
 
-An atom is complete if its lesson is taught and each difficulty slot (`easy`, `medium`, `hard`) has at least a single quiz answered with `hard`, `good`, or `easy`. An `again` rating does not complete a slot. An unpassed quiz is presented again immediately, whereas a failed review of a previously passed quiz is scheduled at its next FSRS due time.
+An atom is complete if its lesson is taught and each difficulty slot has at least a single quiz answered with `hard`, `good`, or `easy`. An `again` rating does not complete a slot. An unpassed quiz is presented again immediately, whereas a failed review of a previously passed quiz is scheduled at its next FSRS due time.
 
 ## Teaching strategies
 
 A path uses either the `bottom-up` or `top-down` traversal strategy. `mt path strategy` changes the active strategy at any time.
 
-- **Bottom-up** (default): Traverses the prerequisite DAG in post-order DFS so that every prerequisite is completed before its dependents.
+- **Bottom-up**: Default strategy. Traverses the prerequisite DAG in post-order DFS so that every prerequisite is completed before its dependents.
 - **Top-down**: Presents target atoms directly in target order without requiring prerequisites first.
 
 ### Subpaths
 
-If a user is blocked on a target atom in `top-down` mode, the agent can set a subpath (`mt path subpath set --atoms a,b,...,<target>`) that lists prerequisite atoms leading to that target. While a subpath is active in `top-down` mode, `mt path next` teaches the incomplete atoms in the subpath in order. Once the final atom in the subpath is completed, the subpath is cleared automatically.
+If a user is blocked on a target atom in `top-down` mode, the agent can set a subpath with `mt path subpath set` that lists prerequisite atoms leading to that target. While a subpath is active in `top-down` mode, `mt path next` teaches the incomplete atoms in the subpath in order. Once the final atom in the subpath is completed, the subpath is cleared automatically.
 
 ## Tool I/O and exit codes
 

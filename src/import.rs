@@ -1,4 +1,4 @@
-//! Migration from a libSQL (Turso) database to Baserunna (`mt import-turso`).
+//! Migration from a libSQL database to Baserunna for `mt import-turso`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;

@@ -1,19 +1,19 @@
 # MCP Server Design
 
-`mt mcp` exposes the Math Tutor tools and agent playbook over the Model Context Protocol (MCP) using HTTP with Server-Sent Events (SSE).
+`mt mcp` exposes the Math Tutor tools and agent playbook over the Model Context Protocol using HTTP with Server-Sent Events.
 
 ## Architecture
 
 - **Feature flag:** The `mcp` feature in `Cargo.toml` enables the HTTP server and `mt mcp` subcommand.
-- **Transport:** Streamable HTTP / SSE via `axum` and `rmcp`.
+- **Transport:** Streamable HTTP and SSE via `axum` and `rmcp`.
 
 ## Interface
 
 ### Tool conventions
 
 - **`path_id`**:
-  - Required for all path-scoped tools (`answer_quiz`, `upsert_lesson`, `create_quiz`, `update_quiz`, `delete_quiz`, `get_next`, `get_state`, `get_tree`, `get_syllabus`, `set_strategy`, `subpath_set`, and `subpath_clear`).
-  - Optional for curriculum inspection tools (`get_item` and `get_children`); if omitted, those tools return static curriculum data without path completion state.
+  - Required for all path-scoped tools.
+  - Optional for the curriculum inspection tools `get_item` and `get_children`. If omitted, those tools return static curriculum data without path completion state.
 - **Return format**: All tools return JSON. Business logic errors return a `CallToolResult` with `isError: true`.
 
 ### Prompt
@@ -27,7 +27,7 @@ The server operates as a single-user, single-tenant instance backed by a single 
 1. **Static bearer token:** Configured via `MT_API_KEY` and passed in `Authorization: Bearer <token>` or `?token=<token>`.
 2. **OAuth 2.1 access token:** Issued by the built-in authorization server if `MT_ADMIN_PASSWORD` is set, and passed in `Authorization: Bearer <token>`.
 
-At least a single authentication variable (`MT_API_KEY` or `MT_ADMIN_PASSWORD`) must be set at startup. Unauthenticated requests receive `401 Unauthorized` with a `WWW-Authenticate` header pointing to `/.well-known/oauth-protected-resource`. If the server cannot read an access token from Baserunna, the request receives `503 Service Unavailable` with a `Retry-After` header.
+Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticated requests receive `401 Unauthorized` with a `WWW-Authenticate` header pointing to `/.well-known/oauth-protected-resource`. If the server cannot read an access token from Baserunna, the request receives `503 Service Unavailable` with a `Retry-After` header.
 
 ### Built-in OAuth 2.1 authorization server
 
@@ -38,12 +38,12 @@ At least a single authentication variable (`MT_API_KEY` or `MT_ADMIN_PASSWORD`) 
 | `/oauth/register`                         | POST   | RFC 7591 dynamic client registration                   |
 | `/oauth/authorize`                        | GET    | Renders the login form with a signed CSRF token       |
 | `/oauth/authorize`                        | POST   | Verifies `MT_ADMIN_PASSWORD` and issues an auth code   |
-| `/oauth/token`                            | POST   | Exchanges an auth code (S256 PKCE) or refresh token    |
+| `/oauth/token`                            | POST   | Exchanges an auth code with S256 PKCE or refresh token |
 
 ### Token parameters and storage
 
 - **Entropy:** 256-bit random tokens encoded with base64url.
-- **Expirations:** Authorization codes expire in 60 seconds (single-use); access tokens expire in 1 hour; refresh tokens expire in 30 days (rotated on each refresh).
+- **Expirations:** Single-use authorization codes expire in 60 seconds. Access tokens expire in 1 hour. Refresh tokens expire in 30 days and rotate on each refresh.
 - **PKCE:** `S256` code challenge is mandatory.
 - **Tables:** `oauth_clients`, `oauth_codes`, `oauth_access_tokens`, and `oauth_refresh_tokens` are stored in the Baserunna database using native row TTLs for expiration.
 

@@ -15,7 +15,7 @@ Write commands print a confirmation to stderr, including the ID of a new quiz or
 
 ## Starting a session
 
-Run `mt path state` to view the most recent learning path (strategy, goal, completion count, and next atom). Show the summary to the user and ask whether to continue or start a new path.
+Run `mt path state` to view the most recent learning path. Show the summary to the user and ask whether to continue or start a new path.
 
 If a learning path does not exist, offer to create a path with `mt path new`. Use `mt path list` to list all existing paths.
 
@@ -23,11 +23,11 @@ To create a path, ask what the user wants to learn, identify the target node IDs
 
     mt path new "Understand SVD" --targets la.5.4
 
-`--targets` accepts comma-separated node IDs (atoms or clusters). Cluster IDs expand to all atomic descendants.
+`--targets` accepts comma-separated atom or cluster IDs. Cluster IDs expand to all atomic descendants.
 
 ### Selecting a strategy
 
-A path uses either the `bottom-up` (default) or `top-down` strategy. Pass `--strategy top-down` to `mt path new`, or change the strategy at any time with `mt path strategy <bottom-up|top-down>`:
+A path uses either the `bottom-up` or `top-down` strategy, and defaults to `bottom-up`. Pass `--strategy top-down` to `mt path new`, or change the strategy at any time with `mt path strategy <bottom-up|top-down>`:
 
 - **bottom-up**: Teaches all prerequisites of a target before the target itself.
 - **top-down**: Presents the target atom directly and descends into prerequisites only if you set a subpath.
@@ -39,7 +39,7 @@ Ask the user which strategy they prefer if they have not specified it.
     mt graph list [<id>] [--path P]
     mt graph show <id>   [--path P]
 
-Run `mt graph list` to list top-level areas, or pass a node ID to list its children. Run `mt graph show <id>` to inspect a node's prerequisites, lesson status, and quiz count. Pass `--path P` to include per-path completion flags (`lesson_taught`, `complete`).
+Run `mt graph list` to list top-level areas, or pass a node ID to list its children. Run `mt graph show <id>` to inspect a node's prerequisites, lesson status, and quiz count. Pass `--path P` to include the `lesson_taught` and `complete` flags for that path.
 
 Run `mt path syllabus [-n N]` to preview upcoming untaught lesson topics in scheduled order.
 
@@ -53,7 +53,7 @@ On each turn:
 
 Stop if `action: done` is returned or if the user pauses the session.
 
-## Subpaths (top-down)
+## Subpaths
 
 If the user is blocked on a target atom in `top-down` mode, create a subpath of prerequisite atoms leading to that target:
 
@@ -67,7 +67,7 @@ The subpath is cleared automatically once its final target atom is completed, or
 
 ### `create_lesson`
 
-The selected atom does not have a stored lesson. Author a lesson (1–2 paragraphs, at most a single theorem, rule, or definition) that builds on the prerequisites in the payload without repeating them. Save the lesson, present it to the user, and wait for their response:
+The selected atom does not have a stored lesson. Author a lesson of 1–2 paragraphs that introduces at most a single theorem, rule, or definition and builds on the prerequisites in the payload without repeating them. Save the lesson, present it to the user, and wait for their response:
 
     mt lesson upsert <atom-id> --body "$(cat <<'BODY'
     ...lesson...
@@ -80,7 +80,7 @@ A lesson is already stored, but it has not been taught on this path. Present `at
 
 ### `create_quiz`
 
-The atom requires a quiz for `target_difficulty` (`easy`, `medium`, or `hard`). Author a question, a concise reference answer, and an optional grading rubric (only for subjective questions). The quiz must depend only on the current lesson and completed prerequisites, and must not duplicate `existing_quizzes`.
+The atom requires a quiz for `target_difficulty`. Author a question, a concise reference answer, and an optional grading rubric for subjective questions. The quiz must depend only on the current lesson and completed prerequisites, and must not duplicate `existing_quizzes`.
 
 Save the quiz before presenting the question to the user:
 
@@ -115,7 +115,7 @@ All target atoms on the path are complete. Inform the user and offer to start a 
 
 ## Style rules
 
-- **Lessons:** 1–2 paragraphs, at most a single theorem, rule, or definition, using inline LaTeX (`$...$`) for math notation.
+- **Lessons:** 1–2 paragraphs, at most a single theorem, rule, or definition, using inline LaTeX `$...$` for math notation.
 - **Quizzes:** Free-text by default; depend only on the current lesson and completed prerequisites.
 - **Tone:** Be direct, polite, and objective. Do not praise or flatter the user, especially if grading an incorrect answer.
 
