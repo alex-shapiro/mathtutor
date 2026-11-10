@@ -15,8 +15,8 @@ use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::schema::{
-    ACTIVITY_PREFIX, CardRecord, LessonRow, QuizRow, RemovedQuizRow, TaughtRow, activity_key,
-    events_stream,
+    ACTIVITY_PREFIX, CardRecord, IMPORT_STATE_KEY, ImportMarker, LessonRow, QuizRow,
+    RemovedQuizRow, TaughtRow, activity_key, events_stream,
 };
 use crate::{Error, Result};
 
@@ -294,7 +294,12 @@ impl Db {
     /// Load `want` from a strong read snapshot without starting a write transaction.
     pub async fn snapshot(&self, want: &Want) -> Result<View> {
         let path_id = self.selected_path_id(&want.path).await?;
-        let mut plan = Plan::new(want, path_id.as_deref(), self.cached_overlay());
+        let mut plan = Plan::new(
+            want,
+            path_id.as_deref(),
+            self.cached_overlay(),
+            self.ignores_open_import,
+        );
         let mut results = self.read(&plan.ops()).await?;
         while let Some(more) = plan.absorb(results)? {
             results = self.read(&more).await?;
@@ -335,7 +340,12 @@ impl Db {
         path_id: Option<&str>,
         f: &mut impl FnMut(&View, &mut Changes) -> Result<T>,
     ) -> Result<(T, Plan, Option<OverlayWrite>)> {
-        let mut plan = Plan::new(want, path_id, self.cached_overlay());
+        let mut plan = Plan::new(
+            want,
+            path_id,
+            self.cached_overlay(),
+            self.ignores_open_import,
+        );
         let mut results = txn.run(&plan.ops()).await?;
         while let Some(more) = plan.absorb(results)? {
             results = txn.run(&more).await?;
@@ -426,6 +436,7 @@ enum PathRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Slot {
+    OpenImportCheck,
     OverlayVersion,
     Lessons,
     Quizzes,
@@ -492,8 +503,16 @@ fn parse_activity(e: &Entry) -> Result<(&str, DateTime<Utc>)> {
 }
 
 impl Plan {
-    fn new(want: &Want, path_id: Option<&str>, cache: Option<CachedOverlay>) -> Self {
+    fn new(
+        want: &Want,
+        path_id: Option<&str>,
+        cache: Option<CachedOverlay>,
+        ignores_open_import: bool,
+    ) -> Self {
         let mut pending = Vec::new();
+        if !ignores_open_import {
+            pending.push((Slot::OpenImportCheck, Op::get(IMPORT_STATE_KEY)));
+        }
         if want.overlay {
             pending.push((Slot::OverlayVersion, Op::get(OVERLAY_VERSION_KEY)));
             if cache.is_none() {
@@ -540,6 +559,11 @@ impl Plan {
                 self.pending.push((slot, next));
             }
             match slot {
+                Slot::OpenImportCheck => {
+                    if ImportMarker::from_entry(r.entry()?)? == Some(ImportMarker::Open) {
+                        return Err(Error::ImportInProgress);
+                    }
+                }
                 Slot::OverlayVersion => {
                     let v = match r.entry()? {
                         Some(e) => text(&e)?.1.to_string(),

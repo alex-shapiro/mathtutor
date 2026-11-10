@@ -444,20 +444,26 @@ async fn unfinished_import_resumes_and_skips_imported_paths() {
 }
 
 #[tokio::test]
-async fn open_import_blocks_other_commands_until_it_verifies() {
-    let cfg = common::fresh_config();
-    let db = Db::open(&cfg).await.unwrap();
+async fn open_import_blocks_a_handle_opened_before_it_until_it_verifies() {
+    let db = common::empty_db().await;
     import(tables_with_wrong_card(), &db).await.expect("first");
 
-    let blocked = Db::open(&cfg).await.unwrap_err();
-    assert!(matches!(blocked, Error::ImportInProgress), "{blocked}");
-
-    let importer = Db::open_for_import(&cfg).await.unwrap();
-    let r = import(legacy(), &importer).await.expect("resume");
-    assert!(r.mismatches.is_empty(), "{:?}", r.mismatches);
-    Db::open(&cfg)
+    let read = db.snapshot(&Want::overlay()).await.unwrap_err();
+    assert!(matches!(read, Error::ImportInProgress), "{read}");
+    let write = db
+        .transact(&Want::overlay(), |_, changes| {
+            overlay::upsert_lesson(changes, "fnd.1.1.1", "edit during the import");
+            Ok(())
+        })
         .await
-        .expect("completed import allows commands");
+        .unwrap_err();
+    assert!(matches!(write, Error::ImportInProgress), "{write}");
+
+    let r = import(legacy(), &db).await.expect("resume");
+    assert!(r.mismatches.is_empty(), "{:?}", r.mismatches);
+    db.snapshot(&Want::overlay())
+        .await
+        .expect("a verified import allows commands");
 }
 
 #[tokio::test]

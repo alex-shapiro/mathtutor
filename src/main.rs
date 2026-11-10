@@ -92,7 +92,6 @@ async fn real_main() -> ExitCode {
     }
 
     let db = match db::DbConfig::from_env() {
-        Ok(cfg) if matches!(cli.cmd, Cmd::ImportTurso(_)) => db::Db::open_for_import(&cfg).await,
         Ok(cfg) => db::Db::open(&cfg).await,
         Err(e) => Err(e),
     };

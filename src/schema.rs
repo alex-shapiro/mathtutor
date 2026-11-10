@@ -16,36 +16,36 @@ const VERSION_KEY: &str = "schema_version";
 /// Key that records the progress of `mt import-turso` on this database.
 pub(crate) const IMPORT_STATE_KEY: &str = "turso_import_state";
 
-/// Progress of `mt import-turso` on a database.
+/// Stored progress of `mt import-turso` on a database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImportState {
-    NotStarted,
-    /// An import has written or may write data and has not verified it.
+pub enum ImportMarker {
     Open,
     Complete,
 }
 
-impl ImportState {
+impl ImportMarker {
     const OPEN_VALUE: &'static str = "running";
     const COMPLETE_VALUE: &'static str = "complete";
 
-    pub(crate) fn from_entry(entry: Option<Entry>) -> Result<Self> {
+    /// Decodes the marker stored at [`IMPORT_STATE_KEY`].
+    pub(crate) fn from_entry(entry: Option<Entry>) -> Result<Option<Self>> {
         let Some(entry) = entry else {
-            return Ok(Self::NotStarted);
+            return Ok(None);
         };
         match entry.value.data().map(AsRef::as_ref) {
-            Some(v) if v == Self::OPEN_VALUE.as_bytes() => Ok(Self::Open),
-            Some(v) if v == Self::COMPLETE_VALUE.as_bytes() => Ok(Self::Complete),
+            Some(v) if v == Self::OPEN_VALUE.as_bytes() => Ok(Some(Self::Open)),
+            Some(v) if v == Self::COMPLETE_VALUE.as_bytes() => Ok(Some(Self::Complete)),
             _ => Err(Error::BadRow(format!("{IMPORT_STATE_KEY}: unknown value"))),
         }
     }
 
-    pub(crate) fn stored_value(self) -> Option<&'static str> {
-        match self {
-            Self::NotStarted => None,
-            Self::Open => Some(Self::OPEN_VALUE),
-            Self::Complete => Some(Self::COMPLETE_VALUE),
-        }
+    /// Returns the write that stores this marker.
+    pub(crate) fn write_op(self) -> Op {
+        let value = match self {
+            Self::Open => Self::OPEN_VALUE,
+            Self::Complete => Self::COMPLETE_VALUE,
+        };
+        Op::put(IMPORT_STATE_KEY, value)
     }
 }
 
@@ -357,33 +357,22 @@ pub fn tables() -> Vec<NewTable> {
     ]
 }
 
-/// Ensures that the database and all required tables exist, and returns its import progress.
-pub async fn ensure(db: &client::Db) -> Result<ImportState> {
-    let (current, import_state) = match db
-        .read(&[Op::get(VERSION_KEY), Op::get(IMPORT_STATE_KEY)])
-        .await
-    {
-        Ok(results) => {
-            let [version, import_state]: [_; 2] = results
-                .try_into()
-                .map_err(|_| Error::BadRow("schema read returned the wrong result count".into()))?;
-            (
-                version.entry()?.and_then(|e| e.value.data().cloned()),
-                ImportState::from_entry(import_state.entry()?)?,
-            )
-        }
+/// Ensure that the database and all required tables exist.
+pub async fn ensure(db: &client::Db) -> Result<()> {
+    let current = match db.read_one(Op::get(VERSION_KEY)).await {
+        Ok(r) => r.entry()?.and_then(|e| e.value.data().cloned()),
         Err(e) if e.code() == Some(ErrorCode::NotFound) => {
             db.ensure().await?;
-            (None, ImportState::NotStarted)
+            None
         }
         Err(e) => return Err(e.into()),
     };
     if current.as_deref() == Some(VERSION.as_bytes()) {
-        return Ok(import_state);
+        return Ok(());
     }
     for t in tables() {
         db.create_table(&t).await?;
     }
     db.write(&[Op::put(VERSION_KEY, VERSION)]).await?;
-    Ok(import_state)
+    Ok(())
 }

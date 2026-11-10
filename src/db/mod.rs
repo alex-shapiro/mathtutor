@@ -8,7 +8,6 @@ use std::time::Duration;
 
 pub use baserunna_client::{self as client, Op, OpResult, Row, Transport};
 
-use crate::schema::ImportState;
 use crate::{Error, Result};
 
 pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
@@ -53,6 +52,7 @@ pub struct Db {
     pub(crate) client: client::Db,
     pub(crate) overlay_cache: Arc<Mutex<Option<crate::view::CachedOverlay>>>,
     pub(crate) cache_file: Option<PathBuf>,
+    pub(crate) ignores_open_import: bool,
 }
 
 impl std::fmt::Debug for Db {
@@ -65,27 +65,20 @@ impl std::fmt::Debug for Db {
 
 impl Db {
     /// Connects to the database and creates the database and tables if they do not exist.
-    ///
-    /// Fails with [`Error::ImportInProgress`] while `mt import-turso` has not verified this database.
     pub async fn open(cfg: &DbConfig) -> Result<Self> {
-        let (db, import_state) = Self::connect_and_ensure_schema(cfg).await?;
-        if import_state == ImportState::Open {
-            return Err(Error::ImportInProgress);
-        }
+        let db = Self::connect(cfg)?;
+        crate::schema::ensure(&db.client)
+            .await
+            .map_err(Error::into_not_applied)?;
         Ok(db)
     }
 
-    /// Opens the database for `mt import-turso`, which can resume an open import.
-    pub async fn open_for_import(cfg: &DbConfig) -> Result<Self> {
-        Ok(Self::connect_and_ensure_schema(cfg).await?.0)
-    }
-
-    async fn connect_and_ensure_schema(cfg: &DbConfig) -> Result<(Self, ImportState)> {
-        let db = Self::connect(cfg)?;
-        let import_state = crate::schema::ensure(&db.client)
-            .await
-            .map_err(Error::into_not_applied)?;
-        Ok((db, import_state))
+    /// Returns a handle that can use the database while an import is open.
+    pub(crate) fn for_import(&self) -> Self {
+        Self {
+            ignores_open_import: true,
+            ..self.clone()
+        }
     }
 
     /// Reads `ops` at the latest version.
@@ -123,6 +116,7 @@ impl Db {
             client: client.db(&cfg.db),
             overlay_cache: Arc::new(Mutex::new(cached)),
             cache_file,
+            ignores_open_import: false,
         }
     }
 

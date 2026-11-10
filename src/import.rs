@@ -10,13 +10,14 @@ use serde_json::{Map, Value as Json};
 
 use crate::answer::atom_from_quiz_id;
 use crate::cards::{self, CardState};
-use crate::db::client::api::{Expect, PAGE_MAX};
+use crate::db::client::Txn;
+use crate::db::client::api::PAGE_MAX;
 use crate::db::{Db, Op, ts};
 use crate::event_log::{Event, EventKind, EventPayload};
 use crate::graph::Quiz;
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
-use crate::schema::{IMPORT_STATE_KEY, ImportState, OAuthClient, activity_key, events_stream};
+use crate::schema::{IMPORT_STATE_KEY, ImportMarker, OAuthClient, activity_key, events_stream};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::{OVERLAY_VERSION_KEY, Want};
 use crate::{Error, Result};
@@ -464,46 +465,43 @@ pub struct Report {
     pub mismatches: Vec<String>,
 }
 
-fn import_state_write(state: ImportState) -> Op {
-    let value = state
-        .stored_value()
-        .expect("written import states have a value");
-    Op::put(IMPORT_STATE_KEY, value)
-}
-
 /// Marks `db` as an import target, or fails if an import would overwrite newer data.
 async fn claim_import_target(db: &Db) -> Result<()> {
-    let results = db
-        .read(&[
+    let mut retry = db.client.retry();
+    loop {
+        let mut txn = db.client.begin();
+        let r = claim_import_target_in(&mut txn).await;
+        if retry.finish(txn, r).await?.is_some() {
+            return Ok(());
+        }
+    }
+}
+
+async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
+    let results = txn
+        .run(&[
             Op::get(IMPORT_STATE_KEY),
             Op::get(OVERLAY_VERSION_KEY),
             Op::query_all::<PathFile>(),
         ])
         .await?;
-    let [state, overlay_version, paths]: [_; 3] = results
+    let [marker, overlay_version, paths]: [_; 3] = results
         .try_into()
         .map_err(|_| Error::BadRow("import target read returned the wrong result count".into()))?;
-    match ImportState::from_entry(state.entry()?)? {
-        ImportState::Open => return Ok(()),
-        ImportState::Complete => return Err(Error::ImportAlreadyComplete),
-        ImportState::NotStarted => {}
+    match ImportMarker::from_entry(marker.entry()?)? {
+        Some(ImportMarker::Open) => return Ok(()),
+        Some(ImportMarker::Complete) => return Err(Error::ImportAlreadyComplete),
+        None => {}
     }
     if overlay_version.entry()?.is_some() || !paths.rows::<PathFile>()?.is_empty() {
         return Err(Error::ImportTargetNotEmpty);
     }
-    db.client
-        .write(&[
-            Op::Check {
-                key: IMPORT_STATE_KEY.into(),
-                expect: Expect::Absent,
-            },
-            import_state_write(ImportState::Open),
-        ])
-        .await?;
+    txn.write([ImportMarker::Open.write_op()]);
     Ok(())
 }
 
 pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
+    let db = &db.for_import();
     let legacy = read(turso).await?;
     claim_import_target(db).await?;
     let mut report = Report {
@@ -546,7 +544,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     }
     if report.mismatches.is_empty() {
         db.client
-            .write(&[import_state_write(ImportState::Complete)])
+            .write(&[ImportMarker::Complete.write_op()])
             .await?;
     }
     Ok(report)
