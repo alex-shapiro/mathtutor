@@ -646,3 +646,28 @@ fn new_mode_returns_done_when_walker_has_nothing_left() {
         Action::Done
     ));
 }
+
+#[test]
+fn due_card_of_a_removed_atom_does_not_hide_later_due_cards() {
+    let g = graph_of(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![quiz("a.q1", Difficulty::Easy)],
+    )]);
+    let p = path_with(&["a"]);
+    let now = Utc::now();
+    let due = [("removed.q1".to_string(), now), ("a.q1".to_string(), now)];
+
+    let action = scheduler::next_action(
+        &g,
+        &p,
+        &p.targets,
+        &PathProgress::default(),
+        &due,
+        &[],
+        scheduler::NextMode::Due,
+    );
+
+    assert_present_quiz(&action, "a", "a.q1");
+}

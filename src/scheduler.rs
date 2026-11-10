@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::answer::atom_from_quiz_id;
 use crate::db::Db;
-use crate::event_log::{self, Event, EventKind};
+use crate::event_log;
 use crate::graph::{FlatConcept, Graph};
 use crate::path::{self, PathFile};
 use crate::progress::PathProgress;
@@ -235,23 +235,15 @@ fn atom_action(g: &Graph, progress: &PathProgress, id: &str) -> Option<Action> {
     None
 }
 
-/// Return `true` if `events` contains a `LessonTaught` or `LessonAuthored` event for `atom_id`.
-pub fn lesson_taught_in_path(events: &[Event], atom_id: &str) -> bool {
-    events.iter().any(|e| {
-        matches!(e.kind, EventKind::LessonTaught | EventKind::LessonAuthored)
-            && e.atom.as_deref() == Some(atom_id)
-    })
-}
-
 fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<(String, String)> {
-    for (quiz_id, _) in due_quizzes {
+    due_quizzes.iter().find_map(|(quiz_id, _)| {
         let atom_id = atom_from_quiz_id(quiz_id)?;
         let atom = g.by_id.get(&atom_id)?;
-        if atom.quizzes.iter().any(|q| &q.id == quiz_id) {
-            return Some((quiz_id.clone(), atom_id));
-        }
-    }
-    None
+        atom.quizzes
+            .iter()
+            .any(|q| &q.id == quiz_id)
+            .then(|| (quiz_id.clone(), atom_id))
+    })
 }
 
 /// Return `true` if `atom_id` has a stored lesson and passed quizzes for all 3 difficulties.
