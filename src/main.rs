@@ -1,5 +1,7 @@
 use std::process::ExitCode;
 
+use argh::FromArgs;
+
 use mathtutor::cli;
 #[cfg(feature = "mcp")]
 use mathtutor::cli::McpOp;
@@ -24,7 +26,10 @@ async fn main() -> ExitCode {
 }
 
 async fn real_main() -> ExitCode {
-    let cli: Mt = argh::from_env();
+    let cli = match parse_args() {
+        Ok(cli) => cli,
+        Err(code) => return code,
+    };
 
     init_tracing(is_mcp(&cli.cmd));
 
@@ -121,6 +126,21 @@ fn report_failure(e: &Error) -> ExitCode {
         eprintln!("the command may have been applied; check the state before you retry it");
     }
     ExitCode::from(e.exit_code())
+}
+
+/// Parses the command line, and returns the exit code if the process should stop.
+fn parse_args() -> std::result::Result<Mt, ExitCode> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    Mt::from_args(&["mt"], &args).map_err(|early| {
+        if early.status.is_ok() {
+            print!("{}", early.output);
+            ExitCode::SUCCESS
+        } else {
+            eprint!("{}", early.output);
+            ExitCode::from(2)
+        }
+    })
 }
 
 /// Filters out empty strings so unset environment variables do not match empty bearer tokens.

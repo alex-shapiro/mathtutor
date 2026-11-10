@@ -293,3 +293,19 @@ fn curriculum_lookup_runs_without_database_credentials() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn invalid_arguments_exit_with_the_usage_code_and_help_succeeds() {
+    let mt = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_mt"))
+            .args(args)
+            .env_remove("BASERUNNA_TOKEN")
+            .output()
+            .unwrap()
+            .status
+            .code()
+    };
+    assert_eq!(mt(&["quiz", "answer", "a.q1", "--rating", "bad"]), Some(2));
+    assert_eq!(mt(&["no-such-command"]), Some(2));
+    assert_eq!(mt(&["--help"]), Some(0));
+}
