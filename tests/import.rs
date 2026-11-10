@@ -10,9 +10,11 @@ use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
 use mathtutor::Error;
 use mathtutor::cards::{self, CardRow};
-use mathtutor::db::{Db, ts};
+use mathtutor::db::{Db, Op, ts};
 use mathtutor::event_log::{self, Event, EventKind, EventPayload};
 use mathtutor::import::{self, Turso};
+use mathtutor::overlay;
+use mathtutor::schema::OAuthClient;
 use mathtutor::types::{Rating, Strategy};
 use mathtutor::view::{PathSel, Want};
 use serde::{Deserialize, Serialize};
@@ -294,20 +296,7 @@ fn legacy() -> Tables {
             vec![text("fnd.9.9.9.q1"), text("fnd.9.9.9")],
         ],
     );
-    t.set(
-        "cards",
-        &[
-            "path_id",
-            "quiz_id",
-            "stability",
-            "difficulty",
-            "due_at",
-            "last_reviewed_at",
-            "reps",
-            "lapses",
-        ],
-        card_rows(&legacy_cards()),
-    );
+    t.set("cards", CARD_COLUMNS, card_rows(&legacy_cards()));
     t
 }
 
@@ -315,6 +304,17 @@ fn legacy_cards() -> Vec<CardRow> {
     let a: Vec<Event> = events().into_iter().filter(|e| e.path == "p_a").collect();
     cards::fold_history("p_a", &a).unwrap().0
 }
+
+const CARD_COLUMNS: &[&str] = &[
+    "path_id",
+    "quiz_id",
+    "stability",
+    "difficulty",
+    "due_at",
+    "last_reviewed_at",
+    "reps",
+    "lapses",
+];
 
 fn card_rows(cards: &[CardRow]) -> Vec<Vec<V>> {
     cards
@@ -420,39 +420,126 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
     assert!(b.cards.is_empty() && b.taught.is_empty());
 }
 
+fn tables_with_wrong_card() -> Tables {
+    let mut cards = legacy_cards();
+    cards[0].reps += 1;
+    let mut tables = legacy();
+    tables.set("cards", CARD_COLUMNS, card_rows(&cards));
+    tables
+}
+
 #[tokio::test]
-async fn rerunning_an_import_skips_imported_paths() {
+async fn unfinished_import_resumes_and_skips_imported_paths() {
     let db = common::empty_db().await;
-    import(legacy(), &db).await.expect("first import");
-    let r = import(legacy(), &db).await.expect("second import");
+    let first = import(tables_with_wrong_card(), &db).await.expect("first");
+    assert_eq!(first.mismatches.len(), 1, "{:?}", first.mismatches);
+
+    let r = import(legacy(), &db).await.expect("resume");
+
     assert_eq!((r.paths, r.skipped, r.events), (0, 3, 0));
     assert!(r.mismatches.is_empty(), "{:?}", r.mismatches);
     assert_eq!(event_log::load(&db, "p_a").await.unwrap().len(), 7);
 }
 
 #[tokio::test]
-async fn import_reports_cards_that_differ_from_libsql() {
+async fn completed_import_refuses_a_rerun_and_keeps_newer_content() {
     let db = common::empty_db().await;
-    let mut cards = legacy_cards();
-    cards[0].reps += 1;
+    import(legacy(), &db).await.expect("first import");
+    let atom = common::overlay(&db)
+        .await
+        .atoms
+        .iter()
+        .find(|(_, a)| a.lesson.is_some())
+        .map(|(id, _)| id.clone())
+        .expect("imported lesson");
+    db.transact(&Want::overlay(), |_, changes| {
+        overlay::upsert_lesson(changes, &atom, "newer");
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    let e = import(legacy(), &db).await.unwrap_err();
+
+    assert!(matches!(e, Error::ImportAlreadyComplete), "{e}");
+    assert_eq!(
+        common::overlay(&db).await.atoms[&atom].lesson.as_deref(),
+        Some("newer")
+    );
+}
+
+#[tokio::test]
+async fn import_refuses_a_target_that_holds_data() {
+    let db = common::fresh_db("p_existing").await;
+    let e = import(legacy(), &db).await.unwrap_err();
+    assert!(matches!(e, Error::ImportTargetNotEmpty), "{e}");
+}
+
+#[tokio::test]
+async fn import_reports_overlay_and_path_fields_that_differ_from_libsql() {
+    let db = common::empty_db().await;
+    import(tables_with_wrong_card(), &db).await.expect("first");
+
+    let mut changed = legacy();
+    changed.set("overlay_lessons", &["atom_id", "body"], Vec::new());
+    changed.set(
+        "path_targets",
+        &["path_id", "id"],
+        vec![vec![text("p_a"), text("fnd.9")]],
+    );
+    let r = import(changed, &db).await.expect("resume");
+
+    assert!(
+        r.mismatches.iter().any(|m| m.starts_with("overlay/")),
+        "{:?}",
+        r.mismatches
+    );
+    assert!(
+        r.mismatches
+            .iter()
+            .any(|m| m == "p_a: stored path differs from libSQL"),
+        "{:?}",
+        r.mismatches
+    );
+}
+
+#[tokio::test]
+async fn import_copies_oauth_clients_so_connectors_stay_registered() {
+    let cfg = common::fresh_config();
+    let db = Db::open(&cfg).await.unwrap();
     let mut tables = legacy();
     tables.set(
-        "cards",
-        &[
-            "path_id",
-            "quiz_id",
-            "stability",
-            "difficulty",
-            "due_at",
-            "last_reviewed_at",
-            "reps",
-            "lapses",
-        ],
-        card_rows(&cards),
+        "oauth_clients",
+        &["client_id", "client_name", "redirect_uris", "created_at"],
+        vec![vec![
+            text("client-1"),
+            text("Claude"),
+            text(r#"["https://claude.ai/callback"]"#),
+            text(&ts::format(at(1))),
+        ]],
     );
+
     let r = import(tables, &db).await.expect("import");
+
+    assert_eq!(r.oauth_clients, 1);
+    let stored = db
+        .client()
+        .db(&cfg.db)
+        .read_one(Op::get_row::<OAuthClient>("client-1"))
+        .await
+        .unwrap()
+        .row::<OAuthClient>()
+        .unwrap()
+        .expect("stored client");
+    assert_eq!(stored.redirect_uris, ["https://claude.ai/callback"]);
+}
+
+#[tokio::test]
+async fn import_reports_cards_that_differ_from_libsql() {
+    let db = common::empty_db().await;
+    let r = import(tables_with_wrong_card(), &db).await.expect("import");
     assert_eq!(r.mismatches.len(), 1, "{:?}", r.mismatches);
-    assert!(r.mismatches[0].starts_with(&format!("p_a/{}:", cards[0].quiz_id)));
+    assert!(r.mismatches[0].starts_with(&format!("p_a/{}:", legacy_cards()[0].quiz_id)));
 }
 
 #[tokio::test]

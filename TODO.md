@@ -6,7 +6,7 @@ Follow-up tasks for the Baserunna migration.
 
 - [x] **Configure Baserunna in CI.** Tests run an in-process node built from the same Baserunna revision as the client.
 - [x] **Import existing Turso data.** Implemented in `mt import-turso`.
-- [ ] **Migrate the Fly.io app.** Create the database and set `BASERUNNA_TOKEN` (and `BASERUNNA_DB` if different from `mathtutor`). Run `mt import-turso` with `TURSO_URL` and `TURSO_AUTH_TOKEN` against a scratch database first to verify zero mismatches. Deploy the app, then unset `TURSO_URL` and `TURSO_AUTH_TOKEN`.
+- [ ] **Migrate the Fly.io app.** Create the database and set `BASERUNNA_TOKEN` (and `BASERUNNA_DB` if different from `mathtutor`). Run `mt import-turso` with `TURSO_URL` and `TURSO_AUTH_TOKEN` against a scratch database first to verify zero mismatches. Stop the old app so that libSQL receives no more writes. Run the import against the production database and confirm zero mismatches. Deploy the app, then unset `TURSO_URL` and `TURSO_AUTH_TOKEN`. Keep the Turso database until the new deployment is verified.
 - [x] **Point the Baserunna dependencies at `main`** after the `mathtutor-client` branch of Baserunna is merged.
 
 ## Later

@@ -776,9 +776,12 @@ fn error_kind(e: &Error) -> &'static str {
         Error::Json(_) => "json",
         Error::Fsrs(_) => "fsrs",
         Error::ConflictingFlags(_, _) => "conflicting_flags",
-        Error::MissingTursoUrl | Error::Turso(_) | Error::ImportMismatch(_) | Error::Http(_) => {
-            "import"
-        }
+        Error::MissingTursoUrl
+        | Error::Turso(_)
+        | Error::ImportMismatch(_)
+        | Error::ImportAlreadyComplete
+        | Error::ImportTargetNotEmpty
+        | Error::Http(_) => "import",
         Error::MissingAuth
         | Error::BadBindAddr { .. }
         | Error::BadPublicUrl { .. }

@@ -1,6 +1,7 @@
 //! Migration from a libSQL (Turso) database to Baserunna (`mt import-turso`).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
@@ -9,18 +10,26 @@ use serde_json::{Map, Value as Json};
 
 use crate::answer::atom_from_quiz_id;
 use crate::cards::{self, CardState};
-use crate::db::client::api::PAGE_MAX;
+use crate::db::client::api::{Expect, PAGE_MAX};
 use crate::db::{Db, Op, ts};
 use crate::event_log::{Event, EventKind, EventPayload};
 use crate::graph::Quiz;
-use crate::overlay::Edit;
+use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
-use crate::schema::{activity_key, events_stream};
+use crate::schema::{OAuthClient, activity_key, events_stream};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
-use crate::view::Want;
+use crate::view::{OVERLAY_VERSION_KEY, Want};
 use crate::{Error, Result};
 
 const SCHEMA_VERSION: i64 = 4;
+
+/// Key that records whether this database is receiving or has received an import.
+const IMPORT_STATE_KEY: &str = "turso_import_state";
+const IMPORT_RUNNING: &[u8] = b"running";
+const IMPORT_COMPLETE: &[u8] = b"complete";
+
+/// Number of legacy rows written per transaction, well below the server's operation limit.
+const IMPORT_WRITE_BATCH: usize = 500;
 
 /// Relative tolerance for comparing `f32` FSRS parameters against `f64` values stored in libSQL.
 const FSRS_TOLERANCE: f64 = 1e-4;
@@ -194,7 +203,7 @@ fn rows<T: DeserializeOwned>(table: &str, rows: Vec<Map<String, Json>>) -> Resul
         .collect()
 }
 
-const QUERIES: [&str; 9] = [
+const QUERIES: [&str; 10] = [
     "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations",
     "SELECT id, goal, created_at, strategy FROM paths",
     "SELECT path_id, target_id AS id FROM path_targets ORDER BY path_id, position",
@@ -207,6 +216,7 @@ const QUERIES: [&str; 9] = [
      LEFT JOIN overlay_quizzes q ON q.quiz_id = r.quiz_id ORDER BY r.quiz_id",
     "SELECT path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses \
      FROM cards",
+    "SELECT client_id, client_name, redirect_uris, created_at FROM oauth_clients",
 ];
 
 #[derive(Deserialize)]
@@ -284,11 +294,36 @@ struct CardRow {
     lapses: u32,
 }
 
+#[derive(Deserialize)]
+struct OAuthClientRow {
+    client_id: String,
+    client_name: Option<String>,
+    redirect_uris: String,
+    #[serde(with = "ts")]
+    created_at: DateTime<Utc>,
+}
+
+impl TryFrom<OAuthClientRow> for OAuthClient {
+    type Error = Error;
+
+    fn try_from(r: OAuthClientRow) -> Result<Self> {
+        let redirect_uris = serde_json::from_str(&r.redirect_uris)
+            .map_err(|e| Error::BadRow(format!("libSQL oauth_clients.redirect_uris: {e}")))?;
+        Ok(Self {
+            client_id: r.client_id,
+            client_name: r.client_name,
+            redirect_uris,
+            created_at: r.created_at,
+        })
+    }
+}
+
 struct Legacy {
     paths: Vec<PathFile>,
     events: HashMap<String, Vec<Event>>,
     overlay: Vec<Edit>,
     cards: HashMap<String, Vec<CardRow>>,
+    oauth_clients: Vec<OAuthClient>,
 }
 
 async fn read(turso: &Turso) -> Result<Legacy> {
@@ -302,7 +337,8 @@ async fn read(turso: &Turso) -> Result<Legacy> {
         quizzes,
         removed,
         cards,
-    ]: [_; 9] = turso
+        oauth_clients,
+    ]: [_; 10] = turso
         .read(&QUERIES)
         .await?
         .try_into()
@@ -346,11 +382,16 @@ async fn read(turso: &Turso) -> Result<Legacy> {
     for c in rows::<CardRow>("cards", cards)? {
         cards_by_path.entry(c.path_id.clone()).or_default().push(c);
     }
+    let oauth_clients = rows::<OAuthClientRow>("oauth_clients", oauth_clients)?
+        .into_iter()
+        .map(OAuthClient::try_from)
+        .collect::<Result<_>>()?;
     Ok(Legacy {
         paths,
         events,
         overlay,
         cards: cards_by_path,
+        oauth_clients,
     })
 }
 
@@ -424,25 +465,66 @@ pub struct Report {
     pub skipped: usize,
     pub events: usize,
     pub overlay_edits: usize,
+    pub oauth_clients: usize,
     pub mismatches: Vec<String>,
+}
+
+/// Marks `db` as an import target, or fails if an import would overwrite newer data.
+async fn claim_import_target(db: &Db) -> Result<()> {
+    let results = db
+        .client
+        .read(&[
+            Op::get(IMPORT_STATE_KEY),
+            Op::get(OVERLAY_VERSION_KEY),
+            Op::query_all::<PathFile>(),
+        ])
+        .await?;
+    let [state, overlay_version, paths]: [_; 3] = results
+        .try_into()
+        .map_err(|_| Error::BadRow("import target read returned the wrong result count".into()))?;
+    let state = state.entry()?;
+    match state
+        .as_ref()
+        .and_then(|e| e.value.data())
+        .map(AsRef::as_ref)
+    {
+        Some(IMPORT_RUNNING) => return Ok(()),
+        Some(IMPORT_COMPLETE) => return Err(Error::ImportAlreadyComplete),
+        _ => {}
+    }
+    if overlay_version.entry()?.is_some() || !paths.rows::<PathFile>()?.is_empty() {
+        return Err(Error::ImportTargetNotEmpty);
+    }
+    db.client
+        .write(&[
+            Op::Check {
+                key: IMPORT_STATE_KEY.into(),
+                expect: Expect::Absent,
+            },
+            Op::put(IMPORT_STATE_KEY, IMPORT_RUNNING),
+        ])
+        .await?;
+    Ok(())
 }
 
 pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     let legacy = read(turso).await?;
+    claim_import_target(db).await?;
     let mut report = Report {
         overlay_edits: legacy.overlay.len(),
+        oauth_clients: legacy.oauth_clients.len(),
         ..Report::default()
     };
-    if !legacy.overlay.is_empty() {
+    for edits in legacy.overlay.chunks(IMPORT_WRITE_BATCH) {
         db.transact(&Want::overlay(), |_, changes| {
-            legacy
-                .overlay
-                .iter()
-                .cloned()
-                .for_each(|e| changes.overlay(e));
+            edits.iter().cloned().for_each(|e| changes.overlay(e));
             Ok(())
         })
         .await?;
+    }
+    for clients in legacy.oauth_clients.chunks(IMPORT_WRITE_BATCH) {
+        let ops: Vec<Op> = clients.iter().map(Op::upsert).collect();
+        db.client.write(&ops).await?;
     }
     for p in &legacy.paths {
         let events = legacy.events.get(&p.id).map_or(&[][..], Vec::as_slice);
@@ -456,14 +538,48 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
             cards::recompute(db, &p.id).await?;
         }
     }
+    report
+        .mismatches
+        .extend(verify_overlay(db, &legacy.overlay).await?);
     for p in &legacy.paths {
         let events = legacy.events.get(&p.id).map_or(&[][..], Vec::as_slice);
         let cards = legacy.cards.get(&p.id).map_or(&[][..], Vec::as_slice);
         report
             .mismatches
-            .extend(verify(db, &p.id, events, cards).await?);
+            .extend(verify(db, p, events, cards).await?);
+    }
+    if report.mismatches.is_empty() {
+        db.client
+            .write(&[Op::put(IMPORT_STATE_KEY, IMPORT_COMPLETE)])
+            .await?;
     }
     Ok(report)
+}
+
+/// Compares the stored overlay, read without the cache, with the legacy edits.
+async fn verify_overlay(db: &Db, edits: &[Edit]) -> Result<Vec<String>> {
+    let mut legacy = Overlay::default();
+    for e in edits {
+        legacy.apply(e);
+    }
+    let uncached = Db {
+        overlay_cache: Arc::default(),
+        cache_file: None,
+        ..db.clone()
+    };
+    let stored = uncached.snapshot(&Want::overlay()).await?.overlay;
+    let atoms: BTreeSet<&String> = legacy.atoms.keys().chain(stored.atoms.keys()).collect();
+    let mut out = Vec::new();
+    for atom in atoms {
+        let same = serde_json::to_value(legacy.atoms.get(atom))?
+            == serde_json::to_value(stored.atoms.get(atom))?;
+        if !same {
+            out.push(format!(
+                "overlay/{atom}: stored content differs from libSQL"
+            ));
+        }
+    }
+    Ok(out)
 }
 
 async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
@@ -488,17 +604,22 @@ async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
 
 async fn verify(
     db: &Db,
-    path_id: &str,
+    path: &PathFile,
     events: &[Event],
     legacy: &[CardRow],
 ) -> Result<Vec<String>> {
+    let path_id = path.id.as_str();
     let mut out = Vec::new();
     let stored = if events.is_empty() {
         Vec::new()
     } else {
         crate::event_log::load(db, path_id).await?
     };
-    let stamps = |es: &[Event]| es.iter().map(|e| (e.ts, e.kind)).collect::<Vec<_>>();
+    let stamps = |es: &[Event]| {
+        es.iter()
+            .map(|e| (ts::format(e.ts), e.kind))
+            .collect::<Vec<_>>()
+    };
     if stamps(&stored) != stamps(events) {
         out.push(format!(
             "{path_id}: {} events stored, {} in libSQL, or their times or kinds differ",
@@ -507,6 +628,15 @@ async fn verify(
         ));
     }
     let view = db.snapshot(&Want::path(Some(path_id))).await?;
+    let stored_path = &view.path()?.file;
+    if stored_path.goal != path.goal
+        || stored_path.strategy != path.strategy
+        || stored_path.targets != path.targets
+        || stored_path.subpath != path.subpath
+        || ts::format(stored_path.created_at) != ts::format(path.created_at)
+    {
+        out.push(format!("{path_id}: stored path differs from libSQL"));
+    }
     let mut answered: BTreeMap<&str, (&cards::CardRow, CardState)> = view
         .path()?
         .cards
@@ -521,8 +651,8 @@ async fn verify(
         let close = |a: f32, b: f64| (f64::from(a) - b).abs() <= FSRS_TOLERANCE * b.abs().max(1.0);
         if c.reps != l.reps
             || c.lapses != l.lapses
-            || s.due != l.due_at
-            || s.last_review != l.last_reviewed_at
+            || ts::format(s.due) != ts::format(l.due_at)
+            || ts::format(s.last_review) != ts::format(l.last_reviewed_at)
             || !close(s.stability, l.stability)
             || !close(s.difficulty, l.difficulty)
         {
@@ -554,14 +684,14 @@ async fn verify(
 pub async fn cmd_import_turso(db: &Db, url: &str, token: Option<String>) -> Result<()> {
     let r = import(&Turso::new(url, token)?, db).await?;
     eprintln!(
-        "imported {} paths ({} events) and {} overlay edits; {} paths were already imported",
-        r.paths, r.events, r.overlay_edits, r.skipped
+        "imported {} paths ({} events), {} overlay edits, and {} OAuth clients; {} paths were already imported",
+        r.paths, r.events, r.overlay_edits, r.oauth_clients, r.skipped
     );
     for m in &r.mismatches {
         eprintln!("mismatch: {m}");
     }
     if r.mismatches.is_empty() {
-        eprintln!("every path's events and cards match libSQL");
+        eprintln!("every path, event, card, and overlay entry matches libSQL");
         Ok(())
     } else {
         Err(Error::ImportMismatch(r.mismatches.len()))

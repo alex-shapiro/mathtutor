@@ -98,6 +98,12 @@ pub enum Error {
     #[error("{0} differences between the import and libSQL")]
     ImportMismatch(usize),
 
+    #[error("this database already completed an import; a repeat run would revert newer data")]
+    ImportAlreadyComplete,
+
+    #[error("the import target already holds data; import into an empty database")]
+    ImportTargetNotEmpty,
+
     #[error("flags {0} and {1} are mutually exclusive")]
     ConflictingFlags(&'static str, &'static str),
 
@@ -162,6 +168,8 @@ impl Error {
             | Error::CardsCorrupt(_)
             | Error::Turso(_)
             | Error::ImportMismatch(_)
+            | Error::ImportAlreadyComplete
+            | Error::ImportTargetNotEmpty
             | Error::Bind { .. }
             | Error::Serve(_) => 1,
         }
