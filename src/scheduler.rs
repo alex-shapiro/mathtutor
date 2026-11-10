@@ -72,7 +72,6 @@ pub async fn compute_next(
         let targets = p.resolve_targets(&g)?;
 
         let action = next_action(&g, p, &targets, &progress, &due, &subpath, mode);
-        changes.touch_path(&p.id);
         // Build the envelope before appending presentation events so history reflects prior attempts.
         let envelope = Envelope::build(ps, &g, action.clone());
 

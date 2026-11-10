@@ -490,6 +490,25 @@ async fn path_next_makes_its_path_the_most_recent_even_without_an_event() {
     assert_eq!(view.path().unwrap().file.id, "p_a_older");
 }
 
+#[tokio::test]
+async fn write_that_names_a_path_makes_it_the_most_recent() {
+    let db = common::empty_db().await;
+    common::seed_path(&db, "p_a_older", &[], Strategy::BottomUp).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    common::seed_path(&db, "p_z_newer", &[], Strategy::BottomUp).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+    mathtutor::path::cmd_path_strategy(&db, Some("p_a_older"), Strategy::TopDown)
+        .await
+        .unwrap();
+
+    let view = db
+        .snapshot(&mathtutor::view::Want::path(None))
+        .await
+        .unwrap();
+    assert_eq!(view.path().unwrap().file.id, "p_a_older");
+}
+
 struct DisconnectedTransport;
 
 impl Transport for DisconnectedTransport {

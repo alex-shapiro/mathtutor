@@ -361,6 +361,9 @@ impl Db {
         }
         let mut changes = Changes::default();
         let out = f(&plan.view, &mut changes)?;
+        if let PathSel::Id(explicit_id) = &want.path {
+            changes.touch_path(explicit_id);
+        }
         let overlay_write = (!changes.overlay.is_empty()).then(|| OverlayWrite {
             version: new_overlay_version(),
             edits: changes.overlay.clone(),

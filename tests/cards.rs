@@ -64,8 +64,14 @@ fn replay_rejects_a_quiz_event_without_a_quiz_like_a_live_append() {
         path: "p".into(),
         atom: None,
         quiz: None,
-        payload: mathtutor::event_log::EventPayload::default(),
+        payload: mathtutor::event_log::EventPayload {
+            rating: Some(mathtutor::types::Rating::Good),
+            ..Default::default()
+        },
     };
     let e = mathtutor::cards::fold_history("p", &[event]).unwrap_err();
-    assert!(matches!(e, mathtutor::Error::BadEvent(_)), "{e}");
+    assert!(
+        matches!(e, mathtutor::Error::BadEvent("quiz event without quiz")),
+        "{e}"
+    );
 }

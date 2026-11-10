@@ -215,7 +215,7 @@ User state is stored in a Baserunna database configured via `BASERUNNA_DB` (defa
 | `lessons`            | Table, by atom ID        | User-authored lesson bodies (overlay)                     |
 | `quizzes`            | Table, by quiz ID        | User-authored or updated quizzes (overlay)                |
 | `removed_quizzes`    | Table, by quiz ID        | Deleted quiz tombstones (overlay)                         |
-| `activity/<path id>` | Key                      | Timestamp of the latest event on a path                   |
+| `activity/<path id>` | Key                      | Timestamp of the latest write that named a path           |
 | `overlay_version`    | Key                      | Random token replaced on every overlay write              |
 
 Each write command executes as a serializable transaction that reads state in a snapshot and commits writes with optimistic concurrency control. Read commands read the latest state without a transaction. A command without `--path` selects the most recent path once, before its first attempt. If a write conflict occurs, the transaction is retried. If a commit's response is lost, the client asks Baserunna whether the commit applied. If Baserunna cannot answer, the command exits with code `3` because its outcome is unknown. The client caches the overlay in memory and under `$MATHTUTOR_HOME` (default `~/.mathtutor`), and reloads it only when `overlay_version` changes.
@@ -273,7 +273,7 @@ Each quiz on a path has an FSRS card whose state is derived from its `quiz_answe
    - `present_quiz` if a quiz has not been answered with `hard`, `good`, or `easy`.
 3. Otherwise, return `done`.
 
-An atom is complete when its lesson is taught and each difficulty slot (`easy`, `medium`, `hard`) has at least a single quiz answered with `hard`, `good`, or `easy`. An `again` rating does not complete a slot and causes the quiz to be presented again immediately.
+An atom is complete when its lesson is taught and each difficulty slot (`easy`, `medium`, `hard`) has at least a single quiz answered with `hard`, `good`, or `easy`. An `again` rating does not complete a slot. A quiz with no passing answer is presented again immediately. A failed review of a passed quiz returns at its next FSRS due time.
 
 ## Teaching strategies
 
