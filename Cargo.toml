@@ -13,7 +13,6 @@ mcp = [
     "dep:axum",
     "dep:base64",
     "dep:hmac",
-    "dep:rand",
     "dep:rmcp",
     "dep:schemars",
     "dep:sha2",
@@ -37,7 +36,7 @@ chrono = { version = "0.4", features = ["serde"] }
 fsrs = "6.1.0"
 hmac = { version = "0.13", optional = true }
 include_dir = "0.7"
-rand = { version = "0.10", optional = true }
+rand = "0.10"
 reqwest = { version = "0.13.4", features = ["json"] }
 rmcp = { version = "1.7", optional = true, features = [
     "server",

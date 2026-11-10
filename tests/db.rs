@@ -452,6 +452,41 @@ async fn own_overlay_writes_keep_the_cache_valid() {
 }
 
 #[tokio::test]
+async fn overlay_cache_does_not_survive_a_recreated_database() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg = DbConfig {
+        cache_dir: Some(dir.path().to_path_buf()),
+        ..common::fresh_config()
+    };
+    let upsert_lesson = async |cfg: &DbConfig, body: &str| {
+        let db = Db::open(cfg).await.unwrap();
+        common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
+        store::cmd_lesson_upsert(&db, "fnd.1.1.1", body.into(), Some(PATH_ID), None)
+            .await
+            .unwrap();
+        db
+    };
+    let first = upsert_lesson(&cfg, "old").await;
+    first.client().db(&cfg.db).delete().await.unwrap();
+
+    let uncached = DbConfig {
+        cache_dir: None,
+        ..cfg.clone()
+    };
+    upsert_lesson(&uncached, "new").await;
+    let reader = Db::connect(&cfg).unwrap();
+    let view = reader
+        .snapshot(&mathtutor::view::Want::overlay())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        Some("new")
+    );
+}
+
+#[tokio::test]
 async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes() {
     let dir = tempfile::TempDir::new().unwrap();
     let cfg = DbConfig {

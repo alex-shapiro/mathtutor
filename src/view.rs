@@ -20,13 +20,26 @@ use crate::schema::{
 };
 use crate::{Error, Result};
 
-const OVERLAY_VERSION_KEY: &str = "overlay_version";
+pub(crate) const OVERLAY_VERSION_KEY: &str = "overlay_version";
 
-pub(crate) type CachedOverlay = (u64, Arc<Overlay>);
+/// Version string of a database with no overlay writes.
+const UNWRITTEN_OVERLAY_VERSION: &str = "";
+
+pub(crate) type CachedOverlay = (String, Arc<Overlay>);
+
+/// Overlay edits queued by a transaction and the version that they commit under.
+struct OverlayWrite {
+    version: String,
+    edits: Vec<Edit>,
+}
+
+fn new_overlay_version() -> String {
+    format!("{:032x}", rand::random::<u128>())
+}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CacheFile {
-    version: u64,
+    version: String,
     overlay: Overlay,
 }
 
@@ -35,14 +48,14 @@ pub(crate) fn read_cached_overlay(path: &Path) -> Option<CachedOverlay> {
     Some((f.version, Arc::new(f.overlay)))
 }
 
-fn write_cached_overlay(path: &Path, version: u64, overlay: &Overlay) {
+fn write_cached_overlay(path: &Path, version: &str, overlay: &Overlay) {
     let write = || -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = path.with_extension("tmp");
         let f = CacheFile {
-            version,
+            version: version.to_string(),
             overlay: overlay.clone(),
         };
         std::fs::write(&tmp, serde_json::to_vec(&f)?)?;
@@ -205,13 +218,6 @@ pub struct Changes {
 }
 
 impl Changes {
-    pub fn is_empty(&self) -> bool {
-        self.ops.is_empty()
-            && self.overlay.is_empty()
-            && self.cards.is_empty()
-            && self.events.is_empty()
-    }
-
     /// Record a raw database write operation.
     pub fn op(&mut self, op: Op) {
         self.ops.push(op);
@@ -271,11 +277,11 @@ impl Changes {
         Ok(())
     }
 
-    fn into_ops(self) -> Vec<Op> {
+    fn into_ops(self, overlay_version: Option<&str>) -> Vec<Op> {
         let mut ops = self.ops;
-        if !self.overlay.is_empty() {
+        if let Some(version) = overlay_version {
             ops.extend(self.overlay.iter().flat_map(Edit::ops));
-            ops.push(Op::increment(OVERLAY_VERSION_KEY, 1));
+            ops.push(Op::put(OVERLAY_VERSION_KEY, version.to_string()));
         }
         ops.extend(
             self.cards
@@ -314,7 +320,7 @@ impl Db {
         mut f: impl FnMut(&View, &mut Changes) -> Result<T>,
     ) -> Result<T> {
         let mut retry = self.client.retry();
-        let (out, plan, edits) = loop {
+        let (out, plan, overlay_write) = loop {
             let mut txn = self.client.begin();
             let r = self.attempt(&mut txn, want, &mut f).await;
             if let Some(r) = retry.finish(txn, r).await? {
@@ -322,8 +328,8 @@ impl Db {
             }
         };
         self.remember(&plan);
-        if !edits.is_empty() {
-            self.remember_edits(&plan, &edits);
+        if let Some(write) = overlay_write {
+            self.remember_edits(&plan, write);
         }
         Ok(out)
     }
@@ -334,7 +340,7 @@ impl Db {
         txn: &mut Txn,
         want: &Want,
         f: &mut impl FnMut(&View, &mut Changes) -> Result<T>,
-    ) -> Result<(T, Plan, Vec<Edit>)> {
+    ) -> Result<(T, Plan, Option<OverlayWrite>)> {
         let mut plan = Plan::new(want, self.hint(), self.cached_overlay());
         let mut results = txn.run(&plan.ops()).await?;
         while let Some(more) = plan.absorb(results)? {
@@ -342,9 +348,12 @@ impl Db {
         }
         let mut changes = Changes::default();
         let out = f(&plan.view, &mut changes)?;
-        let edits = changes.overlay.clone();
-        txn.write(changes.into_ops());
-        Ok((out, plan, edits))
+        let overlay_write = (!changes.overlay.is_empty()).then(|| OverlayWrite {
+            version: new_overlay_version(),
+            edits: changes.overlay.clone(),
+        });
+        txn.write(changes.into_ops(overlay_write.as_ref().map(|w| w.version.as_str())));
+        Ok((out, plan, overlay_write))
     }
 
     fn hint(&self) -> Option<String> {
@@ -359,9 +368,9 @@ impl Db {
             .overlay_cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let changed = cache.as_ref().map(|c| c.0) != next.as_ref().map(|n| n.0);
+        let changed = cache.as_ref().map(|c| &c.0) != next.as_ref().map(|n| &n.0);
         if changed && let (Some(file), Some((v, o))) = (&self.cache_file, &next) {
-            write_cached_overlay(file, *v, o);
+            write_cached_overlay(file, v, o);
         }
         *cache = next;
     }
@@ -373,13 +382,13 @@ impl Db {
             .clone()
     }
 
-    fn remember_edits(&self, plan: &Plan, edits: &[Edit]) {
-        let next = plan.overlay_version.map(|v| {
+    fn remember_edits(&self, plan: &Plan, write: OverlayWrite) {
+        let next = plan.overlay_version.as_ref().map(|_| {
             let mut o = (*plan.view.overlay).clone();
-            for e in edits {
+            for e in &write.edits {
                 o.apply(e);
             }
-            (v + 1, Arc::new(o))
+            (write.version, Arc::new(o))
         });
         self.cache_overlay(next);
     }
@@ -391,8 +400,8 @@ impl Db {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(p.file.id.clone());
         }
-        if let Some(v) = plan.overlay_version {
-            self.cache_overlay(Some((v, plan.view.overlay.clone())));
+        if let Some(v) = &plan.overlay_version {
+            self.cache_overlay(Some((v.clone(), plan.view.overlay.clone())));
         }
     }
 }
@@ -423,7 +432,7 @@ enum Slot {
 struct Plan {
     view: View,
     cache: Option<CachedOverlay>,
-    overlay_version: Option<u64>,
+    overlay_version: Option<String>,
     overlay_cached: bool,
     pending: Vec<(Slot, Op)>,
     path_id: Option<String>,
@@ -536,12 +545,10 @@ impl Plan {
             match slot {
                 Slot::OverlayVersion => {
                     let v = match r.entry()? {
-                        Some(e) => text(&e)?.1.parse().map_err(|err| {
-                            Error::BadRow(format!("{OVERLAY_VERSION_KEY}: {err}"))
-                        })?,
-                        None => 0,
+                        Some(e) => text(&e)?.1.to_string(),
+                        None => UNWRITTEN_OVERLAY_VERSION.to_string(),
                     };
-                    self.overlay_version = Some(v);
+                    self.overlay_version = Some(v.clone());
                     match self.cache.take() {
                         Some((cached, overlay)) if cached == v => {
                             self.view.overlay = overlay;

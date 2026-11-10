@@ -218,7 +218,7 @@ User state is stored in a Baserunna database configured via `BASERUNNA_DB` (defa
 | `quizzes`            | Table, by quiz ID        | User-authored or updated quizzes (overlay)                |
 | `removed_quizzes`    | Table, by quiz ID        | Deleted quiz tombstones (overlay)                         |
 | `activity/<path id>` | Key                      | Timestamp of the latest event on a path                   |
-| `overlay_version`    | Key                      | Monotonic counter incremented on every overlay write      |
+| `overlay_version`    | Key                      | Random token replaced on every overlay write              |
 
 Each command executes as a serializable transaction that reads state in a snapshot and commits writes with optimistic concurrency control. If a write conflict occurs, the transaction is retried. If a commit's response is lost, the client asks Baserunna whether the commit applied. If Baserunna cannot answer, the command exits with code `3` because its outcome is unknown. The client caches the overlay in memory and under `$MATHTUTOR_HOME` (default `~/.mathtutor`), and reloads it only when `overlay_version` changes.
 
