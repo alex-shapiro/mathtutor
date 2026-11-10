@@ -595,6 +595,27 @@ async fn import_reports_a_libsql_write_that_lands_after_its_first_read() {
 }
 
 #[tokio::test]
+async fn malformed_history_fails_before_the_import_claims_the_target() {
+    let db = common::empty_db().await;
+    let mut malformed = events();
+    malformed
+        .iter_mut()
+        .find(|e| e.kind == EventKind::QuizAnswered)
+        .expect("an answer")
+        .payload
+        .rating = None;
+    let mut tables = legacy();
+    tables.set("events", EVENT_COLUMNS, rows_of_events(&malformed));
+
+    let e = import(tables, &db).await.unwrap_err();
+
+    assert!(matches!(e, Error::BadEvent(_)), "{e}");
+    db.snapshot(&Want::overlay())
+        .await
+        .expect("the target stays unclaimed");
+}
+
+#[tokio::test]
 async fn import_copies_oauth_clients_so_connectors_stay_registered() {
     let cfg = common::fresh_config();
     let db = Db::open(&cfg).await.unwrap();

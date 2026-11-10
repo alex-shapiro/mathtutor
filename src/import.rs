@@ -503,6 +503,9 @@ async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
 pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     let db = &db.for_import();
     let legacy = read(turso).await?;
+    for (path_id, events) in &legacy.events {
+        cards::fold_history(path_id, events)?;
+    }
     claim_import_target(db).await?;
     let mut report = Report {
         overlay_edits: legacy.overlay.len(),
