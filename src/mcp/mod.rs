@@ -33,7 +33,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse};
+use tower_http::trace::DefaultOnResponse;
 use url::Url;
 
 use crate::Error;
@@ -865,7 +865,9 @@ pub async fn run(
     }
 
     let trace = tower_http::trace::TraceLayer::new_for_http()
-        .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
+        .make_span_with(|req: &Request<Body>| {
+            tracing::info_span!("request", method = %req.method(), path = %req.uri().path())
+        })
         .on_response(DefaultOnResponse::new().level(tracing::Level::INFO));
 
     let app = app.layer(trace);
