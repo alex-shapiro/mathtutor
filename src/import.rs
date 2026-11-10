@@ -11,7 +11,7 @@ use serde_json::{Map, Value as Json};
 use crate::answer::atom_from_quiz_id;
 use crate::cards::{self, CardState};
 use crate::db::client::Txn;
-use crate::db::client::api::PAGE_MAX;
+use crate::db::client::api::{ErrorCode, PAGE_MAX};
 use crate::db::{Db, Op, ts};
 use crate::event_log::{Event, EventKind, EventPayload};
 use crate::graph::Quiz;
@@ -73,8 +73,12 @@ impl Turso {
             return Err(Error::Turso(format!("{status}: {body}")));
         }
         let r: PipelineResponse = resp.json().await?;
+        let mut results = r.results.into_iter();
+        if let Some(StreamResult::Error { error }) = results.next() {
+            return Err(Error::Turso(format!("BEGIN: {}", error.message)));
+        }
         let mut sets = Vec::with_capacity(queries.len());
-        for (sql, result) in queries.iter().zip(r.results.into_iter().skip(1)) {
+        for (sql, result) in queries.iter().zip(results) {
             match result {
                 StreamResult::Ok {
                     response: Response::Execute { result },
@@ -608,10 +612,14 @@ async fn verify(
 ) -> Result<Vec<String>> {
     let path_id = path.id.as_str();
     let mut out = Vec::new();
-    let stored = if events.is_empty() {
-        Vec::new()
-    } else {
-        crate::event_log::load(db, path_id).await?
+    let view = db.snapshot(&Want::path(Some(path_id))).await?;
+    let Ok(path_state) = view.path() else {
+        out.push(format!("{path_id}: path missing from Baserunna"));
+        return Ok(out);
+    };
+    let stored = match crate::event_log::load(db, path_id).await {
+        Err(Error::Baserunna(e)) if e.code() == Some(ErrorCode::NotFound) => Vec::new(),
+        other => other?,
     };
     if serde_json::to_value(&stored)? != serde_json::to_value(events)? {
         out.push(format!(
@@ -620,8 +628,7 @@ async fn verify(
             events.len()
         ));
     }
-    let view = db.snapshot(&Want::path(Some(path_id))).await?;
-    let stored_path = &view.path()?.file;
+    let stored_path = &path_state.file;
     if stored_path.goal != path.goal
         || stored_path.strategy != path.strategy
         || stored_path.targets != path.targets
@@ -630,8 +637,7 @@ async fn verify(
     {
         out.push(format!("{path_id}: stored path differs from libSQL"));
     }
-    let mut answered: BTreeMap<&str, (&cards::CardRow, CardState)> = view
-        .path()?
+    let mut answered: BTreeMap<&str, (&cards::CardRow, CardState)> = path_state
         .cards
         .values()
         .filter_map(|c| Some((c.quiz_id.as_str(), (c, c.state?))))

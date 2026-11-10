@@ -50,6 +50,12 @@ struct PipelineResp {
 #[serde(tag = "type", rename_all = "lowercase")]
 enum Res {
     Ok { response: Resp },
+    Error { error: ResError },
+}
+
+#[derive(Serialize)]
+struct ResError {
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -94,7 +100,7 @@ fn int(n: i64) -> V {
 }
 
 #[derive(Default, Clone)]
-struct Tables(HashMap<&'static str, StmtResult>);
+struct Tables(HashMap<&'static str, StmtResult>, bool);
 
 impl Tables {
     fn set(&mut self, table: &'static str, cols: &[&str], rows: Vec<Vec<V>>) {
@@ -103,7 +109,7 @@ impl Tables {
     }
 }
 
-/// Libsql snapshots served in order, with the last one repeating.
+/// libSQL snapshots served in order, with the last one repeating.
 struct Source {
     snapshots: Vec<Tables>,
     served: AtomicUsize,
@@ -123,19 +129,26 @@ async fn pipeline(
     let results = req
         .requests
         .into_iter()
-        .map(|r| Res::Ok {
-            response: match r {
-                Req::Execute { stmt } => {
-                    let table = stmt
-                        .sql
-                        .split_once("FROM ")
-                        .and_then(|(_, rest)| rest.split_whitespace().next());
-                    let result = table
-                        .and_then(|t| tables.0.get(t).cloned())
-                        .unwrap_or_default();
-                    Resp::Execute { result }
-                }
-                Req::Close => Resp::Close,
+        .map(|r| match r {
+            Req::Execute { stmt } if tables.1 && stmt.sql == "BEGIN" => Res::Error {
+                error: ResError {
+                    message: "snapshot unavailable".into(),
+                },
+            },
+            r => Res::Ok {
+                response: match r {
+                    Req::Execute { stmt } => {
+                        let table = stmt
+                            .sql
+                            .split_once("FROM ")
+                            .and_then(|(_, rest)| rest.split_whitespace().next());
+                        let result = table
+                            .and_then(|t| tables.0.get(t).cloned())
+                            .unwrap_or_default();
+                        Resp::Execute { result }
+                    }
+                    Req::Close => Resp::Close,
+                },
             },
         })
         .collect();
@@ -613,6 +626,50 @@ async fn malformed_history_fails_before_the_import_claims_the_target() {
     db.snapshot(&Want::overlay())
         .await
         .expect("the target stays unclaimed");
+}
+
+#[tokio::test]
+async fn import_fails_when_the_libsql_snapshot_cannot_begin() {
+    let db = common::empty_db().await;
+    let mut tables = legacy();
+    tables.1 = true;
+
+    let e = import(tables, &db).await.unwrap_err();
+
+    assert!(
+        matches!(&e, Error::Turso(m) if m.starts_with("BEGIN")),
+        "{e}"
+    );
+}
+
+#[tokio::test]
+async fn import_reports_a_libsql_path_that_lands_after_its_first_read() {
+    let db = common::empty_db().await;
+    let mut with_late_path = legacy();
+    let late_path = vec![
+        text("p_late"),
+        text("late"),
+        text(&ts::format(at(40))),
+        text("bottom_up"),
+    ];
+    with_late_path.set(
+        "paths",
+        &["id", "goal", "created_at", "strategy"],
+        vec![late_path],
+    );
+    let url = serve_snapshots(vec![legacy(), with_late_path]).await;
+
+    let r = import::import(&Turso::new(&url, Some(TOKEN.into())).unwrap(), &db)
+        .await
+        .expect("import reports the late path as a difference");
+
+    assert!(
+        r.mismatches
+            .iter()
+            .any(|m| m == "p_late: path missing from Baserunna"),
+        "{:?}",
+        r.mismatches
+    );
 }
 
 #[tokio::test]
