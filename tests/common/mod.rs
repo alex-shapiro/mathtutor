@@ -22,7 +22,7 @@ use mathtutor::view::{Changes, PathSel, PathState, View, Want};
 
 pub const PATH_ID: &str = "p_test";
 
-// Compiles only if the test server and mathtutor share one API crate, so tests run against the client that ships.
+// Compiles only if the test server and mathtutor share the same API crate, so tests run against the client that ships.
 const _: fn(&baserunna::error::Error) -> mathtutor::db::client::api::ApiError =
     baserunna::api::api_error;
 
@@ -145,7 +145,7 @@ pub async fn write(db: &Db, path_id: &str, mut f: impl FnMut(&View, &mut Changes
     .expect("write");
 }
 
-/// Append `events` in a single transaction.
+/// Append `events` to their path stream.
 pub async fn append(db: &Db, events: &[Event]) {
     let path_id = events
         .first()

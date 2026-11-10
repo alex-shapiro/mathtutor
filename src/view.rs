@@ -22,7 +22,7 @@ use crate::{Error, Result};
 
 pub(crate) const OVERLAY_VERSION_KEY: &str = "overlay_version";
 
-/// Version string of a database with no overlay writes.
+/// Version string of a database before any overlay writes.
 const UNWRITTEN_OVERLAY_VERSION: &str = "";
 
 pub(crate) type CachedOverlay = (String, Arc<Overlay>);
@@ -307,7 +307,7 @@ impl Db {
             want,
             path_id.as_deref(),
             self.cached_overlay(),
-            self.ignores_open_import,
+            self.allow_open_import,
         );
         let mut results = self.read(&plan.ops()).await?;
         while let Some(more) = plan.absorb(results)? {
@@ -349,12 +349,7 @@ impl Db {
         path_id: Option<&str>,
         f: &mut impl FnMut(&View, &mut Changes) -> Result<T>,
     ) -> Result<(T, Plan, Option<OverlayWrite>)> {
-        let mut plan = Plan::new(
-            want,
-            path_id,
-            self.cached_overlay(),
-            self.ignores_open_import,
-        );
+        let mut plan = Plan::new(want, path_id, self.cached_overlay(), self.allow_open_import);
         let mut results = txn.run(&plan.ops()).await?;
         while let Some(more) = plan.absorb(results)? {
             results = txn.run(&more).await?;
@@ -372,7 +367,7 @@ impl Db {
         Ok((out, plan, overlay_write))
     }
 
-    /// Returns the path that `selector` names, choosing the most recent path at most once per command.
+    /// Resolves `selector` to a path ID, choosing the most recent path at most once per command.
     async fn selected_path_id(&self, selector: &PathSel) -> Result<Option<String>> {
         match selector {
             PathSel::None => Ok(None),
@@ -498,7 +493,7 @@ fn overlay_reads() -> [(Slot, Op); 3] {
 }
 
 /// Returns the key and value of `e` as UTF-8.
-fn text(e: &Entry) -> Result<(&str, &str)> {
+fn entry_str(e: &Entry) -> Result<(&str, &str)> {
     let key = std::str::from_utf8(&e.key)
         .map_err(|_| Error::BadRow(format!("{:?}: key is not UTF-8", e.key)))?;
     let value = e.value.data().and_then(|d| std::str::from_utf8(d).ok());
@@ -509,7 +504,7 @@ fn text(e: &Entry) -> Result<(&str, &str)> {
 }
 
 fn parse_activity(e: &Entry) -> Result<(&str, DateTime<Utc>)> {
-    let (key, value) = text(e)?;
+    let (key, value) = entry_str(e)?;
     let at = ts::parse(value).map_err(|err| Error::BadRow(format!("{key}: {err}")))?;
     Ok((key.strip_prefix(ACTIVITY_PREFIX).unwrap_or(key), at))
 }
@@ -519,10 +514,10 @@ impl Plan {
         want: &Want,
         path_id: Option<&str>,
         cache: Option<CachedOverlay>,
-        ignores_open_import: bool,
+        allow_open_import: bool,
     ) -> Self {
         let mut pending = Vec::new();
-        if !ignores_open_import {
+        if !allow_open_import {
             pending.push((Slot::OpenImportCheck, Op::get(IMPORT_STATE_KEY)));
         }
         if want.overlay {
@@ -578,7 +573,7 @@ impl Plan {
                 }
                 Slot::OverlayVersion => {
                     let v = match r.entry()? {
-                        Some(e) => text(&e)?.1.to_string(),
+                        Some(e) => entry_str(&e)?.1.to_string(),
                         None => UNWRITTEN_OVERLAY_VERSION.to_string(),
                     };
                     self.overlay_version = Some(v.clone());

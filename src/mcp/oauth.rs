@@ -49,13 +49,13 @@ impl OAuthState {
         }
     }
 
-    /// Return the public issuer URL.
+    /// Returns the public issuer URL.
     pub fn issuer(&self) -> &Url {
         &self.public_url
     }
 }
 
-/// Build the OAuth discovery and authorization router.
+/// Builds the OAuth discovery and authorization router.
 pub fn router(state: OAuthState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -126,7 +126,7 @@ async fn register(
 ) -> Result<Json<RegisterResponse>, OAuthError> {
     if req.redirect_uris.is_empty() {
         return Err(OAuthError::invalid_request(
-            "redirect_uris must include at least one URI",
+            "redirect_uris must not be empty",
         ));
     }
     for uri in &req.redirect_uris {
@@ -361,7 +361,7 @@ async fn token_authorization_code(
         .as_deref()
         .ok_or_else(|| OAuthError::invalid_request("client_id is required"))?;
 
-    // Consume the authorization code and issue tokens in a single transaction to prevent replay.
+    // Consume the authorization code and issue tokens atomically to prevent replay.
     let mut retry = s.db.client.retry();
     let (access, refresh, stored_scope) = loop {
         let mut txn = s.db.client.begin();
@@ -537,7 +537,7 @@ fn token_ops(access: &str, refresh: &str, client_id: &str, scope: Option<&str>) 
     ]
 }
 
-/// Return the `client_id` for a non-expired access token, or `None` if unknown or expired.
+/// Returns the `client_id` for a non-expired access token, or `None` if unknown or expired.
 pub async fn validate_access_token(db: &Db, token: &str) -> Result<Option<String>, crate::Error> {
     let stored: Option<OAuthAccessToken> = db
         .client

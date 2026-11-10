@@ -52,7 +52,7 @@ pub struct Db {
     pub(crate) client: client::Db,
     pub(crate) overlay_cache: Arc<Mutex<Option<crate::view::CachedOverlay>>>,
     pub(crate) cache_file: Option<PathBuf>,
-    pub(crate) ignores_open_import: bool,
+    pub(crate) allow_open_import: bool,
 }
 
 impl std::fmt::Debug for Db {
@@ -76,7 +76,7 @@ impl Db {
     /// Returns a handle that can use the database while an import is open.
     pub(crate) fn for_import(&self) -> Self {
         Self {
-            ignores_open_import: true,
+            allow_open_import: true,
             ..self.clone()
         }
     }
@@ -116,7 +116,7 @@ impl Db {
             client: client.db(&cfg.db),
             overlay_cache: Arc::new(Mutex::new(cached)),
             cache_file,
-            ignores_open_import: false,
+            allow_open_import: false,
         }
     }
 

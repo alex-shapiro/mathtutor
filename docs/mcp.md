@@ -11,7 +11,7 @@
 
 ### Tool conventions
 
-- **`path_id`**: Required for all path-scoped tools (`answer_quiz`, `upsert_lesson`, `create_quiz`, `update_quiz`, `delete_quiz`, `get_next`, `get_state`, `get_tree`, `get_syllabus`, `set_strategy`, `subpath_set`, `subpath_clear`). Optional for curriculum inspection tools (`get_item`, `get_children`); when omitted, those tools return static curriculum data without path completion state.
+- **`path_id`**: Required for all path-scoped tools (`answer_quiz`, `upsert_lesson`, `create_quiz`, `update_quiz`, `delete_quiz`, `get_next`, `get_state`, `get_tree`, `get_syllabus`, `set_strategy`, `subpath_set`, `subpath_clear`). Optional for curriculum inspection tools (`get_item`, `get_children`); if omitted, those tools return static curriculum data without path completion state.
 - **Return format**: All tools return JSON. Business logic errors return a `CallToolResult` with `isError: true`.
 
 ### Prompt
@@ -23,20 +23,20 @@ The `mathtutor-playbook` MCP prompt returns the agent instructions for operating
 The server operates as a single-user, single-tenant instance backed by a single Baserunna database. Two authentication modes are supported on `/mcp`:
 
 1. **Static bearer token:** Configured via `MT_API_KEY` and passed in `Authorization: Bearer <token>` or `?token=<token>`.
-2. **OAuth 2.1 access token:** Issued by the built-in authorization server when `MT_ADMIN_PASSWORD` is set, and passed in `Authorization: Bearer <token>`.
+2. **OAuth 2.1 access token:** Issued by the built-in authorization server if `MT_ADMIN_PASSWORD` is set, and passed in `Authorization: Bearer <token>`.
 
 At least a single authentication variable (`MT_API_KEY` or `MT_ADMIN_PASSWORD`) must be set at startup. Unauthenticated requests receive `401 Unauthorized` with a `WWW-Authenticate` header pointing to `/.well-known/oauth-protected-resource`. If the server cannot read an access token from Baserunna, the request receives `503 Service Unavailable` with a `Retry-After` header.
 
 ### Built-in OAuth 2.1 authorization server
 
-| Path                                      | Method | Purpose                                                                 |
-| ----------------------------------------- | ------ | ----------------------------------------------------------------------- |
-| `/.well-known/oauth-protected-resource`   | GET    | RFC 9728 protected resource metadata                                    |
-| `/.well-known/oauth-authorization-server` | GET    | RFC 8414 authorization server metadata                                  |
-| `/oauth/register`                         | POST   | RFC 7591 dynamic client registration                                    |
-| `/oauth/authorize`                        | GET    | Renders the password login form with an HMAC-signed CSRF token          |
-| `/oauth/authorize`                        | POST   | Verifies `MT_ADMIN_PASSWORD` in constant time and issues an auth code   |
-| `/oauth/token`                            | POST   | Exchanges an authorization code (with S256 PKCE) or refresh token       |
+| Path                                      | Method | Purpose                                                |
+| ----------------------------------------- | ------ | ------------------------------------------------------ |
+| `/.well-known/oauth-protected-resource`   | GET    | RFC 9728 protected resource metadata                   |
+| `/.well-known/oauth-authorization-server` | GET    | RFC 8414 authorization server metadata                 |
+| `/oauth/register`                         | POST   | RFC 7591 dynamic client registration                   |
+| `/oauth/authorize`                        | GET    | Renders the password login form with a signed CSRF key |
+| `/oauth/authorize`                        | POST   | Verifies `MT_ADMIN_PASSWORD` and issues an auth code   |
+| `/oauth/token`                            | POST   | Exchanges an auth code (S256 PKCE) or refresh token    |
 
 ### Token parameters and storage
 

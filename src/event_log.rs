@@ -162,7 +162,7 @@ pub fn quiz_answered(
     }
 }
 
-/// Returns the events of `path_id` in order, or an empty list if the path has no event stream.
+/// Returns the events of `path_id` in order, or an empty list if the event stream does not exist.
 pub async fn load(db: &Db, path_id: &str) -> Result<Vec<Event>> {
     let mut op = Op::read_stream(schema::events_stream(path_id), 0);
     let mut out = Vec::new();

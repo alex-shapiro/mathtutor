@@ -111,7 +111,7 @@ async fn real_main() -> ExitCode {
     }
 }
 
-/// Runs a graph lookup that has no path and therefore needs no database connection.
+/// Runs a graph lookup without `--path` so it does not open a database connection.
 async fn run_curriculum_lookup(op: &GraphOp) -> Option<Result<()>> {
     match op {
         GraphOp::Show(c) if c.path.is_none() => {

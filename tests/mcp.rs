@@ -151,7 +151,7 @@ async fn database_failure_during_token_check_returns_503_without_a_login_challen
 }
 
 #[tokio::test]
-async fn accepts_query_token_when_header_absent() {
+async fn accepts_query_token_if_header_absent() {
     let server = spawn_server().await;
     let url = format!("{}?token={API_KEY}", server.url("/mcp"));
     let res = client()
@@ -546,7 +546,7 @@ async fn authorization_server_metadata_advertises_endpoints() {
 }
 
 #[tokio::test]
-async fn well_known_routes_unreachable_when_oauth_disabled() {
+async fn well_known_routes_return_404_if_oauth_disabled() {
     let server = spawn_server().await;
     let res = oauth_client()
         .get(server.url("/.well-known/oauth-authorization-server"))
@@ -572,7 +572,7 @@ async fn register_rejects_empty_redirect_uris() {
     let server = spawn_oauth_server().await;
     let res = oauth_client()
         .post(server.url("/oauth/register"))
-        .json(&json!({ "client_name": "no redirects", "redirect_uris": [] }))
+        .json(&json!({ "client_name": "empty redirects", "redirect_uris": [] }))
         .send()
         .await
         .unwrap();

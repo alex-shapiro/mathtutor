@@ -497,7 +497,7 @@ async fn open_import_blocks_a_handle_opened_before_it_until_it_verifies() {
 }
 
 #[tokio::test]
-async fn completed_import_refuses_a_rerun_and_keeps_newer_content() {
+async fn completed_import_rejects_rerun_and_keeps_newer_content() {
     let db = common::empty_db().await;
     import(legacy(), &db).await.expect("first import");
     let atom = common::overlay(&db)
@@ -524,7 +524,7 @@ async fn completed_import_refuses_a_rerun_and_keeps_newer_content() {
 }
 
 #[tokio::test]
-async fn import_refuses_a_target_that_holds_data() {
+async fn import_rejects_non_empty_target_database() {
     let db = common::fresh_db("p_existing").await;
     let e = import(legacy(), &db).await.unwrap_err();
     assert!(matches!(e, Error::ImportTargetNotEmpty), "{e}");
@@ -649,7 +649,7 @@ async fn repeated_import_reports_a_late_event_on_a_path_without_a_stream() {
 }
 
 #[tokio::test]
-async fn import_fails_when_the_libsql_snapshot_cannot_begin() {
+async fn import_fails_if_libsql_snapshot_cannot_begin() {
     let db = common::empty_db().await;
     let mut tables = legacy();
     tables.1 = true;
@@ -732,7 +732,7 @@ async fn import_reports_cards_that_differ_from_libsql() {
 }
 
 #[tokio::test]
-async fn import_refuses_a_database_at_another_migration() {
+async fn import_rejects_database_at_another_migration() {
     let db = common::empty_db().await;
     let mut tables = legacy();
     tables.set("schema_migrations", &["version"], vec![vec![int(3)]]);
@@ -751,7 +751,7 @@ async fn import_refuses_a_database_at_another_migration() {
 }
 
 #[tokio::test]
-async fn import_fails_when_turso_rejects_the_token() {
+async fn import_fails_if_turso_rejects_token() {
     let db = common::empty_db().await;
     let url = serve(legacy()).await;
     let e = import::import(&Turso::new(&url, Some("wrong".into())).unwrap(), &db)

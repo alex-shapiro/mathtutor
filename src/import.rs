@@ -194,7 +194,7 @@ impl Value {
     }
 }
 
-fn rows<T: DeserializeOwned>(table: &str, rows: Vec<Map<String, Json>>) -> Result<Vec<T>> {
+fn decode_rows<T: DeserializeOwned>(table: &str, rows: Vec<Map<String, Json>>) -> Result<Vec<T>> {
     rows.into_iter()
         .map(|r| {
             serde_json::from_value(Json::Object(r))
@@ -326,7 +326,7 @@ struct Legacy {
     oauth_clients: Vec<OAuthClient>,
 }
 
-async fn read(turso: &Turso) -> Result<Legacy> {
+async fn read_legacy(turso: &Turso) -> Result<Legacy> {
     let [
         version,
         paths,
@@ -343,7 +343,7 @@ async fn read(turso: &Turso) -> Result<Legacy> {
         .await?
         .try_into()
         .map_err(|_| Error::Turso("missing statement results".into()))?;
-    let version = rows::<Version>("schema_migrations", version)?
+    let version = decode_rows::<Version>("schema_migrations", version)?
         .first()
         .map_or(0, |v| v.version);
     if version != SCHEMA_VERSION {
@@ -352,9 +352,9 @@ async fn read(turso: &Turso) -> Result<Legacy> {
         )));
     }
 
-    let mut targets = group(rows::<PathAtom>("path_targets", targets)?);
-    let mut subpaths = group(rows::<PathAtom>("path_subpath", subpaths)?);
-    let mut paths: Vec<PathFile> = rows::<PathRow>("paths", paths)?
+    let mut targets = group_by_path(decode_rows::<PathAtom>("path_targets", targets)?);
+    let mut subpaths = group_by_path(decode_rows::<PathAtom>("path_subpath", subpaths)?);
+    let mut paths: Vec<PathFile> = decode_rows::<PathRow>("paths", paths)?
         .into_iter()
         .map(|p| PathFile {
             targets: targets.remove(&p.id).unwrap_or_default(),
@@ -372,17 +372,17 @@ async fn read(turso: &Turso) -> Result<Legacy> {
             .then_with(|| a.id.cmp(&b.id))
     });
 
-    let events = group_events(rows("events", events)?)?;
+    let events = group_events(decode_rows("events", events)?)?;
     let overlay = overlay_edits(
-        rows("overlay_lessons", lessons)?,
-        rows("overlay_quizzes", quizzes)?,
-        rows("overlay_removed_quizzes", removed)?,
+        decode_rows("overlay_lessons", lessons)?,
+        decode_rows("overlay_quizzes", quizzes)?,
+        decode_rows("overlay_removed_quizzes", removed)?,
     );
     let mut cards_by_path: HashMap<String, Vec<CardRow>> = HashMap::new();
-    for c in rows::<CardRow>("cards", cards)? {
+    for c in decode_rows::<CardRow>("cards", cards)? {
         cards_by_path.entry(c.path_id.clone()).or_default().push(c);
     }
-    let oauth_clients = rows::<OAuthClientRow>("oauth_clients", oauth_clients)?
+    let oauth_clients = decode_rows::<OAuthClientRow>("oauth_clients", oauth_clients)?
         .into_iter()
         .map(OAuthClient::try_from)
         .collect::<Result<_>>()?;
@@ -451,7 +451,7 @@ fn overlay_edits(
     lessons.chain(quizzes).chain(removed).collect()
 }
 
-fn group(atoms: Vec<PathAtom>) -> HashMap<String, Vec<String>> {
+fn group_by_path(atoms: Vec<PathAtom>) -> HashMap<String, Vec<String>> {
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
     for a in atoms {
         out.entry(a.path_id).or_default().push(a.id);
@@ -506,7 +506,7 @@ async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
 
 pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     let db = &db.for_import();
-    let legacy = read(turso).await?;
+    let legacy = read_legacy(turso).await?;
     for (path_id, events) in &legacy.events {
         cards::fold_history(path_id, events)?;
     }
@@ -539,7 +539,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
             cards::recompute(db, &p.id).await?;
         }
     }
-    let source = read(turso).await?;
+    let source = read_legacy(turso).await?;
     report
         .mismatches
         .extend(verify_overlay(db, &source.overlay).await?);
@@ -548,7 +548,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         let cards = source.cards.get(&p.id).map_or(&[][..], Vec::as_slice);
         report
             .mismatches
-            .extend(verify(db, p, events, cards).await?);
+            .extend(verify_path(db, p, events, cards).await?);
     }
     if report.mismatches.is_empty() {
         db.client
@@ -604,7 +604,7 @@ async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
     Ok(true)
 }
 
-async fn verify(
+async fn verify_path(
     db: &Db,
     path: &PathFile,
     events: &[Event],
@@ -641,7 +641,7 @@ async fn verify(
         .collect();
     for l in legacy {
         let Some((c, s)) = answered.remove(l.quiz_id.as_str()) else {
-            out.push(format!("{path_id}/{}: no answered card", l.quiz_id));
+            out.push(format!("{path_id}/{}: answered card missing", l.quiz_id));
             continue;
         };
         let close = |a: f32, b: f64| (f64::from(a) - b).abs() <= FSRS_TOLERANCE * b.abs().max(1.0);

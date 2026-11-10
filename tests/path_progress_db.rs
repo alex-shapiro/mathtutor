@@ -76,7 +76,7 @@ async fn only_again_answers_do_not_count_as_correct() {
 }
 
 #[tokio::test]
-async fn earlier_correct_answer_survives_later_again() {
+async fn earlier_correct_answer_persists_after_later_again() {
     let db = common::fresh_db(PATH_ID).await;
     common::append(&db, &[answered(PATH_ID, "atom.a", Rating::Good)]).await;
     common::append(&db, &[answered(PATH_ID, "atom.a", Rating::Again)]).await;

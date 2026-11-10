@@ -89,7 +89,7 @@ fn top_down_subpath_walked_in_order() {
 }
 
 #[test]
-fn top_down_subpath_advances_when_earlier_atom_complete() {
+fn top_down_subpath_advances_once_earlier_atom_completes() {
     let g = graph_of(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let subpath = vec!["p".to_string(), "t".to_string()];
@@ -133,7 +133,7 @@ fn top_down_drained_subpath_falls_through_to_targets() {
 }
 
 #[test]
-fn top_down_done_when_targets_complete() {
+fn top_down_returns_done_if_targets_complete() {
     let g = graph_of(vec![complete_atom("t", &[])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let progress = progress_complete(&["t"]);
@@ -153,7 +153,7 @@ fn top_down_done_when_targets_complete() {
 }
 
 #[test]
-fn top_down_cluster_target_resolves_to_atomic_children() {
+fn top_down_cluster_target_expands_to_atomic_children() {
     let g = graph_of(vec![
         cluster("tx.1", &["tx.1.1", "tx.1.2"]),
         empty_atom("tx.1.1", &[]),
@@ -209,7 +209,7 @@ async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
 }
 
 #[tokio::test]
-async fn subpath_cluster_atom_resolves_on_load() {
+async fn subpath_cluster_atom_expands_on_load() {
     // Store a cluster ID directly to simulate curriculum refactoring after subpath creation.
     let conn = common::empty_db().await;
     let id = save(&conn, &["tx.1.1.1"], Strategy::TopDown).await;

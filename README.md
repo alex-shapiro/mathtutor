@@ -10,15 +10,15 @@ The LLM generates lessons and quizzes on demand and grades user answers. Generat
 
 ## Setup
 
-`mt` stores learner state in Baserunna and requires network access. Set these variables before you run a command that reads or writes learner state:
+`mt` stores learner state in Baserunna and requires network access. Set these environment variables before you run a command that reads or writes learner state:
 
 - `BASERUNNA_TOKEN`: required API key.
-- `BASERUNNA_DB`: database name. The default is `mathtutor`.
-- `BASERUNNA_URL`: server URL. The default is `https://baserunna.fly.dev`.
+- `BASERUNNA_DB`: database name (default: `mathtutor`).
+- `BASERUNNA_URL`: server URL (default: `https://baserunna.fly.dev`).
 
-`mt graph list` and `mt graph show` work without these variables when you do not pass `--path`.
+`mt graph list` and `mt graph show` run without these variables if `--path` is omitted.
 
-To move an existing libSQL database, run `mt import-turso` before you create a path. See `docs/design.md` for its rules.
+To migrate an existing libSQL database, run `mt import-turso` before creating a path. See `docs/design.md` for details.
 
 ## CLI
 

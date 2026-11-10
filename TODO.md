@@ -6,114 +6,120 @@ Follow-up tasks for the Baserunna migration.
 
 - [x] **Configure Baserunna in CI.** Tests run an in-process node built from the same Baserunna revision as the client.
 - [x] **Import existing Turso data.** Implemented in `mt import-turso`.
-- [ ] **Migrate the Fly.io app.** Create the database and set `BASERUNNA_TOKEN` (and `BASERUNNA_DB` if different from `mathtutor`). The deploy workflow runs only by manual dispatch until this task is complete. Run `mt import-turso` with `TURSO_URL` and `TURSO_AUTH_TOKEN` against a scratch database first to verify zero mismatches. This is the first run against real libSQL data. Old `mt` processes write to a local replica first, so stop every old Fly machine with a graceful signal and confirm that its log has no sync failure. On each device, run one old `mt` command, confirm that it syncs, and stop using the old binary. Then revoke every libSQL token, because Fly can restart a stopped machine on the next request. Create a new token for the import. Run the import against the production database and confirm zero mismatches. Dispatch the deploy workflow, then unset `TURSO_URL` and `TURSO_AUTH_TOKEN`. Restore the `push` trigger in `.github/workflows/deploy-mcp.yml`. If an import cannot reach zero mismatches, delete the target database with an unscoped Baserunna key, correct the cause, and import again. Keep the Turso database until the new deployment is verified.
+- [ ] **Migrate the Fly.io app.** Follow these steps to cut over without losing local replica writes:
+  1. Create the Baserunna database and set `BASERUNNA_TOKEN` (and `BASERUNNA_DB` if different from `mathtutor`).
+  2. Run `mt import-turso` with `TURSO_URL` and `TURSO_AUTH_TOKEN` against a scratch database to verify zero mismatches on real libSQL data.
+  3. Stop every old Fly machine with a graceful signal and confirm that its log has zero sync failures.
+  4. On each client device, run an old `mt` command to flush the local replica, confirm that it syncs, and retire the old binary.
+  5. Revoke all existing libSQL tokens so that restarted Fly machines cannot write to Turso, then create a fresh token for the import.
+  6. Run `mt import-turso` against the production database and confirm zero mismatches. If mismatches remain, delete the target database with an unscoped Baserunna key, fix the cause, and repeat the import.
+  7. Dispatch `.github/workflows/deploy-mcp.yml`, unset `TURSO_URL` and `TURSO_AUTH_TOKEN`, and restore the `push` trigger in the workflow. Keep the Turso database until the new deployment is verified.
 - [x] **Point the Baserunna dependencies at `main`** after the `mathtutor-client` branch of Baserunna is merged.
 
 ## Open product decisions
 
-
 ### Connected OAuth sessions at cutover
 
-The import copies OAuth clients but not tokens. Every connector must authorize again.
+`mt import-turso` copies OAuth clients without access or refresh tokens, so every connector must sign in again after cutover.
 
-- **Copy refresh tokens:** Connectors keep working. Long-lived secrets move to a new store.
-- **Do not copy tokens (current):** The cutover invalidates every old secret. Each connector needs one new login.
+- **Copy refresh tokens:** Connectors stay signed in, and long-lived secrets move to the new store.
+- **Omit tokens (current):** The cutover invalidates existing secrets, and each connector signs in again.
 
 ### Database backup and rollback
 
-After the cutover, learner history exists only in Baserunna. Baserunna is alpha software, runs on one node, and has no point-in-time restore. `mt` has no export.
+After cutover, learner history is stored only in Baserunna, which runs on a single node without point-in-time recovery or an `mt` export command.
 
-- **Add `mt export` and run it on a schedule:** Restores are possible. This adds a command and a storage location to operate.
-- **Keep Turso read-only for a fixed period:** This costs nothing to build, but it covers only history from before the cutover.
-- **Accept the risk:** No work is necessary, but a storage failure loses learner history.
+- **Add `mt export` and run it on a schedule:** Restores are possible, at the cost of operating a backup store.
+- **Keep Turso read-only for a fixed period:** Requires zero new code and preserves pre-cutover history.
+- **Accept the risk:** Requires zero work, and a storage failure loses learner history.
 
 ### Repeated answers after an unknown outcome
 
-Exit code 3 tells an agent not to repeat a command. Path state cannot show whether one answer was recorded, so an agent that ignores this instruction records a second review.
+Exit code `3` instructs the agent not to repeat a command whose outcome is unknown, because path state does not distinguish a single answer from a duplicate.
 
-- **Add a card token to `mt path next` and `mt quiz answer`:** A repeated answer has no effect. Agents must pass one more field through the CLI and MCP contracts.
-- **Rely on the instruction (current):** The contracts stay the same, but correct behavior depends on the agent.
+- **Add an idempotency token to `mt path next` and `mt quiz answer`:** Duplicate submissions become no-ops, and agents pass an extra field through the CLI and MCP contracts.
+- **Rely on the instruction (current):** The contracts stay unchanged, and correctness depends on agent compliance.
 
 ### When a lesson counts as taught
 
-`mt path next` records `lesson_taught` when it emits a lesson. If the response is lost after the commit, the lesson counts as taught although nobody saw it.
+`mt path next` records `lesson_taught` when it emits a lesson, so a lost response marks the lesson as taught before the user sees it.
 
-- **Record the lesson on the next call:** A lost response has no effect. The agent contract changes.
-- **Record it on emission (current):** The contract stays the same, but a lost response skips a lesson.
+- **Record the lesson on the next call:** A lost response has zero effect, and the agent contract changes.
+- **Record on emission (current):** The contract stays unchanged, and a lost response skips the lesson.
 
 ### Agents that omit `--path`
 
-A command without `--path` acts on the most recent path. Every write that selects a path makes it the most recent, so one session stays on its path. Two concurrent sessions can still move each other between paths from one command to the next.
+Commands without `--path` act on the most recent path, and every write that selects a path updates its activity timestamp. Concurrent sessions that omit `--path` can still switch each other's active path between commands.
 
-- **Require agents to pass the path from `mt path next`:** Sessions stay on their paths. The agent contract changes.
-- **Keep the default (current):** Commands stay short, but concurrent sessions can interfere.
+- **Require agents to pass `--path` from `mt path next`:** Concurrent sessions stay isolated, and the agent contract changes.
+- **Keep the default (current):** Commands stay short, and concurrent sessions can interfere.
 
 ### Cards that FSRS 6.1 cannot reproduce
 
-FSRS 6.1.0 clamps same-day `hard` growth, and 5.2.0 does not. A card with such a review from before 2026-06-01 replays to a different stability, so the import reports a difference and stays open. No real data has been checked yet.
+FSRS 6.1.0 clamps same-day `hard` stability growth, whereas 5.2.0 did not. Cards with same-day `hard` reviews from before 2026-06-01 replay to a different stability, which leaves the import open with a mismatch.
 
-- **Report FSRS differences without blocking, and still require matching `reps`, `lapses`, and review times:** The import can finish. Affected cards get the 6.1.0 schedule.
-- **Copy FSRS state from libSQL instead of rebuilding it:** Schedules stay exact. Those rows stop being a pure projection of events.
-- **Add an option that accepts differences:** This also gives a general escape from a blocked import. The operator must judge each difference.
+- **Report FSRS parameter drift without blocking if `reps`, `lapses`, and timestamps match:** The import completes, and affected cards adopt the 6.1.0 schedule.
+- **Copy FSRS state directly from libSQL:** Schedules stay identical, and imported cards diverge from a pure event replay.
+- **Add a flag to accept mismatches:** Gives the operator an explicit override for inspected differences.
 
 ### Correction of recorded reviews
 
-No command can void a review. A duplicate answer or a wrong grade changes a card's schedule permanently.
+The event log is append-only and has no command to void a mistyped or duplicate review.
 
-- **Add a compensating event and a projection rebuild:** Errors can be repaired. Someone must decide who can void a review.
-- **Keep the log append-only with no correction (current):** The code stays simple, but errors are permanent.
+- **Add a compensating event and rebuild projections:** Mistakes can be undone, and the system must define authorization rules.
+- **Keep the log append-only (current):** The data model stays simple, and recorded reviews are permanent.
 
 ### Schema changes across installed versions
 
-`schema::ensure` creates absent tables and writes its own version. It cannot add a column, and an older binary overwrites a newer version.
+`schema::ensure` creates missing tables and writes its schema version, which does not add columns to existing tables or prevent an older binary from overwriting a newer version marker.
 
-- **Use ordered migrations and refuse a newer schema:** Upgrades become safe. An older binary stops and asks the user to upgrade.
-- **Defer until the first schema change (current):** No work is necessary now, but the first change needs this design.
+- **Run ordered migrations and reject newer schemas:** Upgrades become additive, and older binaries exit with an upgrade prompt.
+- **Defer until the next schema change (current):** Avoids migration machinery until the schema changes.
 
 ### Lesson status without a path
 
-`mt graph show` without `--path` reads only the embedded curriculum, so it reports no authored lessons or quizzes.
+`mt graph show` without `--path` reads only the embedded curriculum and ignores user-authored lessons and quizzes in the overlay.
 
-- **Merge the overlay when a token exists:** The status is correct. Each lookup costs one network read.
-- **Omit those fields without a path:** Lookups stay offline, but the fields disappear.
+- **Merge the overlay if `BASERUNNA_TOKEN` is set:** Output reflects authored content at the cost of a network read.
+- **Omit `has_lesson` and `quizzes` when `--path` is absent:** Lookups stay offline without reporting stale overlay counts.
 
 ### Time limit for an unreachable server
 
-The default retry policy can run for minutes against an unreachable server. Baserunna can also need time to start from zero.
+The default client retry policy can wait several minutes for an unreachable server in order to tolerate cold starts.
 
-- **Set a short overall deadline:** Failures are fast, but a cold start can fail a command.
-- **Keep the default policy (current):** Cold starts succeed, but an outage blocks a command for minutes.
+- **Set a short overall deadline:** Outages fail fast, and cold starts can time out.
+- **Keep the default policy (current):** Cold starts succeed, and outages block commands for minutes.
 
 ### Local-only use
 
-`mt` no longer works offline, and `mt import-turso` accepts only an HTTP pipeline URL. A local `~/.mathtutor/mt.db` has no documented migration.
+`mt` requires a Baserunna server, and `mt import-turso` reads only from an HTTP pipeline URL rather than a local `~/.mathtutor/mt.db` file.
 
-- **Add a local-file import source:** Local users can move their data. This adds code to a one-time tool.
-- **Drop local-only users (current):** The code stays smaller, but local-only users lose their upgrade path.
+- **Add a local-file import source:** Local users can migrate their SQLite files.
+- **Require an HTTP source (current):** Keeps the import tool smaller.
 
 ### Retirement of the import command
 
-The import and its tests are about 1,100 lines, including a Turso wire client and its mock.
+`src/import.rs` and `tests/import.rs` add roughly 1,100 lines for the Turso wire client and test harness.
 
-- **Delete the command after the cutover:** The code shrinks, but self-hosted Turso users cannot migrate with a later release.
-- **Keep the command (current):** Self-hosted users can migrate, and the code stays.
+- **Delete `mt import-turso` after cutover:** Shrinks the codebase once production data is migrated.
+- **Keep the command (current):** Retains a migration path for other Turso databases.
 
-### Verification of derived rows after the cutover
+### Verification of derived rows after cutover
 
-`cards` and `taught` decide what a learner sees next, but only the import compares them with events.
+`cards` and `taught` drive scheduling, and only `mt import-turso` verifies them against the event stream.
 
-- **Add a command that replays each path and can rebuild it:** Operators can detect and repair drift. This adds an operator command.
-- **Do not add a check (current):** The code stays smaller, but a projection bug changes schedules with no signal.
+- **Add a command to verify and rebuild projections:** Operators can detect and repair drift.
+- **Omit the command (current):** Keeps the CLI smaller until projection drift is observed.
 
 ### Acceptance test for the cutover
 
-The runbook says to keep Turso until the deployment is verified, but it does not define that check. Going back after the first Baserunna write loses that write.
+Reverting to Turso after Baserunna accepts new writes loses those writes.
 
-- **Write a checklist with an abort point:** Check the imported path count, one OAuth login, and one `get_next` and `answer_quiz` on a test path. This adds a manual step.
-- **Rely on the operator (current):** The cutover is faster, but the last safe abort is unclear.
+- **Define a pre-traffic checklist:** Verify the imported path count, an OAuth login, and a test `get_next` / `answer_quiz` cycle before enabling user traffic.
+- **Rely on the operator (current):** Keeps the runbook shorter.
 
 ## Later
 
-- [ ] **Support concurrent authoring in a shared database.** Every authoring command replaces the global `overlay_version` token, which invalidates the overlay cache for all other sessions and causes transaction conflicts during concurrent edits. Incremental cache updates via the Baserunna change feed and per-atom version keys will eliminate full downloads and reduce write conflicts.
-- [ ] **Read a multi-page snapshot at one version.** `Db::snapshot` reads each page in a separate request, so a snapshot of more than 1,000 rows of one table can mix versions. Read the pages in one read-only transaction, or pin the version of the first page.
+- [ ] **Support concurrent authoring in a shared database.** Authoring commands replace the global `overlay_version` token, which invalidates the overlay cache for other sessions and causes transaction conflicts during concurrent edits. Incremental cache updates via the Baserunna change feed and per-atom version keys will avoid full downloads and reduce write conflicts.
+- [ ] **Read a multi-page snapshot at a single version.** `Db::snapshot` reads each page in a separate request, so a table with more than 1,000 rows can span versions across pages. Read all pages in a single read-only transaction or pin the snapshot version from the first page.
 - [ ] **Run the load test against a staging database** before each deployment to verify transaction correctness and latency.

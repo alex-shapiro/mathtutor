@@ -159,7 +159,7 @@ async fn events_round_trip_in_order_with_every_field() {
 }
 
 #[tokio::test]
-async fn event_log_pages_past_one_read() {
+async fn event_log_pages_across_multiple_reads() {
     let db = common::fresh_db(PATH_ID).await;
     let ts = Utc::now();
     let events: Vec<Event> = (0..1205)
@@ -175,7 +175,7 @@ async fn event_log_pages_past_one_read() {
 }
 
 #[tokio::test]
-async fn concurrent_answers_all_land_exactly_once() {
+async fn concurrent_answers_are_recorded_once_each() {
     let db = common::fresh_db(PATH_ID).await;
     let quiz = store::cmd_quiz_create(
         &db,
@@ -279,13 +279,13 @@ async fn recompute_reproduces_incremental_rows_exactly() {
     assert_eq!(q1.recent, [Rating::Good, Rating::Again]);
 }
 
-/// Transport that counts the response bytes it receives.
-struct Counting {
+/// Transport that counts response bytes.
+struct CountingTransport {
     inner: HttpTransport,
     received: Arc<AtomicUsize>,
 }
 
-impl Transport for Counting {
+impl Transport for CountingTransport {
     fn send(
         &self,
         req: http::Request<Bytes>,
@@ -299,10 +299,10 @@ impl Transport for Counting {
     }
 }
 
-fn counting(cfg: &DbConfig) -> (Db, Arc<AtomicUsize>) {
+fn counting_db(cfg: &DbConfig) -> (Db, Arc<AtomicUsize>) {
     let received = Arc::new(AtomicUsize::new(0));
     let inner = cfg.transport().unwrap();
-    let t = Counting {
+    let t = CountingTransport {
         inner,
         received: received.clone(),
     };
@@ -320,7 +320,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
     })
     .await;
 
-    let (reader, received) = counting(&cfg);
+    let (reader, received) = counting_db(&cfg);
     let read = |db: &Db| {
         let db = db.clone();
         async move {
@@ -363,7 +363,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
 }
 
 #[tokio::test]
-async fn quiz_ids_stay_unique_when_clients_author_concurrently() {
+async fn quiz_ids_stay_unique_under_concurrent_authoring() {
     let cfg = common::fresh_config();
     let db = Db::open(&cfg).await.unwrap();
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
@@ -407,7 +407,7 @@ async fn quiz_ids_stay_unique_when_clients_author_concurrently() {
 async fn own_overlay_writes_keep_the_cache_valid() {
     let cfg = common::fresh_config();
     Db::open(&cfg).await.unwrap();
-    let (db, received) = counting(&cfg);
+    let (db, received) = counting_db(&cfg);
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
     let body = "y".repeat(20_000);
     store::cmd_lesson_upsert(&db, "fnd.1.1.1", body.clone(), Some(PATH_ID), None)
@@ -491,7 +491,7 @@ async fn path_next_makes_its_path_the_most_recent_even_without_an_event() {
 }
 
 #[tokio::test]
-async fn write_that_names_a_path_makes_it_the_most_recent() {
+async fn write_for_a_path_makes_it_the_most_recent() {
     let db = common::empty_db().await;
     common::seed_path(&db, "p_a_older", &[], Strategy::BottomUp).await;
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
@@ -528,7 +528,7 @@ impl Transport for DisconnectedTransport {
 }
 
 #[tokio::test]
-async fn failed_read_reports_that_no_write_was_applied() {
+async fn failed_read_reports_unapplied_outcome() {
     let db = Db::with_transport(&common::fresh_config(), DisconnectedTransport);
 
     let e = db
@@ -590,7 +590,7 @@ async fn retried_command_keeps_the_most_recent_path_of_its_first_attempt() {
 }
 
 #[tokio::test]
-async fn overlay_cache_does_not_survive_a_recreated_database() {
+async fn recreating_database_invalidates_overlay_cache() {
     let dir = tempfile::TempDir::new().unwrap();
     let cfg = DbConfig {
         cache_dir: Some(dir.path().to_path_buf()),
@@ -639,7 +639,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         .unwrap();
     drop(first);
 
-    let (second, received) = counting(&cfg);
+    let (second, received) = counting_db(&cfg);
     let view = second
         .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
         .await

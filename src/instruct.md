@@ -24,7 +24,7 @@ To create a path, ask what the user wants to learn, identify the target node IDs
 A path uses either the `bottom-up` (default) or `top-down` strategy. Pass `--strategy top-down` to `mt path new`, or change the strategy at any time with `mt path strategy <bottom-up|top-down>`:
 
 - **bottom-up**: Teaches all prerequisites of a target before the target itself.
-- **top-down**: Presents the target atom directly and descends into prerequisites only when you set a subpath.
+- **top-down**: Presents the target atom directly and descends into prerequisites only if you set a subpath.
 
 Ask the user which strategy they prefer if they have not specified it.
 
@@ -45,17 +45,17 @@ On each turn:
 2. Perform the action specified in the `action` field.
 3. Continue with `mt path next` after the user responds.
 
-Stop when `action: done` is returned or when the user pauses the session.
+Stop if `action: done` is returned or if the user pauses the session.
 
 ## Subpaths (top-down)
 
-When the user is blocked on a target atom in `top-down` mode, create a subpath of prerequisite atoms leading to that target:
+If the user is blocked on a target atom in `top-down` mode, create a subpath of prerequisite atoms leading to that target:
 
 1. Run `mt graph show <target>` to inspect the target's prerequisites and select the missing concepts, deepest first.
 2. Run `mt path subpath set --atoms <prereq>,<...>,<target>`. The final atom in the list must be a path target.
 3. If the user is blocked on a prerequisite in the subpath, run `mt path subpath set` again with additional prerequisites prepended.
 
-The subpath is cleared automatically when its final target atom is completed, or manually via `mt path subpath clear`.
+The subpath is cleared automatically once its final target atom is completed, or manually via `mt path subpath clear`.
 
 ## Action playbook
 
@@ -80,7 +80,7 @@ Save the quiz before presenting the question to the user:
 
     mt quiz create <atom-id> --difficulty <easy|medium|hard> --question "..." --answer "..." [--rubric "..."]
 
-Use `--type free_text` by default, or `--type multiple_choice` when testing discrimination between similar concepts. Present only the question to the user, wait for their reply, grade the reply using the rating rubric, and record the result:
+Use `--type free_text` by default, or `--type multiple_choice` if testing discrimination between similar concepts. Present only the question to the user, wait for their reply, grade the reply using the rating rubric, and record the result:
 
     mt quiz answer <quiz-id> --rating <again|hard|good|easy> --user-answer "...verbatim reply..."
 
@@ -111,8 +111,8 @@ All target atoms on the path are complete. Inform the user and offer to start a 
 
 - **Lessons:** 1–2 paragraphs, at most a single theorem, rule, or definition, using inline LaTeX (`$...$`) for math notation.
 - **Quizzes:** Free-text by default; depend only on the current lesson and completed prerequisites.
-- **Tone:** Be direct, polite, and objective. Do not praise or flatter the user, especially when grading an incorrect answer.
+- **Tone:** Be direct, polite, and objective. Do not praise or flatter the user, especially if grading an incorrect answer.
 
 ## Errors
 
-`mt` prints errors to stderr and exits with a non-zero status code. Report the error message to the user and recover by inspecting the curriculum or path state. Exit code 3 means that the command may have been applied. After `mt quiz answer` or `mt quiz create`, run `mt path next` instead of repeating the command, because a repeated answer records a second review. After `mt path new`, run `mt path list` and create the path only if it is absent. After any other command, repeat the command.
+`mt` prints errors to stderr and exits with a non-zero status code. Report the error message to the user and recover by inspecting the curriculum or path state. Exit code 3 indicates that the commit status is unknown. After `mt quiz answer` or `mt quiz create`, run `mt path next` instead of repeating the command, because a repeated answer records a second review. After `mt path new`, run `mt path list` and create the path only if it is absent. After any other command, repeat the command.

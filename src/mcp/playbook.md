@@ -18,14 +18,14 @@ If paths exist, show them to the user and ask which path to resume. Then call `g
 A path uses either the `bottom_up` (default) or `top_down` strategy. Pass `strategy` to `new_path`, or change the strategy at any time with `set_strategy { path_id, strategy }`:
 
 - **bottom_up**: Teaches all prerequisites of a target before the target itself.
-- **top_down**: Presents the target atom directly and descends into prerequisites only when you set a subpath.
+- **top_down**: Presents the target atom directly and descends into prerequisites only if you set a subpath.
 
 Ask the user which strategy they prefer if they have not specified it.
 
 ## Browsing the curriculum
 
 - `get_item { id, path_id? }`: Returns details for an atom, cluster, or area.
-- `get_children { id?, path_id?, recursive? }`: Lists the children of a node, or the root areas when `id` is omitted.
+- `get_children { id?, path_id?, recursive? }`: Lists the children of a node, or the root areas if `id` is omitted.
 - `get_syllabus { path_id, n? }`: Lists upcoming untaught lesson topics in scheduled order.
 
 ## Main loop
@@ -36,17 +36,17 @@ On each turn:
 2. Perform the action specified in `action`.
 3. Call `get_next` again after the user responds.
 
-Stop when `action: done` is returned or when the user pauses the session.
+Stop if `action: done` is returned or if the user pauses the session.
 
 ## Subpaths (top-down)
 
-When the user is blocked on a target atom in `top_down` mode, create a subpath of prerequisite atoms leading to that target:
+If the user is blocked on a target atom in `top_down` mode, create a subpath of prerequisite atoms leading to that target:
 
 1. Call `get_item { id: <target> }` to inspect the target's prerequisites and select the missing concepts, deepest first.
 2. Call `subpath_set { path_id, atoms }` with an ordered list of prerequisite atoms ending with the target atom.
 3. If the user is blocked on a prerequisite in the subpath, call `subpath_set` again with additional prerequisites prepended.
 
-The subpath is cleared automatically when its final target atom is completed, or manually via `subpath_clear { path_id }`.
+The subpath is cleared automatically once its final target atom is completed, or manually via `subpath_clear { path_id }`.
 
 ## Action playbook
 
@@ -62,7 +62,7 @@ A lesson is already stored, but it has not been taught on this path. Present `at
 
 The atom requires a quiz for `target_difficulty` (`easy`, `medium`, or `hard`). Author a question, a concise reference answer, and an optional grading rubric (only for subjective questions). The quiz must depend only on the current lesson and completed prerequisites, and must not duplicate `existing_quizzes`.
 
-Call `create_quiz { atom, question, answer, rubric?, difficulty, kind, path_id }` before presenting the question to the user. Use `free_text` by default, or `multiple_choice` when testing discrimination between similar concepts. Present only the question to the user, wait for their reply, grade the reply using the rating rubric, and call `answer_quiz { quiz_id, answer, rating, path_id }` with the user's verbatim response.
+Call `create_quiz { atom, question, answer, rubric?, difficulty, kind, path_id }` before presenting the question to the user. Use `free_text` by default, or `multiple_choice` if testing discrimination between similar concepts. Present only the question to the user, wait for their reply, grade the reply using the rating rubric, and call `answer_quiz { quiz_id, answer, rating, path_id }` with the user's verbatim response.
 
 ### `present_quiz`
 
@@ -89,8 +89,8 @@ All target atoms on the path are complete. Inform the user and offer to start a 
 
 - **Lessons:** 1–2 paragraphs, at most a single theorem, rule, or definition, using inline LaTeX (`$...$`) for math notation.
 - **Quizzes:** Free-text by default; depend only on the current lesson and completed prerequisites.
-- **Tone:** Be direct, polite, and objective. Do not praise or flatter the user, especially when grading an incorrect answer.
+- **Tone:** Be direct, polite, and objective. Do not praise or flatter the user, especially if grading an incorrect answer.
 
 ## Errors
 
-Tool errors return `isError: true` with a JSON error object. Report the error message to the user and recover by inspecting the curriculum or path state. The error kind `outcome_unknown` means that the call may have been applied. After `answer_quiz` or `create_quiz`, call `get_next` instead of repeating the call, because a repeated answer records a second review. After `new_path`, call `get_paths` and create the path only if it is absent. After any other call, repeat the call.
+Tool errors return `isError: true` with a JSON error object. Report the error message to the user and recover by inspecting the curriculum or path state. The error kind `outcome_unknown` indicates that the commit status is unknown. After `answer_quiz` or `create_quiz`, call `get_next` instead of repeating the call, because a repeated answer records a second review. After `new_path`, call `get_paths` and create the path only if it is absent. After any other call, repeat the call.

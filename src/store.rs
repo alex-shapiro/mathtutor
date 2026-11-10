@@ -138,7 +138,7 @@ pub async fn cmd_quiz_delete(
     .await
 }
 
-// Include tombstoned quiz IDs when assigning the next suffix so deleted IDs are never reused.
+// Include tombstoned quiz IDs when assigning the next suffix so that deleted IDs are never reused.
 fn next_quiz_id(
     atom_id: &str,
     quizzes: &[graph::Quiz],

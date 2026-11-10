@@ -20,7 +20,7 @@ pub enum Error {
     #[error("unknown id: {0}")]
     UnknownId(String),
 
-    #[error("cluster '{0}' has no atomic descendants")]
+    #[error("cluster '{0}' does not have atomic descendants")]
     EmptyCluster(String),
 
     #[error("cycle in target atoms")]
@@ -38,7 +38,7 @@ pub enum Error {
     #[error("HOME not set; set MATHTUTOR_HOME or HOME")]
     NoHome,
 
-    #[error("atom '{0}' has no stored lesson; teach it before authoring quizzes")]
+    #[error("atom '{0}' does not have a stored lesson; teach it before authoring quizzes")]
     NoLesson(String),
 
     #[error("fsrs: {0}")]
@@ -77,7 +77,7 @@ pub enum Error {
     #[error("subpaths apply only to top-down paths; switch with `mt path strategy top-down`")]
     SubpathNotTopDown,
 
-    #[error("a subpath needs at least one atom")]
+    #[error("subpath must not be empty")]
     SubpathEmpty,
 
     #[error("subpath must end in a target atom; '{0}' is not a target of this path")]
@@ -105,7 +105,7 @@ pub enum Error {
     ImportTargetNotEmpty,
 
     #[error(
-        "an import into this database is unfinished; run `mt import-turso` again until it reports no differences, or delete the database and import again"
+        "an import into this database is unfinished; run `mt import-turso` again until zero differences remain, or delete the database and import again"
     )]
     ImportInProgress,
 
@@ -181,7 +181,7 @@ impl Error {
         }
     }
 
-    /// Marks a failure from a step that writes no learner state as not applied.
+    /// Marks a failure from a read-only or setup step as not applied.
     #[must_use]
     pub fn into_not_applied(self) -> Self {
         match self {

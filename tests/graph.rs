@@ -215,7 +215,7 @@ fn orphan_check_skips_terminal_atoms() {
 }
 
 #[test]
-fn orphan_check_clears_when_referenced_as_prereq() {
+fn orphan_check_clears_if_referenced_as_prereq() {
     let dir = write_graph(
         "
   - id: ta.1

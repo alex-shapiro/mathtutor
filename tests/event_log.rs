@@ -253,7 +253,7 @@ async fn recompute_rebuilds_cards_identically_to_live_append() {
 }
 
 #[tokio::test]
-async fn failed_transaction_leaves_no_event_or_card() {
+async fn failed_transaction_does_not_write_events_or_cards() {
     let db = common::fresh_db(PATH_ID).await;
     let r: Result<(), Error> = db
         .transact(&Want::path(Some(PATH_ID)), |view, changes| {
@@ -299,6 +299,6 @@ async fn recompute_only_touches_target_path() {
             .await
             .cards
             .contains_key("atom.y.q1"),
-        "other path's card must survive recompute"
+        "recompute must preserve cards on other paths"
     );
 }

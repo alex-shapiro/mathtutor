@@ -50,7 +50,7 @@ fn assert_present_lesson(action: &Action, expected_atom: &str) {
 }
 
 #[test]
-fn create_lesson_when_atom_has_none() {
+fn create_lesson_if_atom_lacks_lesson() {
     let g = graph_of(vec![atom("a", &[], None, vec![])]);
     let p = path_with(&["a"]);
     assert_create_lesson(
@@ -68,7 +68,7 @@ fn create_lesson_when_atom_has_none() {
 }
 
 #[test]
-fn present_lesson_when_stored_but_not_taught_in_path() {
+fn present_lesson_if_stored_but_untaught_in_path() {
     let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
     let p = path_with(&["a"]);
     assert_present_lesson(
@@ -106,7 +106,7 @@ fn lesson_authored_event_satisfies_taught_check() {
 }
 
 #[test]
-fn create_easy_quiz_when_lesson_stored_and_taught() {
+fn create_easy_quiz_if_lesson_stored_and_taught() {
     let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
@@ -126,7 +126,7 @@ fn create_easy_quiz_when_lesson_stored_and_taught() {
 }
 
 #[test]
-fn present_easy_quiz_when_authored_but_unanswered() {
+fn present_easy_quiz_if_authored_but_unanswered() {
     let g = graph_of(vec![atom(
         "a",
         &[],
@@ -442,7 +442,7 @@ fn cluster_prereq_descends_before_target() {
 }
 
 #[test]
-fn cluster_prereq_advances_to_target_when_complete() {
+fn cluster_prereq_advances_to_target_once_complete() {
     let g = graph_of(vec![
         cluster("pre", &["pre.1"]),
         common::complete_atom("pre.1", &[]),
@@ -576,7 +576,7 @@ fn due_mode_returns_earliest_due_card() {
 }
 
 #[test]
-fn due_mode_returns_done_when_no_card_is_due() {
+fn due_mode_returns_done_if_zero_cards_are_due() {
     let g = graph_of(vec![atom("a", &[], None, vec![])]);
     let p = path_with(&["a"]);
     assert!(matches!(
@@ -614,7 +614,7 @@ fn from_flags_rejects_both_new_and_due() {
 }
 
 #[test]
-fn new_mode_returns_done_when_walker_has_nothing_left() {
+fn new_mode_returns_done_if_all_targets_are_complete() {
     let g = graph_of(vec![atom(
         "a",
         &[],

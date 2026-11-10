@@ -103,7 +103,7 @@ pub enum ProjectionTarget<'e> {
     None,
 }
 
-/// Returns the derived row that `e` changes, or [`Error::BadEvent`] if `e` lacks its ID.
+/// Returns the derived row that `e` changes, or [`Error::BadEvent`] if a required field is missing.
 pub fn projection_target(e: &Event) -> Result<ProjectionTarget<'_>> {
     match e.kind {
         EventKind::LessonTaught | EventKind::LessonAuthored => e
@@ -204,7 +204,7 @@ impl TryFrom<CardRecord> for CardRow {
     }
 }
 
-/// Rebuilds the `cards` and `taught` rows for `path_id` from its event stream in a single transaction.
+/// Rebuilds the `cards` and `taught` rows for `path_id` from its event stream.
 pub async fn recompute(db: &Db, path_id: &str) -> Result<()> {
     let mut retry = db.client.retry();
     loop {

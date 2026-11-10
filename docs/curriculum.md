@@ -10,8 +10,8 @@ Every atom must be a prerequisite for a downstream AI/ML concept, or be explicit
 
 List only direct, required dependencies in `prerequisites`:
 
-- Reference an **atom ID** when the dependent node requires a specific concept.
-- Reference a **cluster ID** when the dependent node requires all concepts in that cluster.
+- Reference an **atom ID** if the dependent node requires a specific concept.
+- Reference a **cluster ID** if the dependent node requires all concepts in that cluster.
 
 Cross-area prerequisites are supported and encouraged.
 

@@ -32,7 +32,7 @@ The graph defines two relationships over the same nodes:
 
 A node is an **atom** if `children` is omitted or empty; otherwise, it is a **cluster**.
 
-Most atoms in the repository contain only metadata (`id`, `name`, `description`, `prerequisites`). Lesson and quiz bodies are authored on demand at runtime and stored in the user overlay, or defined inline in the AYML file when fixed canonically.
+Most atoms in the repository contain only metadata (`id`, `name`, `description`, `prerequisites`). Lesson and quiz bodies are authored on demand at runtime and stored in the user overlay, or defined inline in the AYML file if fixed canonically.
 
 ## ID conventions
 

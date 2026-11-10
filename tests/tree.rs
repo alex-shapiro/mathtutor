@@ -11,7 +11,7 @@ mod common;
 use common::{atom, cluster, graph_of, quiz};
 
 #[test]
-fn badge_empty_when_nothing_stored() {
+fn badge_empty_if_atom_untaught() {
     let a = atom("a", &[], None, vec![]);
     assert_eq!(state_badge(&PathProgress::default(), &a), "[····]");
 }
@@ -25,7 +25,7 @@ fn badge_lesson_slot_only_lights_up_after_taught() {
 }
 
 #[test]
-fn badge_lowercase_when_quiz_authored_but_unanswered() {
+fn badge_lowercase_if_quiz_authored_but_unanswered() {
     let a = atom(
         "a",
         &[],
@@ -40,7 +40,7 @@ fn badge_lowercase_when_quiz_authored_but_unanswered() {
 }
 
 #[test]
-fn badge_uppercase_when_quiz_answered_correctly() {
+fn badge_uppercase_if_quiz_answered_correctly() {
     let a = atom(
         "a",
         &[],

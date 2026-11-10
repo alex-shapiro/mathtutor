@@ -9,7 +9,7 @@ Math Tutor manages math learning through a directed acyclic graph (DAG) of lesso
 - `mt` manages scheduling, persistence, graph validation, and the user overlay.
 - The agent authors lessons and quizzes, presents material to the user, and grades responses.
 
-`mt path next` selects the next action, and the agent presents the material. When a lesson or quiz is required for the first time, the agent authors it and saves it with `mt lesson upsert` or `mt quiz create`. All authored content is written to the user overlay so that subsequent presentations are deterministic.
+`mt path next` selects the next action, and the agent presents the material. If a lesson or quiz is required for the first time, the agent authors it and saves it with `mt lesson upsert` or `mt quiz create`. All authored content is written to the user overlay so that subsequent presentations are deterministic.
 
 Each atom represents a single concept. A lesson is 1–2 paragraphs and introduces at most a single theorem, rule, or definition. Quizzes depend only on the current lesson and completed prerequisites.
 
@@ -50,7 +50,7 @@ mt instruct
 mt import-turso [--url URL]
 ```
 
-When `--path P` is provided to `mt graph show` or `mt graph list`, the output includes per-path completion fields (`lesson_taught`, `complete`).
+If `--path P` is provided to `mt graph show` or `mt graph list`, the output includes per-path completion fields (`lesson_taught`, `complete`).
 
 ### Target ID resolution
 
@@ -63,8 +63,8 @@ Each `--targets` entry is either an atom ID (a leaf node, such as `tx.1.1`) or a
 1. **Untaught.** The atom exists in the curriculum without user overlay content.
 2. **Lesson stored.** A lesson body exists in the curriculum or is saved to the overlay via `mt lesson upsert`.
 3. **Lesson taught.** The path event log contains `lesson_taught` or `lesson_authored` for the atom.
-4. **Quiz stored.** For each difficulty slot (`easy`, `medium`, `hard`), the agent saves a quiz via `mt quiz create` when prompted by `create_quiz`.
-5. **Quiz answered.** When `mt path next` returns `present_quiz`, the agent presents the question, grades the user response, and records the result with `mt quiz answer`.
+4. **Quiz stored.** For each difficulty slot (`easy`, `medium`, `hard`), the agent saves a quiz via `mt quiz create` if prompted by `create_quiz`.
+5. **Quiz answered.** If `mt path next` returns `present_quiz`, the agent presents the question, grades the user response, and records the result with `mt quiz answer`.
 
 ## `mt path next` output
 
@@ -215,12 +215,12 @@ User state is stored in a Baserunna database configured via `BASERUNNA_DB` (defa
 | `lessons`            | Table, by atom ID        | User-authored lesson bodies (overlay)                     |
 | `quizzes`            | Table, by quiz ID        | User-authored or updated quizzes (overlay)                |
 | `removed_quizzes`    | Table, by quiz ID        | Deleted quiz tombstones (overlay)                         |
-| `activity/<path id>` | Key                      | Timestamp of the latest write that named a path           |
+| `activity/<path id>` | Key                      | Timestamp of the latest write for a path                  |
 | `overlay_version`    | Key                      | Random token replaced on every overlay write              |
 
-Each write command executes as a serializable transaction that reads state in a snapshot and commits writes with optimistic concurrency control. Read commands read the latest state without a transaction. A command without `--path` selects the most recent path once, before its first attempt. If a write conflict occurs, the transaction is retried. If a commit's response is lost, the client asks Baserunna whether the commit applied. If Baserunna cannot answer, the command exits with code `3` because its outcome is unknown. The client caches the overlay in memory and under `$MATHTUTOR_HOME` (default `~/.mathtutor`), and reloads it only when `overlay_version` changes.
+Each write command executes as a serializable transaction that reads a snapshot and commits with optimistic concurrency control. Read commands read the latest state without a transaction. A command without `--path` selects the most recent path once, before its first attempt. If a write conflict occurs, the transaction is retried. If a commit response is lost, the client queries Baserunna for the commit status; if the status is unavailable, the command exits with code `3` because its outcome is unknown. The client caches the overlay in memory and under `$MATHTUTOR_HOME` (default `~/.mathtutor`), and reloads it only if `overlay_version` changes.
 
-`mt import-turso` migrates an existing libSQL database into an empty Baserunna database. It reads a consistent snapshot, writes the paths, overlay, events, and OAuth clients, and rebuilds `cards` and `taught` from the event streams. It then verifies the paths, overlay, events, and cards against the source rows. While an import is open, every read and write of learner state fails. An import with differences stays open and can resume. If differences remain, delete the database and import again. A completed import refuses another run, because a repeat run would revert newer data.
+`mt import-turso` migrates a libSQL database into an empty Baserunna database. It reads a consistent snapshot, writes the paths, overlay, events, and OAuth clients, and rebuilds `cards` and `taught` from the event streams. It then verifies the paths, overlay, events, and cards against a fresh read of the source rows. While an import is open, reads and writes of learner state are blocked. An import with mismatches stays open so that it can be resumed; if mismatches remain, delete the database and run the import again. Once an import completes with zero mismatches, subsequent runs are rejected to preserve newer data.
 
 ## User overlay
 
@@ -273,7 +273,7 @@ Each quiz on a path has an FSRS card whose state is derived from its `quiz_answe
    - `present_quiz` if a quiz has not been answered with `hard`, `good`, or `easy`.
 3. Otherwise, return `done`.
 
-An atom is complete when its lesson is taught and each difficulty slot (`easy`, `medium`, `hard`) has at least a single quiz answered with `hard`, `good`, or `easy`. An `again` rating does not complete a slot. A quiz with no passing answer is presented again immediately. A failed review of a passed quiz returns at its next FSRS due time.
+An atom is complete if its lesson is taught and each difficulty slot (`easy`, `medium`, `hard`) has at least a single quiz answered with `hard`, `good`, or `easy`. An `again` rating does not complete a slot. An unpassed quiz is presented again immediately, whereas a failed review of a previously passed quiz is scheduled at its next FSRS due time.
 
 ## Teaching strategies
 
@@ -284,11 +284,11 @@ A path uses either the `bottom-up` or `top-down` traversal strategy. `mt path st
 
 ### Subpaths
 
-When a user is blocked on a target atom in `top-down` mode, the agent can set a subpath (`mt path subpath set --atoms a,b,...,<target>`) that lists prerequisite atoms leading to that target. While a subpath is active in `top-down` mode, `mt path next` teaches the incomplete atoms in the subpath in order. When the final atom in the subpath is completed, the subpath is cleared automatically.
+If a user is blocked on a target atom in `top-down` mode, the agent can set a subpath (`mt path subpath set --atoms a,b,...,<target>`) that lists prerequisite atoms leading to that target. While a subpath is active in `top-down` mode, `mt path next` teaches the incomplete atoms in the subpath in order. Once the final atom in the subpath is completed, the subpath is cleared automatically.
 
 ## Tool I/O and exit codes
 
 - Standard output: A single AYML record for `mt path next`, `mt path list`, `mt path syllabus`, `mt graph show`, `mt graph list`, and `mt graph dump`. `mt path state` and `mt path tree` print text for people to read.
 - Standard error: Confirmation messages from write commands, including the ID of a new quiz or path.
 - Standard error: Diagnostic and error messages.
-- Exit codes: `0` for success, `1` for runtime or state errors, `2` for usage or validation errors, and `3` if the command failed and may still have committed. After exit `3`, the command prints its safe next step.
+- Exit codes: `0` for success, `1` for runtime or state errors, `2` for usage or validation errors, and `3` if the commit status is unknown. After exit `3`, the command prints its safe next step.

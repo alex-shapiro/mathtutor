@@ -22,7 +22,7 @@ async fn lesson_history(db: &Db) -> LessonHistory {
 }
 
 #[tokio::test]
-async fn quiz_history_empty_when_quiz_never_touched() {
+async fn quiz_history_empty_if_quiz_unanswered() {
     let db = common::fresh_db(PATH_ID).await;
 
     let h = quiz_history(&db).await;
@@ -136,7 +136,7 @@ async fn quiz_history_isolates_quiz_id_and_path_id() {
 }
 
 #[tokio::test]
-async fn lesson_history_empty_when_atom_never_taught() {
+async fn lesson_history_empty_if_atom_untaught() {
     let db = common::fresh_db(PATH_ID).await;
 
     let h = lesson_history(&db).await;

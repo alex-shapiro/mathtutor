@@ -23,10 +23,10 @@ use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
 use mathtutor::view::Want;
 use mathtutor::{answer, cards, path, scheduler, state, store, syllabus};
 
-/// Baserunna request kind, named after its endpoint.
+/// Baserunna request kind, derived from its endpoint.
 type RequestKind = &'static str;
 
-fn kind(method: &http::Method, route: &str) -> RequestKind {
+fn request_kind(method: &http::Method, route: &str) -> RequestKind {
     match route {
         r if r == api::Txn::ROUTE => "txn",
         r if r == api::BeginTxn::ROUTE => "begin",
@@ -39,7 +39,7 @@ fn kind(method: &http::Method, route: &str) -> RequestKind {
     }
 }
 
-/// One request to the server.
+/// Measured request to the server.
 #[derive(Debug, Clone)]
 struct Sample {
     kind: RequestKind,
@@ -99,7 +99,7 @@ impl<T: Transport> Transport for Observed<T> {
     ) -> BoxFuture<'_, Result<http::Response<Bytes>, TransportError>> {
         Box::pin(async move {
             let route = req.extensions().get::<Route>().map_or("", |r| r.0);
-            let kind = kind(req.method(), route);
+            let kind = request_kind(req.method(), route);
             let sent_bytes = req.body().len();
             let started = Instant::now();
             let resp = self.inner.send(req).await?;
@@ -121,7 +121,7 @@ impl<T: Transport> Transport for Observed<T> {
     }
 }
 
-fn env<T: std::str::FromStr>(k: &str, default: T) -> T {
+fn env_or<T: std::str::FromStr>(k: &str, default: T) -> T {
     std::env::var(k)
         .ok()
         .and_then(|v| v.parse().ok())
@@ -171,7 +171,7 @@ struct Requests {
     statuses: BTreeMap<u16, u64>,
 }
 
-fn pct(v: &mut [Duration], p: f64) -> f64 {
+fn percentile_ms(v: &mut [Duration], p: f64) -> f64 {
     if v.is_empty() {
         return 0.0;
     }
@@ -242,13 +242,13 @@ impl Stats {
             println!(
                 "{kind:<8} {:>7} {:>9.1} {:>9.1} {:>9.1} {:>9.1} {:>9.1} {:>9.1} {:>9.1} {:>8.0} {:>8.0}  {:?}",
                 r.elapsed.len(),
-                pct(&mut r.elapsed, 0.5),
-                pct(&mut r.elapsed, 0.99),
-                pct(&mut r.server, 0.5),
-                pct(&mut r.server, 0.99),
-                pct(&mut r.store, 0.5),
-                pct(&mut r.commit, 0.5),
-                pct(&mut r.network, 0.5),
+                percentile_ms(&mut r.elapsed, 0.5),
+                percentile_ms(&mut r.elapsed, 0.99),
+                percentile_ms(&mut r.server, 0.5),
+                percentile_ms(&mut r.server, 0.99),
+                percentile_ms(&mut r.store, 0.5),
+                percentile_ms(&mut r.commit, 0.5),
+                percentile_ms(&mut r.network, 0.5),
                 r.sent as f64 / 1024.0,
                 r.received as f64 / 1024.0,
                 r.statuses,
@@ -313,7 +313,7 @@ impl Rng {
     }
 }
 
-fn text(rng: &mut Rng, bytes: usize) -> String {
+fn sample_text(rng: &mut Rng, bytes: usize) -> String {
     const WORDS: [&str; 12] = [
         "vector",
         "space",
@@ -414,7 +414,7 @@ impl Learner {
         let t = Instant::now();
         match envelope.action() {
             Action::CreateLesson { atom_id } => {
-                let body = text(&mut self.rng, self.lesson_bytes);
+                let body = sample_text(&mut self.rng, self.lesson_bytes);
                 let r = store::cmd_lesson_upsert(&self.db, atom_id, body, Some(&p), None).await;
                 out.push(("lesson upsert", t.elapsed(), r.map_err(|e| e.to_string())));
             }
@@ -426,9 +426,9 @@ impl Learner {
                     &self.db,
                     atom_id,
                     *difficulty,
-                    text(&mut self.rng, 250),
-                    text(&mut self.rng, 300),
-                    Some(text(&mut self.rng, 200)),
+                    sample_text(&mut self.rng, 250),
+                    sample_text(&mut self.rng, 300),
+                    Some(sample_text(&mut self.rng, 200)),
                     QuizType::FreeText,
                     Some(&p),
                     None,
@@ -444,7 +444,7 @@ impl Learner {
                     30..80 => Rating::Good,
                     _ => Rating::Easy,
                 };
-                let answer = Some(text(&mut self.rng, 200));
+                let answer = Some(sample_text(&mut self.rng, 200));
                 let r = answer::cmd_quiz_answer(&self.db, quiz_id, rating, answer, Some(&p), None)
                     .await;
                 let mut ledger = self.ledger.lock().unwrap();
@@ -508,7 +508,7 @@ async fn seed(db: &Db, atoms: usize, lesson_bytes: usize) {
     for chunk in ids[..atoms.min(ids.len())].chunks(BATCH) {
         let lessons: Vec<(String, String)> = chunk
             .iter()
-            .map(|id| ((*id).clone(), text(&mut rng, lesson_bytes)))
+            .map(|id| ((*id).clone(), sample_text(&mut rng, lesson_bytes)))
             .collect();
         db.transact(&Want::overlay(), |_, changes| {
             for (id, body) in &lessons {
@@ -590,15 +590,15 @@ async fn verify(base: &DbConfig, ledger: &Ledger) {
 #[tokio::main]
 async fn main() {
     let base = DbConfig::from_env().expect("BASERUNNA_TOKEN");
-    let prefix: String = env("LT_PREFIX", "lt-".to_string());
-    let steps: Vec<usize> = env("LT_STEPS", "1,4,16".to_string())
+    let prefix: String = env_or("LT_PREFIX", "lt-".to_string());
+    let steps: Vec<usize> = env_or("LT_STEPS", "1,4,16".to_string())
         .split(',')
         .map(|s| s.trim().parse().expect("LT_STEPS"))
         .collect();
-    let secs: u64 = env("LT_SECS", 20);
-    let think = Duration::from_millis(env("LT_THINK_MS", 0));
-    let lesson_bytes: usize = env("LT_LESSON", 1500);
-    let seed_atoms: usize = env("LT_SEED", 0);
+    let secs: u64 = env_or("LT_SECS", 20);
+    let think = Duration::from_millis(env_or("LT_THINK_MS", 0));
+    let lesson_bytes: usize = env_or("LT_LESSON", 1500);
+    let seed_atoms: usize = env_or("LT_SEED", 0);
     let targets = Arc::new(targets());
     let stats = Arc::new(Mutex::new(Stats::default()));
 
@@ -607,7 +607,7 @@ async fn main() {
         Arc::new(move |x: Sample| stats.lock().unwrap().observe(&x))
     };
 
-    let share: String = env("LT_SHARE", String::new());
+    let share: String = env_or("LT_SHARE", String::new());
     let shared_path = (share == "path").then(|| Arc::new(Mutex::new(None)));
     let max = steps.iter().copied().max().unwrap_or(1);
     println!(
@@ -650,7 +650,7 @@ async fn main() {
         })));
     }
 
-    let metrics: bool = env("LT_METRICS", 1u8) == 1;
+    let metrics: bool = env_or("LT_METRICS", 1u8) == 1;
     let admin = Db::connect(&base).expect("connect").client().clone();
     let server_metrics = |reset: bool| {
         let admin = admin.clone();
@@ -726,11 +726,17 @@ mod tests {
     }
 
     #[test]
-    fn requests_are_named_after_their_endpoint() {
+    fn request_kind_matches_endpoint_route() {
         let post = http::Method::POST;
-        assert_eq!(kind(&post, api::CommitTxn::ROUTE), "commit");
-        assert_eq!(kind(&http::Method::DELETE, api::AbortTxn::ROUTE), "abort");
-        assert_eq!(kind(&post, api::Txn::ROUTE), "txn");
-        assert_eq!(kind(&http::Method::GET, api::GetCommit::ROUTE), "status");
+        assert_eq!(request_kind(&post, api::CommitTxn::ROUTE), "commit");
+        assert_eq!(
+            request_kind(&http::Method::DELETE, api::AbortTxn::ROUTE),
+            "abort"
+        );
+        assert_eq!(request_kind(&post, api::Txn::ROUTE), "txn");
+        assert_eq!(
+            request_kind(&http::Method::GET, api::GetCommit::ROUTE),
+            "status"
+        );
     }
 }
