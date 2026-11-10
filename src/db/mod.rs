@@ -66,8 +66,26 @@ impl Db {
     /// Connects to the database and creates the database and tables if they do not exist.
     pub async fn open(cfg: &DbConfig) -> Result<Self> {
         let db = Self::connect(cfg)?;
-        crate::schema::ensure(&db.client).await?;
+        crate::schema::ensure(&db.client)
+            .await
+            .map_err(Error::into_not_applied)?;
         Ok(db)
+    }
+
+    /// Reads `ops` at the latest version.
+    pub(crate) async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
+        self.client
+            .read(ops)
+            .await
+            .map_err(|e| Error::from(e).into_not_applied())
+    }
+
+    /// Reads `op` at the latest version.
+    pub(crate) async fn read_one(&self, op: Op) -> Result<OpResult> {
+        self.client
+            .read_one(op)
+            .await
+            .map_err(|e| Error::from(e).into_not_applied())
     }
 
     /// Creates a client handle without performing network I/O; the database and tables must already exist.

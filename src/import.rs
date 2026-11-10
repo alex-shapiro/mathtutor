@@ -472,7 +472,6 @@ pub struct Report {
 /// Marks `db` as an import target, or fails if an import would overwrite newer data.
 async fn claim_import_target(db: &Db) -> Result<()> {
     let results = db
-        .client
         .read(&[
             Op::get(IMPORT_STATE_KEY),
             Op::get(OVERLAY_VERSION_KEY),
@@ -583,7 +582,7 @@ async fn verify_overlay(db: &Db, edits: &[Edit]) -> Result<Vec<String>> {
 }
 
 async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
-    let existing = db.client.read_one(Op::get_row::<PathFile>(&p.id)).await?;
+    let existing = db.read_one(Op::get_row::<PathFile>(&p.id)).await?;
     if existing.row::<PathFile>()?.is_some() {
         return Ok(false);
     }

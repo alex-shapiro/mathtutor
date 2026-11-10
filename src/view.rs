@@ -295,9 +295,9 @@ impl Db {
     pub async fn snapshot(&self, want: &Want) -> Result<View> {
         let path_id = self.selected_path_id(&want.path).await?;
         let mut plan = Plan::new(want, path_id.as_deref(), self.cached_overlay());
-        let mut results = self.client.read(&plan.ops()).await?;
+        let mut results = self.read(&plan.ops()).await?;
         while let Some(more) = plan.absorb(results)? {
-            results = self.client.read(&more).await?;
+            results = self.read(&more).await?;
         }
         self.remember(&plan);
         Ok(plan.view)
@@ -363,7 +363,7 @@ impl Db {
         let mut op = Op::scan(ACTIVITY_PREFIX);
         let mut latest: Option<(DateTime<Utc>, String)> = None;
         loop {
-            let page = self.client.read_one(op.clone()).await?;
+            let page = self.read_one(op.clone()).await?;
             let next = op.next_page(&page);
             for e in page.scan_page()?.entries {
                 let (id, at) = parse_activity(&e)?;

@@ -175,6 +175,17 @@ impl Error {
         }
     }
 
+    /// Marks a failure from a step that writes no learner state as not applied.
+    #[must_use]
+    pub fn into_not_applied(self) -> Self {
+        match self {
+            Error::Baserunna(e) if e.outcome() == baserunna_client::api::Outcome::Unknown => {
+                Error::Baserunna(baserunna_client::Error::NotApplied(Box::new(e)))
+            }
+            other => other,
+        }
+    }
+
     /// Returns true if the failed command may have committed its writes.
     pub fn outcome_is_unknown(&self) -> bool {
         matches!(

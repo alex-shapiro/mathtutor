@@ -451,6 +451,30 @@ async fn own_overlay_writes_keep_the_cache_valid() {
     assert_eq!(format!("{:?}", fresh.atoms), format!("{:?}", stored.atoms));
 }
 
+struct DisconnectedTransport;
+
+impl Transport for DisconnectedTransport {
+    fn send(
+        &self,
+        _req: http::Request<Bytes>,
+    ) -> BoxFuture<'_, Result<http::Response<Bytes>, TransportError>> {
+        Box::pin(async { Err(TransportError::Unknown("connection reset".into())) })
+    }
+}
+
+#[tokio::test]
+async fn failed_read_reports_that_no_write_was_applied() {
+    let db = Db::with_transport(&common::fresh_config(), DisconnectedTransport);
+
+    let e = db
+        .snapshot(&mathtutor::view::Want::overlay())
+        .await
+        .unwrap_err();
+
+    assert!(!e.outcome_is_unknown(), "{e}");
+    assert_eq!(e.exit_code(), 1);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn retried_command_keeps_the_most_recent_path_of_its_first_attempt() {
     let db = common::fresh_db("p_old").await;
