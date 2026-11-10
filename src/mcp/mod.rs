@@ -504,7 +504,7 @@ async fn compute_item(
     path_id: Option<&str>,
     graph_dir: Option<&std::path::Path>,
 ) -> CrateResult<ItemView> {
-    let (g, progress) = discover::graph_for(db, path_id, graph_dir).await?;
+    let (g, progress) = discover::graph_for(Some(db), path_id, graph_dir).await?;
     let item = discover::show_view(&g, id)?;
     let status = progress.and_then(|p| status_for(&g, id, &p));
     Ok(ItemView { item, status })
@@ -533,7 +533,7 @@ async fn compute_children(
     recursive: bool,
     graph_dir: Option<&std::path::Path>,
 ) -> CrateResult<ChildrenView> {
-    let (g, progress) = discover::graph_for(db, path_id, graph_dir).await?;
+    let (g, progress) = discover::graph_for(Some(db), path_id, graph_dir).await?;
     let manifest = graph::load_manifest_default(graph_dir)?;
     let view = discover::list_view(&g, &manifest, id)?;
     let descendants = if recursive {

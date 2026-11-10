@@ -77,6 +77,15 @@ async fn real_main() -> ExitCode {
         };
     }
 
+    if let Cmd::Graph(g) = &cli.cmd
+        && let Some(result) = run_curriculum_lookup(&g.op).await
+    {
+        return match result {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => report_failure(&e),
+        };
+    }
+
     let db = match db::DbConfig::from_env() {
         Ok(cfg) => db::Db::open(&cfg).await,
         Err(e) => Err(e),
@@ -88,6 +97,19 @@ async fn real_main() -> ExitCode {
     match dispatch(&db, cli.cmd).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => report_failure(&e),
+    }
+}
+
+/// Runs a graph lookup that has no path and therefore needs no database connection.
+async fn run_curriculum_lookup(op: &GraphOp) -> Option<Result<()>> {
+    match op {
+        GraphOp::Show(c) if c.path.is_none() => {
+            Some(discover::cmd_graph_show(None, &c.id, None, c.graph.as_deref()).await)
+        }
+        GraphOp::List(c) if c.path.is_none() => {
+            Some(discover::cmd_graph_list(None, c.id.as_deref(), None, c.graph.as_deref()).await)
+        }
+        _ => None,
     }
 }
 
@@ -195,11 +217,16 @@ async fn dispatch_graph(db: &db::Db, op: GraphOp) -> Result<()> {
     match op {
         GraphOp::Check(_) => unreachable!("handled before dispatch"),
         GraphOp::Show(c) => {
-            discover::cmd_graph_show(db, &c.id, c.path.as_deref(), c.graph.as_deref()).await
+            discover::cmd_graph_show(Some(db), &c.id, c.path.as_deref(), c.graph.as_deref()).await
         }
         GraphOp::List(c) => {
-            discover::cmd_graph_list(db, c.id.as_deref(), c.path.as_deref(), c.graph.as_deref())
-                .await
+            discover::cmd_graph_list(
+                Some(db),
+                c.id.as_deref(),
+                c.path.as_deref(),
+                c.graph.as_deref(),
+            )
+            .await
         }
         GraphOp::Dump(_) => overlay::cmd_graph_dump(db).await,
     }

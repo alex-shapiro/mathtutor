@@ -279,3 +279,17 @@ fn orphan_check_cluster_prereq_covers_descendant_atoms() {
     let report = graph::run_check(Some(dir.path())).expect("run_check");
     assert!(orphan_ids(&report).is_empty(), "{:?}", report.issues);
 }
+
+#[test]
+fn curriculum_lookup_runs_without_database_credentials() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_mt"))
+        .args(["graph", "list"])
+        .env_remove("BASERUNNA_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
