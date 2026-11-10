@@ -111,6 +111,9 @@ pub fn projection_target(e: &Event) -> Result<ProjectionTarget<'_>> {
             .as_deref()
             .map(|atom_id| ProjectionTarget::Taught { atom_id })
             .ok_or(Error::BadEvent("lesson event without atom")),
+        EventKind::QuizAnswered if e.payload.rating.is_none() => {
+            Err(Error::BadEvent("quiz answer without rating"))
+        }
         EventKind::QuizPresented | EventKind::QuizAnswered => e
             .quiz
             .as_deref()

@@ -611,14 +611,9 @@ async fn verify(
     } else {
         crate::event_log::load(db, path_id).await?
     };
-    let stamps = |es: &[Event]| {
-        es.iter()
-            .map(|e| (ts::format(e.ts), e.kind))
-            .collect::<Vec<_>>()
-    };
-    if stamps(&stored) != stamps(events) {
+    if serde_json::to_value(&stored)? != serde_json::to_value(events)? {
         out.push(format!(
-            "{path_id}: {} events stored, {} in libSQL, or their times or kinds differ",
+            "{path_id}: {} events stored and {} in libSQL, or their contents differ",
             stored.len(),
             events.len()
         ));

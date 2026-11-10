@@ -189,7 +189,11 @@ fn events() -> Vec<Event> {
 }
 
 fn event_rows() -> Vec<Vec<V>> {
-    events()
+    rows_of_events(&events())
+}
+
+fn rows_of_events(events: &[Event]) -> Vec<Vec<V>> {
+    events
         .iter()
         .map(|e| {
             let kind = serde_json::to_value(e.kind).unwrap();
@@ -255,13 +259,7 @@ fn legacy() -> Tables {
             vec![text("p_a"), text("fnd.2.1.1")],
         ],
     );
-    t.set(
-        "events",
-        &[
-            "ts", "kind", "path_id", "atom_id", "quiz_id", "rating", "payload",
-        ],
-        event_rows(),
-    );
+    t.set("events", EVENT_COLUMNS, event_rows());
     t.set(
         "overlay_lessons",
         &["atom_id", "body"],
@@ -304,6 +302,10 @@ fn legacy_cards() -> Vec<CardRow> {
     let a: Vec<Event> = events().into_iter().filter(|e| e.path == "p_a").collect();
     cards::fold_history("p_a", &a).unwrap().0
 }
+
+const EVENT_COLUMNS: &[&str] = &[
+    "ts", "kind", "path_id", "atom_id", "quiz_id", "rating", "payload",
+];
 
 const CARD_COLUMNS: &[&str] = &[
     "path_id",
@@ -515,6 +517,31 @@ async fn import_reports_overlay_and_path_fields_that_differ_from_libsql() {
         r.mismatches
             .iter()
             .any(|m| m == "p_a: stored path differs from libSQL"),
+        "{:?}",
+        r.mismatches
+    );
+}
+
+#[tokio::test]
+async fn import_reports_an_event_whose_contents_differ_from_libsql() {
+    let db = common::empty_db().await;
+    import(tables_with_wrong_card(), &db).await.expect("first");
+    let mut changed_events = events();
+    let answered = changed_events
+        .iter_mut()
+        .find(|e| e.payload.user_answer.is_some())
+        .expect("an event with an answer");
+    answered.payload.user_answer = Some("a different answer".into());
+    let path = answered.path.clone();
+    let mut changed = legacy();
+    changed.set("events", EVENT_COLUMNS, rows_of_events(&changed_events));
+
+    let r = import(changed, &db).await.expect("resume");
+
+    assert!(
+        r.mismatches
+            .iter()
+            .any(|m| m.starts_with(&format!("{path}:")) && m.contains("events")),
         "{:?}",
         r.mismatches
     );
