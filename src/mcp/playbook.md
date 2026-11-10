@@ -93,4 +93,4 @@ All target atoms on the path are complete. Inform the user and offer to start a 
 
 ## Errors
 
-Tool errors return `isError: true` with a JSON error object. Report the error message to the user and recover by inspecting the curriculum or path state. The error kind `outcome_unknown` means that the call may have been applied. Inspect the path state before you retry it, because a repeated `answer_quiz` records a second review.
+Tool errors return `isError: true` with a JSON error object. Report the error message to the user and recover by inspecting the curriculum or path state. The error kind `outcome_unknown` means that the call may have been applied. Do not repeat the call, because a repeated `answer_quiz` records a second review. Call `get_next` to continue. If the answer was lost, the quiz returns.

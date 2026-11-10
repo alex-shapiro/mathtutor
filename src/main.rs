@@ -123,7 +123,7 @@ async fn run_curriculum_lookup(op: &GraphOp) -> Option<Result<()>> {
 fn report_failure(e: &Error) -> ExitCode {
     eprintln!("error: {e}");
     if e.outcome_is_unknown() {
-        eprintln!("the command may have been applied; check the state before you retry it");
+        eprintln!("the command may have been applied; run `mt path next` instead of repeating it");
     }
     ExitCode::from(e.exit_code())
 }
