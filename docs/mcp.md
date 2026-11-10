@@ -34,7 +34,7 @@ At least a single authentication variable (`MT_API_KEY` or `MT_ADMIN_PASSWORD`) 
 | `/.well-known/oauth-protected-resource`   | GET    | RFC 9728 protected resource metadata                   |
 | `/.well-known/oauth-authorization-server` | GET    | RFC 8414 authorization server metadata                 |
 | `/oauth/register`                         | POST   | RFC 7591 dynamic client registration                   |
-| `/oauth/authorize`                        | GET    | Renders the password login form with a signed CSRF key |
+| `/oauth/authorize`                        | GET    | Renders the login form with a signed CSRF token       |
 | `/oauth/authorize`                        | POST   | Verifies `MT_ADMIN_PASSWORD` and issues an auth code   |
 | `/oauth/token`                            | POST   | Exchanges an auth code (S256 PKCE) or refresh token    |
 
