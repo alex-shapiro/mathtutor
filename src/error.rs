@@ -133,7 +133,7 @@ pub enum Error {
 }
 
 impl Error {
-    /// Returns the process exit code documented in `docs/design.md`.
+    /// Return the process exit code documented in `docs/design.md`.
     pub fn exit_code(&self) -> u8 {
         if self.outcome_is_unknown() {
             return 3;
@@ -181,7 +181,7 @@ impl Error {
         }
     }
 
-    /// Marks a failure from a read-only or setup step as not applied.
+    /// Mark a failure from a read-only or setup step as not applied.
     #[must_use]
     pub fn into_not_applied(self) -> Self {
         match self {
@@ -192,7 +192,7 @@ impl Error {
         }
     }
 
-    /// Returns true if the failed command may have committed its writes.
+    /// Return `true` if the failed command may have committed its writes.
     pub fn outcome_is_unknown(&self) -> bool {
         matches!(
             self,

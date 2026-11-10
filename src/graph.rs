@@ -190,7 +190,7 @@ fn node_to_concept(n: NodeRaw) -> Concept {
     }
 }
 
-/// Wraps top-level area concepts in a synthetic root node so that area prefixes are resolved as clusters.
+/// Wrap top-level area concepts in a synthetic root node so that area prefixes are resolved as clusters.
 fn area_root_concept(entry: &ManifestArea, children: Vec<Concept>) -> Concept {
     Concept {
         id: entry.prefix.clone(),
@@ -262,7 +262,7 @@ fn load_area_embedded(filename: &str) -> Result<AreaFileRaw> {
     })
 }
 
-/// Loads `manifest.ayml` from `explicit`, `$MT_GRAPH`, or the embedded curriculum directory.
+/// Load `manifest.ayml` from `explicit`, `$MT_GRAPH`, or the embedded curriculum directory.
 pub fn load_manifest_default(explicit: Option<&Path>) -> Result<Manifest> {
     if let Some(p) = explicit {
         return load_manifest(&p.join("manifest.ayml"));
@@ -329,7 +329,7 @@ impl Graph {
         Ok(Self { by_id })
     }
 
-    /// Loads the curriculum graph from `explicit`, `$MT_GRAPH`, or the embedded curriculum directory.
+    /// Load the curriculum graph from `explicit`, `$MT_GRAPH`, or the embedded curriculum directory.
     pub fn load_default(explicit: Option<&Path>) -> Result<Self> {
         if let Some(p) = explicit {
             return Self::load(p);
@@ -340,14 +340,14 @@ impl Graph {
         Self::load_embedded()
     }
 
-    /// Loads the curriculum graph and applies `overlay` overrides and tombstones.
+    /// Load the curriculum graph and apply `overlay` overrides and tombstones.
     pub fn merged(overlay: &crate::overlay::Overlay, graph_dir: Option<&Path>) -> Result<Self> {
         let mut g = Self::load_default(graph_dir)?;
         g.apply_overlay(overlay);
         Ok(g)
     }
 
-    /// Returns all atomic descendants of `targets` and their transitive prerequisites.
+    /// Return all atomic descendants of `targets` and their transitive prerequisites.
     pub fn reachable_atoms(&self, targets: &[String]) -> HashSet<String> {
         let mut out: HashSet<String> = HashSet::new();
         let mut stack: Vec<String> = targets.to_vec();
@@ -368,7 +368,7 @@ impl Graph {
         out
     }
 
-    /// Expands atom and cluster IDs into a deduplicated list of atomic descendant IDs in first-seen order.
+    /// Expand atom and cluster IDs into a deduplicated list of atomic descendant IDs in first-seen order.
     pub fn expand_to_atoms(&self, ids: &[String]) -> Result<Vec<String>> {
         let mut seen: HashSet<String> = HashSet::new();
         let mut out: Vec<String> = Vec::new();
@@ -459,7 +459,7 @@ impl Graph {
     }
 }
 
-/// Compares dot-separated concept IDs segment by segment, ordering numeric segments by integer value.
+/// Compare dot-separated concept IDs segment by segment, ordering numeric segments by integer value.
 pub fn natural_id_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let (mut sa, mut sb) = (a.split('.'), b.split('.'));
@@ -663,7 +663,7 @@ pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport> {
     Ok(report)
 }
 
-/// Reports non-terminal atoms that are not referenced as prerequisites directly or via an ancestor cluster.
+/// Report non-terminal atoms that are not referenced as prerequisites directly or via an ancestor cluster.
 fn check_orphans(
     area_trees: &[(ManifestArea, u32, Vec<Concept>)],
     adj: &HashMap<String, Vec<String>>,

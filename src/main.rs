@@ -111,7 +111,7 @@ async fn real_main() -> ExitCode {
     }
 }
 
-/// Runs a graph lookup without `--path` so it does not open a database connection.
+/// Run a graph lookup without `--path` so it does not open a database connection.
 async fn run_curriculum_lookup(op: &GraphOp) -> Option<Result<()>> {
     match op {
         GraphOp::Show(c) if c.path.is_none() => {
@@ -124,13 +124,13 @@ async fn run_curriculum_lookup(op: &GraphOp) -> Option<Result<()>> {
     }
 }
 
-/// Prints `e` to stderr and returns its exit code.
+/// Print `e` to stderr and return its exit code.
 fn report_failure(e: &Error) -> ExitCode {
     eprintln!("error: {e}");
     ExitCode::from(e.exit_code())
 }
 
-/// Returns the safe next step after `cmd` fails with an unknown outcome.
+/// Return the safe next step after `cmd` fails with an unknown outcome.
 fn unknown_outcome_recovery(cmd: &Cmd) -> &'static str {
     match cmd {
         Cmd::ImportTurso(_) => {
@@ -146,7 +146,7 @@ fn unknown_outcome_recovery(cmd: &Cmd) -> &'static str {
     }
 }
 
-/// Parses the command line, and returns the exit code if the process should stop.
+/// Parse the command line, and return the exit code if the process should stop.
 fn parse_args() -> std::result::Result<Mt, ExitCode> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -161,7 +161,7 @@ fn parse_args() -> std::result::Result<Mt, ExitCode> {
     })
 }
 
-/// Filters out empty strings so unset environment variables do not match empty bearer tokens.
+/// Filter out empty strings so unset environment variables do not match empty bearer tokens.
 fn nonempty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.is_empty())
 }

@@ -419,7 +419,7 @@ fn group_events(rows: Vec<EventRow>) -> Result<HashMap<String, Vec<Event>>> {
     Ok(by_path)
 }
 
-/// Orders quiz edits before tombstones because upserting a quiz deletes its tombstone row.
+/// Order quiz edits before tombstones because upserting a quiz deletes its tombstone row.
 fn overlay_edits(
     lessons: Vec<LessonRow>,
     quizzes: Vec<QuizRow>,
@@ -469,7 +469,7 @@ pub struct Report {
     pub mismatches: Vec<String>,
 }
 
-/// Marks `db` as an import target, or fails if an import would overwrite newer data.
+/// Mark `db` as an import target, or fail if an import would overwrite newer data.
 async fn claim_import_target(db: &Db) -> Result<()> {
     let mut retry = db.client.retry();
     loop {
@@ -558,7 +558,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     Ok(report)
 }
 
-/// Compares the stored overlay, read without the cache, with the legacy edits.
+/// Compare the stored overlay, read without the cache, with the legacy edits.
 async fn verify_overlay(db: &Db, edits: &[Edit]) -> Result<Vec<String>> {
     let mut legacy = Overlay::default();
     for e in edits {

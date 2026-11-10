@@ -49,13 +49,13 @@ impl OAuthState {
         }
     }
 
-    /// Returns the public issuer URL.
+    /// Return the public issuer URL.
     pub fn issuer(&self) -> &Url {
         &self.public_url
     }
 }
 
-/// Builds the OAuth discovery and authorization router.
+/// Build the OAuth discovery and authorization router.
 pub fn router(state: OAuthState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -410,7 +410,7 @@ async fn token_refresh(
     }))
 }
 
-/// Marks authorization `code` used and queues new tokens, or returns the grant error.
+/// Mark authorization `code` used and queue new tokens, or return the grant error.
 async fn exchange_code(
     txn: &mut Txn,
     code: &str,
@@ -432,7 +432,7 @@ async fn exchange_code(
     Ok(Ok((access, refresh, scope)))
 }
 
-/// Replaces refresh token `provided` with new tokens, or returns the grant error.
+/// Replace refresh token `provided` with new tokens, or return the grant error.
 async fn rotate_refresh(
     txn: &mut Txn,
     provided: &str,
@@ -537,7 +537,7 @@ fn token_ops(access: &str, refresh: &str, client_id: &str, scope: Option<&str>) 
     ]
 }
 
-/// Returns the `client_id` for a non-expired access token, or `None` if unknown or expired.
+/// Return the `client_id` for a non-expired access token, or `None` if unknown or expired.
 pub async fn validate_access_token(db: &Db, token: &str) -> Result<Option<String>, crate::Error> {
     let stored: Option<OAuthAccessToken> = db
         .client

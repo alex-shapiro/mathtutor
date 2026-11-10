@@ -69,6 +69,8 @@ Each `--targets` entry is either an atom ID (a leaf node, such as `tx.1.1`) or a
 ## `mt path next` output
 
 `mt path next` writes a single AYML record to stdout:
+- Under the `bottom-up` strategy, `mt path next` only selects an atom after all of its prerequisites are complete.
+- Under the `top-down` strategy, targets are presented before their prerequisites.
 
 ```yaml
 schema_version: 1
@@ -76,8 +78,6 @@ action: create_lesson | present_lesson | create_quiz | present_quiz | done
 path: <path-id>
 payload: ...
 ```
-
-Under the `bottom-up` strategy, `mt path next` only selects an atom after all of its prerequisites are complete. Under the `top-down` strategy, targets are presented before their prerequisites.
 
 ### `create_lesson`
 
@@ -185,7 +185,7 @@ payload:
 
 ## `mt path syllabus` output
 
-`mt path syllabus` lists upcoming atoms with untaught lessons in scheduled teaching order. Lesson bodies are omitted.
+`mt path syllabus` lists upcoming atoms with untaught lessons in scheduled teaching order. Lesson bodies are omitted, and an atom is removed from the syllabus as soon as its lesson is taught, even if its quizzes are incomplete.
 
 ```yaml
 schema_version: 1
@@ -197,8 +197,6 @@ atoms:
     name: "Singular values from A*A eigenvalues"
     description: "σᵢ² are the non-zero eigenvalues of A* A."
 ```
-
-An atom is removed from the syllabus as soon as its lesson is taught, even if its quizzes are incomplete.
 
 ## Storage
 
@@ -232,7 +230,7 @@ User-authored lessons and quizzes are stored in the database overlay and shared 
 
 ## Event log
 
-Each path records learning activity in an append-only stream (`events.<path id>`) with UTC RFC 3339 timestamps:
+Each path records learning activity in an append-only stream (`events.<path id>`) with UTC RFC 3339 timestamps. `cards` and `taught` are materialized projections of the event stream.
 
 ```yaml
 - ts: 2026-05-09T18:42:01Z
@@ -256,8 +254,6 @@ Event types:
 - `quiz_answered`
 - `quiz_amended`
 - `quiz_removed`
-
-`cards` and `taught` are materialized projections of the event stream.
 
 ## Spaced repetition (FSRS)
 
@@ -288,7 +284,14 @@ If a user is blocked on a target atom in `top-down` mode, the agent can set a su
 
 ## Tool I/O and exit codes
 
-- Standard output: A single AYML record for `mt path next`, `mt path list`, `mt path syllabus`, `mt graph show`, `mt graph list`, and `mt graph dump`. `mt path state` and `mt path tree` print text for people to read.
+- Standard output: A single AYML record for:
+  - `mt path next`
+  - `mt path list`
+  - `mt path syllabus`
+  - `mt graph show`
+  - `mt graph list`
+  - `mt graph dump`
+  `mt path state` and `mt path tree` print text for people to read.
 - Standard error: Confirmation messages from write commands, including the ID of a new quiz or path.
 - Standard error: Diagnostic and error messages.
 - Exit codes: `0` for success, `1` for runtime or state errors, `2` for usage or validation errors, and `3` if the commit status is unknown. After exit `3`, the command prints its safe next step.

@@ -323,7 +323,7 @@ fn sample_text(rng: &mut Rng, bytes: usize) -> String {
         "kernel",
         "image",
         "rank",
-        "$x^2$",
+        "x^2",
         "proof",
         "therefore",
         "lemma",

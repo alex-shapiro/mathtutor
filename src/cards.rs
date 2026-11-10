@@ -56,7 +56,7 @@ impl CardRow {
     }
 }
 
-/// Computes the next FSRS card state for `rating` at `ts`, with a minimum interval of 60 seconds.
+/// Compute the next FSRS card state for `rating` at `ts`, with a minimum interval of 60 seconds.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -103,7 +103,7 @@ pub enum ProjectionTarget<'e> {
     None,
 }
 
-/// Returns the derived row that `e` changes, or [`Error::BadEvent`] if a required field is missing.
+/// Return the derived row that `e` changes, or [`Error::BadEvent`] if a required field is missing.
 pub fn projection_target(e: &Event) -> Result<ProjectionTarget<'_>> {
     match e.kind {
         EventKind::LessonTaught | EventKind::LessonAuthored => e
@@ -204,7 +204,7 @@ impl TryFrom<CardRecord> for CardRow {
     }
 }
 
-/// Rebuilds the `cards` and `taught` rows for `path_id` from its event stream.
+/// Rebuild the `cards` and `taught` rows for `path_id` from its event stream.
 pub async fn recompute(db: &Db, path_id: &str) -> Result<()> {
     let mut retry = db.client.retry();
     loop {

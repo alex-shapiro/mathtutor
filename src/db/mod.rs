@@ -23,7 +23,7 @@ pub struct DbConfig {
 }
 
 impl DbConfig {
-    /// Reads `BASERUNNA_URL`, `BASERUNNA_TOKEN` (required), and `BASERUNNA_DB` from the environment.
+    /// Read `BASERUNNA_URL`, `BASERUNNA_TOKEN` (required), and `BASERUNNA_DB` from the environment.
     pub fn from_env() -> Result<Self> {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         Ok(Self {
@@ -34,7 +34,7 @@ impl DbConfig {
         })
     }
 
-    /// Returns the HTTP transport to the configured server.
+    /// Return the HTTP transport to the configured server.
     pub fn transport(&self) -> Result<client::HttpTransport> {
         let http = reqwest::Client::builder()
             .user_agent(concat!("mathtutor/", env!("CARGO_PKG_VERSION")))
@@ -64,7 +64,7 @@ impl std::fmt::Debug for Db {
 }
 
 impl Db {
-    /// Connects to the database and creates the database and tables if they do not exist.
+    /// Connect to the database and create the database and tables if they do not exist.
     pub async fn open(cfg: &DbConfig) -> Result<Self> {
         let db = Self::connect(cfg)?;
         crate::schema::ensure(&db.client)
@@ -73,7 +73,7 @@ impl Db {
         Ok(db)
     }
 
-    /// Returns a handle that can use the database while an import is open.
+    /// Return a handle that can use the database while an import is open.
     pub(crate) fn for_import(&self) -> Self {
         Self {
             allow_open_import: true,
@@ -81,7 +81,7 @@ impl Db {
         }
     }
 
-    /// Reads `ops` at the latest version.
+    /// Read `ops` at the latest version.
     pub(crate) async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
         self.client
             .read(ops)
@@ -89,7 +89,7 @@ impl Db {
             .map_err(|e| Error::from(e).into_not_applied())
     }
 
-    /// Reads `op` at the latest version.
+    /// Read `op` at the latest version.
     pub(crate) async fn read_one(&self, op: Op) -> Result<OpResult> {
         self.client
             .read_one(op)
@@ -97,12 +97,12 @@ impl Db {
             .map_err(|e| Error::from(e).into_not_applied())
     }
 
-    /// Creates a client handle without performing network I/O; the database and tables must already exist.
+    /// Create a client handle without performing network I/O; the database and tables must already exist.
     pub fn connect(cfg: &DbConfig) -> Result<Self> {
         Ok(Self::with_transport(cfg, cfg.transport()?))
     }
 
-    /// Creates a client handle that sends requests through `transport` instead of HTTP to `cfg.url`.
+    /// Create a client handle that sends requests through `transport` instead of HTTP to `cfg.url`.
     pub fn with_transport(cfg: &DbConfig, transport: impl Transport + 'static) -> Self {
         let cache_file = cfg
             .cache_dir
@@ -120,7 +120,7 @@ impl Db {
         }
     }
 
-    /// Returns the Baserunna client of this database.
+    /// Return the Baserunna client of this database.
     pub fn client(&self) -> &client::Client {
         self.client.client()
     }

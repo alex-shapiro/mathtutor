@@ -7,7 +7,7 @@ use crate::event_log;
 use crate::types::Rating;
 use crate::view::Want;
 
-/// Extracts the atom ID prefix from a quiz ID (for example, `fnd.1.1.1.q3` -> `fnd.1.1.1`).
+/// Extract the atom ID prefix from a quiz ID (for example, `fnd.1.1.1.q3` -> `fnd.1.1.1`).
 pub fn atom_from_quiz_id(quiz_id: &str) -> Option<String> {
     let pos = quiz_id.rfind(".q")?;
     Some(quiz_id[..pos].to_string())

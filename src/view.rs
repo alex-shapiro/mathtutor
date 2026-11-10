@@ -229,7 +229,7 @@ impl Changes {
         self.cards.insert((c.path_id.clone(), c.quiz_id.clone()), c);
     }
 
-    /// Makes `path_id` the most recent path.
+    /// Make `path_id` the most recent path.
     pub fn touch_path(&mut self, path_id: &str) {
         self.active_paths.insert(path_id.to_string());
     }
@@ -341,7 +341,7 @@ impl Db {
         Ok(out)
     }
 
-    /// Reads `want` in `txn` and queues the writes of `f`.
+    /// Read `want` in `txn` and queue the writes of `f`.
     async fn attempt<T>(
         &self,
         txn: &mut Txn,
@@ -492,7 +492,7 @@ fn overlay_reads() -> [(Slot, Op); 3] {
     ]
 }
 
-/// Returns the key and value of `e` as UTF-8.
+/// Return the key and value of `e` as UTF-8.
 fn entry_str(e: &Entry) -> Result<(&str, &str)> {
     let key = std::str::from_utf8(&e.key)
         .map_err(|_| Error::BadRow(format!("{:?}: key is not UTF-8", e.key)))?;

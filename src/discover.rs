@@ -11,7 +11,7 @@ use crate::scheduler;
 use crate::view::Want;
 use crate::{Error, Result};
 
-/// Prints curriculum item `id`, with the progress of `path_id` if `db` and `path_id` are provided.
+/// Print curriculum item `id`, with the progress of `path_id` if `db` and `path_id` are provided.
 pub async fn cmd_graph_show(
     db: Option<&Db>,
     id: &str,
@@ -26,7 +26,7 @@ pub async fn cmd_graph_show(
     emit(&view)
 }
 
-/// Loads the merged graph and path progress if `path_id` is provided, or the base curriculum graph otherwise.
+/// Load the merged graph and path progress if `path_id` is provided, or the base curriculum graph otherwise.
 pub async fn graph_for(
     db: Option<&Db>,
     path_id: Option<&str>,
@@ -40,7 +40,7 @@ pub async fn graph_for(
     Ok((view.graph(graph_dir)?, Some(progress)))
 }
 
-/// Prints curriculum items under `id`, with the progress of `path_id` if `db` and `path_id` are provided.
+/// Print curriculum items under `id`, with the progress of `path_id` if `db` and `path_id` are provided.
 pub async fn cmd_graph_list(
     db: Option<&Db>,
     id: Option<&str>,

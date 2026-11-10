@@ -489,7 +489,7 @@ fn default_mcp_addr() -> String {
     "127.0.0.1:8080".into()
 }
 
-/// Splits comma-separated and repeated CLI flag values into a flat list of trimmed strings.
+/// Split comma-separated and repeated CLI flag values into a flat list of trimmed strings.
 pub fn flatten_ids(raw: &[String]) -> Vec<String> {
     raw.iter()
         .flat_map(|s| s.split(','))
