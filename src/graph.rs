@@ -763,7 +763,7 @@ fn walk_validate(
                 report.issues.push(CheckIssue {
                     area: Some(area_slug.to_string()),
                     node: Some(n.id.clone()),
-                    message: format!("id should extend parent '{p}' by exactly one segment"),
+                    message: format!("id should extend parent '{p}' by a single segment"),
                 });
             }
         } else {

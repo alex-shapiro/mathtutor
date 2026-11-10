@@ -109,7 +109,7 @@ impl Tables {
     }
 }
 
-/// libSQL snapshots served in order, with the last one repeating.
+/// libSQL snapshots served in order, with the final snapshot repeating.
 struct Source {
     snapshots: Vec<Tables>,
     served: AtomicUsize,
