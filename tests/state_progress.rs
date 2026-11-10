@@ -149,13 +149,25 @@ async fn compute_state_past_due_counts_overdue_cards() {
     let db = common::fresh_db(PATH_ID).await;
     let now = Utc::now();
 
-    for (quiz_id, offset_secs) in [
-        ("q.overdue.old", -3600_i64),
-        ("q.overdue.recent", -60),
-        ("q.future", 3600),
-    ] {
+    mathtutor::store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some(PATH_ID), None)
+        .await
+        .unwrap();
+    for offset_secs in [-3600_i64, -60, 3600] {
+        let quiz_id = mathtutor::store::cmd_quiz_create(
+            &db,
+            "fnd.1.1.1",
+            mathtutor::types::Difficulty::Easy,
+            "q".into(),
+            "a".into(),
+            None,
+            mathtutor::types::QuizType::FreeText,
+            Some(PATH_ID),
+            None,
+        )
+        .await
+        .unwrap();
         let due = now + Duration::seconds(offset_secs);
-        seed_card(&db, quiz_id, due, due - Duration::seconds(1)).await;
+        seed_card(&db, &quiz_id, due, due - Duration::seconds(1)).await;
     }
 
     let s = state::compute_state(&db, Some(PATH_ID), None)
@@ -195,4 +207,61 @@ fn write_state_emits_past_due_line() {
             .any(|l| l.starts_with("past due:") && l.contains('7')),
         "missing 'past due: 7' line in:\n{out}"
     );
+}
+
+#[tokio::test]
+async fn past_due_ignores_a_deleted_quiz() {
+    let db = common::empty_db().await;
+    common::seed_path(
+        &db,
+        common::PATH_ID,
+        &["fnd.1.1.1"],
+        mathtutor::types::Strategy::BottomUp,
+    )
+    .await;
+    mathtutor::store::cmd_lesson_upsert(
+        &db,
+        "fnd.1.1.1",
+        "body".into(),
+        Some(common::PATH_ID),
+        None,
+    )
+    .await
+    .unwrap();
+    let quiz_id = mathtutor::store::cmd_quiz_create(
+        &db,
+        "fnd.1.1.1",
+        mathtutor::types::Difficulty::Easy,
+        "q".into(),
+        "a".into(),
+        None,
+        mathtutor::types::QuizType::FreeText,
+        Some(common::PATH_ID),
+        None,
+    )
+    .await
+    .unwrap();
+    let long_ago = Utc::now() - Duration::days(365);
+    common::append(
+        &db,
+        &[common::answered_at(
+            &quiz_id,
+            mathtutor::types::Rating::Good,
+            long_ago,
+        )],
+    )
+    .await;
+    let past_due = async || {
+        state::compute_state(&db, Some(common::PATH_ID), None)
+            .await
+            .unwrap()
+            .past_due
+    };
+    assert_eq!(past_due().await, 1);
+
+    mathtutor::store::cmd_quiz_delete(&db, &quiz_id, Some(common::PATH_ID), None)
+        .await
+        .unwrap();
+
+    assert_eq!(past_due().await, 0);
 }

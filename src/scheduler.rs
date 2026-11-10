@@ -237,13 +237,18 @@ fn atom_action(g: &Graph, progress: &PathProgress, id: &str) -> Option<Action> {
 
 fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<(String, String)> {
     due_quizzes.iter().find_map(|(quiz_id, _)| {
-        let atom_id = atom_from_quiz_id(quiz_id)?;
-        let atom = g.by_id.get(&atom_id)?;
-        atom.quizzes
-            .iter()
-            .any(|q| &q.id == quiz_id)
-            .then(|| (quiz_id.clone(), atom_id))
+        atom_of_live_quiz(g, quiz_id).map(|atom_id| (quiz_id.clone(), atom_id))
     })
+}
+
+/// Returns the atom of `quiz_id` if the merged curriculum still contains the quiz.
+pub fn atom_of_live_quiz(g: &Graph, quiz_id: &str) -> Option<String> {
+    let atom_id = atom_from_quiz_id(quiz_id)?;
+    let atom = g.by_id.get(&atom_id)?;
+    atom.quizzes
+        .iter()
+        .any(|q| q.id == quiz_id)
+        .then_some(atom_id)
 }
 
 /// Return `true` if `atom_id` has a stored lesson and passed quizzes for all 3 difficulties.

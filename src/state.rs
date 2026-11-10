@@ -172,7 +172,10 @@ pub async fn compute_state(
         targets,
         reachable,
         subpath,
-        past_due: due.len(),
+        past_due: due
+            .iter()
+            .filter(|(quiz_id, _)| scheduler::atom_of_live_quiz(&g, quiz_id).is_some())
+            .count(),
         most_recent,
         next,
     })
