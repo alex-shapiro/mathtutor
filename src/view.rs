@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex, Weak};
 
 use chrono::{DateTime, Utc};
 
-use crate::cards::{self, CardRow};
+use crate::cards::{self, CardRow, ProjectionTarget};
 use crate::db::client::{Entry, Txn};
 use crate::db::{Db, Op, OpResult, ts};
-use crate::event_log::{Event, EventKind};
+use crate::event_log::Event;
 use crate::graph::Graph;
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
@@ -240,35 +240,24 @@ impl Changes {
             .as_ref()
             .filter(|p| p.file.id == e.path)
             .or_else(|| view.paths.iter().find(|p| p.file.id == e.path));
-        match e.kind {
-            EventKind::LessonTaught | EventKind::LessonAuthored => {
-                let atom = e
-                    .atom
-                    .clone()
-                    .ok_or_else(|| Error::BadEvent("lesson event without atom"))?;
-                let key = (e.path.clone(), atom.clone());
+        match cards::projection_target(e)? {
+            ProjectionTarget::Taught { atom_id } => {
+                let key = (e.path.clone(), atom_id.to_string());
                 let t = self.taught.entry(key).or_insert_with(|| {
-                    base.and_then(|p| p.taught.get(&atom).cloned())
+                    base.and_then(|p| p.taught.get(atom_id).cloned())
                         .unwrap_or_default()
                 });
-                if e.kind == EventKind::LessonTaught {
-                    t.count += 1;
-                    t.last_at = Some(e.ts);
-                }
+                cards::apply_taught_event(t, e);
             }
-            EventKind::QuizPresented | EventKind::QuizAnswered => {
-                let quiz = e
-                    .quiz
-                    .clone()
-                    .ok_or_else(|| Error::BadEvent("quiz event without quiz"))?;
-                let key = (e.path.clone(), quiz.clone());
+            ProjectionTarget::Card { quiz_id } => {
+                let key = (e.path.clone(), quiz_id.to_string());
                 let c = self.cards.entry(key).or_insert_with(|| {
-                    base.and_then(|p| p.cards.get(&quiz).cloned())
-                        .unwrap_or_else(|| CardRow::new(&e.path, &quiz))
+                    base.and_then(|p| p.cards.get(quiz_id).cloned())
+                        .unwrap_or_else(|| CardRow::new(&e.path, quiz_id))
                 });
                 cards::apply_event(c, e)?;
             }
-            _ => {}
+            ProjectionTarget::None => {}
         }
         self.events
             .entry(e.path.clone())

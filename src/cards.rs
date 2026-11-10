@@ -96,6 +96,37 @@ pub fn apply_answer(
     })
 }
 
+/// Derived row that an event changes.
+pub enum ProjectionTarget<'e> {
+    Card { quiz_id: &'e str },
+    Taught { atom_id: &'e str },
+    None,
+}
+
+/// Returns the derived row that `e` changes, or [`Error::BadEvent`] if `e` lacks its ID.
+pub fn projection_target(e: &Event) -> Result<ProjectionTarget<'_>> {
+    match e.kind {
+        EventKind::LessonTaught | EventKind::LessonAuthored => e
+            .atom
+            .as_deref()
+            .map(|atom_id| ProjectionTarget::Taught { atom_id })
+            .ok_or(Error::BadEvent("lesson event without atom")),
+        EventKind::QuizPresented | EventKind::QuizAnswered => e
+            .quiz
+            .as_deref()
+            .map(|quiz_id| ProjectionTarget::Card { quiz_id })
+            .ok_or(Error::BadEvent("quiz event without quiz")),
+        _ => Ok(ProjectionTarget::None),
+    }
+}
+
+pub fn apply_taught_event(t: &mut Taught, e: &Event) {
+    if e.kind == EventKind::LessonTaught {
+        t.count += 1;
+        t.last_at = Some(e.ts);
+    }
+}
+
 pub fn apply_event(c: &mut CardRow, e: &Event) -> Result<()> {
     match (e.kind, e.payload.rating) {
         (EventKind::QuizPresented, _) => {
@@ -213,21 +244,17 @@ pub fn fold_history(
     let mut cards: HashMap<String, CardRow> = HashMap::new();
     let mut taught: BTreeMap<String, Taught> = BTreeMap::new();
     for e in events {
-        match (e.kind, e.quiz.as_deref(), e.atom.as_deref()) {
-            (EventKind::QuizPresented | EventKind::QuizAnswered, Some(quiz), _) => {
+        match projection_target(e)? {
+            ProjectionTarget::Card { quiz_id } => {
                 let c = cards
-                    .entry(quiz.to_string())
-                    .or_insert_with(|| CardRow::new(path_id, quiz));
+                    .entry(quiz_id.to_string())
+                    .or_insert_with(|| CardRow::new(path_id, quiz_id));
                 apply_event(c, e)?;
             }
-            (EventKind::LessonTaught | EventKind::LessonAuthored, _, Some(atom)) => {
-                let t = taught.entry(atom.to_string()).or_default();
-                if e.kind == EventKind::LessonTaught {
-                    t.count += 1;
-                    t.last_at = Some(e.ts);
-                }
+            ProjectionTarget::Taught { atom_id } => {
+                apply_taught_event(taught.entry(atom_id.to_string()).or_default(), e);
             }
-            _ => {}
+            ProjectionTarget::None => {}
         }
     }
     let mut cards: Vec<CardRow> = cards.into_values().collect();

@@ -41,3 +41,17 @@ fn chained_steps_use_gap_to_most_recent_answer_not_first() {
          otherwise the third step is using gap-to-first instead of gap-to-prev"
     );
 }
+
+#[test]
+fn replay_rejects_a_quiz_event_without_a_quiz_like_a_live_append() {
+    let event = mathtutor::event_log::Event {
+        ts: chrono::Utc::now(),
+        kind: mathtutor::event_log::EventKind::QuizAnswered,
+        path: "p".into(),
+        atom: None,
+        quiz: None,
+        payload: mathtutor::event_log::EventPayload::default(),
+    };
+    let e = mathtutor::cards::fold_history("p", &[event]).unwrap_err();
+    assert!(matches!(e, mathtutor::Error::BadEvent(_)), "{e}");
+}
