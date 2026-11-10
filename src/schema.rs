@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::db::client::api::{Column, ColumnType, ErrorCode, NewTable};
+use crate::db::client::api::{ColumnType, ErrorCode, NewColumn, NewTable};
 use crate::db::{Op, Row, client, ts};
 use crate::path::PathFile;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
@@ -185,7 +185,7 @@ impl Row for OAuthRefreshToken {
     const TABLE: &'static str = "oauth_refresh_tokens";
 }
 
-fn table(name: &str, primary_key: &[&str], columns: Vec<Column>) -> NewTable {
+fn table(name: &str, primary_key: &[&str], columns: Vec<NewColumn>) -> NewTable {
     NewTable {
         name: name.into(),
         columns,
@@ -195,27 +195,27 @@ fn table(name: &str, primary_key: &[&str], columns: Vec<Column>) -> NewTable {
     }
 }
 
-fn string(name: &str) -> Column {
-    Column::new(name, ColumnType::String)
+fn string(name: &str) -> NewColumn {
+    NewColumn::new(name, ColumnType::String)
 }
 
-fn string_or_null(name: &str) -> Column {
-    Column::nullable(name, ColumnType::String)
+fn string_or_null(name: &str) -> NewColumn {
+    NewColumn::nullable(name, ColumnType::String)
 }
 
-fn int(name: &str) -> Column {
-    Column::new(name, ColumnType::Int)
+fn int(name: &str) -> NewColumn {
+    NewColumn::new(name, ColumnType::Int)
 }
 
-fn float_or_null(name: &str) -> Column {
-    Column::nullable(name, ColumnType::Float)
+fn float_or_null(name: &str) -> NewColumn {
+    NewColumn::nullable(name, ColumnType::Float)
 }
 
-fn json(name: &str) -> Column {
-    Column::new(name, ColumnType::Json)
+fn json(name: &str) -> NewColumn {
+    NewColumn::new(name, ColumnType::Json)
 }
 
-fn token_columns() -> Vec<Column> {
+fn token_columns() -> Vec<NewColumn> {
     vec![
         string("token"),
         string("client_id"),

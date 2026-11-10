@@ -31,7 +31,7 @@ test = true
 argh = "0.1.19"
 axum = { version = "0.8", optional = true, features = ["form"] }
 ayml = "0.1.0"
-baserunna-client = { git = "https://github.com/alex-shapiro/baserunna.git", rev = "32d744a5efa926730a3e0ab188757cd20e73330a" }
+baserunna-client = { git = "https://github.com/alex-shapiro/baserunna.git", rev = "0995f7ec20d2890cce3354a08945fd3a804d403f" }
 base64 = { version = "0.22", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 fsrs = "6.1.0"
@@ -60,7 +60,7 @@ url = { version = "2.5", optional = true }
 
 [dev-dependencies]
 axum = "0.8"
-baserunna = { git = "https://github.com/alex-shapiro/baserunna.git", rev = "32d744a5efa926730a3e0ab188757cd20e73330a", default-features = false }
+baserunna = { git = "https://github.com/alex-shapiro/baserunna.git", rev = "0995f7ec20d2890cce3354a08945fd3a804d403f", default-features = false }
 reqwest = { version = "0.13.4", features = ["form", "json", "stream"] }
 tempfile = "3.27"
 

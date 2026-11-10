@@ -450,9 +450,9 @@ fn path_reads(id: &str) -> [(Slot, Op); 3] {
 
 fn overlay_reads() -> [(Slot, Op); 3] {
     [
-        (Slot::Lessons, Op::query::<LessonRow>(())),
-        (Slot::Quizzes, Op::query::<QuizRow>(())),
-        (Slot::Removed, Op::query::<RemovedQuizRow>(())),
+        (Slot::Lessons, Op::query_all::<LessonRow>()),
+        (Slot::Quizzes, Op::query_all::<QuizRow>()),
+        (Slot::Removed, Op::query_all::<RemovedQuizRow>()),
     ]
 }
 
@@ -484,9 +484,9 @@ impl Plan {
         }
         let recent = want.path == PathSel::Recent;
         if want.all_paths {
-            pending.push((Slot::Paths, Op::query::<PathFile>(())));
-            pending.push((Slot::AllCards, Op::query::<CardRecord>(())));
-            pending.push((Slot::AllTaught, Op::query::<TaughtRow>(())));
+            pending.push((Slot::Paths, Op::query_all::<PathFile>()));
+            pending.push((Slot::AllCards, Op::query_all::<CardRecord>()));
+            pending.push((Slot::AllTaught, Op::query_all::<TaughtRow>()));
         }
         if want.all_paths || recent {
             pending.push((Slot::Activity, Op::scan(ACTIVITY_PREFIX)));
