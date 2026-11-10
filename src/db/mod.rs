@@ -50,7 +50,6 @@ impl DbConfig {
 #[derive(Clone)]
 pub struct Db {
     pub(crate) client: client::Db,
-    pub(crate) path_hint: Arc<Mutex<Option<String>>>,
     pub(crate) overlay_cache: Arc<Mutex<Option<crate::view::CachedOverlay>>>,
     pub(crate) cache_file: Option<PathBuf>,
 }
@@ -88,7 +87,6 @@ impl Db {
         let client = client::Client::new(transport).with_token(&cfg.token);
         Self {
             client: client.db(&cfg.db),
-            path_hint: Arc::default(),
             overlay_cache: Arc::new(Mutex::new(cached)),
             cache_file,
         }

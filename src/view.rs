@@ -293,7 +293,8 @@ impl Changes {
 impl Db {
     /// Load `want` from a strong read snapshot without starting a write transaction.
     pub async fn snapshot(&self, want: &Want) -> Result<View> {
-        let mut plan = Plan::new(want, self.hint(), self.cached_overlay());
+        let path_id = self.selected_path_id(&want.path).await?;
+        let mut plan = Plan::new(want, path_id.as_deref(), self.cached_overlay());
         let mut results = self.client.read(&plan.ops()).await?;
         while let Some(more) = plan.absorb(results)? {
             results = self.client.read(&more).await?;
@@ -308,10 +309,13 @@ impl Db {
         want: &Want,
         mut f: impl FnMut(&View, &mut Changes) -> Result<T>,
     ) -> Result<T> {
+        let path_id = self.selected_path_id(&want.path).await?;
         let mut retry = self.client.retry();
         let (out, plan, overlay_write) = loop {
             let mut txn = self.client.begin();
-            let r = self.attempt(&mut txn, want, &mut f).await;
+            let r = self
+                .attempt(&mut txn, want, path_id.as_deref(), &mut f)
+                .await;
             if let Some(r) = retry.finish(txn, r).await? {
                 break r;
             }
@@ -328,9 +332,10 @@ impl Db {
         &self,
         txn: &mut Txn,
         want: &Want,
+        path_id: Option<&str>,
         f: &mut impl FnMut(&View, &mut Changes) -> Result<T>,
     ) -> Result<(T, Plan, Option<OverlayWrite>)> {
-        let mut plan = Plan::new(want, self.hint(), self.cached_overlay());
+        let mut plan = Plan::new(want, path_id, self.cached_overlay());
         let mut results = txn.run(&plan.ops()).await?;
         while let Some(more) = plan.absorb(results)? {
             results = txn.run(&more).await?;
@@ -345,11 +350,34 @@ impl Db {
         Ok((out, plan, overlay_write))
     }
 
-    fn hint(&self) -> Option<String> {
-        self.path_hint
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+    /// Returns the path that `selector` names, choosing the most recent path at most once per command.
+    async fn selected_path_id(&self, selector: &PathSel) -> Result<Option<String>> {
+        match selector {
+            PathSel::None => Ok(None),
+            PathSel::Id(id) => Ok(Some(id.clone())),
+            PathSel::Recent => self.most_recent_path_id().await,
+        }
+    }
+
+    async fn most_recent_path_id(&self) -> Result<Option<String>> {
+        let mut op = Op::scan(ACTIVITY_PREFIX);
+        let mut latest: Option<(DateTime<Utc>, String)> = None;
+        loop {
+            let page = self.client.read_one(op.clone()).await?;
+            let next = op.next_page(&page);
+            for e in page.scan_page()?.entries {
+                let (id, at) = parse_activity(&e)?;
+                if latest
+                    .as_ref()
+                    .is_none_or(|l| (at, id) > (l.0, l.1.as_str()))
+                {
+                    latest = Some((at, id.to_string()));
+                }
+            }
+            let Some(next) = next else { break };
+            op = next;
+        }
+        Ok(latest.map(|(_, id)| id))
     }
 
     fn cache_overlay(&self, next: Option<CachedOverlay>) {
@@ -383,12 +411,6 @@ impl Db {
     }
 
     fn remember(&self, plan: &Plan) {
-        if let Some(p) = &plan.view.path {
-            *self
-                .path_hint
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(p.file.id.clone());
-        }
         if let Some(v) = &plan.overlay_version {
             self.cache_overlay(Some((v.clone(), plan.view.overlay.clone())));
         }
@@ -424,8 +446,6 @@ struct Plan {
     overlay_version: Option<String>,
     overlay_cached: bool,
     pending: Vec<(Slot, Op)>,
-    path_id: Option<String>,
-    recent: bool,
     activity: HashMap<String, DateTime<Utc>>,
     path_row: PathRow,
     cards: Vec<CardRecord>,
@@ -472,7 +492,7 @@ fn parse_activity(e: &Entry) -> Result<(&str, DateTime<Utc>)> {
 }
 
 impl Plan {
-    fn new(want: &Want, hint: Option<String>, cache: Option<CachedOverlay>) -> Self {
+    fn new(want: &Want, path_id: Option<&str>, cache: Option<CachedOverlay>) -> Self {
         let mut pending = Vec::new();
         if want.overlay {
             pending.push((Slot::OverlayVersion, Op::get(OVERLAY_VERSION_KEY)));
@@ -480,24 +500,14 @@ impl Plan {
                 pending.extend(overlay_reads());
             }
         }
-        let recent = want.path == PathSel::Recent;
         if want.all_paths {
             pending.push((Slot::Paths, Op::query_all::<PathFile>()));
             pending.push((Slot::AllCards, Op::query_all::<CardRecord>()));
             pending.push((Slot::AllTaught, Op::query_all::<TaughtRow>()));
-        }
-        if want.all_paths || recent {
             pending.push((Slot::Activity, Op::scan(ACTIVITY_PREFIX)));
         }
-        let path_id = match &want.path {
-            PathSel::None => None,
-            PathSel::Id(id) => {
-                pending.push((Slot::PathActivity, Op::get(activity_key(id))));
-                Some(id.clone())
-            }
-            PathSel::Recent => hint,
-        };
-        if let Some(id) = &path_id {
+        if let Some(id) = path_id {
+            pending.push((Slot::PathActivity, Op::get(activity_key(id))));
             pending.extend(path_reads(id));
         }
         Self {
@@ -506,8 +516,6 @@ impl Plan {
             overlay_version: None,
             overlay_cached: false,
             pending,
-            path_id,
-            recent,
             activity: HashMap::new(),
             path_row: PathRow::Unread,
             cards: Vec::new(),
@@ -570,26 +578,6 @@ impl Plan {
                         self.activity.insert(id.to_string(), at);
                     }
                 }
-            }
-        }
-        if self.recent && !self.pending.iter().any(|(s, _)| *s == Slot::Activity) {
-            self.recent = false;
-            let latest = self
-                .activity
-                .iter()
-                .max_by(|a, b| a.1.cmp(b.1).then_with(|| a.0.cmp(b.0)));
-            let latest = latest.map(|(id, _)| id.clone());
-            if latest != self.path_id {
-                // Discard speculative reads for the stale path hint and schedule reads for `latest`.
-                self.path_row = PathRow::Unread;
-                self.cards.clear();
-                self.taught.clear();
-                self.pending
-                    .retain(|(s, _)| !matches!(s, Slot::PathRow | Slot::Cards | Slot::Taught));
-                if let Some(id) = &latest {
-                    self.pending.extend(path_reads(id));
-                }
-                self.path_id = latest;
             }
         }
         if !self.pending.is_empty() {

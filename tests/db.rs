@@ -81,7 +81,7 @@ async fn most_recent_path_follows_logged_events() {
     assert_eq!(
         recent(&db).await.0,
         "p_b",
-        "the hint follows the newer activity"
+        "the selection follows the newer activity"
     );
 }
 
@@ -449,6 +449,55 @@ async fn own_overlay_writes_keep_the_cache_valid() {
         format!("{:?}", stored.atoms["fnd.1.1.1"])
     );
     assert_eq!(format!("{:?}", fresh.atoms), format!("{:?}", stored.atoms));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn retried_command_keeps_the_most_recent_path_of_its_first_attempt() {
+    let db = common::fresh_db("p_old").await;
+    common::seed_path(&db, "p_new", &[], Strategy::BottomUp).await;
+    let answered = |path: &str| Event {
+        ts: Utc::now(),
+        kind: EventKind::QuizAnswered,
+        path: path.into(),
+        atom: Some("atom.x".into()),
+        quiz: Some("atom.x.q1".into()),
+        payload: EventPayload {
+            rating: Some(Rating::Good),
+            reason: None,
+            user_answer: None,
+        },
+    };
+    let want_old = mathtutor::view::Want::path(Some("p_old"));
+    db.transact(&want_old, |view, changes| {
+        changes.append(view, &answered("p_old"))
+    })
+    .await
+    .unwrap();
+    let other = db.clone();
+    let mut selected = Vec::new();
+
+    db.transact(&mathtutor::view::Want::path(None), |view, changes| {
+        selected.push(view.path()?.file.id.clone());
+        changes.append(view, &answered(&view.path()?.file.id))?;
+        if selected.len() == 1 {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    other
+                        .transact(
+                            &mathtutor::view::Want::path(Some("p_new")),
+                            |view, changes| changes.append(view, &answered("p_new")),
+                        )
+                        .await
+                        .unwrap();
+                });
+            });
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    assert!(selected.iter().all(|id| id == "p_old"), "{selected:?}");
 }
 
 #[tokio::test]
