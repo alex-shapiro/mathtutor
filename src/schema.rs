@@ -27,7 +27,7 @@ impl ImportMarker {
     const OPEN_VALUE: &'static str = "running";
     const COMPLETE_VALUE: &'static str = "complete";
 
-    /// Decodes the marker stored at [`IMPORT_STATE_KEY`].
+    /// Decode the marker stored at [`IMPORT_STATE_KEY`].
     pub(crate) fn from_entry(entry: Option<Entry>) -> Result<Option<Self>> {
         let Some(entry) = entry else {
             return Ok(None);
@@ -39,7 +39,7 @@ impl ImportMarker {
         }
     }
 
-    /// Returns the write that stores this marker.
+    /// Return the write operation that stores this marker.
     pub(crate) fn write_op(self) -> Op {
         let value = match self {
             Self::Open => Self::OPEN_VALUE,
@@ -261,7 +261,7 @@ fn token_columns() -> Vec<NewColumn> {
     ]
 }
 
-/// Returns the definition of every table.
+/// Return the schema definition for all tables.
 pub fn tables() -> Vec<NewTable> {
     vec![
         table(

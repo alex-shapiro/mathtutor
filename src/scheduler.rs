@@ -241,7 +241,7 @@ fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<
     })
 }
 
-/// Returns the atom of `quiz_id` if the merged curriculum still contains the quiz.
+/// Return the atom ID of `quiz_id` if the merged curriculum contains the quiz.
 pub fn atom_of_live_quiz(g: &Graph, quiz_id: &str) -> Option<String> {
     let atom_id = atom_from_quiz_id(quiz_id)?;
     let atom = g.by_id.get(&atom_id)?;

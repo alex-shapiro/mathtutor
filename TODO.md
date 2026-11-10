@@ -64,7 +64,7 @@ FSRS 6.1.0 clamps same-day `hard` stability growth, whereas 5.2.0 did not. Cards
 
 ### Correction of recorded reviews
 
-The event log is append-only and has no command to void a mistyped or duplicate review.
+The event log is append-only and lacks a command to void a mistyped or duplicate review.
 
 - **Add a compensating event and rebuild projections:** Mistakes can be undone, and the system must define authorization rules.
 - **Keep the log append-only (current):** The data model stays simple, and recorded reviews are permanent.
@@ -81,7 +81,7 @@ The event log is append-only and has no command to void a mistyped or duplicate 
 `mt graph show` without `--path` reads only the embedded curriculum and ignores user-authored lessons and quizzes in the overlay.
 
 - **Merge the overlay if `BASERUNNA_TOKEN` is set:** Output reflects authored content at the cost of a network read.
-- **Omit `has_lesson` and `quizzes` when `--path` is absent:** Lookups stay offline without reporting stale overlay counts.
+- **Omit `has_lesson` and `quizzes` if `--path` is absent:** Lookups stay offline without reporting stale overlay counts.
 
 ### Time limit for an unreachable server
 

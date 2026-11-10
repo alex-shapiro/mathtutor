@@ -359,7 +359,7 @@ async fn graph_atom_helper_rejects_clusters_and_unknowns() {
 }
 
 #[tokio::test]
-async fn graph_quiz_helper_resolves_overlay_authored_ids() {
+async fn graph_quiz_helper_finds_overlay_authored_ids() {
     let db = fresh_db().await;
 
     edit(&db, |c| {

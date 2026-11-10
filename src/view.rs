@@ -367,7 +367,7 @@ impl Db {
         Ok((out, plan, overlay_write))
     }
 
-    /// Resolves `selector` to a path ID, choosing the most recent path at most once per command.
+    /// Resolve `selector` to a path ID, choosing the most recent path at most once per command.
     async fn selected_path_id(&self, selector: &PathSel) -> Result<Option<String>> {
         match selector {
             PathSel::None => Ok(None),

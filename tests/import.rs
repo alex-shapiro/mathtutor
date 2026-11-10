@@ -68,7 +68,7 @@ enum Resp {
 #[derive(Serialize, Default, Clone)]
 struct StmtResult {
     cols: Vec<Col>,
-    rows: Vec<Vec<V>>,
+    rows: Vec<Vec<CellValue>>,
 }
 
 #[derive(Serialize, Clone)]
@@ -78,23 +78,23 @@ struct Col {
 
 #[derive(Serialize, Clone)]
 #[serde(tag = "type", rename_all = "lowercase")]
-enum V {
+enum CellValue {
     Null,
     Integer { value: String },
     Float { value: f64 },
     Text { value: String },
 }
 
-fn text(s: &str) -> V {
-    V::Text { value: s.into() }
+fn text_val(s: &str) -> CellValue {
+    CellValue::Text { value: s.into() }
 }
 
-fn opt(s: Option<&str>) -> V {
-    s.map_or(V::Null, text)
+fn opt_text_val(s: Option<&str>) -> CellValue {
+    s.map_or(CellValue::Null, text_val)
 }
 
-fn int(n: i64) -> V {
-    V::Integer {
+fn int_val(n: i64) -> CellValue {
+    CellValue::Integer {
         value: n.to_string(),
     }
 }
@@ -103,7 +103,7 @@ fn int(n: i64) -> V {
 struct Tables(HashMap<&'static str, StmtResult>, bool);
 
 impl Tables {
-    fn set(&mut self, table: &'static str, cols: &[&str], rows: Vec<Vec<V>>) {
+    fn set(&mut self, table: &'static str, cols: &[&str], rows: Vec<Vec<CellValue>>) {
         let cols = cols.iter().map(|c| Col { name: (*c).into() }).collect();
         self.0.insert(table, StmtResult { cols, rows });
     }
@@ -218,11 +218,11 @@ fn events() -> Vec<Event> {
     ]
 }
 
-fn event_rows() -> Vec<Vec<V>> {
+fn event_rows() -> Vec<Vec<CellValue>> {
     rows_of_events(&events())
 }
 
-fn rows_of_events(events: &[Event]) -> Vec<Vec<V>> {
+fn rows_of_events(events: &[Event]) -> Vec<Vec<CellValue>> {
     events
         .iter()
         .map(|e| {
@@ -233,13 +233,15 @@ fn rows_of_events(events: &[Event]) -> Vec<Vec<V>> {
                 .as_ref()
                 .map(|a| format!(r#"{{"user_answer":"{a}"}}"#));
             vec![
-                text(&ts::format(e.ts)),
-                text(kind.as_str().unwrap()),
-                text(&e.path),
-                opt(e.atom.as_deref()),
-                opt(e.quiz.as_deref()),
-                e.payload.rating.map_or(V::Null, |r| int(i64::from(r))),
-                opt(payload.as_deref()),
+                text_val(&ts::format(e.ts)),
+                text_val(kind.as_str().unwrap()),
+                text_val(&e.path),
+                opt_text_val(e.atom.as_deref()),
+                opt_text_val(e.quiz.as_deref()),
+                e.payload
+                    .rating
+                    .map_or(CellValue::Null, |r| int_val(i64::from(r))),
+                opt_text_val(payload.as_deref()),
             ]
         })
         .collect()
@@ -247,28 +249,28 @@ fn rows_of_events(events: &[Event]) -> Vec<Vec<V>> {
 
 fn legacy() -> Tables {
     let mut t = Tables::default();
-    t.set("schema_migrations", &["version"], vec![vec![int(4)]]);
+    t.set("schema_migrations", &["version"], vec![vec![int_val(4)]]);
     t.set(
         "paths",
         &["id", "goal", "created_at", "strategy"],
         vec![
             vec![
-                text("p_b"),
-                text("later"),
-                text(&ts::format(at(30))),
-                text("bottom_up"),
+                text_val("p_b"),
+                text_val("later"),
+                text_val(&ts::format(at(30))),
+                text_val("bottom_up"),
             ],
             vec![
-                text("p_a"),
-                text("first"),
-                text(&ts::format(at(0))),
-                text("top_down"),
+                text_val("p_a"),
+                text_val("first"),
+                text_val(&ts::format(at(0))),
+                text_val("top_down"),
             ],
             vec![
-                text("p_c"),
-                text("silent"),
-                text(&ts::format(at(40))),
-                text("bottom_up"),
+                text_val("p_c"),
+                text_val("silent"),
+                text_val(&ts::format(at(40))),
+                text_val("bottom_up"),
             ],
         ],
     );
@@ -276,24 +278,24 @@ fn legacy() -> Tables {
         "path_targets",
         &["path_id", "id"],
         vec![
-            vec![text("p_a"), text("fnd.2.1.1")],
-            vec![text("p_a"), text("fnd.2")],
-            vec![text("p_b"), text("fnd.1")],
+            vec![text_val("p_a"), text_val("fnd.2.1.1")],
+            vec![text_val("p_a"), text_val("fnd.2")],
+            vec![text_val("p_b"), text_val("fnd.1")],
         ],
     );
     t.set(
         "path_subpath",
         &["path_id", "id"],
         vec![
-            vec![text("p_a"), text("fnd.1.1.1")],
-            vec![text("p_a"), text("fnd.2.1.1")],
+            vec![text_val("p_a"), text_val("fnd.1.1.1")],
+            vec![text_val("p_a"), text_val("fnd.2.1.1")],
         ],
     );
     t.set("events", EVENT_COLUMNS, event_rows());
     t.set(
         "overlay_lessons",
         &["atom_id", "body"],
-        vec![vec![text("fnd.9.9.9"), text("body")]],
+        vec![vec![text_val("fnd.9.9.9"), text_val("body")]],
     );
     t.set(
         "overlay_quizzes",
@@ -307,21 +309,21 @@ fn legacy() -> Tables {
             "rubric",
         ],
         vec![vec![
-            text("fnd.9.9.9"),
-            text("fnd.9.9.9.q1"),
-            text("medium"),
-            text("multiple_choice"),
-            text("q?"),
-            text("a"),
-            V::Null,
+            text_val("fnd.9.9.9"),
+            text_val("fnd.9.9.9.q1"),
+            text_val("medium"),
+            text_val("multiple_choice"),
+            text_val("q?"),
+            text_val("a"),
+            CellValue::Null,
         ]],
     );
     t.set(
         "overlay_removed_quizzes",
         &["quiz_id", "atom_id"],
         vec![
-            vec![text("fnd.2.1.1.q3"), V::Null],
-            vec![text("fnd.9.9.9.q1"), text("fnd.9.9.9")],
+            vec![text_val("fnd.2.1.1.q3"), CellValue::Null],
+            vec![text_val("fnd.9.9.9.q1"), text_val("fnd.9.9.9")],
         ],
     );
     t.set("cards", CARD_COLUMNS, card_rows(&legacy_cards()));
@@ -348,24 +350,24 @@ const CARD_COLUMNS: &[&str] = &[
     "lapses",
 ];
 
-fn card_rows(cards: &[CardRow]) -> Vec<Vec<V>> {
+fn card_rows(cards: &[CardRow]) -> Vec<Vec<CellValue>> {
     cards
         .iter()
         .filter_map(|c| {
             let s = c.state?;
             Some(vec![
-                text(&c.path_id),
-                text(&c.quiz_id),
-                V::Float {
+                text_val(&c.path_id),
+                text_val(&c.quiz_id),
+                CellValue::Float {
                     value: f64::from(s.stability),
                 },
-                V::Float {
+                CellValue::Float {
                     value: f64::from(s.difficulty),
                 },
-                text(&ts::format(s.due)),
-                text(&ts::format(s.last_review)),
-                int(i64::from(c.reps)),
-                int(i64::from(c.lapses)),
+                text_val(&ts::format(s.due)),
+                text_val(&ts::format(s.last_review)),
+                int_val(i64::from(c.reps)),
+                int_val(i64::from(c.lapses)),
             ])
         })
         .collect()
@@ -540,7 +542,7 @@ async fn import_reports_overlay_and_path_fields_that_differ_from_libsql() {
     changed.set(
         "path_targets",
         &["path_id", "id"],
-        vec![vec![text("p_a"), text("fnd.9")]],
+        vec![vec![text_val("p_a"), text_val("fnd.9")]],
     );
     let r = import(changed, &db).await.expect("resume");
 
@@ -667,10 +669,10 @@ async fn import_reports_a_libsql_path_that_lands_after_its_first_read() {
     let db = common::empty_db().await;
     let mut with_late_path = legacy();
     let late_path = vec![
-        text("p_late"),
-        text("late"),
-        text(&ts::format(at(40))),
-        text("bottom_up"),
+        text_val("p_late"),
+        text_val("late"),
+        text_val(&ts::format(at(40))),
+        text_val("bottom_up"),
     ];
     with_late_path.set(
         "paths",
@@ -701,10 +703,10 @@ async fn import_copies_oauth_clients_so_connectors_stay_registered() {
         "oauth_clients",
         &["client_id", "client_name", "redirect_uris", "created_at"],
         vec![vec![
-            text("client-1"),
-            text("Claude"),
-            text(r#"["https://claude.ai/callback"]"#),
-            text(&ts::format(at(1))),
+            text_val("client-1"),
+            text_val("Claude"),
+            text_val(r#"["https://claude.ai/callback"]"#),
+            text_val(&ts::format(at(1))),
         ]],
     );
 
@@ -735,7 +737,7 @@ async fn import_reports_cards_that_differ_from_libsql() {
 async fn import_rejects_database_at_another_migration() {
     let db = common::empty_db().await;
     let mut tables = legacy();
-    tables.set("schema_migrations", &["version"], vec![vec![int(3)]]);
+    tables.set("schema_migrations", &["version"], vec![vec![int_val(3)]]);
     let e = import(tables, &db).await.unwrap_err();
     assert!(
         matches!(&e, Error::Turso(m) if m.contains("migration 3")),
