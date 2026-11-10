@@ -99,9 +99,15 @@ async fn real_main() -> ExitCode {
         Ok(db) => db,
         Err(e) => return report_failure(&e),
     };
+    let recovery = unknown_outcome_recovery(&cli.cmd);
     match dispatch(&db, cli.cmd).await {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => report_failure(&e),
+        Err(e) => {
+            if e.outcome_is_unknown() {
+                eprintln!("the command may have been applied; {recovery}");
+            }
+            report_failure(&e)
+        }
     }
 }
 
@@ -121,10 +127,21 @@ async fn run_curriculum_lookup(op: &GraphOp) -> Option<Result<()>> {
 /// Prints `e` to stderr and returns its exit code.
 fn report_failure(e: &Error) -> ExitCode {
     eprintln!("error: {e}");
-    if e.outcome_is_unknown() {
-        eprintln!("the command may have been applied; run `mt path next` instead of repeating it");
-    }
     ExitCode::from(e.exit_code())
+}
+
+/// Returns the safe next step after `cmd` fails with an unknown outcome.
+fn unknown_outcome_recovery(cmd: &Cmd) -> &'static str {
+    match cmd {
+        Cmd::ImportTurso(_) => "run `mt import-turso` again",
+        Cmd::Path(p) if matches!(p.op, PathOp::New(_)) => {
+            "run `mt path list` and create the path only if it is absent"
+        }
+        Cmd::Quiz(q) if matches!(q.op, QuizOp::Answer(_) | QuizOp::Create(_)) => {
+            "run `mt path next` instead of repeating the command"
+        }
+        _ => "repeat the command",
+    }
 }
 
 /// Parses the command line, and returns the exit code if the process should stop.

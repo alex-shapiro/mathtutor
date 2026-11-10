@@ -33,10 +33,25 @@ Exit code 3 tells an agent not to repeat a command. Path state cannot show wheth
 
 ## Agents that omit `--path`
 
-A command without `--path` acts on the most recent path. Two concurrent sessions can move each other between paths from one command to the next.
+A command without `--path` acts on the most recent path. `mt path next` now makes its path the most recent, so one session stays on its path. Two concurrent sessions can still move each other between paths from one command to the next.
 
 - **Require agents to pass the path from `mt path next`:** Sessions stay on their paths. The agent contract changes.
 - **Keep the default (current):** Commands stay short, but concurrent sessions can interfere.
+
+## Cards that FSRS 6.1 cannot reproduce
+
+FSRS 6.1.0 clamps same-day `hard` growth, and 5.2.0 does not. A card with such a review from before 2026-06-01 replays to a different stability, so the import reports a difference and stays open. No real data has been checked yet.
+
+- **Report FSRS differences without blocking, and still require matching `reps`, `lapses`, and review times:** The import can finish. Affected cards get the 6.1.0 schedule.
+- **Copy FSRS state from libSQL instead of rebuilding it:** Schedules stay exact. Those rows stop being a pure projection of events.
+- **Add an option that accepts differences:** This also gives a general escape from a blocked import. The operator must judge each difference.
+
+## Correction of recorded reviews
+
+No command can void a review. A duplicate answer or a wrong grade changes a card's schedule permanently.
+
+- **Add a compensating event and a projection rebuild:** Errors can be repaired. Someone must decide who can void a review.
+- **Keep the log append-only with no correction (current):** The code stays simple, but errors are permanent.
 
 ## Schema changes across installed versions
 

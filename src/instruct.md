@@ -115,4 +115,4 @@ All target atoms on the path are complete. Inform the user and offer to start a 
 
 ## Errors
 
-`mt` prints errors to stderr and exits with a non-zero status code. Report the error message to the user and recover by inspecting the curriculum or path state. Exit code 3 means that the command may have been applied. Do not repeat the command, because a repeated `mt quiz answer` records a second review. Run `mt path next` to continue. If the answer was lost, the quiz returns.
+`mt` prints errors to stderr and exits with a non-zero status code. Report the error message to the user and recover by inspecting the curriculum or path state. Exit code 3 means that the command may have been applied. After `mt quiz answer` or `mt quiz create`, run `mt path next` instead of repeating the command, because a repeated answer records a second review. After `mt path new`, run `mt path list` and create the path only if it is absent. After any other command, repeat the command.

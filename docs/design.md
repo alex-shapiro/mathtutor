@@ -291,4 +291,4 @@ When a user is blocked on a target atom in `top-down` mode, the agent can set a 
 - Standard output: A single AYML record for `mt path next`, `mt path list`, `mt path syllabus`, `mt graph show`, `mt graph list`, and `mt graph dump`. `mt path state` and `mt path tree` print text for people to read.
 - Standard error: Confirmation messages from write commands, including the ID of a new quiz or path.
 - Standard error: Diagnostic and error messages.
-- Exit codes: `0` for success, `1` for runtime or state errors, `2` for usage or validation errors, and `3` if the command failed and may still have committed. After exit `3`, run `mt path next` instead of repeating the command.
+- Exit codes: `0` for success, `1` for runtime or state errors, `2` for usage or validation errors, and `3` if the command failed and may still have committed. After exit `3`, the command prints its safe next step.
