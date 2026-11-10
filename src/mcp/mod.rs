@@ -950,10 +950,15 @@ async fn auth_middleware(
         {
             return next.run(req).await;
         }
-        if let Some(db) = state.db.as_ref()
-            && let Ok(Some(_client_id)) = oauth::validate_access_token(db, &token).await
-        {
-            return next.run(req).await;
+        if let Some(db) = state.db.as_ref() {
+            match oauth::validate_access_token(db, &token).await {
+                Ok(Some(_client_id)) => return next.run(req).await,
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!(error = %e, "cannot validate access token");
+                    return token_check_unavailable();
+                }
+            }
         }
     }
 
@@ -963,6 +968,16 @@ async fn auth_middleware(
         resp.headers_mut()
             .insert(http::header::WWW_AUTHENTICATE, value);
     }
+    resp
+}
+
+fn token_check_unavailable() -> Response {
+    let mut resp = Response::new(Body::empty());
+    *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+    resp.headers_mut().insert(
+        http::header::RETRY_AFTER,
+        http::HeaderValue::from_static("5"),
+    );
     resp
 }
 

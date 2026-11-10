@@ -38,8 +38,10 @@ impl ServerHandle {
 
 // Probe an ephemeral port first so `mcp::run` can bind to a known address.
 async fn spawn_server_with(auth: AuthConfig) -> ServerHandle {
-    let cfg = common::fresh_config();
+    spawn_server_on(common::fresh_config(), auth).await
+}
 
+async fn spawn_server_on(cfg: mathtutor::db::DbConfig, auth: AuthConfig) -> ServerHandle {
     let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = probe.local_addr().unwrap();
     drop(probe);
@@ -112,6 +114,39 @@ async fn rejects_wrong_api_key_with_401() {
         .await
         .unwrap();
     assert_eq!(res.status(), 401);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn database_failure_during_token_check_returns_503_without_a_login_challenge() {
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            api_key: Some(API_KEY.into()),
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    mathtutor::db::Db::connect(&cfg)
+        .unwrap()
+        .client()
+        .db(&cfg.db)
+        .delete()
+        .await
+        .unwrap();
+
+    let resp = client()
+        .post(server.url("/mcp"))
+        .bearer_auth("an-oauth-access-token")
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert!(resp.headers().contains_key("retry-after"));
+    assert!(!resp.headers().contains_key("www-authenticate"));
     server.stop().await;
 }
 
