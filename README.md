@@ -18,6 +18,8 @@ The LLM generates lessons and quizzes on demand and grades user answers. Generat
 
 `mt graph list` and `mt graph show` work without these variables when you do not pass `--path`.
 
+To move an existing libSQL database, run `mt import-turso` before you create a path. See `docs/design.md` for its rules.
+
 ## CLI
 
 ```

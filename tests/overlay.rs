@@ -376,3 +376,32 @@ async fn graph_quiz_helper_resolves_overlay_authored_ids() {
     assert_eq!(atom.id, WITH_LESSON_ATOM);
     assert_eq!(quiz.id, "fnd.1.1.1.q9");
 }
+
+#[tokio::test]
+async fn deleting_a_deleted_quiz_succeeds() {
+    let db = common::fresh_db(common::PATH_ID).await;
+    let path = Some(common::PATH_ID);
+    mathtutor::store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), path, None)
+        .await
+        .unwrap();
+    let quiz_id = mathtutor::store::cmd_quiz_create(
+        &db,
+        "fnd.1.1.1",
+        mathtutor::types::Difficulty::Easy,
+        "q".into(),
+        "a".into(),
+        None,
+        mathtutor::types::QuizType::FreeText,
+        path,
+        None,
+    )
+    .await
+    .unwrap();
+    mathtutor::store::cmd_quiz_delete(&db, &quiz_id, path, None)
+        .await
+        .unwrap();
+
+    mathtutor::store::cmd_quiz_delete(&db, &quiz_id, path, None)
+        .await
+        .expect("a repeated delete is safe after an unknown outcome");
+}

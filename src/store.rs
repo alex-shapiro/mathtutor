@@ -119,6 +119,14 @@ pub async fn cmd_quiz_delete(
 ) -> Result<()> {
     db.transact(&Want::path(path_id), |view, changes| {
         let id = view.path()?.file.id.clone();
+        if view
+            .overlay
+            .atoms
+            .values()
+            .any(|a| a.removed.contains(quiz_id))
+        {
+            return Ok(());
+        }
         let g = view.graph(graph_dir)?;
         let (atom, _) = g.quiz(quiz_id)?;
         overlay::remove_quiz(changes, &atom.id, quiz_id);
