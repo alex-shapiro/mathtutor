@@ -8,7 +8,7 @@ use crate::db::Db;
 use crate::graph::{self, FlatConcept, Graph, Manifest};
 use crate::progress::PathProgress;
 use crate::scheduler;
-use crate::view::{PathState, Want};
+use crate::view::Want;
 use crate::{Error, Result};
 
 /// Prints curriculum item `id`, with the progress of `path_id` when `db` and `path_id` are provided.
@@ -36,7 +36,7 @@ pub async fn graph_for(
         return Ok((std::sync::Arc::new(Graph::load_default(graph_dir)?), None));
     };
     let view = db.snapshot(&Want::path(Some(pid))).await?;
-    let progress = view.path().map(PathState::progress).unwrap_or_default();
+    let progress = view.path()?.progress();
     Ok((view.graph(graph_dir)?, Some(progress)))
 }
 

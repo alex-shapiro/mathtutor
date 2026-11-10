@@ -10,7 +10,7 @@ use chrono::{Duration, Utc};
 use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, Event, EventKind, EventPayload};
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
-use mathtutor::{answer, cards, overlay, store};
+use mathtutor::{Error, answer, cards, overlay, store};
 
 mod common;
 
@@ -507,6 +507,13 @@ async fn write_that_names_a_path_makes_it_the_most_recent() {
         .await
         .unwrap();
     assert_eq!(view.path().unwrap().file.id, "p_a_older");
+}
+
+#[tokio::test]
+async fn graph_lookup_rejects_an_unknown_path() {
+    let db = common::empty_db().await;
+    let result = mathtutor::discover::graph_for(Some(&db), Some("typo"), None).await;
+    assert!(matches!(result, Err(Error::NoPath)));
 }
 
 struct DisconnectedTransport;
