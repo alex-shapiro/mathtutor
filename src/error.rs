@@ -104,6 +104,11 @@ pub enum Error {
     #[error("the import target already holds data; import into an empty database")]
     ImportTargetNotEmpty,
 
+    #[error(
+        "an import into this database is unfinished; run `mt import-turso` again until it reports no differences, or delete the database and import again"
+    )]
+    ImportInProgress,
+
     #[error("flags {0} and {1} are mutually exclusive")]
     ConflictingFlags(&'static str, &'static str),
 
@@ -170,6 +175,7 @@ impl Error {
             | Error::ImportMismatch(_)
             | Error::ImportAlreadyComplete
             | Error::ImportTargetNotEmpty
+            | Error::ImportInProgress
             | Error::Bind { .. }
             | Error::Serve(_) => 1,
         }

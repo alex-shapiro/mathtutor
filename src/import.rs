@@ -16,17 +16,12 @@ use crate::event_log::{Event, EventKind, EventPayload};
 use crate::graph::Quiz;
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
-use crate::schema::{OAuthClient, activity_key, events_stream};
+use crate::schema::{IMPORT_STATE_KEY, ImportState, OAuthClient, activity_key, events_stream};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::{OVERLAY_VERSION_KEY, Want};
 use crate::{Error, Result};
 
 const SCHEMA_VERSION: i64 = 4;
-
-/// Key that records whether this database is receiving or has received an import.
-const IMPORT_STATE_KEY: &str = "turso_import_state";
-const IMPORT_RUNNING: &[u8] = b"running";
-const IMPORT_COMPLETE: &[u8] = b"complete";
 
 /// Number of legacy rows written per transaction, well below the server's operation limit.
 const IMPORT_WRITE_BATCH: usize = 500;
@@ -469,6 +464,13 @@ pub struct Report {
     pub mismatches: Vec<String>,
 }
 
+fn import_state_write(state: ImportState) -> Op {
+    let value = state
+        .stored_value()
+        .expect("written import states have a value");
+    Op::put(IMPORT_STATE_KEY, value)
+}
+
 /// Marks `db` as an import target, or fails if an import would overwrite newer data.
 async fn claim_import_target(db: &Db) -> Result<()> {
     let results = db
@@ -481,15 +483,10 @@ async fn claim_import_target(db: &Db) -> Result<()> {
     let [state, overlay_version, paths]: [_; 3] = results
         .try_into()
         .map_err(|_| Error::BadRow("import target read returned the wrong result count".into()))?;
-    let state = state.entry()?;
-    match state
-        .as_ref()
-        .and_then(|e| e.value.data())
-        .map(AsRef::as_ref)
-    {
-        Some(IMPORT_RUNNING) => return Ok(()),
-        Some(IMPORT_COMPLETE) => return Err(Error::ImportAlreadyComplete),
-        _ => {}
+    match ImportState::from_entry(state.entry()?)? {
+        ImportState::Open => return Ok(()),
+        ImportState::Complete => return Err(Error::ImportAlreadyComplete),
+        ImportState::NotStarted => {}
     }
     if overlay_version.entry()?.is_some() || !paths.rows::<PathFile>()?.is_empty() {
         return Err(Error::ImportTargetNotEmpty);
@@ -500,7 +497,7 @@ async fn claim_import_target(db: &Db) -> Result<()> {
                 key: IMPORT_STATE_KEY.into(),
                 expect: Expect::Absent,
             },
-            Op::put(IMPORT_STATE_KEY, IMPORT_RUNNING),
+            import_state_write(ImportState::Open),
         ])
         .await?;
     Ok(())
@@ -549,7 +546,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     }
     if report.mismatches.is_empty() {
         db.client
-            .write(&[Op::put(IMPORT_STATE_KEY, IMPORT_COMPLETE)])
+            .write(&[import_state_write(ImportState::Complete)])
             .await?;
     }
     Ok(report)

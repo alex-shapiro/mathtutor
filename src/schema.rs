@@ -3,14 +3,51 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::Result;
+use crate::db::client::Entry;
 use crate::db::client::api::{ColumnType, ErrorCode, NewColumn, NewTable};
 use crate::db::{Op, Row, client, ts};
 use crate::path::PathFile;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
+use crate::{Error, Result};
 
 const VERSION: &str = "1";
 const VERSION_KEY: &str = "schema_version";
+
+/// Key that records the progress of `mt import-turso` on this database.
+pub(crate) const IMPORT_STATE_KEY: &str = "turso_import_state";
+
+/// Progress of `mt import-turso` on a database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportState {
+    NotStarted,
+    /// An import has written or may write data and has not verified it.
+    Open,
+    Complete,
+}
+
+impl ImportState {
+    const OPEN_VALUE: &'static str = "running";
+    const COMPLETE_VALUE: &'static str = "complete";
+
+    pub(crate) fn from_entry(entry: Option<Entry>) -> Result<Self> {
+        let Some(entry) = entry else {
+            return Ok(Self::NotStarted);
+        };
+        match entry.value.data().map(AsRef::as_ref) {
+            Some(v) if v == Self::OPEN_VALUE.as_bytes() => Ok(Self::Open),
+            Some(v) if v == Self::COMPLETE_VALUE.as_bytes() => Ok(Self::Complete),
+            _ => Err(Error::BadRow(format!("{IMPORT_STATE_KEY}: unknown value"))),
+        }
+    }
+
+    pub(crate) fn stored_value(self) -> Option<&'static str> {
+        match self {
+            Self::NotStarted => None,
+            Self::Open => Some(Self::OPEN_VALUE),
+            Self::Complete => Some(Self::COMPLETE_VALUE),
+        }
+    }
+}
 
 /// Return the stream key for the event log of `path_id`.
 pub fn events_stream(path_id: &str) -> String {
@@ -320,22 +357,33 @@ pub fn tables() -> Vec<NewTable> {
     ]
 }
 
-/// Ensure that the database and all required tables exist.
-pub async fn ensure(db: &client::Db) -> Result<()> {
-    let current = match db.read_one(Op::get(VERSION_KEY)).await {
-        Ok(r) => r.entry()?.and_then(|e| e.value.data().cloned()),
+/// Ensures that the database and all required tables exist, and returns its import progress.
+pub async fn ensure(db: &client::Db) -> Result<ImportState> {
+    let (current, import_state) = match db
+        .read(&[Op::get(VERSION_KEY), Op::get(IMPORT_STATE_KEY)])
+        .await
+    {
+        Ok(results) => {
+            let [version, import_state]: [_; 2] = results
+                .try_into()
+                .map_err(|_| Error::BadRow("schema read returned the wrong result count".into()))?;
+            (
+                version.entry()?.and_then(|e| e.value.data().cloned()),
+                ImportState::from_entry(import_state.entry()?)?,
+            )
+        }
         Err(e) if e.code() == Some(ErrorCode::NotFound) => {
             db.ensure().await?;
-            None
+            (None, ImportState::NotStarted)
         }
         Err(e) => return Err(e.into()),
     };
     if current.as_deref() == Some(VERSION.as_bytes()) {
-        return Ok(());
+        return Ok(import_state);
     }
     for t in tables() {
         db.create_table(&t).await?;
     }
     db.write(&[Op::put(VERSION_KEY, VERSION)]).await?;
-    Ok(())
+    Ok(import_state)
 }

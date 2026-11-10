@@ -781,6 +781,7 @@ fn error_kind(e: &Error) -> &'static str {
         | Error::ImportMismatch(_)
         | Error::ImportAlreadyComplete
         | Error::ImportTargetNotEmpty
+        | Error::ImportInProgress
         | Error::Http(_) => "import",
         Error::MissingAuth
         | Error::BadBindAddr { .. }
