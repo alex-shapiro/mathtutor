@@ -532,12 +532,13 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
             cards::recompute(db, &p.id).await?;
         }
     }
+    let source = read(turso).await?;
     report
         .mismatches
-        .extend(verify_overlay(db, &legacy.overlay).await?);
-    for p in &legacy.paths {
-        let events = legacy.events.get(&p.id).map_or(&[][..], Vec::as_slice);
-        let cards = legacy.cards.get(&p.id).map_or(&[][..], Vec::as_slice);
+        .extend(verify_overlay(db, &source.overlay).await?);
+    for p in &source.paths {
+        let events = source.events.get(&p.id).map_or(&[][..], Vec::as_slice);
+        let cards = source.cards.get(&p.id).map_or(&[][..], Vec::as_slice);
         report
             .mismatches
             .extend(verify(db, p, events, cards).await?);

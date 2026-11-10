@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
@@ -102,8 +103,14 @@ impl Tables {
     }
 }
 
+/// Libsql snapshots served in order, with the last one repeating.
+struct Source {
+    snapshots: Vec<Tables>,
+    served: AtomicUsize,
+}
+
 async fn pipeline(
-    State(tables): State<Arc<Tables>>,
+    State(source): State<Arc<Source>>,
     headers: HeaderMap,
     Json(req): Json<PipelineReq>,
 ) -> Result<Json<PipelineResp>, StatusCode> {
@@ -111,6 +118,8 @@ async fn pipeline(
     if auth != Some(&format!("Bearer {TOKEN}")) {
         return Err(StatusCode::UNAUTHORIZED);
     }
+    let served = source.served.fetch_add(1, Ordering::Relaxed);
+    let tables = &source.snapshots[served.min(source.snapshots.len() - 1)];
     let results = req
         .requests
         .into_iter()
@@ -134,11 +143,19 @@ async fn pipeline(
 }
 
 async fn serve(tables: Tables) -> String {
+    serve_snapshots(vec![tables]).await
+}
+
+async fn serve_snapshots(snapshots: Vec<Tables>) -> String {
+    let source = Source {
+        snapshots,
+        served: AtomicUsize::new(0),
+    };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let app = Router::new()
         .route("/v2/pipeline", post(pipeline))
-        .with_state(Arc::new(tables));
+        .with_state(Arc::new(source));
     tokio::spawn(async move { axum::serve(listener, app).await });
     url
 }
@@ -551,6 +568,30 @@ async fn import_reports_an_event_whose_contents_differ_from_libsql() {
         "{:?}",
         r.mismatches
     );
+}
+
+#[tokio::test]
+async fn import_reports_a_libsql_write_that_lands_after_its_first_read() {
+    let db = common::empty_db().await;
+    let mut late_events = events();
+    late_events.push(event("p_a", 90, EventKind::LessonTaught, Some("a"), None));
+    let mut after_late_write = legacy();
+    after_late_write.set("events", EVENT_COLUMNS, rows_of_events(&late_events));
+    let url = serve_snapshots(vec![legacy(), after_late_write]).await;
+
+    let r = import::import(&Turso::new(&url, Some(TOKEN.into())).unwrap(), &db)
+        .await
+        .expect("import");
+
+    assert!(
+        r.mismatches
+            .iter()
+            .any(|m| m.starts_with("p_a:") && m.contains("events")),
+        "{:?}",
+        r.mismatches
+    );
+    let blocked = db.snapshot(&Want::overlay()).await.unwrap_err();
+    assert!(matches!(blocked, Error::ImportInProgress), "{blocked}");
 }
 
 #[tokio::test]
