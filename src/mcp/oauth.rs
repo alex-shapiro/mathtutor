@@ -113,8 +113,20 @@ pub fn router(state: OAuthState) -> Router {
     Router::new()
         .route("/oauth/authorize", get(authorize_get).post(authorize_post))
         .route_layer(limit)
+        .route_layer(middleware::map_response(deny_framing))
         .merge(cross_origin)
         .with_state(state)
+}
+
+/// Forbid every site to show `resp` in a frame, so that no site can overlay the sign-in form and trick the owner into a sign-in.
+async fn deny_framing(mut resp: Response) -> Response {
+    let headers = resp.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("frame-ancestors 'none'"),
+    );
+    headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    resp
 }
 
 /// Refuse a request from a client address over its request limit before the route reads the database.

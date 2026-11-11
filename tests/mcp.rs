@@ -962,6 +962,24 @@ async fn an_access_token_works_only_in_the_authorization_header() {
 }
 
 #[tokio::test]
+async fn no_site_can_frame_the_sign_in_page() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Framed").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&server, &reg.client_id, &pkce.challenge, None, None);
+    let form = oauth_client().get(&auth_url).send().await.unwrap();
+    let form_headers = form.headers().clone();
+    let html = form.text().await.unwrap();
+    let wrong = submit_login(&server, &html, "wrong").await;
+
+    for headers in [&form_headers, wrong.headers()] {
+        assert_eq!(headers["content-security-policy"], "frame-ancestors 'none'");
+        assert_eq!(headers["x-frame-options"], "DENY");
+    }
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn full_authorization_code_flow_yields_a_working_access_token() {
     let server = spawn_oauth_server().await;
     let reg = register_client(&server, "Full Flow").await;
