@@ -9,10 +9,11 @@ use baserunna_client::{BoxFuture, HttpTransport, Transport, TransportError, http
 use mathtutor::cli::Mt;
 use mathtutor::db::Db;
 use mathtutor::event_log::{self, EventKind};
+use mathtutor::graph::Curriculum;
 use mathtutor::overlay::QuizDraft;
-use mathtutor::store;
 use mathtutor::surface::Surface;
-use mathtutor::types::{Difficulty, QuizType, Strategy};
+use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
+use mathtutor::{answer, store};
 
 mod common;
 
@@ -201,7 +202,7 @@ async fn quiz_create_after_delete_skips_tombstoned_id() {
     )
     .await
     .unwrap();
-    assert_eq!(first, format!("{NO_LESSON_ATOM}.q1"));
+    assert_eq!(first, format!("{NO_LESSON_ATOM}.u1"));
 
     store::cmd_quiz_delete(&db, &first, Some(&path_id))
         .await
@@ -221,7 +222,40 @@ async fn quiz_create_after_delete_skips_tombstoned_id() {
     )
     .await
     .expect("create after delete must not recycle the tombstoned id");
-    assert_eq!(second, format!("{NO_LESSON_ATOM}.q2"));
+    assert_eq!(second, format!("{NO_LESSON_ATOM}.u2"));
+}
+
+#[tokio::test]
+async fn a_user_quiz_keeps_its_id_apart_from_the_curriculum_quizzes() {
+    let (db, path_id) = fresh_db_with_path().await;
+    let atom = WITH_LESSON_ATOM;
+    let draft = QuizDraft {
+        difficulty: Difficulty::Hard,
+        question: "q?".into(),
+        answer: "a".into(),
+        rubric: None,
+        kind: QuizType::FreeText,
+    };
+    let created = store::cmd_quiz_create(&db, atom, draft, Some(&path_id))
+        .await
+        .unwrap();
+    assert_eq!(created, format!("{atom}.u1"));
+
+    answer::cmd_quiz_answer(&db, &created, Rating::Good, None, Some(&path_id))
+        .await
+        .expect("the graph finds a user quiz by its ID");
+    let g = Curriculum::embedded()
+        .merged(&common::overlay(&db).await)
+        .unwrap();
+    let (found, _) = g.quiz(&created).unwrap();
+    assert_eq!(found.id, atom);
+    assert!(
+        g.by_id[atom]
+            .quizzes
+            .iter()
+            .any(|q| q.id == format!("{atom}.q1")),
+        "the curriculum quiz stays beside the user quiz"
+    );
 }
 
 #[tokio::test]

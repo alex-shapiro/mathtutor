@@ -324,6 +324,40 @@ fn graph_check_rejects_a_cycle_through_a_prerequisite_cluster() {
 }
 
 #[test]
+fn graph_check_rejects_a_curriculum_quiz_id_outside_the_curriculum_form() {
+    let dir = write_graph(
+        "
+  - id: ta.1
+    name: cluster
+    children:
+      - id: ta.1.1
+        name: atom
+        description: d
+        terminal: true
+        quizzes:
+          - id: ta.1.1.q1
+            difficulty: easy
+            question: q
+            answer: a
+          - id: ta.1.1.u1
+            difficulty: medium
+            question: q
+            answer: a
+",
+    );
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
+    let quiz_issues: Vec<&str> = report
+        .issues
+        .iter()
+        .filter(|i| i.message.starts_with("quiz id"))
+        .map(|i| i.message.as_str())
+        .collect();
+    assert_eq!(quiz_issues.len(), 1, "{:?}", report.issues);
+    assert!(quiz_issues[0].contains("'ta.1.1.u1'"), "{quiz_issues:?}");
+}
+
+#[test]
 fn atomic_prerequisites_expand_clusters_and_include_the_holding_clusters() {
     let mut holder = cluster("c.1", &["c.1.1"]);
     holder.prerequisites = vec!["c.3".to_string()];

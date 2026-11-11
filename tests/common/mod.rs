@@ -322,12 +322,14 @@ pub fn answered(quiz_id: &str, rating: Rating) -> Event {
     )
 }
 
+/// Return the presentation of quiz `quiz_id`, whose ID is its atom ID with one more segment.
 pub fn presented(quiz_id: &str) -> Event {
     Event::now(
         PATH_ID,
         EventKind::QuizPresented {
-            atom: mathtutor::graph::atom_from_quiz_id(quiz_id)
-                .unwrap_or(quiz_id)
+            atom: quiz_id
+                .rsplit_once('.')
+                .map_or(quiz_id, |(atom, _)| atom)
                 .into(),
             quiz: quiz_id.into(),
         },

@@ -199,7 +199,7 @@ async fn cli_steps_store_free_text_unchanged() {
         assert_eq!(q.answer, shell_text(Field::Answer));
         assert_eq!(q.rubric, Some(shell_text(Field::Rubric)));
     }
-    let (q1, q2) = ("fnd.1.1.1.q1", "fnd.1.1.2.q1");
+    let (q1, q2) = ("fnd.1.1.1.q1", "fnd.1.1.2.u1");
 
     let update = template("update_quiz").fill(|field| match field {
         Field::Question | Field::Answer | Field::Rubric => format!("new {}", shell_text(field)),

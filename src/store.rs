@@ -118,13 +118,15 @@ pub async fn cmd_quiz_delete(db: &Db, quiz_id: &str, path_id: Option<&str>) -> R
     .await
 }
 
-// Include tombstoned quiz IDs in the suffix scan so that deleted IDs are never reused.
+/// Return the next user quiz ID of `atom_id`, `<atom_id>.u<N>`, above every live and removed user quiz ID of the atom.
+///
+/// Curriculum quizzes use `<atom_id>.q<N>`, so a curriculum release cannot reuse the ID of a user quiz.
 fn next_quiz_id(
     atom_id: &str,
     quizzes: &[graph::Quiz],
     tombstones: Option<&BTreeSet<String>>,
 ) -> String {
-    let prefix = format!("{atom_id}.q");
+    let prefix = format!("{atom_id}.u");
     let parse_n = |id: &str| id.strip_prefix(&prefix).and_then(|s| s.parse::<u32>().ok());
     let live = quizzes.iter().filter_map(|q| parse_n(&q.id));
     let dead = tombstones

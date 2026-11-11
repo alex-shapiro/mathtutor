@@ -11,7 +11,7 @@ use crate::cards::{self, CardState};
 use crate::db::client::api::Selection;
 use crate::db::{Db, Op, Row, Txn, run_txn, ts};
 use crate::event_log::{self, Event};
-use crate::graph::{self, Quiz};
+use crate::graph::Quiz;
 use crate::overlay::{Edit, Overlay, OverlayRows};
 use crate::path::PathFile;
 use crate::schema::{DbState, ImportMarker, OAuthClient, STATE_KEY, TableSet};
@@ -505,6 +505,10 @@ fn overlay_edits(
     quizzes: Vec<LegacyQuizRow>,
     removed: Vec<LegacyRemovedRow>,
 ) -> Vec<Edit> {
+    let quiz_atoms: HashMap<String, String> = quizzes
+        .iter()
+        .map(|q| (q.quiz_id.clone(), q.atom_id.clone()))
+        .collect();
     let lessons = lessons.into_iter().map(|l| Edit::Lesson {
         atom_id: l.atom_id,
         body: l.body,
@@ -524,11 +528,17 @@ fn overlay_edits(
     let removed = removed.into_iter().map(|r| Edit::Remove {
         atom_id: r
             .atom_id
-            .or_else(|| graph::atom_from_quiz_id(&r.quiz_id).map(str::to_string))
+            .or_else(|| quiz_atoms.get(&r.quiz_id).cloned())
+            .or_else(|| legacy_quiz_atom(&r.quiz_id).map(str::to_string))
             .unwrap_or_else(|| r.quiz_id.clone()),
         quiz_id: r.quiz_id,
     });
     lessons.chain(quizzes).chain(removed).collect()
+}
+
+/// Return the atom of `quiz_id` in the `<atom>.q<N>` form that libSQL releases gave every quiz ID.
+fn legacy_quiz_atom(quiz_id: &str) -> Option<&str> {
+    quiz_id.rfind(".q").map(|pos| &quiz_id[..pos])
 }
 
 fn group_by_path(atoms: Vec<LegacyPathAtom>) -> HashMap<String, Vec<String>> {

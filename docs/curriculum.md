@@ -17,6 +17,10 @@ A prerequisite of a cluster applies to every atom in that cluster. A prerequisit
 
 Cross-area prerequisites are supported and encouraged.
 
+## Quizzes
+
+Give each curriculum quiz the ID `<atom>.q<N>`, where `N` is a positive integer. User quizzes use `<atom>.u<N>`, so this form keeps the two sets of IDs apart. `mt graph check` rejects a curriculum quiz ID in another form.
+
 ## Orphans
 
 `mt graph check` reports any atom that is not referenced as a direct or cluster prerequisite and does not set `terminal: true`. To resolve an orphan:

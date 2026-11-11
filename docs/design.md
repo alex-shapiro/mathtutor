@@ -264,6 +264,7 @@ User-authored lessons and quizzes are stored in the database overlay and shared 
 
 - **Lessons:** An entry in `lessons` overrides the curriculum lesson for that atom.
 - **Quizzes:** Entries in `quizzes` replace curriculum quizzes with matching IDs or append new quizzes. Any quiz ID present in `removed_quizzes` is excluded.
+- **Quiz IDs:** A curriculum quiz has the ID `<atom>.q<N>`, and `mt quiz create` gives a user quiz the ID `<atom>.u<N>`. Thus a later curriculum release cannot reuse the ID of a user quiz. Each overlay row stores the atom of its quiz, so `mt` never reads the atom from a quiz ID. Quizzes that `mt import-turso` copies keep their `<atom>.q<N>` IDs.
 - **Topology:** Prerequisites and cluster hierarchy are defined exclusively by the curriculum files.
 
 ## Event log

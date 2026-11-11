@@ -660,7 +660,7 @@ async fn quiz_tools_accept_the_shared_quiz_fields() {
     let created = call_tool(&server, "create_quiz", quiz).await;
     assert_ne!(created["isError"], json!(true), "{created}");
     let quiz_id = created["structuredContent"]["quiz_id"].clone();
-    assert_eq!(quiz_id, json!("fnd.1.1.2.q1"));
+    assert_eq!(quiz_id, json!("fnd.1.1.2.u1"));
 
     let patch = json!({ "quiz_id": quiz_id, "question": "q2", "path_id": path_id });
     let updated = call_tool(&server, "update_quiz", patch).await;

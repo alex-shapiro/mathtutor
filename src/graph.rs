@@ -343,6 +343,8 @@ pub struct Graph {
     pub areas: Vec<ManifestArea>,
     /// ID of the parent of each concept that has a parent, keyed by concept ID.
     parent_ids: HashMap<String, String>,
+    /// ID of the atom of each quiz, keyed by quiz ID.
+    quiz_atoms: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -385,10 +387,15 @@ impl Graph {
                     .map(|child| (child.clone(), c.id.clone()))
             })
             .collect();
+        let quiz_atoms = by_id
+            .values()
+            .flat_map(|c| c.quizzes.iter().map(|q| (q.id.clone(), c.id.clone())))
+            .collect();
         Self {
             by_id,
             areas,
             parent_ids,
+            quiz_atoms,
         }
     }
 
@@ -492,18 +499,19 @@ impl Graph {
         Ok(c)
     }
 
+    /// Return the live quiz `quiz_id` and its atom, or [`Error::UnknownId`] if the graph does not hold the quiz.
     pub fn quiz(&self, quiz_id: &str) -> Result<(&FlatConcept, &Quiz)> {
-        let atom_id =
-            atom_from_quiz_id(quiz_id).ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
+        let unknown = || Error::UnknownId(quiz_id.to_string());
         let atom = self
-            .by_id
-            .get(atom_id)
-            .ok_or_else(|| Error::UnknownId(atom_id.to_string()))?;
+            .quiz_atoms
+            .get(quiz_id)
+            .and_then(|atom_id| self.by_id.get(atom_id))
+            .ok_or_else(unknown)?;
         let q = atom
             .quizzes
             .iter()
             .find(|q| q.id == quiz_id)
-            .ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
+            .ok_or_else(unknown)?;
         Ok((atom, q))
     }
 
@@ -521,17 +529,16 @@ impl Graph {
                     Some(existing) => existing.clone_from(overlay_quiz),
                     None => c.quizzes.push(overlay_quiz.clone()),
                 }
+                self.quiz_atoms
+                    .insert(overlay_quiz.id.clone(), atom_id.clone());
             }
             if !entry.removed.is_empty() {
                 c.quizzes.retain(|q| !entry.removed.contains(&q.id));
+                self.quiz_atoms
+                    .retain(|quiz_id, a| a != atom_id || !entry.removed.contains(quiz_id));
             }
         }
     }
-}
-
-/// Return the atom ID prefix of a quiz ID, such as `fnd.1.1.1` for `fnd.1.1.1.q3`.
-pub fn atom_from_quiz_id(quiz_id: &str) -> Option<&str> {
-    quiz_id.rfind(".q").map(|pos| &quiz_id[..pos])
 }
 
 /// Compare dot-separated concept IDs segment by segment, ordering numeric segments by integer value.
@@ -875,6 +882,18 @@ impl AreaCheck<'_> {
             }
         }
 
+        for q in &n.quizzes {
+            if !is_curriculum_quiz_id(&n.id, &q.id) {
+                self.issue(
+                    &n.id,
+                    format!(
+                        "quiz id '{}' should be '{}.q<N>' with a positive N",
+                        q.id, n.id
+                    ),
+                );
+            }
+        }
+
         if let Some(prev_area) = self.id_to_area.insert(n.id.clone(), self.slug.to_string()) {
             self.issue(&n.id, format!("duplicate id (also in area '{prev_area}')"));
         }
@@ -883,6 +902,15 @@ impl AreaCheck<'_> {
             self.visit(child, Some(&n.id), depth + 1);
         }
     }
+}
+
+/// Return `true` if `quiz_id` has the form `<atom_id>.q<N>` of a curriculum quiz, so that it cannot equal the ID of a user quiz.
+fn is_curriculum_quiz_id(atom_id: &str, quiz_id: &str) -> bool {
+    quiz_id
+        .strip_prefix(atom_id)
+        .and_then(|rest| rest.strip_prefix(".q"))
+        .and_then(|n| n.parse::<u32>().ok())
+        .is_some_and(|n| n > 0)
 }
 
 fn check_prereqs_resolve(
@@ -1022,13 +1050,7 @@ impl CheckReport {
 
 #[cfg(test)]
 mod tests {
-    use super::{atom_from_quiz_id, natural_id_cmp};
-
-    #[test]
-    fn atom_from_quiz_id_strips_q_suffix() {
-        assert_eq!(atom_from_quiz_id("fnd.1.1.1.q3"), Some("fnd.1.1.1"));
-        assert_eq!(atom_from_quiz_id("no-dot-q-here"), None);
-    }
+    use super::natural_id_cmp;
 
     #[test]
     fn natural_id_cmp_orders_numeric_segments_by_value() {
