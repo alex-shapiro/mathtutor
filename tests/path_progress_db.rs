@@ -159,3 +159,36 @@ async fn path_list_reports_targets_that_the_curriculum_cannot_expand() {
     assert_eq!(mixed.targets.total, 1);
     assert_eq!(mixed.unresolved_targets, vec!["zz.9.9".to_string()]);
 }
+
+#[tokio::test]
+async fn path_list_shows_the_time_of_the_latest_activity_of_each_path() {
+    let db = common::empty_db().await;
+    let first =
+        mathtutor::path::cmd_path_new(&db, "first", &["fnd.1.1.1".into()], Strategy::BottomUp)
+            .await
+            .unwrap();
+    let second =
+        mathtutor::path::cmd_path_new(&db, "second", &["fnd.1.1.1".into()], Strategy::BottomUp)
+            .await
+            .unwrap();
+    mathtutor::scheduler::compute_next(
+        &db,
+        Some(&first),
+        mathtutor::scheduler::NextMode::Default,
+        mathtutor::surface::Surface::Cli,
+    )
+    .await
+    .unwrap();
+
+    let list = mathtutor::path::compute_path_list(&db).await.unwrap();
+    let updated = |id: &str| {
+        list.paths
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.updated_at)
+            .unwrap()
+    };
+    assert!(updated(&first) > updated(&second), "{list:?}");
+    let shown = serde_json::to_value(&list).unwrap();
+    assert!(shown["paths"][0].get("updated_at").is_some(), "{shown}");
+}

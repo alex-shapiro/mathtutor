@@ -119,6 +119,8 @@ pub struct PathSummary {
     pub goal: String,
     pub strategy: Strategy,
     pub created_at: chrono::DateTime<Utc>,
+    /// Time of the latest write to the path.
+    pub updated_at: chrono::DateTime<Utc>,
     /// Progress over the targets that the curriculum of this release can expand.
     pub targets: TargetProgress,
     /// Stored target IDs that the curriculum of this release cannot expand, such as a renamed atom.
@@ -153,6 +155,7 @@ pub async fn compute_path_list(db: &Db) -> Result<PathListView> {
                 goal: p.file.goal.clone(),
                 strategy: p.file.strategy,
                 created_at: p.file.created_at,
+                updated_at: p.updated_at,
                 targets: TargetProgress::of(&g, &resolved.atoms, &p.progress()),
                 unresolved_targets: resolved.unresolved,
             })

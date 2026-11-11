@@ -36,7 +36,7 @@ Call `get_paths` to list the user's learning paths.
 
 If the list is empty, ask what the user wants to learn, identify the target node IDs using `get_children` and `get_item`, and call `new_path { goal, targets, strategy? }`.
 
-If paths exist, show them to the user and ask which path to resume. Then call `get_state { path_id }` to display the path summary and confirm before continuing.
+If paths exist, show each goal with the time of its latest activity (`updated_at`), and ask the user which path to resume. Then call `get_state { path_id }` to display the path summary and confirm before continuing.
 <!-- end -->
 
 ### Selecting a strategy
