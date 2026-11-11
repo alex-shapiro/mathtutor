@@ -14,10 +14,13 @@ use crate::{Error, Result};
 pub use crate::schema::PathFile;
 
 impl PathFile {
-    /// Return a new path toward `targets`, or fail if `g` cannot expand a target.
+    /// Return a new path toward `targets`, or fail if `targets` is empty or `g` cannot expand a target.
     ///
     /// The path stores each cluster target as given, without its atoms.
     pub fn create(g: &Graph, goal: &str, targets: &[String], strategy: Strategy) -> Result<Self> {
+        if targets.is_empty() {
+            return Err(Error::NoTargets);
+        }
         g.expand_to_atoms(targets)?;
         let now = Utc::now();
         Ok(Self {

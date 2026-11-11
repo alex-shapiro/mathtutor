@@ -1674,6 +1674,25 @@ async fn a_validated_access_token_needs_no_further_database_read() {
 }
 
 #[tokio::test]
+async fn new_path_rejects_an_empty_target_list() {
+    let server = spawn_server().await;
+    let created = call_tool(
+        &server,
+        "new_path",
+        json!({ "goal": "Learn fractions", "targets": [] }),
+    )
+    .await;
+    assert_eq!(created["isError"], json!(true), "{created}");
+    assert_eq!(
+        created["structuredContent"]["kind"], "no_targets",
+        "{created}"
+    );
+    let paths = call_tool(&server, "get_paths", json!({})).await;
+    assert_eq!(paths["structuredContent"]["paths"], json!([]));
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn new_path_accepts_a_target_inside_another_target() {
     let server = spawn_server().await;
     let created = call_tool(

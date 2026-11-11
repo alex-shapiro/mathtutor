@@ -112,7 +112,7 @@ pub struct PathNewCmd {
     #[argh(positional)]
     pub goal: String,
 
-    /// target atom or cluster IDs (comma-separated or repeated)
+    /// target atom or cluster IDs, at least 1 (comma-separated or repeated)
     #[argh(option)]
     pub targets: Vec<String>,
 

@@ -28,6 +28,9 @@ pub enum Error {
     #[error("cluster '{0}' does not have atomic descendants")]
     EmptyCluster(String),
 
+    #[error("a learning path needs at least 1 target")]
+    NoTargets,
+
     #[error("cycle in target atoms")]
     Cycle,
 
@@ -225,6 +228,7 @@ macro_rules! error_kinds {
 error_kinds! {
     UnknownId = "unknown_id" => 2,
     EmptyCluster = "empty_cluster" => 2,
+    NoTargets = "no_targets" => 2,
     Cycle = "cycle" => 2,
     NotAtom = "not_atom" => 2,
     SubpathNotTopDown = "subpath_not_top_down" => 2,
@@ -260,6 +264,7 @@ impl Error {
         match self {
             Error::UnknownId(_) => ErrorKind::UnknownId,
             Error::EmptyCluster(_) => ErrorKind::EmptyCluster,
+            Error::NoTargets => ErrorKind::NoTargets,
             Error::Cycle => ErrorKind::Cycle,
             Error::NotAtom(_) => ErrorKind::NotAtom,
             Error::SubpathNotTopDown => ErrorKind::SubpathNotTopDown,

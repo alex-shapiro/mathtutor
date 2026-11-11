@@ -94,10 +94,15 @@ fn mt_on(cfg: &DbConfig, args: &[&str]) -> Output {
 #[tokio::test]
 async fn a_rejected_new_path_creates_no_database() {
     let cfg = common::fresh_config();
-    let out = mt_on(&cfg, &["path", "new", "g", "--targets", "nope.1"]);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(out.status.code(), Some(2), "{stderr}");
-    assert!(!stderr.contains("created database"), "{stderr}");
+    for args in [
+        &["path", "new", "g", "--targets", "nope.1"][..],
+        &["path", "new", "Learn fractions"],
+    ] {
+        let out = mt_on(&cfg, args);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "mt {args:?}: {stderr}");
+        assert!(!stderr.contains("created database"), "{stderr}");
+    }
     let raw = baserunna_client::Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
     let info = raw.db(&cfg.db).info().await;
     assert!(

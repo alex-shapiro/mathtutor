@@ -71,7 +71,7 @@ impl MathTutorServer {
 pub struct NewPathArgs {
     /// Learning goal text.
     pub goal: String,
-    /// Target atom or cluster IDs.
+    /// Target atom or cluster IDs, at least 1.
     pub targets: Vec<String>,
     /// Initial traversal strategy (`bottom_up` or `top_down`).
     #[serde(default)]

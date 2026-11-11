@@ -340,6 +340,7 @@ Each error has a kind that sets its exit code. An MCP tool error reports the sam
 | ------------------------- | --------- | ------------------------------------------------------------------------------- |
 | `unknown_id`              | 2         | The curriculum does not contain the ID.                                         |
 | `empty_cluster`           | 2         | A cluster target has zero atoms.                                                |
+| `no_targets`              | 2         | The new path has zero targets.                                                  |
 | `cycle`                   | 2         | The target atoms form a prerequisite cycle.                                     |
 | `not_atom`                | 2         | The ID names a cluster where an atom is necessary.                              |
 | `subpath_not_top_down`    | 2         | The path does not use the `top_down` strategy.                                  |
