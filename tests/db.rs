@@ -527,6 +527,32 @@ async fn commands_check_the_database_in_their_first_request() {
 }
 
 #[tokio::test]
+async fn a_subpath_write_reads_no_overlay() {
+    let cfg = common::fresh_config();
+    let seeded = common::create_db(&cfg).await;
+    common::seed_path(&seeded, PATH_ID, &["fnd.1.1.2"], Strategy::TopDown).await;
+    store::cmd_lesson_upsert(&seeded, "fnd.1.1.1", "lesson".into(), Some(PATH_ID))
+        .await
+        .unwrap();
+
+    let (db, traffic) = counting_db(&cfg);
+    let atoms = ["fnd.1.1.1".to_string(), "fnd.1.1.2".to_string()];
+    mathtutor::subpath::cmd_subpath_set(&db, Some(PATH_ID), &atoms)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        traffic.requests.load(Ordering::Relaxed),
+        2,
+        "a read and a commit"
+    );
+    let queried = traffic.txn_queried_tables();
+    for overlay_table in ["lessons", "quizzes", "removed_quizzes"] {
+        assert!(!queried.iter().any(|t| t == overlay_table), "{queried:?}");
+    }
+}
+
+#[tokio::test]
 async fn most_recent_path_follows_logged_events() {
     let cfg = common::fresh_config();
     let db = common::create_db(&cfg).await;

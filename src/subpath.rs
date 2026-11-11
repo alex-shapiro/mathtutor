@@ -23,12 +23,13 @@ pub async fn cmd_subpath_set(
     let Some((tail, _)) = atoms.split_last() else {
         return Err(Error::SubpathEmpty);
     };
-    db.transact(&ViewRequest::path(explicit_id), |view, changes| {
+    let g = db.curriculum().graph()?;
+    let want = ViewRequest::path(explicit_id).without_overlay();
+    db.transact(&want, |view, changes| {
         let p = &view.path()?.row;
         if p.strategy != Strategy::TopDown {
             return Err(Error::SubpathNotTopDown);
         }
-        let g = view.graph()?;
         if !p.resolve_targets(&g)?.iter().any(|t| t == tail) {
             return Err(Error::SubpathTailNotTarget(tail.clone()));
         }
