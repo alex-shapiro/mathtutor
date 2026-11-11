@@ -12,7 +12,7 @@ use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::graph::Curriculum;
 use mathtutor::overlay::QuizDraft;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
-use mathtutor::view::Want;
+use mathtutor::view::{PathState, Want};
 use mathtutor::{Error, answer, cards, overlay, path, store};
 
 mod common;
@@ -328,7 +328,7 @@ async fn append_accepts_events_after_the_path_created_event_in_one_write() {
 }
 
 #[tokio::test]
-async fn recompute_reproduces_incremental_rows_exactly() {
+async fn replayed_history_reproduces_incremental_rows_exactly() {
     let db = common::fresh_db(PATH_ID).await;
     let t0 = Utc::now() - Duration::days(30);
     common::append(
@@ -359,8 +359,13 @@ async fn recompute_reproduces_incremental_rows_exactly() {
     .await;
 
     let before = common::path_state(&db, PATH_ID).await;
-    cards::recompute(&db, PATH_ID).await.unwrap();
-    let after = common::path_state(&db, PATH_ID).await;
+    let events = event_log::load(&db, PATH_ID).await.unwrap();
+    let (cards, taught) = cards::fold_history(PATH_ID, &events).unwrap();
+    let after = PathState {
+        cards: cards.into_iter().map(|c| (c.quiz_id.clone(), c)).collect(),
+        taught: taught.into_iter().collect(),
+        ..before.clone()
+    };
 
     assert_eq!(before.taught, after.taught);
     assert_eq!(after.taught["a"].count, 2);

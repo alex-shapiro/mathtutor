@@ -15,7 +15,9 @@ use crate::event_log::{self, Event};
 use crate::graph::Quiz;
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
-use crate::schema::{IMPORT_STATE_KEY, ImportMarker, OAuthClient, activity_key, events_stream};
+use crate::schema::{
+    CardRecord, IMPORT_STATE_KEY, ImportMarker, OAuthClient, activity_key, events_stream,
+};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::{OVERLAY_VERSION_KEY, Want};
 use crate::{Error, Result};
@@ -524,9 +526,6 @@ async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
 pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     let db = &db.for_import();
     let legacy = read_legacy(turso).await?;
-    for (path_id, events) in &legacy.events {
-        cards::fold_history(path_id, events)?;
-    }
     claim_import_target(db).await?;
     let mut report = Report {
         overlay_edits: legacy.overlay.len(),
@@ -550,9 +549,6 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
             report.events += events.len();
         } else {
             report.skipped += 1;
-        }
-        if !event_log::load(db, &p.id).await?.is_empty() {
-            cards::recompute(db, &p.id).await?;
         }
     }
     let source = read_legacy(turso).await?;
@@ -597,11 +593,13 @@ async fn verify_overlay(db: &Db, edits: &[Edit]) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Write path `p`, its `events`, and the `cards` and `taught` rows that the events produce in one transaction, or return `false` if the path exists.
 async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
     let existing = db.read_one(Op::get_row::<PathFile>(&p.id)).await?;
     if existing.row::<PathFile>()?.is_some() {
         return Ok(false);
     }
+    let (cards, taught) = cards::fold_history(&p.id, events)?;
     let latest = events.iter().map(|e| e.ts).max().unwrap_or(p.created_at);
     let stream = events_stream(&p.id);
     let mut ops = vec![
@@ -612,6 +610,12 @@ async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
         events
             .chunks(PAGE_MAX)
             .map(|c| Op::append(stream.clone(), c)),
+    );
+    ops.extend(cards.iter().map(|c| Op::upsert(&CardRecord::from(c))));
+    ops.extend(
+        taught
+            .into_iter()
+            .map(|(atom_id, t)| Op::upsert(&t.into_row(&p.id, atom_id))),
     );
     db.write(ops).await?;
     Ok(true)

@@ -5,9 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
 
-use crate::db::{Db, Op, Txn, run_txn};
 use crate::event_log::{Event, EventKind};
-use crate::schema::{self, CardRecord, TaughtRow};
+use crate::schema::CardRecord;
 use crate::types::Rating;
 use crate::view::Taught;
 use crate::{Error, Result};
@@ -196,35 +195,7 @@ impl TryFrom<CardRecord> for CardRow {
     }
 }
 
-/// Rebuild the `cards` and `taught` rows for `path_id` from its event stream.
-pub async fn recompute(db: &Db, path_id: &str) -> Result<()> {
-    run_txn!(db, |txn| recompute_in(&mut txn, path_id).await)
-}
-
-async fn recompute_in(txn: &mut Txn, path_id: &str) -> Result<()> {
-    let mut op = Op::read_stream(schema::events_stream(path_id), 0);
-    let mut events = Vec::new();
-    loop {
-        let page = txn.run_one(op.clone()).await?;
-        let next = op.next_page(&page);
-        events.extend(page.records::<Event>()?);
-        let Some(next) = next else { break };
-        op = next;
-    }
-    let (cards, taught) = fold_history(path_id, &events)?;
-    txn.write([
-        Op::delete_rows::<CardRecord>(path_id),
-        Op::delete_rows::<TaughtRow>(path_id),
-    ]);
-    txn.write(cards.iter().map(|c| Op::upsert(&CardRecord::from(c))));
-    txn.write(
-        taught
-            .into_iter()
-            .map(|(atom_id, t)| Op::upsert(&t.into_row(path_id, atom_id))),
-    );
-    Ok(())
-}
-
+/// Return the `cards` and `taught` rows of `path_id` that `events` produce, with cards ordered by quiz ID.
 pub fn fold_history(
     path_id: &str,
     events: &[Event],

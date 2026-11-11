@@ -1,13 +1,15 @@
 //! Integration tests for `mt import-turso` against a mock libSQL HTTP server.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
+use baserunna_client::bytes::Bytes;
+use baserunna_client::{BoxFuture, HttpTransport, Transport, TransportError, http};
 use chrono::{DateTime, Duration, Utc};
 use mathtutor::Error;
 use mathtutor::cards::{self, CardRow};
@@ -477,8 +479,7 @@ async fn open_import_blocks_a_handle_opened_before_it_until_it_verifies() {
     let recent = db.snapshot(&Want::path(None)).await.unwrap_err();
     let events = event_log::load(&db, "p_a").await.unwrap_err();
     let missing_stream = event_log::load(&db, "p_none").await.unwrap_err();
-    let recompute = cards::recompute(&db, "p_a").await.unwrap_err();
-    for e in [recent, events, missing_stream, recompute] {
+    for e in [recent, events, missing_stream] {
         assert!(matches!(e, Error::ImportInProgress), "{e}");
     }
     #[cfg(feature = "mcp")]
@@ -519,6 +520,66 @@ async fn completed_import_rejects_rerun_and_keeps_newer_content() {
         common::overlay(&db).await.atoms[&atom].lesson.as_deref(),
         Some("newer")
     );
+}
+
+/// Transport that records the operations of every request.
+struct RecordingTransport {
+    inner: HttpTransport,
+    requests: Arc<Mutex<Vec<Vec<serde_json::Value>>>>,
+}
+
+impl Transport for RecordingTransport {
+    fn send(
+        &self,
+        req: http::Request<Bytes>,
+    ) -> BoxFuture<'_, Result<http::Response<Bytes>, TransportError>> {
+        let body: serde_json::Value = serde_json::from_slice(req.body()).unwrap_or_default();
+        if let Some(ops) = body["ops"].as_array() {
+            self.requests.lock().unwrap().push(ops.clone());
+        }
+        self.inner.send(req)
+    }
+}
+
+#[tokio::test]
+async fn import_writes_projections_with_their_path_and_reads_each_stream_once() {
+    let cfg = common::fresh_config();
+    common::create_db(&cfg).await;
+    let requests = Arc::<Mutex<Vec<Vec<serde_json::Value>>>>::default();
+    let transport = RecordingTransport {
+        inner: cfg.transport().unwrap(),
+        requests: requests.clone(),
+    };
+    let db = Db::with_transport(&cfg, transport);
+
+    let r = import(legacy(), &db).await.expect("import");
+
+    assert!(r.mismatches.is_empty(), "{:?}", r.mismatches);
+    let requests = requests.lock().unwrap();
+    let names = |op: &serde_json::Value, name: &str, field: &str, value: &str| {
+        op["op"] == name && op[field] == value
+    };
+    let stream_reads = requests
+        .iter()
+        .flatten()
+        .filter(|op| names(op, "read_stream", "stream", "events.p_a"))
+        .count();
+    assert_eq!(stream_reads, 1, "only the verification reads the stream");
+    let write = requests
+        .iter()
+        .find(|ops| {
+            ops.iter()
+                .any(|op| names(op, "append", "stream", "events.p_a"))
+        })
+        .expect("the write of p_a");
+    for table in ["paths", "cards", "taught"] {
+        assert!(
+            write
+                .iter()
+                .any(|op| op["table"] == table && op["op"] != "query_rows"),
+            "the write of p_a writes {table}"
+        );
+    }
 }
 
 #[tokio::test]

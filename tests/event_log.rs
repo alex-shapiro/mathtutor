@@ -1,7 +1,7 @@
 //! Integration tests for the event log and derived card state.
 
 use chrono::{DateTime, Duration, Utc};
-use mathtutor::cards::{self, CardRow, CardState};
+use mathtutor::cards::{CardRow, CardState};
 use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::types::{Rating, Strategy};
 use mathtutor::view::Want;
@@ -269,43 +269,6 @@ async fn due_returns_only_past_due_in_order() {
 }
 
 #[tokio::test]
-async fn recompute_rebuilds_cards_identically_to_live_append() {
-    let db = common::fresh_db(PATH_ID).await;
-    let t0 = Utc::now() - Duration::days(60);
-    for (rating, ts) in [
-        (Rating::Good, t0),
-        (Rating::Hard, t0 + Duration::days(10)),
-        (Rating::Again, t0 + Duration::days(20)),
-        (Rating::Good, t0 + Duration::days(25)),
-    ] {
-        common::append(
-            &db,
-            &[common::at(ts, common::answered("atom.x.q1", rating))],
-        )
-        .await;
-    }
-
-    let before = common::path_state(&db, PATH_ID).await.cards["atom.x.q1"].clone();
-    cards::recompute(&db, PATH_ID).await.unwrap();
-    let after = common::path_state(&db, PATH_ID).await.cards["atom.x.q1"].clone();
-
-    let (b, a) = (before.state.unwrap(), after.state.unwrap());
-    assert!(
-        (b.stability - a.stability).abs() < 1e-6,
-        "stability {} vs {}",
-        b.stability,
-        a.stability
-    );
-    assert!((b.difficulty - a.difficulty).abs() < 1e-6);
-    assert_eq!(b.due, a.due);
-    assert_eq!(b.last_review, a.last_review);
-    assert_eq!(before.reps, after.reps);
-    assert_eq!(before.lapses, after.lapses);
-    assert_eq!(before.recent, after.recent);
-    assert_eq!(before.first_correct_at, after.first_correct_at);
-}
-
-#[tokio::test]
 async fn failed_transaction_does_not_write_events_or_cards() {
     let db = common::fresh_db(PATH_ID).await;
     let r: Result<(), Error> = db
@@ -322,36 +285,4 @@ async fn failed_transaction_does_not_write_events_or_cards() {
     assert_eq!(logged(&db, PATH_ID).await, []);
     let ps = common::path_state(&db, PATH_ID).await;
     assert!(ps.cards.is_empty());
-}
-
-#[tokio::test]
-async fn recompute_only_touches_target_path() {
-    let db = common::fresh_db(PATH_ID).await;
-    common::seed_path(&db, "p_other", &[], Strategy::BottomUp).await;
-    common::append(
-        &db,
-        &[answered(PATH_ID, "atom.x", "atom.x.q1", Rating::Good)],
-    )
-    .await;
-    common::append(
-        &db,
-        &[answered("p_other", "atom.y", "atom.y.q1", Rating::Good)],
-    )
-    .await;
-
-    cards::recompute(&db, PATH_ID).await.unwrap();
-
-    assert!(
-        common::path_state(&db, PATH_ID)
-            .await
-            .cards
-            .contains_key("atom.x.q1")
-    );
-    assert!(
-        common::path_state(&db, "p_other")
-            .await
-            .cards
-            .contains_key("atom.y.q1"),
-        "recompute must preserve cards on other paths"
-    );
 }
