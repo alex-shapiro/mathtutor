@@ -552,10 +552,8 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
 
     let limits = throttle::AddrLimits::new(&auth_db, auth.client_addrs.clone());
     let auth_state = AuthState::new(&auth, &public_url, auth_db.clone(), limits.clone());
-    // Run body logging after auth so unauthenticated requests are not buffered.
     let mut app = Router::new()
         .nest_service("/mcp", mcp_service)
-        .route_layer(middleware::from_fn(log_request_body))
         .route_layer(middleware::from_fn_with_state(auth_state, auth_middleware))
         .route("/health", get(health))
         .route("/ready", get(ready).with_state(Readiness::new(db.clone())));
@@ -727,42 +725,6 @@ fn token_check_unavailable() -> Response {
         http::HeaderValue::from_static("5"),
     );
     resp
-}
-
-const MAX_LOGGED_BODY: usize = 1 << 20;
-
-async fn log_request_body(req: Request<Body>, next: Next) -> Response {
-    if !tracing::enabled!(tracing::Level::DEBUG) {
-        return next.run(req).await;
-    }
-    let too_big = req
-        .headers()
-        .get(http::header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<usize>().ok())
-        .is_some_and(|n| n > MAX_LOGGED_BODY);
-    if too_big {
-        tracing::debug!("mcp request body too large to log");
-        return next.run(req).await;
-    }
-    let (parts, body) = req.into_parts();
-    let bytes = match axum::body::to_bytes(body, MAX_LOGGED_BODY).await {
-        Ok(b) => b,
-        Err(e) => {
-            // Return 400 because the request body stream has already been consumed.
-            tracing::warn!(error = %e, "mcp request body buffering failed");
-            let mut resp = Response::new(Body::empty());
-            *resp.status_mut() = StatusCode::BAD_REQUEST;
-            return resp;
-        }
-    };
-    if let Ok(s) = std::str::from_utf8(&bytes) {
-        tracing::debug!(body = %s, "mcp request body");
-    } else {
-        tracing::debug!(bytes = bytes.len(), "mcp request body (non-utf8)");
-    }
-    next.run(Request::from_parts(parts, Body::from(bytes)))
-        .await
 }
 
 async fn health() -> &'static str {
