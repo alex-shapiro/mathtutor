@@ -223,19 +223,20 @@ The curriculum graph is embedded into the binary at build time from `curriculum/
 
 User state is stored in a Baserunna database configured via `BASERUNNA_DB`, `BASERUNNA_URL`, and `BASERUNNA_TOKEN`. `BASERUNNA_DB` defaults to `mathtutor`, and `BASERUNNA_URL` defaults to `https://baserunna.fly.dev`. Only `mt path new` and `mt import-turso` create a missing database, and each reports the creation. If the creation stops before it completes, the next run completes it. Other commands fail with exit code `2` if the database does not exist, so a wrong `BASERUNNA_DB` cannot start a second learner history. `mt mcp` checks the database at startup and stops if it does not exist.
 
-| Data                 | Storage type             | Purpose                                                   |
-| -------------------- | ------------------------ | --------------------------------------------------------- |
-| `paths`              | Table, keyed by path ID  | Path goal, strategy, target IDs, and active subpath       |
-| `events.<path id>`   | Stream                   | Append-only learning history for a path                   |
-| `cards`              | Table, by `(path, quiz)` | Derived FSRS card state and answer statistics             |
-| `taught`             | Table, by `(path, atom)` | Derived set of lessons taught on a path                   |
-| `lessons`            | Table, by atom ID        | User-authored lesson bodies in the overlay                |
-| `quizzes`            | Table, by quiz ID        | User-authored or updated quizzes in the overlay           |
-| `removed_quizzes`    | Table, by quiz ID        | Deleted quiz tombstones in the overlay                    |
-| `activity/<path id>` | Key                      | Timestamp of the latest write for a path                  |
-| `overlay_version`    | Key                      | Random token replaced on every overlay write              |
+| Data                 | Storage type             | Purpose                                                    |
+| -------------------- | ------------------------ | ---------------------------------------------------------- |
+| `paths`              | Table, keyed by path ID  | Path goal, strategy, target IDs, and active subpath        |
+| `events.<path id>`   | Stream                   | Append-only learning history for a path                    |
+| `cards`              | Table, by `(path, quiz)` | Derived FSRS card state and answer statistics              |
+| `taught`             | Table, by `(path, atom)` | Derived set of lessons taught on a path                    |
+| `lessons`            | Table, by atom ID        | User-authored lesson bodies in the overlay                 |
+| `quizzes`            | Table, by quiz ID        | User-authored or updated quizzes in the overlay            |
+| `removed_quizzes`    | Table, by quiz ID        | Deleted quiz tombstones in the overlay                     |
+| `activity/<path id>` | Key                      | Timestamp of the latest write for a path                   |
+| `overlay_version`    | Key                      | Random token replaced on every overlay write               |
+| `mathtutor_state`    | Key                      | Schema version of the tables and the progress of an import |
 
-Each write command executes as a serializable transaction that reads a snapshot and commits with optimistic concurrency control. Read commands read the latest state without a transaction. A command without `--path` selects the most recent path once, before its first attempt. If a write conflict occurs, the transaction is retried. If a commit response is lost, the client queries Baserunna for the commit status. If the status is unavailable, the command exits with code `3` because its outcome is unknown. The client caches the overlay in memory and under `$MATHTUTOR_HOME`, which defaults to `~/.mathtutor`. It reloads the overlay only if `overlay_version` changes. A write transaction reads only `overlay_version`. The client loads the overlay rows before the transaction and restarts the transaction if the version changes, so the overlay size does not count against the 16 MB read limit of a transaction.
+Each write command executes as a serializable transaction that reads a snapshot and commits with optimistic concurrency control. Read commands read the latest state without a transaction. Each request also reads `mathtutor_state`, and the command fails if the database has a different schema version or an open import. A command without `--path` selects the most recent path once, before its first attempt. If a write conflict occurs, the transaction is retried. If a commit response is lost, the client queries Baserunna for the commit status. If the status is unavailable, the command exits with code `3` because its outcome is unknown. The client caches the overlay in memory and under `$MATHTUTOR_HOME`, which defaults to `~/.mathtutor`. It reloads the overlay only if `overlay_version` changes. A write transaction reads only `overlay_version`. The client loads the overlay rows before the transaction and restarts the transaction if the version changes, so the overlay size does not count against the 16 MB read limit of a transaction.
 
 `mt import-turso` migrates a libSQL database into an empty Baserunna database. It reads the libSQL URL from `--url` or `TURSO_URL`, and it sends `TURSO_AUTH_TOKEN` as the libSQL auth token if the variable is set.
 

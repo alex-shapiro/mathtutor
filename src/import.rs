@@ -13,7 +13,7 @@ use crate::event_log::{self, Event};
 use crate::graph::{self, Quiz};
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
-use crate::schema::{IMPORT_STATE_KEY, ImportMarker, OAuthClient};
+use crate::schema::{DbState, ImportMarker, OAuthClient, STATE_KEY};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::{OVERLAY_VERSION_KEY, View, Want};
 use crate::{Error, Result};
@@ -544,7 +544,7 @@ async fn claim_import_target(db: &Db) -> Result<()> {
 async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
     let results = txn
         .run(&[
-            Op::get(IMPORT_STATE_KEY),
+            Op::get(STATE_KEY),
             Op::get(OVERLAY_VERSION_KEY),
             Op::query_all::<PathFile>(),
         ])
@@ -552,7 +552,7 @@ async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
     let [marker, overlay_version, paths]: [_; 3] = results
         .try_into()
         .map_err(|_| Error::BadRow("import target read returned the wrong result count".into()))?;
-    match ImportMarker::from_entry(marker.entry()?)? {
+    match DbState::from_entry(marker.entry()?.as_ref()).import {
         Some(ImportMarker::Open) => return Ok(()),
         Some(ImportMarker::Complete) => return Err(Error::ImportAlreadyComplete),
         None => {}

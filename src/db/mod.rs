@@ -3,7 +3,6 @@
 pub mod ts;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,7 +11,7 @@ pub use baserunna_client::{self as client, Op, OpResult, Row, Transport};
 use client::api::ErrorCode;
 
 use crate::graph::Curriculum;
-use crate::schema::{self, IMPORT_STATE_KEY, ImportMarker, OAuthRow, SchemaState};
+use crate::schema::{self, DbState, ImportMarker, OAuthRow, SchemaState};
 use crate::{Error, Result};
 
 pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
@@ -63,7 +62,6 @@ pub struct Db {
     pub(crate) cache_file: Option<PathBuf>,
     pub(crate) curriculum: Arc<Curriculum>,
     allow_open_import: bool,
-    schema_checked: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for Db {
@@ -74,34 +72,10 @@ impl std::fmt::Debug for Db {
     }
 }
 
-/// Checks that a request runs before its own operations.
-struct Gate {
-    /// Fail if an import into the database is open.
-    import: bool,
-    /// Fail if the database does not exist or has a different schema version.
-    schema: bool,
-}
-
-impl Gate {
-    fn ops(&self, ops: &[Op]) -> Vec<Op> {
-        let schema = self.schema.then(schema::version_op);
-        let import = self.import.then(|| Op::get(IMPORT_STATE_KEY));
-        schema
-            .into_iter()
-            .chain(import)
-            .chain(ops.iter().cloned())
-            .collect()
-    }
-
-    fn len(&self) -> usize {
-        usize::from(self.schema) + usize::from(self.import)
-    }
-}
-
 impl Db {
     /// Create the database and its tables if they do not exist, and return `true` if this call created the database.
     pub async fn create_if_missing(&self) -> Result<bool> {
-        let state = schema::state(&self.client).await?;
+        let state = schema::state(&self.client).await?.schema;
         let created = state == SchemaState::NoDatabase;
         match state {
             SchemaState::Current => {}
@@ -112,17 +86,13 @@ impl Db {
             }
             SchemaState::NoTables => schema::create_tables(&self.client).await?,
         }
-        self.schema_checked.store(true, Ordering::Relaxed);
         Ok(created)
     }
 
     /// Fail with [`Error::DatabaseNotFound`] or [`Error::SchemaMismatch`] unless the database holds the tables of this release.
     pub async fn require_database(&self) -> Result<()> {
-        match schema::state(&self.client).await? {
-            SchemaState::Current => {
-                self.schema_checked.store(true, Ordering::Relaxed);
-                Ok(())
-            }
+        match schema::state(&self.client).await?.schema {
+            SchemaState::Current => Ok(()),
             other => Err(self.schema_error(other)),
         }
     }
@@ -174,58 +144,44 @@ impl Db {
         }
     }
 
-    fn gate(&self) -> Gate {
-        Gate {
-            import: !self.allow_open_import,
-            schema: !self.schema_checked.load(Ordering::Relaxed),
+    /// Fail unless `state` permits this handle to use the database.
+    fn check_state(&self, state: DbState) -> Result<()> {
+        if state.schema != SchemaState::Current {
+            return Err(self.schema_error(state.schema));
         }
+        if state.import == Some(ImportMarker::Open) && !self.allow_open_import {
+            return Err(Error::ImportInProgress);
+        }
+        Ok(())
     }
 
-    /// Check the results of `gate` at the front of `results` and return the remaining results.
-    fn pass_gate(&self, gate: &Gate, mut results: Vec<OpResult>) -> Result<Vec<OpResult>> {
-        let rest = results.split_off(gate.len().min(results.len()));
-        let mut checks = results.into_iter();
-        if gate.schema {
-            let entry = checks.next().map(OpResult::entry).transpose()?.flatten();
-            match SchemaState::from_entry(entry.as_ref()) {
-                SchemaState::Current => self.schema_checked.store(true, Ordering::Relaxed),
-                other => return Err(self.schema_error(other)),
-            }
+    /// Check the state that a request read before `ops`, and return the results of `ops`.
+    fn pass_gate(&self, mut results: Vec<OpResult>) -> Result<Vec<OpResult>> {
+        if results.is_empty() {
+            return Err(Error::BadRow("request returned no state".into()));
         }
-        if gate.import {
-            let entry = checks.next().map(OpResult::entry).transpose()?.flatten();
-            if ImportMarker::from_entry(entry)? == Some(ImportMarker::Open) {
-                return Err(Error::ImportInProgress);
-            }
-        }
+        let rest = results.split_off(1);
+        let entry = results.pop().map(OpResult::entry).transpose()?.flatten();
+        self.check_state(DbState::from_entry(entry.as_ref()))?;
         Ok(rest)
     }
 
-    /// Return the error for a failed request, and report a missing database instead of a missing table or stream.
-    async fn gate_failure(&self, gate: &Gate, e: client::Error) -> Error {
-        if !gate.schema || e.code() != Some(ErrorCode::NotFound) {
+    /// Return the error for a failed request, and report a missing database or a blocked state instead of a missing table or stream.
+    async fn gate_failure(&self, e: client::Error) -> Error {
+        if e.code() != Some(ErrorCode::NotFound) {
             return e.into();
         }
         match schema::state(&self.client).await {
-            Ok(SchemaState::Current) => {
-                self.schema_checked.store(true, Ordering::Relaxed);
-                e.into()
-            }
-            Ok(other) => self.schema_error(other),
+            Ok(state) => self.check_state(state).err().unwrap_or_else(|| e.into()),
             Err(check) => check,
         }
     }
 
     /// Read `ops` at the latest version after the database and import checks.
     pub(crate) async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
-        let gate = self.gate();
-        let all = gate.ops(ops);
-        if all.is_empty() {
-            return Ok(Vec::new());
-        }
-        match self.client.read(&all).await {
-            Ok(results) => self.pass_gate(&gate, results),
-            Err(e) => Err(self.gate_failure(&gate, e).await.into_not_applied()),
+        match self.client.read(&gated(ops)).await {
+            Ok(results) => self.pass_gate(results),
+            Err(e) => Err(self.gate_failure(e).await.into_not_applied()),
         }
     }
 
@@ -288,7 +244,7 @@ impl Db {
     pub(crate) fn begin(&self) -> Txn {
         Txn {
             inner: self.client.begin(),
-            gate: Some(self.gate()),
+            checked: false,
             db: self.clone(),
         }
     }
@@ -322,7 +278,6 @@ impl Db {
             cache_file,
             curriculum: cfg.curriculum.clone(),
             allow_open_import: false,
-            schema_checked: Arc::default(),
         }
     }
 }
@@ -373,25 +328,27 @@ impl Retry {
 /// Serializable transaction whose first request runs the database and import checks.
 pub(crate) struct Txn {
     inner: client::Txn,
-    gate: Option<Gate>,
+    /// A request of this transaction ran the database and import checks.
+    checked: bool,
     db: Db,
 }
 
 impl Txn {
     /// Execute `ops` in the transaction.
     pub(crate) async fn run(&mut self, ops: &[Op]) -> Result<Vec<OpResult>> {
-        let Some(gate) = self.gate.take() else {
+        if self.checked {
             return Ok(self.inner.run(ops).await?);
-        };
-        match self.inner.run(&gate.ops(ops)).await {
-            Ok(results) => self.db.pass_gate(&gate, results),
-            Err(e) => Err(self.db.gate_failure(&gate, e).await),
+        }
+        self.checked = true;
+        match self.inner.run(&gated(ops)).await {
+            Ok(results) => self.db.pass_gate(results),
+            Err(e) => Err(self.db.gate_failure(e).await),
         }
     }
 
     /// Run the database and import checks if no request of this transaction has run them.
     async fn check_gate(&mut self) -> Result<()> {
-        if self.gate.is_some() {
+        if !self.checked {
             self.run(&[]).await?;
         }
         Ok(())
@@ -410,6 +367,13 @@ impl Txn {
     pub(crate) fn write(&mut self, ops: impl IntoIterator<Item = Op>) {
         self.inner.write(ops);
     }
+}
+
+/// Return `ops` after the read of the database state that each request checks.
+fn gated(ops: &[Op]) -> Vec<Op> {
+    std::iter::once(schema::state_op())
+        .chain(ops.iter().cloned())
+        .collect()
 }
 
 fn cache_name(url: &str, db: &str) -> String {

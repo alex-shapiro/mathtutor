@@ -158,6 +158,39 @@ async fn commands_reject_a_database_without_math_tutor_tables() {
 }
 
 #[tokio::test]
+async fn a_handle_checks_the_database_state_in_every_request() {
+    let cfg = common::fresh_config();
+    let db = common::create_db(&cfg).await;
+    common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
+    let want = Want::path(Some(PATH_ID));
+    db.snapshot(&want).await.unwrap();
+    let raw = raw_db(&cfg);
+
+    raw.write(&[Op::put("mathtutor_state", r#"{"schema":"99"}"#)])
+        .await
+        .unwrap();
+    let e = db.snapshot(&want).await.unwrap_err();
+    assert!(
+        matches!(&e, Error::SchemaMismatch { found, .. } if found == "99"),
+        "{e:?}"
+    );
+
+    raw.write(&[Op::put(
+        "mathtutor_state",
+        r#"{"schema":"2","import":"open"}"#,
+    )])
+    .await
+    .unwrap();
+    let e = db.snapshot(&want).await.unwrap_err();
+    assert!(matches!(e, Error::ImportInProgress), "{e:?}");
+
+    raw.delete().await.unwrap();
+    raw.ensure().await.unwrap();
+    let e = db.snapshot(&want).await.unwrap_err();
+    assert_database_not_found(&e, &cfg);
+}
+
+#[tokio::test]
 async fn commands_check_the_database_in_their_first_request() {
     let cfg = common::fresh_config();
     let seeded = common::create_db(&cfg).await;

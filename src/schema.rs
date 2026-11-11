@@ -10,42 +10,41 @@ use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{Error, Result};
 
 pub(crate) const VERSION: &str = "2";
-const VERSION_KEY: &str = "schema_version";
 
-/// Key that records the progress of `mt import-turso` on this database.
-pub(crate) const IMPORT_STATE_KEY: &str = "turso_import_state";
+/// Key that records the schema version of the tables and the progress of `mt import-turso`.
+pub(crate) const STATE_KEY: &str = "mathtutor_state";
 
 /// Stored progress of `mt import-turso` on a database.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ImportMarker {
     Open,
     Complete,
 }
 
 impl ImportMarker {
-    const OPEN_VALUE: &'static str = "running";
-    const COMPLETE_VALUE: &'static str = "complete";
-
-    /// Decode the marker stored at [`IMPORT_STATE_KEY`].
-    pub(crate) fn from_entry(entry: Option<Entry>) -> Result<Option<Self>> {
-        let Some(entry) = entry else {
-            return Ok(None);
-        };
-        match entry.value.data().map(AsRef::as_ref) {
-            Some(v) if v == Self::OPEN_VALUE.as_bytes() => Ok(Some(Self::Open)),
-            Some(v) if v == Self::COMPLETE_VALUE.as_bytes() => Ok(Some(Self::Complete)),
-            _ => Err(Error::BadRow(format!("{IMPORT_STATE_KEY}: unknown value"))),
-        }
-    }
-
-    /// Return the write operation that stores this marker.
+    /// Return the write operation that stores this marker with the schema version of this release.
     pub(crate) fn write_op(self) -> Op {
-        let value = match self {
-            Self::Open => Self::OPEN_VALUE,
-            Self::Complete => Self::COMPLETE_VALUE,
-        };
-        Op::put(IMPORT_STATE_KEY, value)
+        state_write_op(Some(self))
     }
+}
+
+/// Value stored at [`STATE_KEY`].
+#[derive(Serialize, Deserialize)]
+struct StoredState {
+    schema: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    import: Option<ImportMarker>,
+}
+
+/// Return the operation that stores the schema version of this release and `import`.
+fn state_write_op(import: Option<ImportMarker>) -> Op {
+    let state = StoredState {
+        schema: VERSION.to_string(),
+        import,
+    };
+    let value = serde_json::to_vec(&state).expect("a stored state serializes");
+    Op::put(STATE_KEY, value)
 }
 
 /// Return the stream key for the event log of `path_id`.
@@ -311,7 +310,7 @@ pub fn tables() -> Vec<NewTable> {
     ]
 }
 
-/// Schema state of a database, read from [`VERSION_KEY`].
+/// Schema state of a database.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SchemaState {
     /// The database does not exist.
@@ -323,27 +322,52 @@ pub(crate) enum SchemaState {
     Other(String),
 }
 
-impl SchemaState {
-    /// Decode the schema state from the entry stored at [`VERSION_KEY`].
+/// Schema state and import progress of a database, read from [`STATE_KEY`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DbState {
+    pub schema: SchemaState,
+    pub import: Option<ImportMarker>,
+}
+
+impl DbState {
+    /// Decode the state from the entry stored at [`STATE_KEY`] of an existing database.
     pub(crate) fn from_entry(entry: Option<&Entry>) -> Self {
-        match entry.and_then(|e| e.value.data()) {
-            None => Self::NoTables,
-            Some(v) if v.as_ref() == VERSION.as_bytes() => Self::Current,
-            Some(v) => Self::Other(String::from_utf8_lossy(v).into_owned()),
+        let Some(value) = entry.map(|e| e.value.data().cloned().unwrap_or_default()) else {
+            return Self {
+                schema: SchemaState::NoTables,
+                import: None,
+            };
+        };
+        match serde_json::from_slice::<StoredState>(&value) {
+            Ok(stored) => Self {
+                schema: if stored.schema == VERSION {
+                    SchemaState::Current
+                } else {
+                    SchemaState::Other(stored.schema)
+                },
+                import: stored.import,
+            },
+            Err(_) => Self {
+                schema: SchemaState::Other(String::from_utf8_lossy(&value).into_owned()),
+                import: None,
+            },
         }
     }
 }
 
-/// Return the operation that reads the schema version.
-pub(crate) fn version_op() -> Op {
-    Op::get(VERSION_KEY)
+/// Return the operation that reads the state of a database.
+pub(crate) fn state_op() -> Op {
+    Op::get(STATE_KEY)
 }
 
-/// Read the schema state of `db`.
-pub(crate) async fn state(db: &client::Db) -> Result<SchemaState> {
-    match db.read_one(version_op()).await {
-        Ok(r) => Ok(SchemaState::from_entry(r.entry()?.as_ref())),
-        Err(e) if e.code() == Some(ErrorCode::NotFound) => Ok(SchemaState::NoDatabase),
+/// Read the state of `db`.
+pub(crate) async fn state(db: &client::Db) -> Result<DbState> {
+    match db.read_one(state_op()).await {
+        Ok(r) => Ok(DbState::from_entry(r.entry()?.as_ref())),
+        Err(e) if e.code() == Some(ErrorCode::NotFound) => Ok(DbState {
+            schema: SchemaState::NoDatabase,
+            import: None,
+        }),
         Err(e) => Err(Error::from(e).into_not_applied()),
     }
 }
@@ -361,7 +385,7 @@ pub(crate) async fn create_tables(db: &client::Db) -> Result<()> {
             });
         }
     }
-    db.write(&[Op::put(VERSION_KEY, VERSION)]).await?;
+    db.write(&[state_write_op(None)]).await?;
     Ok(())
 }
 
