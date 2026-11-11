@@ -18,7 +18,7 @@ use crate::{Error, Result};
 pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
 pub const DEFAULT_DB: &str = "mathtutor";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DbConfig {
     pub url: String,
     pub token: String,
@@ -27,6 +27,17 @@ pub struct DbConfig {
     pub cache_dir: Option<PathBuf>,
     /// Curriculum that the user overlay amends.
     pub curriculum: Arc<Curriculum>,
+}
+
+impl std::fmt::Debug for DbConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbConfig")
+            .field("url", &self.url)
+            .field("token", &"<hidden>")
+            .field("db", &self.db)
+            .field("cache_dir", &self.cache_dir)
+            .finish_non_exhaustive()
+    }
 }
 
 impl DbConfig {

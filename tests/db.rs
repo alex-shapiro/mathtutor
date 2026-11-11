@@ -111,6 +111,16 @@ async fn setup_rejects_an_existing_table_with_other_columns() {
     assert!(e.to_string().contains("BASERUNNA_DB"), "{e}");
 }
 
+#[test]
+fn debug_output_of_the_config_hides_the_token() {
+    let cfg = common::fresh_config();
+
+    let shown = format!("{cfg:?}");
+
+    assert!(!shown.contains(&cfg.token), "{shown}");
+    assert!(shown.contains(&cfg.db), "{shown}");
+}
+
 /// Assert that `e` reports the missing database of `cfg`.
 fn assert_database_not_found(e: &Error, cfg: &DbConfig) {
     let message = e.to_string();
