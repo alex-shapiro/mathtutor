@@ -188,7 +188,7 @@ async fn learner_commands_ignore_the_authorization_schema_version() {
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
     db.snapshot(&Want::path(Some(PATH_ID))).await.unwrap();
 
-    let e = db.with_auth_tables().await.unwrap_err();
+    let e = db.with_auth_tables().check_usable().await.unwrap_err();
     assert!(
         matches!(&e, Error::SchemaMismatch { tables: TableSet::Auth, found, .. } if found == "99"),
         "{e:?}"
@@ -201,7 +201,8 @@ async fn the_server_handle_creates_and_checks_the_authorization_tables() {
     let db = common::create_db(&cfg).await;
     assert_eq!(table_names(&cfg).await, TABLES);
 
-    let server = db.with_auth_tables().await.unwrap();
+    let server = db.with_auth_tables();
+    server.snapshot(&Want::overlay()).await.unwrap();
     let mut names = table_names(&cfg).await;
     names.retain(|n| !TABLES.contains(&n.as_str()));
     let mut auth: Vec<String> = TableSet::Auth
@@ -1380,7 +1381,7 @@ async fn a_rejected_token_names_the_server_and_the_settings() {
     };
     let db = Db::connect(&wrong).unwrap();
     let errors = [
-        db.require_database().await.unwrap_err(),
+        db.check_usable().await.unwrap_err(),
         db.create_if_missing().await.unwrap_err(),
         db.snapshot(&Want::overlay()).await.unwrap_err(),
         path::cmd_path_new(&db, "g", &["fnd.1.1.1".into()], Strategy::BottomUp)

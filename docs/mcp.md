@@ -67,7 +67,7 @@ Only the metadata routes, `/oauth/register`, and `/oauth/token` send CORS header
 
 ### Health checks
 
-- **`/health`:** Returns `200 ok` without a Baserunna request. The Fly service check uses it, so a Baserunna outage does not take the server out of routing or make Fly restart it.
+- **`/health`:** Returns `200 ok` without a Baserunna request. The server starts and answers `/health` before its first Baserunna request. The Fly service check uses it, so a Baserunna outage does not take the server out of routing or make Fly restart it, also if the outage starts while the machine is stopped.
 - **`/ready`:** Reads the state of the database and returns `200 ready` if the tools can use it. Otherwise it returns `503` with the error kind, such as `{"ready": false, "kind": "config"}` for a missing database or a rejected key. The server reuses each result for 10 seconds, so unauthenticated requests to `/ready` send at most one Baserunna request in each interval. The top-level check in `fly.toml` and the last step of the deploy workflow use it, so a deployment that cannot use its database fails.
 
 Neither route needs authentication.
@@ -92,4 +92,4 @@ curl -X POST "$BASERUNNA_URL/v1/api-keys" -H "Authorization: Bearer <session tok
   -d '{"name": "mt mcp", "db": "mathtutor", "rate_limit": 50}'
 ```
 
-The `rate_limit` value is the number of requests per second on each Baserunna node. The server does not create the database. It stops at startup if the database does not exist. See "Baserunna keys" in `docs/design.md`.
+The `rate_limit` value is the number of requests per second on each Baserunna node. The server does not create the database. If the database does not exist, the server still starts, `/ready` fails with the `config` kind, and each tool call fails with an error that names `BASERUNNA_DB`. See "Baserunna keys" in `docs/design.md`.

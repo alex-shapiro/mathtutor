@@ -43,6 +43,14 @@ async fn spawn_server_with(auth: AuthConfig) -> ServerHandle {
 
 async fn spawn_server_on(cfg: mathtutor::db::DbConfig, auth: AuthConfig) -> ServerHandle {
     common::create_db(&cfg).await;
+    spawn_server_without_setup(cfg, auth).await
+}
+
+/// Start a server on `cfg` without a request to its database.
+async fn spawn_server_without_setup(
+    cfg: mathtutor::db::DbConfig,
+    auth: AuthConfig,
+) -> ServerHandle {
     let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = probe.local_addr().unwrap();
     drop(probe);
@@ -119,31 +127,52 @@ async fn rejects_wrong_api_key_with_401() {
 }
 
 #[tokio::test]
-async fn server_stops_at_startup_without_creating_a_missing_database() {
+async fn server_reports_a_missing_database_without_creating_it() {
     let cfg = common::fresh_config();
     let auth = AuthConfig {
         api_key: Some(API_KEY.into()),
         ..AuthConfig::default()
     };
+    let server = spawn_server_without_setup(cfg.clone(), auth).await;
 
-    let e = mcp::run("127.0.0.1:0", auth, cfg.clone())
-        .await
-        .unwrap_err();
-
-    let message = e.to_string();
-    assert!(
-        matches!(e, mathtutor::Error::DatabaseNotFound { .. }),
-        "{e:?}"
-    );
+    let health = client().get(server.url("/health")).send().await.unwrap();
+    assert_eq!(health.status(), 200);
+    let ready = client().get(server.url("/ready")).send().await.unwrap();
+    assert_eq!(ready.status(), 503);
+    assert_eq!(ready.json::<Value>().await.unwrap()["kind"], "config");
+    let paths = call_tool(&server, "get_paths", json!({})).await;
+    let message = paths["content"][0]["text"].as_str().unwrap();
     assert!(message.contains("BASERUNNA_DB"), "{message}");
-    assert!(message.contains("BASERUNNA_URL"), "{message}");
     assert!(!message.contains("mt path new"), "{message}");
+
     let raw = baserunna_client::Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
     let info = raw.db(&cfg.db).info().await;
     assert!(
         info.is_err(),
         "the server must not create the database: {info:?}"
     );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn server_answers_health_while_baserunna_is_unreachable() {
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let cfg = mathtutor::db::DbConfig {
+        url: format!("http://{}", closed.local_addr().unwrap()),
+        ..common::fresh_config()
+    };
+    drop(closed);
+    let auth = AuthConfig {
+        api_key: Some(API_KEY.into()),
+        ..AuthConfig::default()
+    };
+    let server = spawn_server_without_setup(cfg, auth).await;
+
+    let health = client().get(server.url("/health")).send().await.unwrap();
+    assert_eq!(health.status(), 200);
+    let ready = client().get(server.url("/ready")).send().await.unwrap();
+    assert_eq!(ready.status(), 503);
+    server.stop().await;
 }
 
 #[tokio::test]

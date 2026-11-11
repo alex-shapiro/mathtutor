@@ -596,7 +596,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         })
         .await?;
     }
-    let auth = db.with_auth_tables().await?;
+    let auth = db.with_auth_tables();
     for clients in legacy.oauth_clients.chunks(IMPORT_WRITE_BATCH) {
         auth.replace_oauth_clients(clients).await?;
     }
@@ -773,7 +773,8 @@ async fn verify_row_counts(
     let paths = stored.paths();
     let atoms = stored.overlay()?.atoms.values();
     let mut oauth_clients = 0;
-    for page in db.read_pages(Op::query_all::<OAuthClient>()).await? {
+    let auth = db.with_auth_tables();
+    for page in auth.read_pages(Op::query_all::<OAuthClient>()).await? {
         oauth_clients += page.rows::<OAuthClient>()?.len();
     }
     let stored = RowCounts::from([

@@ -135,36 +135,13 @@ impl Db {
         Ok(())
     }
 
-    /// Fail with [`Error::DatabaseNotFound`] or [`Error::SchemaMismatch`] unless the database holds the learner tables of this release.
-    pub async fn require_database(&self) -> Result<()> {
-        let state = schema::state(&self.client, TableSet::Learner)
-            .await
-            .map_err(|e| self.explain_key_error(e))?;
-        match state.schema {
-            SchemaState::Current => Ok(()),
-            other => Err(self.schema_error(TableSet::Learner, other)),
-        }
-    }
-
-    /// Create the authorization tables if they are missing, and return a handle whose requests also check their schema version.
-    ///
-    /// Fails like [`Self::require_database`] if the learner tables are not ready.
-    pub async fn with_auth_tables(&self) -> Result<Self> {
-        self.require_database().await?;
-        let state = schema::state(&self.client, TableSet::Auth)
-            .await
-            .map_err(|e| self.explain_key_error(e))?;
-        match state.schema {
-            SchemaState::Current => {}
-            SchemaState::NoTables => schema::create_tables(&self.client, TableSet::Auth)
-                .await
-                .map_err(|e| self.explain_key_error(e))?,
-            other => return Err(self.schema_error(TableSet::Auth, other)),
-        }
-        Ok(Self {
+    /// Return a handle whose requests also check the authorization tables, and create them in the first request if they are missing.
+    #[must_use]
+    pub fn with_auth_tables(&self) -> Self {
+        Self {
             checks_auth_tables: true,
             ..self.clone()
-        })
+        }
     }
 
     /// Return the error that reports `state` of `set` for a database that is not ready.
