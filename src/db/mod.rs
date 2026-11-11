@@ -124,12 +124,16 @@ impl Db {
         Ok(created)
     }
 
-    /// Create the tables of each table set that this handle checks and that the existing database does not hold.
-    async fn create_missing_tables(&self) -> Result<()> {
+    /// Create the tables of each checked table set that the existing database does not hold, and replace the tables of each set that an older release stored.
+    async fn set_up_tables(&self) -> Result<()> {
         for &set in self.checked_sets() {
-            let state = schema::state(&self.client, set).await?;
-            if state.schema == SchemaState::NoTables {
-                schema::create_tables(&self.client, set).await?;
+            match schema::state(&self.client, set).await?.schema {
+                SchemaState::NoTables => schema::create_tables(&self.client, set).await?,
+                SchemaState::Other(found) if set.replaces(&found) => {
+                    tracing::warn!(tables = %set, %found, "replacing tables of an older schema version");
+                    schema::recreate_tables(&self.client, set).await?;
+                }
+                _ => {}
             }
         }
         Ok(())
@@ -141,6 +145,15 @@ impl Db {
         Self {
             checks_auth_tables: true,
             ..self.clone()
+        }
+    }
+
+    /// Return `true` if [`Self::set_up_tables`] repairs the database state that `e` reports.
+    fn needs_table_setup(e: &Error) -> bool {
+        match e {
+            Error::TablesMissing { .. } => true,
+            Error::SchemaMismatch { tables, found, .. } => tables.replaces(found),
+            _ => false,
         }
     }
 
@@ -289,11 +302,11 @@ impl Db {
         e.into()
     }
 
-    /// Read `ops` at the latest version after the database and import checks, and create the missing tables first.
+    /// Read `ops` at the latest version after the database and import checks, and set up the tables first if necessary.
     pub(crate) async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
         match self.read_once(ops).await {
-            Err(Error::TablesMissing { .. }) => {
-                self.create_missing_tables()
+            Err(e) if Self::needs_table_setup(&e) => {
+                self.set_up_tables()
                     .await
                     .map_err(|e| self.explain_key_error(e).into_not_applied())?;
                 self.read_once(ops).await
@@ -388,7 +401,7 @@ impl Db {
         Txn {
             inner: self.client.begin(),
             checked: false,
-            created_tables: false,
+            ran_table_setup: false,
             db: self.clone(),
         }
     }
@@ -397,7 +410,7 @@ impl Db {
     pub(crate) fn retry(&self) -> Retry {
         Retry {
             inner: self.client.retry(),
-            created_tables: false,
+            ran_table_setup: false,
         }
     }
 
@@ -448,14 +461,14 @@ pub(crate) use run_txn;
 /// Retry state of a [`run_txn`] loop.
 pub(crate) struct Retry {
     inner: client::Retry,
-    /// An attempt of this loop created missing tables.
-    created_tables: bool,
+    /// An attempt of this loop set up missing or outdated tables.
+    ran_table_setup: bool,
 }
 
 impl Retry {
     /// Commit `txn` if `result` is `Ok`, or abort it, and return `None` if the attempt must restart.
     ///
-    /// An attempt restarts once after its transaction created missing tables.
+    /// An attempt restarts once after its transaction set up missing or outdated tables.
     pub(crate) async fn finish<T, E>(
         &mut self,
         mut txn: Txn,
@@ -468,8 +481,8 @@ impl Retry {
             Ok(out) => txn.check_gate().await.map(|()| out).map_err(E::from),
             Err(e) => Err(e),
         };
-        let restart = txn.created_tables && !self.created_tables;
-        self.created_tables |= txn.created_tables;
+        let restart = txn.ran_table_setup && !self.ran_table_setup;
+        self.ran_table_setup |= txn.ran_table_setup;
         let db = txn.db.clone();
         match self.inner.finish(txn.inner, result).await {
             Err(_) if restart => Ok(None),
@@ -486,8 +499,8 @@ pub(crate) struct Txn {
     inner: client::Txn,
     /// A request of this transaction ran the database and import checks.
     checked: bool,
-    /// The checks of this transaction found missing tables and created them.
-    created_tables: bool,
+    /// The checks of this transaction found missing or outdated tables and set them up.
+    ran_table_setup: bool,
     db: Db,
 }
 
@@ -506,12 +519,14 @@ impl Txn {
             Ok(results) => self.db.pass_gate(results),
             Err(e) => Err(self.db.gate_failure(e).await),
         };
-        if let Err(Error::TablesMissing { .. }) = &result {
+        if let Err(e) = &result
+            && Db::needs_table_setup(e)
+        {
             self.db
-                .create_missing_tables()
+                .set_up_tables()
                 .await
                 .map_err(|e| self.db.explain_key_error(e))?;
-            self.created_tables = true;
+            self.ran_table_setup = true;
         }
         result
     }

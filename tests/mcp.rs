@@ -454,6 +454,45 @@ async fn get_paths_returns_empty_list_on_fresh_db() {
 }
 
 #[tokio::test]
+async fn tool_calls_with_the_api_key_ignore_the_authorization_schema_version() {
+    let cfg = common::fresh_config();
+    common::create_db(&cfg).await;
+    baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db)
+        .write(&[baserunna_client::Op::put(
+            "mathtutor_auth_state",
+            r#"{"schema":"99"}"#,
+        )])
+        .await
+        .unwrap();
+    let server = spawn_server_without_setup(
+        cfg,
+        AuthConfig {
+            api_key: Some(API_KEY.into()),
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+
+    let result = call_tool(&server, "get_paths", json!({})).await;
+    assert_eq!(result["structuredContent"], json!({ "paths": [] }));
+    let register = oauth_client()
+        .post(server.url("/oauth/register"))
+        .json(&json!({ "redirect_uris": ["http://localhost/cb"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        register.status(),
+        500,
+        "OAuth requests still check the version"
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn server_caches_the_overlay_only_in_memory() {
     let dir = tempfile::TempDir::new().unwrap();
     let cfg = mathtutor::db::DbConfig {

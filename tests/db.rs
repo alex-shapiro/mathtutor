@@ -311,6 +311,47 @@ async fn the_server_handle_creates_and_checks_the_authorization_tables() {
 }
 
 #[tokio::test]
+async fn the_server_handle_replaces_authorization_tables_of_an_older_version() {
+    let cfg = common::fresh_config();
+    let db = common::create_db(&cfg).await;
+    common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
+    let raw = raw_db(&cfg);
+    let old_clients = NewTable {
+        name: "oauth_clients".into(),
+        columns: vec![NewColumn::new("client_id", ColumnType::String)],
+        primary_key: vec!["client_id".into()],
+        indexes: Vec::new(),
+        if_not_exists: false,
+    };
+    raw.create_table(&old_clients).await.unwrap();
+    raw.write(&[
+        Op::put("mathtutor_auth_state", r#"{"schema":"1"}"#),
+        Op::UpsertRow {
+            table: "oauth_clients".into(),
+            row: serde_json::json!({ "client_id": "old" }),
+        },
+    ])
+    .await
+    .unwrap();
+
+    let server = db.with_auth_tables();
+    server.snapshot(&Want::overlay()).await.unwrap();
+
+    let clients = raw.get_table("oauth_clients").await.unwrap();
+    let expected = TableSet::Auth.tables().remove(0);
+    assert_eq!(clients.columns.len(), expected.columns.len());
+    let rows = raw
+        .read_one(Op::query_all::<mathtutor::schema::OAuthClient>())
+        .await
+        .unwrap()
+        .rows::<mathtutor::schema::OAuthClient>()
+        .unwrap();
+    assert!(rows.is_empty(), "{rows:?}");
+    common::path_state(&db, PATH_ID).await;
+    server.check_usable().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_handle_checks_the_database_state_in_every_request() {
     let cfg = common::fresh_config();
     let db = common::create_db(&cfg).await;

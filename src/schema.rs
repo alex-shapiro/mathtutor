@@ -5,7 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::client::Entry;
 use crate::db::client::Expect;
-use crate::db::client::api::{ColumnType, ErrorCode, ListTablesQuery, NewColumn, NewTable, Table};
+use crate::db::client::api::{
+    ColumnType, Endpoint, ErrorCode, ListTablesQuery, NewColumn, NewTable, NoBody, Table,
+    fill_route,
+};
+use crate::db::client::http::{Method, StatusCode};
 use crate::db::{Op, Row, client, ts};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{Error, Result};
@@ -57,6 +61,17 @@ impl TableSet {
                 OAuthAddrCount::new_table(),
             ],
         }
+    }
+
+    /// Return `true` if this release drops and recreates the tables of this set that schema version `found` describes.
+    ///
+    /// Only the authorization tables qualify, because they hold only registrations, tokens, and limit counts that a new sign-in recreates. A newer version stays, so that a server of an older release cannot erase the tables of a newer one.
+    pub(crate) fn replaces(self, found: &str) -> bool {
+        let older = match (found.parse::<u32>(), self.version().parse::<u32>()) {
+            (Ok(found), Ok(current)) => found < current,
+            _ => false,
+        };
+        self == TableSet::Auth && older
     }
 
     /// Return the key that records the schema version of this set.
@@ -440,9 +455,11 @@ pub(crate) async fn state(db: &client::Db, set: TableSet) -> Result<DbState> {
 
 /// Create every missing table of `set` and record the schema version of the set, unless the database already records a state for it.
 ///
-/// Fails with [`Error::ForeignTable`] if the database holds a table that no table set defines, and with [`Error::TableMismatch`] if a table exists with other columns.
+/// Fails with [`Error::ForeignTable`] if `set` is the learner set and the database holds a table that no table set defines, and with [`Error::TableMismatch`] if a table exists with other columns.
 pub(crate) async fn create_tables(db: &client::Db, set: TableSet) -> Result<()> {
-    refuse_foreign_tables(db).await?;
+    if set == TableSet::Learner {
+        refuse_foreign_tables(db).await?;
+    }
     for t in set.tables() {
         let stored = db.create_table(&t).await?.table;
         if !defines(&t, &stored) {
@@ -459,6 +476,47 @@ pub(crate) async fn create_tables(db: &client::Db, set: TableSet) -> Result<()> 
     match db.write(&[absent, state_write_op(set, None)]).await {
         Err(e) if e.code() != Some(ErrorCode::PreconditionFailed) => Err(e.into()),
         _ => Ok(()),
+    }
+}
+
+/// Drop the tables of `set` and create them again with the definitions of this release.
+pub(crate) async fn recreate_tables(db: &client::Db, set: TableSet) -> Result<()> {
+    for t in set.tables() {
+        let drop = DropTable {
+            db: db.name().to_string(),
+            table: t.name,
+        };
+        match db.client().send(&drop, &NoBody {}).await {
+            Err(e) if e.code() != Some(ErrorCode::NotFound) => return Err(e.into()),
+            _ => {}
+        }
+    }
+    db.write(&[Op::Delete {
+        key: set.state_key().into(),
+    }])
+    .await?;
+    create_tables(db, set).await
+}
+
+/// `DELETE /v1/dbs/{db}/tables/{t}`, which drops a table and its rows.
+struct DropTable {
+    db: String,
+    table: String,
+}
+
+impl Endpoint for DropTable {
+    const METHOD: Method = Method::DELETE;
+    const ROUTE: &'static str = "/v1/dbs/{db}/tables/{t}";
+    const STATUS: StatusCode = StatusCode::OK;
+    type Body = NoBody;
+    type Response = NoBody;
+
+    fn is_idempotent(&self, _: &NoBody) -> bool {
+        true
+    }
+
+    fn path(&self) -> String {
+        fill_route(Self::ROUTE, &[&self.db, &self.table])
     }
 }
 
@@ -533,6 +591,15 @@ mod tests {
         columns.sort();
         fields.sort();
         assert_eq!(columns, fields);
+    }
+
+    #[test]
+    fn only_authorization_tables_of_an_older_version_are_replaced() {
+        assert!(TableSet::Auth.replaces("1"));
+        for found in [TableSet::Auth.version(), "99", "x"] {
+            assert!(!TableSet::Auth.replaces(found), "{found}");
+        }
+        assert!(!TableSet::Learner.replaces("1"));
     }
 
     /// Return the FNV-1a hash of the JSON definition of `tables`.

@@ -514,7 +514,8 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
         cache_dir: None,
         ..cfg
     };
-    let db = Db::connect(&cfg)?.with_auth_tables();
+    let db = Db::connect(&cfg)?;
+    let auth_db = db.with_auth_tables();
     let shutdown = CancellationToken::new();
 
     let mcp_config = StreamableHttpServerConfig::default()
@@ -540,8 +541,8 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
 
     let public_url = resolve_public_url(auth.public_url.as_deref(), socket_addr)?;
 
-    let limits = throttle::AddrLimits::new(&db, auth.client_addrs.clone());
-    let auth_state = AuthState::new(&auth, &public_url, db.clone(), limits.clone());
+    let limits = throttle::AddrLimits::new(&auth_db, auth.client_addrs.clone());
+    let auth_state = AuthState::new(&auth, &public_url, auth_db.clone(), limits.clone());
     // Run body logging after auth so unauthenticated requests are not buffered.
     let mut app = Router::new()
         .nest_service("/mcp", mcp_service)
@@ -552,7 +553,7 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
 
     if let Some(password) = auth.admin_password.as_deref() {
         let oauth_state = oauth::OAuthState::new(
-            db.clone(),
+            auth_db,
             password,
             public_url.clone(),
             limits.clone(),
