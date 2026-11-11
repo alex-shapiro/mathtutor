@@ -262,5 +262,5 @@ async fn subpath_set_rejects_empty_and_duplicates_and_unknown() {
         subpath::cmd_subpath_set(&conn, Some(&id), &["nope.0.0.0".into(), "fnd.1.1.2".into()])
             .await
             .unwrap_err();
-    assert!(matches!(unknown, Error::AtomNotFound(_)), "got {unknown:?}");
+    assert!(matches!(unknown, Error::UnknownId(_)), "got {unknown:?}");
 }

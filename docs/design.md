@@ -342,11 +342,6 @@ Each error has a kind that sets its exit code. An MCP tool error reports the sam
 | `empty_cluster`           | 2         | A cluster target has zero atoms.                                                |
 | `cycle`                   | 2         | The target atoms form a prerequisite cycle.                                     |
 | `not_atom`                | 2         | The ID names a cluster where an atom is necessary.                              |
-| `atom_not_found`          | 2         | A subpath atom is not in the curriculum.                                        |
-| `invalid_rating`          | 2         | A stored rating is not valid.                                                   |
-| `invalid_difficulty`      | 2         | The difficulty is not `easy`, `medium`, or `hard`.                              |
-| `invalid_quiz_type`       | 2         | The quiz type is not `free_text` or `multiple_choice`.                          |
-| `invalid_strategy`        | 2         | The strategy is not `bottom_up` or `top_down`.                                  |
 | `subpath_not_top_down`    | 2         | The path does not use the `top_down` strategy.                                  |
 | `subpath_empty`           | 2         | The subpath has zero atoms.                                                     |
 | `subpath_tail_not_target` | 2         | The last subpath atom is not a path target.                                     |
@@ -355,7 +350,6 @@ Each error has a kind that sets its exit code. An MCP tool error reports the sam
 | `config`                  | 2         | A setting is missing or incorrect, such as `BASERUNNA_TOKEN` or `BASERUNNA_DB`. |
 | `no_path`                 | 1         | The learning path does not exist. The error names the ID and the list step.     |
 | `no_lesson`               | 1         | The atom does not have a stored lesson.                                         |
-| `no_home`                 | 1         | Neither `MATHTUTOR_HOME` nor `HOME` is set.                                     |
 | `io`                      | 1         | A file read, file write, or AYML conversion failed.                             |
 | `graph_check`             | 1         | The curriculum check found problems.                                            |
 | `corrupt`                 | 1         | `mt` cannot decode a stored row or a server response.                           |

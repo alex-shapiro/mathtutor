@@ -308,7 +308,9 @@ impl TryFrom<LegacyEventRow> for Event {
         if let Some(rating) = r.rating {
             fields.insert(
                 "rating".into(),
-                serde_json::to_value(Rating::try_from(rating)?)?,
+                serde_json::to_value(
+                    Rating::from_grade(rating).ok_or_else(|| bad(format!("rating {rating}")))?,
+                )?,
             );
         }
         if let Some(payload) = &r.payload {

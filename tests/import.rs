@@ -14,6 +14,7 @@ use chrono::{DateTime, Duration, Utc};
 use mathtutor::Error;
 use mathtutor::cards::{self, CardRow};
 use mathtutor::db::{Db, Op, ts};
+use mathtutor::error::ErrorKind;
 use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::import::{self, Turso};
 use mathtutor::overlay;
@@ -686,6 +687,28 @@ async fn import_reports_a_libsql_write_that_lands_after_its_first_read() {
     );
     let blocked = db.snapshot(&Want::overlay()).await.unwrap_err();
     assert!(matches!(blocked, Error::ImportInProgress), "{blocked}");
+}
+
+#[tokio::test]
+async fn an_unknown_rating_grade_is_a_corrupt_source_row() {
+    let db = common::empty_db().await;
+    let mut rows = event_rows();
+    let rating = EVENT_COLUMNS.iter().position(|c| *c == "rating").unwrap();
+    let answer = rows
+        .iter_mut()
+        .find(|row| row[rating] != CellValue::Null)
+        .expect("an answer");
+    answer[rating] = int_val(7);
+    let mut tables = legacy();
+    tables.set("events", EVENT_COLUMNS, rows);
+
+    let e = import(tables, &db).await.unwrap_err();
+
+    assert!(
+        matches!(&e, Error::BadRow(m) if m.contains("rating 7")),
+        "{e}"
+    );
+    assert_eq!(e.kind(), ErrorKind::Corrupt);
 }
 
 #[tokio::test]

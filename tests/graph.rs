@@ -35,7 +35,7 @@ fn quiz_rejects_malformed_id() {
 #[test]
 fn quiz_rejects_unknown_atom() {
     let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
-    assert!(matches!(g.quiz("nope.1.q1"), Err(Error::AtomNotFound(_))));
+    assert!(matches!(g.quiz("nope.1.q1"), Err(Error::UnknownId(_))));
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn atom_rejects_cluster() {
 #[test]
 fn atom_rejects_unknown_id() {
     let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
-    assert!(matches!(g.atom("nope"), Err(Error::AtomNotFound(_))));
+    assert!(matches!(g.atom("nope"), Err(Error::UnknownId(_))));
 }
 
 #[test]

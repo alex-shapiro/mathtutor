@@ -349,9 +349,9 @@ async fn graph_atom_helper_rejects_clusters_and_unknowns() {
     assert!(
         matches!(
             g.atom("nope.does.not.exist"),
-            Err(mathtutor::Error::AtomNotFound(_))
+            Err(mathtutor::Error::UnknownId(_))
         ),
-        "unknown id must fail with AtomNotFound",
+        "unknown id must fail with UnknownId",
     );
 }
 

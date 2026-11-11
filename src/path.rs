@@ -1,7 +1,6 @@
 //! Learning path records and path management commands.
 
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 
@@ -45,15 +44,6 @@ pub struct ResolvedTargets {
     pub atoms: Vec<String>,
     /// Stored target IDs that the curriculum does not contain or that have zero atoms.
     pub unresolved: Vec<String>,
-}
-
-/// Resolve the local Math Tutor home directory from `MATHTUTOR_HOME` or `$HOME/.mathtutor`.
-pub fn mt_home() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("MATHTUTOR_HOME") {
-        return Ok(PathBuf::from(p));
-    }
-    let home = std::env::var("HOME").map_err(|_| Error::NoHome)?;
-    Ok(PathBuf::from(home).join(".mathtutor"))
 }
 
 /// Generate a unique path ID from `now` and a random 4-character suffix.

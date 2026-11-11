@@ -1,6 +1,13 @@
 //! Shared domain enums for quiz ratings, difficulties, strategies, and formats.
 
-use crate::Error;
+/// String that is not a spelling of an enum of this module.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("invalid {what} '{value}' (expected {expected})", expected = .spellings.join(" | "))]
+pub struct InvalidSpelling {
+    what: &'static str,
+    value: String,
+    spellings: &'static [&'static str],
+}
 
 /// Declare an enum of unit variants with one spelling each, and derive every string form of the enum from that table.
 ///
@@ -8,7 +15,7 @@ use crate::Error;
 macro_rules! spelled_enum {
     (
         $(#[$attr:meta])*
-        pub enum $name:ident, invalid: $invalid:path {
+        pub enum $name:ident, what: $what:literal {
             $(
                 $(#[$variant_attr:meta])*
                 $variant:ident = $spelling:literal,
@@ -43,11 +50,15 @@ macro_rules! spelled_enum {
         }
 
         impl std::str::FromStr for $name {
-            type Err = Error;
-            fn from_str(s: &str) -> Result<Self, Error> {
+            type Err = InvalidSpelling;
+            fn from_str(s: &str) -> Result<Self, InvalidSpelling> {
                 match s {
                     $($spelling => Ok(Self::$variant),)+
-                    other => Err($invalid(other.to_string())),
+                    other => Err(InvalidSpelling {
+                        what: $what,
+                        value: other.to_string(),
+                        spellings: Self::SPELLINGS,
+                    }),
                 }
             }
         }
@@ -84,18 +95,11 @@ macro_rules! spelled_enum {
 
 spelled_enum! {
     /// FSRS recall rating for a quiz answer.
-    pub enum Rating, invalid: Error::InvalidRating {
+    pub enum Rating, what: "rating" {
         Again = "again",
         Hard = "hard",
         Good = "good",
         Easy = "easy",
-    }
-}
-
-impl Rating {
-    /// Return `true` if the rating is `Hard`, `Good`, or `Easy`.
-    pub fn is_correct(self) -> bool {
-        !matches!(self, Rating::Again)
     }
 }
 
@@ -111,20 +115,16 @@ impl From<Rating> for i64 {
     }
 }
 
-impl TryFrom<i64> for Rating {
-    type Error = Error;
-    fn try_from(v: i64) -> Result<Self, Error> {
-        Rating::ALL
-            .iter()
-            .copied()
-            .find(|r| i64::from(*r) == v)
-            .ok_or_else(|| Error::InvalidRating(v.to_string()))
+impl Rating {
+    /// Return the rating of FSRS grade `grade`, or `None` if no rating has the grade.
+    pub fn from_grade(grade: i64) -> Option<Self> {
+        Rating::ALL.iter().copied().find(|r| i64::from(*r) == grade)
     }
 }
 
 spelled_enum! {
     /// Quiz difficulty level.
-    pub enum Difficulty, invalid: Error::InvalidDifficulty {
+    pub enum Difficulty, what: "difficulty" {
         Easy = "easy",
         Medium = "medium",
         Hard = "hard",
@@ -134,7 +134,7 @@ spelled_enum! {
 spelled_enum! {
     /// Learning path traversal strategy.
     #[derive(Default)]
-    pub enum Strategy, invalid: Error::InvalidStrategy {
+    pub enum Strategy, what: "strategy" {
         #[default]
         BottomUp = "bottom_up",
         TopDown = "top_down",
@@ -144,7 +144,7 @@ spelled_enum! {
 spelled_enum! {
     /// Quiz response format.
     #[derive(Default)]
-    pub enum QuizType, invalid: Error::InvalidQuizType {
+    pub enum QuizType, what: "quiz type" {
         #[default]
         FreeText = "free_text",
         MultipleChoice = "multiple_choice",
@@ -162,7 +162,7 @@ mod tests {
             + PartialEq
             + std::fmt::Debug
             + std::fmt::Display
-            + std::str::FromStr<Err = Error>
+            + std::str::FromStr<Err = InvalidSpelling>
             + serde::Serialize
             + serde::de::DeserializeOwned,
     {
@@ -199,8 +199,8 @@ mod tests {
     fn ratings_map_to_fsrs_grades() {
         for (grade, rating) in (1..).zip(Rating::ALL) {
             assert_eq!(i64::from(*rating), grade);
-            assert_eq!(Rating::try_from(grade).unwrap(), *rating);
+            assert_eq!(Rating::from_grade(grade), Some(*rating));
         }
-        assert!(Rating::try_from(0).is_err());
+        assert_eq!(Rating::from_grade(0), None);
     }
 }

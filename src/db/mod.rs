@@ -44,6 +44,14 @@ impl std::fmt::Debug for DbConfig {
     }
 }
 
+/// Return the local Math Tutor home directory: `MATHTUTOR_HOME`, or `$HOME/.mathtutor`, or `None` if neither variable is set.
+fn mt_home() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("MATHTUTOR_HOME") {
+        return Some(PathBuf::from(p));
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".mathtutor"))
+}
+
 impl DbConfig {
     /// Read `BASERUNNA_URL`, `BASERUNNA_TOKEN`, and `BASERUNNA_DB` from the environment, and use the embedded curriculum.
     pub fn from_env() -> Result<Self> {
@@ -52,7 +60,7 @@ impl DbConfig {
             url: var("BASERUNNA_URL").unwrap_or_else(|| DEFAULT_URL.into()),
             token: var("BASERUNNA_TOKEN").ok_or(Error::MissingToken)?,
             db: var("BASERUNNA_DB").unwrap_or_else(|| DEFAULT_DB.into()),
-            cache_dir: crate::path::mt_home().ok(),
+            cache_dir: mt_home(),
             curriculum: Curriculum::embedded(),
         })
     }

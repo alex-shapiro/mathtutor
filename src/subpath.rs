@@ -40,7 +40,7 @@ pub async fn cmd_subpath_set(
             match g.by_id.get(a) {
                 Some(c) if c.children_ids.is_empty() => {}
                 Some(_) => return Err(Error::NotAtom(a.clone())),
-                None => return Err(Error::AtomNotFound(a.clone())),
+                None => return Err(Error::UnknownId(a.clone())),
             }
         }
         let p = PathFile {

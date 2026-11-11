@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use crate::surface::Surface;
-use crate::types::{Difficulty, QuizType, Rating, Strategy};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -35,9 +34,6 @@ pub enum Error {
     #[error("'{0}' is a cluster, not an atom")]
     NotAtom(String),
 
-    #[error("atom '{0}' not found in graph")]
-    AtomNotFound(String),
-
     /// The selected path does not exist, or no path exists if the command named no path.
     #[error("{}", match .0 {
         Some(id) => format!("learning path '{id}' not found"),
@@ -59,9 +55,6 @@ pub enum Error {
         "the overlay is not loaded in this view; mt must load the overlay before it reads lessons or quizzes"
     )]
     OverlayNotLoaded,
-
-    #[error("HOME not set; set MATHTUTOR_HOME or HOME")]
-    NoHome,
 
     #[error("atom '{0}' does not have a stored lesson; teach it before authoring quizzes")]
     NoLesson(String),
@@ -129,18 +122,6 @@ pub enum Error {
 
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
-
-    #[error("invalid rating '{0}' (expected {expected})", expected = Rating::SPELLINGS.join(" | "))]
-    InvalidRating(String),
-
-    #[error("invalid difficulty '{0}' (expected {expected})", expected = Difficulty::SPELLINGS.join(" | "))]
-    InvalidDifficulty(String),
-
-    #[error("invalid quiz type '{0}' (expected {expected})", expected = QuizType::SPELLINGS.join(" | "))]
-    InvalidQuizType(String),
-
-    #[error("invalid strategy '{0}' (expected {expected})", expected = Strategy::SPELLINGS.join(" | "))]
-    InvalidStrategy(String),
 
     #[error("subpaths apply only to paths with the top_down strategy")]
     SubpathNotTopDown,
@@ -245,11 +226,6 @@ error_kinds! {
     EmptyCluster = "empty_cluster" => 2,
     Cycle = "cycle" => 2,
     NotAtom = "not_atom" => 2,
-    AtomNotFound = "atom_not_found" => 2,
-    InvalidRating = "invalid_rating" => 2,
-    InvalidDifficulty = "invalid_difficulty" => 2,
-    InvalidQuizType = "invalid_quiz_type" => 2,
-    InvalidStrategy = "invalid_strategy" => 2,
     SubpathNotTopDown = "subpath_not_top_down" => 2,
     SubpathEmpty = "subpath_empty" => 2,
     SubpathTailNotTarget = "subpath_tail_not_target" => 2,
@@ -259,7 +235,6 @@ error_kinds! {
     Config = "config" => 2,
     NoPath = "no_path" => 1,
     NoLesson = "no_lesson" => 1,
-    NoHome = "no_home" => 1,
     Io = "io" => 1,
     GraphCheck = "graph_check" => 1,
     /// A stored row or response that `mt` cannot decode.
@@ -286,11 +261,6 @@ impl Error {
             Error::EmptyCluster(_) => ErrorKind::EmptyCluster,
             Error::Cycle => ErrorKind::Cycle,
             Error::NotAtom(_) => ErrorKind::NotAtom,
-            Error::AtomNotFound(_) => ErrorKind::AtomNotFound,
-            Error::InvalidRating(_) => ErrorKind::InvalidRating,
-            Error::InvalidDifficulty(_) => ErrorKind::InvalidDifficulty,
-            Error::InvalidQuizType(_) => ErrorKind::InvalidQuizType,
-            Error::InvalidStrategy(_) => ErrorKind::InvalidStrategy,
             Error::SubpathNotTopDown => ErrorKind::SubpathNotTopDown,
             Error::SubpathEmpty => ErrorKind::SubpathEmpty,
             Error::SubpathTailNotTarget(_) => ErrorKind::SubpathTailNotTarget,
@@ -310,7 +280,6 @@ impl Error {
             | Error::BadClientIpHeader(_) => ErrorKind::Config,
             Error::NoPath(_) => ErrorKind::NoPath,
             Error::NoLesson(_) => ErrorKind::NoLesson,
-            Error::NoHome => ErrorKind::NoHome,
             Error::FileIo { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => {
                 ErrorKind::Io
             }

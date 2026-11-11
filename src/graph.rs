@@ -440,7 +440,7 @@ impl Graph {
         let c = self
             .by_id
             .get(id)
-            .ok_or_else(|| Error::AtomNotFound(id.to_string()))?;
+            .ok_or_else(|| Error::UnknownId(id.to_string()))?;
         if !c.children_ids.is_empty() {
             return Err(Error::NotAtom(id.to_string()));
         }
@@ -453,7 +453,7 @@ impl Graph {
         let atom = self
             .by_id
             .get(atom_id)
-            .ok_or_else(|| Error::AtomNotFound(atom_id.to_string()))?;
+            .ok_or_else(|| Error::UnknownId(atom_id.to_string()))?;
         let q = atom
             .quizzes
             .iter()
