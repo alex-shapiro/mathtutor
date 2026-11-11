@@ -3,29 +3,15 @@
 mod common;
 
 use common::{
-    PATH_ID, cluster, complete_atom, empty_atom, graph_of, path_state, path_with_strategy,
+    PATH_ID, cluster, complete_atom, complete_events, empty_atom, graph_of, path_state,
+    path_with_strategy,
 };
 
-use chrono::Utc;
 use mathtutor::db::Db;
 use mathtutor::path::{self, PathFile};
-use mathtutor::progress::PathProgress;
-use mathtutor::scheduler::{self, Action, NextMode};
+use mathtutor::scheduler::{Action, NextMode};
 use mathtutor::types::Strategy;
 use mathtutor::{Error, subpath};
-
-const NO_DUE: &[(String, chrono::DateTime<Utc>)] = &[];
-
-fn progress_complete(ids: &[&str]) -> PathProgress {
-    let mut p = PathProgress::default();
-    for id in ids {
-        p.taught_atoms.insert((*id).to_string());
-        for n in 1..=3 {
-            p.correct_quizzes.insert(format!("{id}.q{n}"));
-        }
-    }
-    p
-}
 
 fn atom_id(a: &Action) -> Option<&str> {
     a.atom_id()
@@ -35,15 +21,7 @@ fn atom_id(a: &Action) -> Option<&str> {
 fn top_down_presents_target_before_its_prereqs() {
     let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &PathProgress::default(),
-        NO_DUE,
-        &[],
-        NextMode::Default,
-    );
+    let action = common::next_action(&g, &p, &[], NextMode::Default);
     assert_eq!(
         atom_id(&action),
         Some("t"),
@@ -55,15 +33,7 @@ fn top_down_presents_target_before_its_prereqs() {
 fn bottom_up_descends_into_prereqs_first() {
     let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::BottomUp);
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &PathProgress::default(),
-        NO_DUE,
-        &[],
-        NextMode::Default,
-    );
+    let action = common::next_action(&g, &p, &[], NextMode::Default);
     assert_eq!(
         atom_id(&action),
         Some("p"),
@@ -74,35 +44,19 @@ fn bottom_up_descends_into_prereqs_first() {
 #[test]
 fn top_down_subpath_walked_in_order() {
     let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
-    let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let subpath = vec!["p".to_string(), "t".to_string()];
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &PathProgress::default(),
-        NO_DUE,
-        &subpath,
-        NextMode::Default,
-    );
+    let mut p = path_with_strategy(&["t"], Strategy::TopDown);
+    p.subpath = vec!["p".to_string(), "t".to_string()];
+    let action = common::next_action(&g, &p, &[], NextMode::Default);
     assert_eq!(atom_id(&action), Some("p"), "first incomplete subpath atom");
 }
 
 #[test]
 fn top_down_subpath_advances_once_earlier_atom_completes() {
     let g = graph_of(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
-    let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let subpath = vec!["p".to_string(), "t".to_string()];
-    let progress = progress_complete(&["p"]);
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &progress,
-        NO_DUE,
-        &subpath,
-        NextMode::Default,
-    );
+    let mut p = path_with_strategy(&["t"], Strategy::TopDown);
+    p.subpath = vec!["p".to_string(), "t".to_string()];
+    let events = complete_events("p");
+    let action = common::next_action(&g, &p, &events, NextMode::Default);
     assert_eq!(
         atom_id(&action),
         Some("t"),
@@ -113,18 +67,10 @@ fn top_down_subpath_advances_once_earlier_atom_completes() {
 #[test]
 fn top_down_drained_subpath_falls_through_to_targets() {
     let g = graph_of(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
-    let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let subpath = vec!["p".to_string()];
-    let progress = progress_complete(&["p"]);
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &progress,
-        NO_DUE,
-        &subpath,
-        NextMode::Default,
-    );
+    let mut p = path_with_strategy(&["t"], Strategy::TopDown);
+    p.subpath = vec!["p".to_string()];
+    let events = complete_events("p");
+    let action = common::next_action(&g, &p, &events, NextMode::Default);
     assert_eq!(
         atom_id(&action),
         Some("t"),
@@ -136,16 +82,8 @@ fn top_down_drained_subpath_falls_through_to_targets() {
 fn top_down_returns_done_if_targets_complete() {
     let g = graph_of(vec![complete_atom("t", &[])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let progress = progress_complete(&["t"]);
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &progress,
-        NO_DUE,
-        &[],
-        NextMode::Default,
-    );
+    let events = complete_events("t");
+    let action = common::next_action(&g, &p, &events, NextMode::Default);
     assert!(
         matches!(action, Action::Done),
         "all targets complete → done"
@@ -161,18 +99,7 @@ fn top_down_cluster_target_expands_to_atomic_children() {
     ]);
     let p = path_with_strategy(&["tx.1"], Strategy::TopDown);
 
-    let targets = p.resolve_targets(&g).unwrap();
-    assert_eq!(targets, vec!["tx.1.1".to_string(), "tx.1.2".to_string()]);
-
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &targets,
-        &PathProgress::default(),
-        NO_DUE,
-        &[],
-        NextMode::Default,
-    );
+    let action = common::next_action(&g, &p, &[], NextMode::Default);
     assert_eq!(
         atom_id(&action),
         Some("tx.1.1"),

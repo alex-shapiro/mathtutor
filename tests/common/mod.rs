@@ -17,6 +17,7 @@ use mathtutor::graph::{FlatConcept, Graph, Quiz};
 use mathtutor::overlay::Overlay;
 use mathtutor::path::PathFile;
 use mathtutor::progress::PathProgress;
+use mathtutor::scheduler::{Action, NextMode, PathPlan};
 use mathtutor::types::{Difficulty, Rating, Strategy};
 use mathtutor::view::{Changes, PathState, View, Want};
 use tempfile::TempDir;
@@ -358,4 +359,40 @@ pub fn progress_of(events: &[Event]) -> PathProgress {
     Projection::from_events(events)
         .expect("project events")
         .progress()
+}
+
+/// Return the state of path `p` after `events`.
+pub fn state_of(p: &PathFile, events: &[Event]) -> PathState {
+    PathState {
+        file: p.clone(),
+        updated_at: p.created_at,
+        projection: Projection::from_events(events).expect("project events"),
+    }
+}
+
+/// Return the next action in `mode` of path `p` over `g` after `events`, at time `now`.
+pub fn next_action_at(
+    g: &Graph,
+    p: &PathFile,
+    events: &[Event],
+    now: DateTime<Utc>,
+    mode: NextMode,
+) -> Action {
+    let state = state_of(p, events);
+    PathPlan::new(&state, Arc::new(g.clone()), now)
+        .expect("plan")
+        .next_action(mode)
+}
+
+/// Return the next action in `mode` of path `p` over `g` after `events`.
+pub fn next_action(g: &Graph, p: &PathFile, events: &[Event], mode: NextMode) -> Action {
+    next_action_at(g, p, events, Utc::now(), mode)
+}
+
+/// Return the atoms of path `p` over `g` with untaught lessons after `events`, in teaching order.
+pub fn upcoming(g: &Graph, p: &PathFile, events: &[Event]) -> Vec<String> {
+    let state = state_of(p, events);
+    PathPlan::new(&state, Arc::new(g.clone()), Utc::now())
+        .expect("plan")
+        .upcoming()
 }

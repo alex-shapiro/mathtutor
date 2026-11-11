@@ -1,6 +1,6 @@
-//! Unit tests for `scheduler::next_action` and `scheduler::is_atom_complete`.
+//! Unit tests for `PathPlan::next_action` and `scheduler::is_atom_complete`.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 
 use mathtutor::progress::{PathProgress, QuizSlot};
 use mathtutor::scheduler::{self, Action};
@@ -9,8 +9,6 @@ use mathtutor::types::{Difficulty, Rating};
 mod common;
 
 use common::{atom, cluster, graph_of, path_with, quiz, taught};
-
-const NO_DUE: &[(String, DateTime<Utc>)] = &[];
 
 fn assert_create_lesson(action: &Action, expected_atom: &str) {
     match action {
@@ -54,15 +52,7 @@ fn create_lesson_if_atom_lacks_lesson() {
     let g = graph_of(vec![atom("a", &[], None, vec![])]);
     let p = path_with(&["a"]);
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "a",
     );
 }
@@ -72,15 +62,7 @@ fn present_lesson_if_stored_but_untaught_in_path() {
     let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
     let p = path_with(&["a"]);
     assert_present_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "a",
     );
 }
@@ -91,15 +73,7 @@ fn lesson_authored_event_satisfies_taught_check() {
     let p = path_with(&["a"]);
     let events = vec![common::lesson_authored("a")];
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         Difficulty::Easy,
     );
@@ -111,15 +85,7 @@ fn create_easy_quiz_if_lesson_stored_and_taught() {
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         Difficulty::Easy,
     );
@@ -136,15 +102,7 @@ fn present_easy_quiz_if_authored_but_unanswered() {
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
     assert_present_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         "a.q1",
     );
@@ -161,15 +119,7 @@ fn keep_presenting_easy_after_again_rating() {
     let p = path_with(&["a"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Again)];
     assert_present_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         "a.q1",
     );
@@ -186,15 +136,7 @@ fn advance_to_medium_after_hard_rating() {
     let p = path_with(&["a"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Hard)];
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         Difficulty::Medium,
     );
@@ -211,15 +153,7 @@ fn advance_to_medium_after_easy_correct() {
     let p = path_with(&["a"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Good)];
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         Difficulty::Medium,
     );
@@ -243,15 +177,7 @@ fn advance_to_hard_after_easy_and_medium_correct() {
         common::answered("a.q2", Rating::Good),
     ];
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         Difficulty::Hard,
     );
@@ -277,15 +203,7 @@ fn done_after_all_three_correct_on_only_target() {
         common::answered("a.q3", Rating::Easy),
     ];
     assert!(matches!(
-        scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default
-        ),
+        common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         Action::Done
     ));
 }
@@ -313,15 +231,7 @@ fn advance_to_next_target_lesson_after_first_complete() {
         common::answered("a.q3", Rating::Good),
     ];
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "b",
     );
 }
@@ -334,15 +244,7 @@ fn does_not_advance_after_only_lesson_stored() {
     ]);
     let p = path_with(&["a", "b"]);
     assert_present_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "a",
     );
 }
@@ -355,15 +257,7 @@ fn descends_into_prereq_before_target() {
     ]);
     let p = path_with(&["target"]);
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "pre",
     );
 }
@@ -382,15 +276,7 @@ fn finishes_prereq_quizzes_before_target_lesson() {
     let p = path_with(&["target"]);
     let events = vec![taught("pre")];
     assert_present_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "pre",
         "pre.q1",
     );
@@ -405,15 +291,7 @@ fn cluster_target_descends_to_first_atom() {
     ]);
     let p = path_with(&["c"]);
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "c.1",
     );
 }
@@ -428,15 +306,7 @@ fn cluster_prereq_descends_before_target() {
     ]);
     let p = path_with(&["target"]);
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "pre.1",
     );
 }
@@ -451,15 +321,7 @@ fn cluster_prereq_advances_to_target_once_complete() {
     let p = path_with(&["target"]);
     let events = common::complete_events("pre.1");
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "target",
     );
 }
@@ -535,15 +397,7 @@ fn passed_quizzes_do_not_complete_an_atom_whose_lesson_is_untaught() {
 
     assert!(!scheduler::is_atom_complete(&g, &progress, "a"));
     assert_present_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &progress,
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
     );
 }
@@ -562,15 +416,7 @@ fn a_passed_second_quiz_of_a_difficulty_completes_the_slot() {
         QuizSlot::Correct
     );
     assert_present_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &progress,
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         "a.q2",
     );
@@ -585,8 +431,9 @@ fn a_passed_second_quiz_of_a_difficulty_completes_the_slot() {
     ));
 }
 
-fn due_card(quiz_id: &str) -> Vec<(String, DateTime<Utc>)> {
-    vec![(quiz_id.into(), Utc::now())]
+/// Return a time at which every card that the tests answer is due.
+fn later() -> DateTime<Utc> {
+    Utc::now() + Duration::days(3650)
 }
 
 #[test]
@@ -597,17 +444,8 @@ fn new_mode_skips_due_card_and_returns_walker_action() {
     ]);
     let p = path_with(&["a", "b"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Good)];
-    let due = due_card("a.q1");
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            &due,
-            &[],
-            scheduler::NextMode::New,
-        ),
+        &common::next_action_at(&g, &p, &events, later(), scheduler::NextMode::New),
         "a",
         Difficulty::Medium,
     );
@@ -623,17 +461,8 @@ fn due_mode_returns_earliest_due_card() {
     )]);
     let p = path_with(&["a"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Good)];
-    let due = due_card("a.q1");
     assert_present_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            &due,
-            &[],
-            scheduler::NextMode::Due,
-        ),
+        &common::next_action_at(&g, &p, &events, later(), scheduler::NextMode::Due),
         "a",
         "a.q1",
     );
@@ -644,15 +473,7 @@ fn due_mode_reports_zero_due_reviews_on_an_incomplete_path() {
     let g = graph_of(vec![atom("a", &[], None, vec![])]);
     let p = path_with(&["a"]);
     assert!(matches!(
-        scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Due,
-        ),
+        common::next_action(&g, &p, &[], scheduler::NextMode::Due),
         Action::NoReviewsDue
     ));
 }
@@ -696,17 +517,8 @@ fn new_mode_returns_done_if_all_targets_are_complete() {
         common::answered("a.q2", Rating::Good),
         common::answered("a.q3", Rating::Good),
     ];
-    let due = due_card("a.q1");
     assert!(matches!(
-        scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            &due,
-            &[],
-            scheduler::NextMode::New,
-        ),
+        common::next_action_at(&g, &p, &events, later(), scheduler::NextMode::New),
         Action::Done
     ));
 }
@@ -720,18 +532,15 @@ fn due_card_of_a_removed_atom_does_not_hide_later_due_cards() {
         vec![quiz("a.q1", Difficulty::Easy)],
     )]);
     let p = path_with(&["a"]);
-    let now = Utc::now();
-    let due = [("removed.q1".to_string(), now), ("a.q1".to_string(), now)];
+    let events = vec![
+        common::at(
+            Utc::now() - Duration::days(1),
+            common::answered("removed.q1", Rating::Good),
+        ),
+        common::answered("a.q1", Rating::Good),
+    ];
 
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &PathProgress::default(),
-        &due,
-        &[],
-        scheduler::NextMode::Due,
-    );
+    let action = common::next_action_at(&g, &p, &events, later(), scheduler::NextMode::Due);
 
     assert_present_quiz(&action, "a", "a.q1");
 }

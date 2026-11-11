@@ -64,34 +64,72 @@ pub struct PathPlan<'v> {
 impl<'v> PathPlan<'v> {
     /// Return the plan of the path that `view` selected.
     pub fn of(view: &'v View) -> Result<Self> {
-        let state = view.path()?;
-        let graph = view.graph()?;
+        Self::new(view.path()?, view.graph()?, Utc::now())
+    }
+
+    /// Return the plan of path `state` over `graph` at time `now`.
+    pub fn new(state: &'v PathState, graph: Arc<Graph>, now: DateTime<Utc>) -> Result<Self> {
         Ok(Self {
             progress: state.progress(),
             targets: state.file.resolve_targets(&graph)?,
             subpath: subpath::resolved(&state.file, &graph)?,
-            due: state.due(Utc::now()),
+            due: state.due(now),
             graph,
             state,
         })
     }
 
-    /// Return the next action of this path in `mode`.
+    /// Return the highest-priority action of this path in `mode`.
     pub fn next_action(&self, mode: NextMode) -> Action {
-        next_action(
-            &self.graph,
-            &self.state.file,
-            &self.targets,
-            &self.progress,
-            &self.due,
-            &self.subpath,
-            mode,
-        )
+        if mode != NextMode::New
+            && let Some((quiz_id, atom_id)) = first_due_card(&self.graph, &self.due)
+        {
+            return Action::PresentQuiz { quiz_id, atom_id };
+        }
+        if mode == NextMode::Due {
+            return Action::NoReviewsDue;
+        }
+        self.teaching_order()
+            .iter()
+            .find_map(|atom| atom_action(self.graph.by_id.get(atom)?, &self.progress))
+            .unwrap_or(Action::Done)
+    }
+
+    /// Return the atoms of this path with untaught lessons, in teaching order.
+    pub fn upcoming(&self) -> Vec<String> {
+        let mut order = self.teaching_order();
+        order.retain(|atom| !self.progress.lesson_taught(atom));
+        order
     }
 
     /// Return `true` if the atom `atom_id` is complete on this path.
     pub fn is_complete(&self, atom_id: &str) -> bool {
         is_atom_complete(&self.graph, &self.progress, atom_id)
+    }
+
+    /// Return the atoms of this path in the order that the scheduler teaches them.
+    ///
+    /// `bottom_up` visits the prerequisites and the children of each target before the target. `top_down` lists the subpath and then the targets.
+    fn teaching_order(&self) -> Vec<String> {
+        let g = &self.graph;
+        let mut visited = HashSet::new();
+        let mut out = Vec::new();
+        match self.state.file.strategy {
+            Strategy::BottomUp => {
+                for target in &self.targets {
+                    visit_bottom_up(g, target, &mut visited, &mut out);
+                }
+            }
+            Strategy::TopDown => {
+                for id in self.subpath.iter().chain(&self.targets) {
+                    let is_atom = g.by_id.get(id).is_some_and(|c| c.children_ids.is_empty());
+                    if is_atom && visited.insert(id.clone()) {
+                        out.push(id.clone());
+                    }
+                }
+            }
+        }
+        out
     }
 }
 
@@ -185,59 +223,6 @@ impl Action {
             Action::NoReviewsDue | Action::Done => None,
         }
     }
-}
-
-/// Compute the highest-priority action for `p` filtered by `mode`.
-pub fn next_action(
-    g: &Graph,
-    p: &PathFile,
-    targets: &[String],
-    progress: &PathProgress,
-    due_quizzes: &[(String, DateTime<Utc>)],
-    subpath: &[String],
-    mode: NextMode,
-) -> Action {
-    if mode != NextMode::New
-        && let Some((quiz_id, atom_id)) = first_due_card(g, due_quizzes)
-    {
-        return Action::PresentQuiz { quiz_id, atom_id };
-    }
-    if mode == NextMode::Due {
-        return Action::NoReviewsDue;
-    }
-    teaching_order(g, p.strategy, targets, subpath)
-        .iter()
-        .find_map(|atom| atom_action(g.by_id.get(atom)?, progress))
-        .unwrap_or(Action::Done)
-}
-
-/// Return the atoms of a path in the order that the scheduler teaches them.
-///
-/// `bottom_up` visits the prerequisites and the children of each target before the target. `top_down` lists the subpath and then the targets.
-pub fn teaching_order(
-    g: &Graph,
-    strategy: Strategy,
-    targets: &[String],
-    subpath: &[String],
-) -> Vec<String> {
-    let mut visited = HashSet::new();
-    let mut out = Vec::new();
-    match strategy {
-        Strategy::BottomUp => {
-            for target in targets {
-                visit_bottom_up(g, target, &mut visited, &mut out);
-            }
-        }
-        Strategy::TopDown => {
-            for id in subpath.iter().chain(targets) {
-                let is_atom = g.by_id.get(id).is_some_and(|c| c.children_ids.is_empty());
-                if is_atom && visited.insert(id.clone()) {
-                    out.push(id.clone());
-                }
-            }
-        }
-    }
-    out
 }
 
 fn visit_bottom_up(g: &Graph, id: &str, visited: &mut HashSet<String>, out: &mut Vec<String>) {

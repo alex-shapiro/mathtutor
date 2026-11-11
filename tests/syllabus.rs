@@ -1,11 +1,13 @@
-//! Tests for `syllabus::upcoming` and the agreement of the syllabus with the scheduler.
+//! Tests for `PathPlan::upcoming` and the agreement of the syllabus with the scheduler.
 
+use std::sync::Arc;
+
+use chrono::Utc;
+use mathtutor::Error;
 use mathtutor::db::{Db, DbConfig};
 use mathtutor::graph::Curriculum;
-use mathtutor::graph::Graph;
 use mathtutor::overlay::QuizDraft;
-use mathtutor::progress::PathProgress;
-use mathtutor::scheduler::{self, Action, NextMode};
+use mathtutor::scheduler::{self, Action, NextMode, PathPlan};
 use mathtutor::surface::Surface;
 use mathtutor::types::{QuizType, Rating, Strategy};
 use mathtutor::{answer, path, store, subpath, syllabus};
@@ -16,37 +18,18 @@ use common::{
     cluster, empty_atom as atom, graph_of, lesson_authored, path_with, path_with_strategy, taught,
 };
 
-fn upcoming_atoms(g: &Graph, targets: &[String], progress: &PathProgress) -> Vec<String> {
-    syllabus::upcoming(g, Strategy::BottomUp, targets, &[], progress)
-}
-
-fn upcoming_top_down(
-    g: &Graph,
-    targets: &[String],
-    progress: &PathProgress,
-    subpath: &[String],
-) -> Vec<String> {
-    syllabus::upcoming(g, Strategy::TopDown, targets, subpath, progress)
-}
-
 #[test]
 fn empty_targets_yield_empty_syllabus() {
     let g = graph_of(vec![]);
     let p = path_with(&[]);
-    assert_eq!(
-        upcoming_atoms(&g, &p.targets, &PathProgress::default()),
-        Vec::<String>::new()
-    );
+    assert_eq!(common::upcoming(&g, &p, &[]), Vec::<String>::new());
 }
 
 #[test]
 fn single_untaught_target_appears() {
     let g = graph_of(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
-    assert_eq!(
-        upcoming_atoms(&g, &p.targets, &PathProgress::default()),
-        vec!["a".to_string()]
-    );
+    assert_eq!(common::upcoming(&g, &p, &[]), vec!["a".to_string()]);
 }
 
 #[test]
@@ -54,10 +37,7 @@ fn taught_target_is_skipped() {
     let g = graph_of(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
-    assert_eq!(
-        upcoming_atoms(&g, &p.targets, &common::progress_of(&events)),
-        Vec::<String>::new()
-    );
+    assert_eq!(common::upcoming(&g, &p, &events), Vec::<String>::new());
 }
 
 #[test]
@@ -65,10 +45,7 @@ fn lesson_authored_event_counts_as_taught() {
     let g = graph_of(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = vec![lesson_authored("a")];
-    assert_eq!(
-        upcoming_atoms(&g, &p.targets, &common::progress_of(&events)),
-        Vec::<String>::new()
-    );
+    assert_eq!(common::upcoming(&g, &p, &events), Vec::<String>::new());
 }
 
 #[test]
@@ -76,7 +53,7 @@ fn prereq_appears_before_target() {
     let g = graph_of(vec![atom("pre", &[]), atom("target", &["pre"])]);
     let p = path_with(&["target"]);
     assert_eq!(
-        upcoming_atoms(&g, &p.targets, &PathProgress::default()),
+        common::upcoming(&g, &p, &[]),
         vec!["pre".to_string(), "target".to_string()],
     );
 }
@@ -87,7 +64,7 @@ fn taught_prereq_is_skipped_but_target_remains() {
     let p = path_with(&["target"]);
     let events = vec![taught("pre")];
     assert_eq!(
-        upcoming_atoms(&g, &p.targets, &common::progress_of(&events)),
+        common::upcoming(&g, &p, &events),
         vec!["target".to_string()],
     );
 }
@@ -101,7 +78,7 @@ fn diamond_prereq_appears_once() {
         atom("c", &[]),
     ]);
     let p = path_with(&["tx.1"]);
-    let order = upcoming_atoms(&g, &p.targets, &PathProgress::default());
+    let order = common::upcoming(&g, &p, &[]);
     assert_eq!(order.iter().filter(|x| *x == "c").count(), 1);
     let pos = |id: &str| order.iter().position(|x| x == id).unwrap();
     assert!(pos("c") < pos("a"));
@@ -118,7 +95,7 @@ fn cluster_target_expands_to_atomic_children() {
         atom("la.2.2", &[]),
     ]);
     let p = path_with(&["la.2"]);
-    let order = upcoming_atoms(&g, &p.targets, &PathProgress::default());
+    let order = common::upcoming(&g, &p, &[]);
     assert!(!order.contains(&"la.2".to_string()));
     assert!(order.contains(&"la.2.1".to_string()));
     assert!(order.contains(&"la.2.2".to_string()));
@@ -129,19 +106,17 @@ fn multiple_targets_walked_in_order() {
     let g = graph_of(vec![atom("a", &[]), atom("b", &[])]);
     let p = path_with(&["a", "b"]);
     assert_eq!(
-        upcoming_atoms(&g, &p.targets, &PathProgress::default()),
+        common::upcoming(&g, &p, &[]),
         vec!["a".to_string(), "b".to_string()],
     );
 }
 
 #[test]
-fn missing_id_is_silently_skipped() {
+fn plan_rejects_a_target_that_the_curriculum_lacks() {
     let g = graph_of(vec![atom("a", &[])]);
-    let p = path_with(&["a", "ghost"]);
-    assert_eq!(
-        upcoming_atoms(&g, &p.targets, &PathProgress::default()),
-        vec!["a".to_string()]
-    );
+    let state = common::state_of(&path_with(&["a", "ghost"]), &[]);
+    let plan = PathPlan::new(&state, Arc::new(g), Utc::now());
+    assert!(matches!(plan, Err(Error::UnknownId(id)) if id == "ghost"));
 }
 
 #[test]
@@ -153,7 +128,7 @@ fn n_truncates_atoms_but_total_remaining_is_full_count() {
         atom("d", &[]),
     ]);
     let p = path_with(&["a", "b", "c", "d"]);
-    let upcoming = upcoming_atoms(&g, &p.targets, &PathProgress::default());
+    let upcoming = common::upcoming(&g, &p, &[]);
     assert_eq!(upcoming.len(), 4);
     let n = 2;
     let truncated: Vec<_> = upcoming.iter().take(n).cloned().collect();
@@ -164,19 +139,16 @@ fn n_truncates_atoms_but_total_remaining_is_full_count() {
 fn top_down_lists_targets_not_prereqs() {
     let g = graph_of(vec![atom("p", &[]), atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
-    assert_eq!(
-        upcoming_top_down(&g, &p.targets, &PathProgress::default(), &[]),
-        vec!["t".to_string()],
-    );
+    assert_eq!(common::upcoming(&g, &p, &[]), vec!["t".to_string()],);
 }
 
 #[test]
 fn top_down_prefixes_subpath_before_targets() {
     let g = graph_of(vec![atom("p", &[]), atom("q", &[]), atom("t", &["p", "q"])]);
-    let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let subpath = vec!["q".to_string(), "t".to_string()];
+    let mut p = path_with_strategy(&["t"], Strategy::TopDown);
+    p.subpath = vec!["q".to_string(), "t".to_string()];
     assert_eq!(
-        upcoming_top_down(&g, &p.targets, &PathProgress::default(), &subpath),
+        common::upcoming(&g, &p, &[]),
         vec!["q".to_string(), "t".to_string()],
     );
 }
@@ -184,15 +156,10 @@ fn top_down_prefixes_subpath_before_targets() {
 #[test]
 fn top_down_skips_taught_subpath_and_target_atoms() {
     let g = graph_of(vec![atom("p", &[]), atom("t", &["p"])]);
-    let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let subpath = vec!["p".to_string(), "t".to_string()];
+    let mut p = path_with_strategy(&["t"], Strategy::TopDown);
+    p.subpath = vec!["p".to_string(), "t".to_string()];
     assert_eq!(
-        upcoming_top_down(
-            &g,
-            &p.targets,
-            &common::progress_of(&[taught("p")]),
-            &subpath
-        ),
+        common::upcoming(&g, &p, &[taught("p")]),
         vec!["t".to_string()],
     );
 }

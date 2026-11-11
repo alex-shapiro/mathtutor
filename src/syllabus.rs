@@ -3,10 +3,7 @@
 use serde::Serialize;
 
 use crate::db::Db;
-use crate::graph::Graph;
-use crate::progress::PathProgress;
-use crate::scheduler::{self, PathPlan};
-use crate::types::Strategy;
+use crate::scheduler::PathPlan;
 use crate::view::Want;
 use crate::{Error, Result};
 
@@ -47,8 +44,7 @@ pub async fn compute_syllabus(
     let view = db.snapshot(&Want::path(explicit_id)).await?;
     let plan = PathPlan::of(&view)?;
     let g = &plan.graph;
-    let strategy = plan.state.file.strategy;
-    let upcoming = upcoming(g, strategy, &plan.targets, &plan.subpath, &plan.progress);
+    let upcoming = plan.upcoming();
     let total_remaining = upcoming.len();
     let atoms: Vec<SyllabusAtom> = upcoming
         .into_iter()
@@ -69,17 +65,4 @@ pub async fn compute_syllabus(
         total_remaining,
         atoms,
     })
-}
-
-/// Return the atoms of a path with untaught lessons, in teaching order.
-pub fn upcoming(
-    g: &Graph,
-    strategy: Strategy,
-    targets: &[String],
-    subpath: &[String],
-    progress: &PathProgress,
-) -> Vec<String> {
-    let mut order = scheduler::teaching_order(g, strategy, targets, subpath);
-    order.retain(|atom| !progress.lesson_taught(atom));
-    order
 }
