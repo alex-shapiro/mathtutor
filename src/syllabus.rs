@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::Result;
 use crate::db::Db;
 use crate::scheduler::PathPlan;
-use crate::view::Want;
+use crate::view::ViewRequest;
 
 /// Preview of upcoming untaught atoms for a learning path.
 #[derive(Debug, Serialize)]
@@ -38,7 +38,7 @@ pub async fn compute_syllabus(
     explicit_id: Option<&str>,
     n: usize,
 ) -> Result<SyllabusView> {
-    let view = db.snapshot(&Want::path(explicit_id)).await?;
+    let view = db.snapshot(&ViewRequest::path(explicit_id)).await?;
     let plan = PathPlan::of(&view)?;
     let g = &plan.graph;
     let upcoming = plan.upcoming();
@@ -57,8 +57,8 @@ pub async fn compute_syllabus(
 
     Ok(SyllabusView {
         schema_version: 1,
-        path: plan.state.file.id.clone(),
-        goal: plan.state.file.goal.clone(),
+        path: plan.state.row.id.clone(),
+        goal: plan.state.row.goal.clone(),
         total_remaining,
         atoms,
     })

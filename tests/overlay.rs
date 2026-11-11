@@ -4,7 +4,7 @@ use mathtutor::db::Db;
 use mathtutor::graph::{Graph, Quiz};
 use mathtutor::overlay::{self, QuizDraft, QuizPatch};
 use mathtutor::types::{Difficulty, QuizType};
-use mathtutor::view::{Changes, View};
+use mathtutor::view::{View, WriteSet};
 
 mod common;
 
@@ -18,7 +18,7 @@ async fn fresh_db() -> Db {
     common::fresh_db(PATH_ID).await
 }
 
-async fn edit(db: &Db, f: impl Fn(&View, &mut Changes)) {
+async fn edit(db: &Db, f: impl Fn(&View, &mut WriteSet)) {
     common::write(db, PATH_ID, |view, changes| f(view, changes)).await;
 }
 
@@ -323,10 +323,10 @@ async fn overlay_is_global_across_paths() {
 
     for id in ["p_a", "p_b"] {
         let view = db
-            .snapshot(&mathtutor::view::Want::path(Some(id)))
+            .snapshot(&mathtutor::view::ViewRequest::path(Some(id)))
             .await
             .unwrap();
-        assert_eq!(view.path().unwrap().file.id, id);
+        assert_eq!(view.path().unwrap().row.id, id);
         let g = mathtutor::graph::Curriculum::embedded()
             .merged(view.overlay().unwrap())
             .unwrap();
@@ -410,7 +410,7 @@ async fn deleting_a_deleted_quiz_succeeds() {
 #[tokio::test]
 async fn an_overlay_edit_fails_in_a_write_set_without_the_overlay() {
     let db = fresh_db().await;
-    let want = mathtutor::view::Want::path(Some(PATH_ID)).without_overlay();
+    let want = mathtutor::view::ViewRequest::path(Some(PATH_ID)).without_overlay();
     let e = db
         .transact(&want, |view, changes| {
             overlay::upsert_lesson(changes, view, NO_LESSON_ATOM, "unchecked")

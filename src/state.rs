@@ -10,7 +10,7 @@ use crate::graph::{FlatConcept, Graph};
 use crate::progress::{PathCompletion, PathProgress, ReachProgress, TargetProgress};
 use crate::scheduler::{self, PathPlan};
 use crate::types::Strategy;
-use crate::view::{PathState, Want};
+use crate::view::{PathState, ViewRequest};
 use crate::{Error, Result};
 
 /// Progress summary for a learning path.
@@ -92,10 +92,10 @@ pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
 
 /// Compute the progress summary for `explicit_id` or the latest path.
 pub async fn compute_state(db: &Db, explicit_id: Option<&str>) -> Result<StateSummary> {
-    let view = db.snapshot(&Want::path(explicit_id)).await?;
+    let view = db.snapshot(&ViewRequest::path(explicit_id)).await?;
     let plan = PathPlan::of(&view)?;
     let (ps, g, progress) = (plan.state, &plan.graph, &plan.progress);
-    let p = ps.file.clone();
+    let p = ps.row.clone();
     let completion = PathCompletion::of(g, &plan.targets, &plan.reachable, progress);
 
     let next = plan

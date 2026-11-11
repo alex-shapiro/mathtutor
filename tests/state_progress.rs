@@ -3,7 +3,7 @@
 use chrono::{Duration, Utc};
 use mathtutor::graph::Graph;
 use mathtutor::overlay::QuizDraft;
-use mathtutor::path::PathFile;
+use mathtutor::path::PathRow;
 use mathtutor::progress::{PathCompletion, PathProgress, ReachProgress, TargetProgress};
 use mathtutor::state;
 use mathtutor::types::Rating;
@@ -12,7 +12,7 @@ mod common;
 
 use common::{PATH_ID, complete_atom, complete_events, empty_atom, path_with, progress_of, taught};
 
-fn completion(g: &Graph, p: &PathFile, progress: &PathProgress) -> (TargetProgress, ReachProgress) {
+fn completion(g: &Graph, p: &PathRow, progress: &PathProgress) -> (TargetProgress, ReachProgress) {
     let targets = p.resolve_targets(g).unwrap();
     let c = PathCompletion::of(g, &targets, &g.prerequisite_order(&targets), progress);
     (c.targets, c.reachable)

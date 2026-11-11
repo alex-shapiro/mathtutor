@@ -195,7 +195,7 @@ async fn dispatch_path(ctx: &Context, op: PathOp) -> Result<()> {
         PathOp::New(c) => {
             let targets = cli::flatten_ids(&c.targets);
             let p =
-                path::PathFile::create(&*ctx.curriculum.graph()?, &c.goal, &targets, c.strategy)?;
+                path::PathRow::create(&*ctx.curriculum.graph()?, &c.goal, &targets, c.strategy)?;
             path::store_new_path(&ctx.create_db().await?, &p).await?;
             eprintln!("created path: {}", p.id);
             Ok(())

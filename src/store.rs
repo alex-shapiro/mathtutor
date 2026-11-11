@@ -6,7 +6,7 @@ use crate::db::Db;
 use crate::event_log::{Event, EventKind};
 use crate::graph;
 use crate::overlay::{self, QuizDraft, QuizPatch};
-use crate::view::Want;
+use crate::view::ViewRequest;
 use crate::{Error, Result};
 
 /// Store a lesson body for `atom_id` in the overlay and log its authoring and presentation events.
@@ -18,9 +18,9 @@ pub async fn cmd_lesson_upsert(
     body: String,
     path_id: Option<&str>,
 ) -> Result<()> {
-    db.transact(&Want::path(path_id), |view, changes| {
+    db.transact(&ViewRequest::path(path_id), |view, changes| {
         let ps = view.path()?;
-        let id = ps.file.id.clone();
+        let id = ps.row.id.clone();
         let g = view.graph()?;
         let stored = g.atom(atom_id)?.lesson.as_deref();
         let atom = atom_id.to_string();
@@ -51,8 +51,8 @@ pub async fn cmd_quiz_create(
     draft: QuizDraft,
     path_id: Option<&str>,
 ) -> Result<String> {
-    db.transact(&Want::path(path_id), |view, changes| {
-        let id = view.path()?.file.id.clone();
+    db.transact(&ViewRequest::path(path_id), |view, changes| {
+        let id = view.path()?.row.id.clone();
         let g = view.graph()?;
         let c = g.atom(atom_id)?;
         if c.lesson.is_none() {
@@ -80,8 +80,8 @@ pub async fn cmd_quiz_update(
     patch: &QuizPatch,
     path_id: Option<&str>,
 ) -> Result<()> {
-    db.transact(&Want::path(path_id), |view, changes| {
-        let id = view.path()?.file.id.clone();
+    db.transact(&ViewRequest::path(path_id), |view, changes| {
+        let id = view.path()?.row.id.clone();
         let g = view.graph()?;
         let (atom, quiz) = g.quiz(quiz_id)?;
         overlay::amend_quiz(changes, view, &atom.id, quiz, patch)?;
@@ -96,8 +96,8 @@ pub async fn cmd_quiz_update(
 
 /// Mark `quiz_id` as removed in the overlay and log a `quiz_removed` event.
 pub async fn cmd_quiz_delete(db: &Db, quiz_id: &str, path_id: Option<&str>) -> Result<()> {
-    db.transact(&Want::path(path_id), |view, changes| {
-        let id = view.path()?.file.id.clone();
+    db.transact(&ViewRequest::path(path_id), |view, changes| {
+        let id = view.path()?.row.id.clone();
         if view
             .overlay()?
             .atoms

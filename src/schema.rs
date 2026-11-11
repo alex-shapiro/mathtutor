@@ -46,11 +46,11 @@ impl TableSet {
     pub fn tables(self) -> Vec<NewTable> {
         match self {
             TableSet::Learner => vec![
-                PathFile::new_table(),
+                PathRow::new_table(),
                 LessonRow::new_table(),
                 QuizRow::new_table(),
                 RemovedQuizRow::new_table(),
-                CardRecord::new_table(),
+                CardRow::new_table(),
                 TaughtRow::new_table(),
             ],
             TableSet::Auth => vec![
@@ -240,7 +240,7 @@ macro_rules! row_table {
 
 row_table! {
     /// Stored metadata and configuration for a learning path.
-    pub struct PathFile in "paths", primary key (id) {
+    pub struct PathRow in "paths", primary key (id) {
         pub id: String,
         pub goal: String,
         #[serde(with = "ts")]
@@ -282,7 +282,7 @@ row_table! {
 
 row_table! {
     /// Row in the `cards` table storing FSRS state and answer history for a quiz.
-    pub struct CardRecord in "cards", primary key (path_id, quiz_id) {
+    pub struct CardRow in "cards", primary key (path_id, quiz_id) {
         pub path_id: String,
         pub quiz_id: String,
         pub stability: Option<f32>,
@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn columns_follow_the_field_types_of_their_row() {
-        let cards = CardRecord::new_table();
+        let cards = CardRow::new_table();
         let column = |name: &str| {
             let c = cards.columns.iter().find(|c| c.name == name).unwrap();
             (c.ty, c.nullable)

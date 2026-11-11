@@ -9,12 +9,12 @@ use serde::Serialize;
 use crate::db::Db;
 use crate::event_log::{Event, EventKind};
 use crate::graph::{FlatConcept, Graph};
-use crate::path::PathFile;
+use crate::path::PathRow;
 use crate::progress::{PathProgress, QuizSlot};
 use crate::subpath;
-use crate::surface::{Field, Step, Surface, Tool, Value};
+use crate::surface::{AgentCommand, Field, Step, Surface, Value};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
-use crate::view::{PathState, View, Want};
+use crate::view::{PathState, View, ViewRequest};
 use crate::{Error, Result};
 
 /// Compute the next action for `path_id` and print its AYML envelope for `mt path next`.
@@ -76,7 +76,7 @@ impl<'v> PathPlan<'v> {
 
     /// Return the plan of path `state` over `graph` at time `now`.
     pub fn new(state: &'v PathState, graph: Arc<Graph>, now: DateTime<Utc>) -> Result<Self> {
-        let targets = state.file.resolve_targets(&graph)?;
+        let targets = state.row.resolve_targets(&graph)?;
         let due = state
             .due(now)
             .into_iter()
@@ -92,7 +92,7 @@ impl<'v> PathPlan<'v> {
         Ok(Self {
             progress: state.progress(),
             reachable: graph.prerequisite_order(&targets),
-            subpath: subpath::resolved(&state.file, &graph)?,
+            subpath: subpath::resolved(&state.row, &graph)?,
             targets,
             due,
             graph,
@@ -135,7 +135,7 @@ impl<'v> PathPlan<'v> {
     ///
     /// `bottom_up` lists the transitive atomic prerequisites of each target atom before the atom. `top_down` lists the subpath and then the targets.
     fn teaching_order(&self) -> Vec<String> {
-        match self.state.file.strategy {
+        match self.state.row.strategy {
             Strategy::BottomUp => self.reachable.clone(),
             Strategy::TopDown => {
                 let g = &self.graph;
@@ -159,9 +159,9 @@ pub async fn compute_next(
     mode: NextMode,
     surface: Surface,
 ) -> Result<Envelope> {
-    db.transact(&Want::path(path_id), |view, changes| {
+    db.transact(&ViewRequest::path(path_id), |view, changes| {
         let plan = PathPlan::of(view)?;
-        let p = &plan.state.file;
+        let p = &plan.state.row;
         let action = plan.next_action(mode);
         // Build the envelope before appending presentation events so history reflects prior attempts.
         let envelope = Envelope::build(plan.state, &plan.graph, action.clone(), surface);
@@ -187,7 +187,7 @@ pub async fn compute_next(
             && !plan.subpath.is_empty()
             && plan.subpath.iter().all(|a| plan.is_complete(a))
         {
-            changes.replace_path(&PathFile {
+            changes.replace_path(&PathRow {
                 subpath: Vec::new(),
                 ..p.clone()
             });
@@ -517,8 +517,8 @@ impl Envelope {
         };
         Envelope {
             schema_version: 1,
-            next_step: next_step(&action, &ps.file.id).map(|s| s.render(surface)),
-            path: ps.file.id.clone(),
+            next_step: next_step(&action, &ps.row.id).map(|s| s.render(surface)),
+            path: ps.row.id.clone(),
             action,
             payload,
         }
@@ -529,18 +529,20 @@ impl Envelope {
 pub fn next_step(action: &Action, path_id: &str) -> Option<Step> {
     let path = Value::known(path_id);
     let step = match action {
-        Action::PresentLesson { .. } | Action::NoReviewsDue => Step::new(Tool::GetNext, path),
-        Action::PresentQuiz { quiz_id, .. } => Step::new(Tool::AnswerQuiz, path)
+        Action::PresentLesson { .. } | Action::NoReviewsDue => {
+            Step::new(AgentCommand::GetNext, path)
+        }
+        Action::PresentQuiz { quiz_id, .. } => Step::new(AgentCommand::AnswerQuiz, path)
             .arg(Field::QuizId, Value::known(quiz_id))
             .arg(Field::Rating, Value::Choice(Rating::SPELLINGS))
             .arg(Field::UserAnswer, Value::Text("verbatim reply")),
-        Action::CreateLesson { atom_id } => Step::new(Tool::UpsertLesson, path)
+        Action::CreateLesson { atom_id } => Step::new(AgentCommand::UpsertLesson, path)
             .arg(Field::Atom, Value::known(atom_id))
             .arg(Field::Body, Value::Text("lesson")),
         Action::CreateQuiz {
             atom_id,
             difficulty,
-        } => Step::new(Tool::CreateQuiz, path)
+        } => Step::new(AgentCommand::CreateQuiz, path)
             .arg(Field::Atom, Value::known(atom_id))
             .arg(Field::Difficulty, Value::known(difficulty.as_str()))
             .arg(Field::Question, Value::Text("question"))

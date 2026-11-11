@@ -4,13 +4,13 @@ use std::collections::HashSet;
 
 use crate::db::Db;
 use crate::graph::Graph;
-use crate::path::PathFile;
+use crate::path::PathRow;
 use crate::types::Strategy;
-use crate::view::Want;
+use crate::view::ViewRequest;
 use crate::{Error, Result};
 
 /// Expand the stored subpath of `p` into an ordered list of atom IDs.
-pub fn resolved(p: &PathFile, g: &Graph) -> Result<Vec<String>> {
+pub fn resolved(p: &PathRow, g: &Graph) -> Result<Vec<String>> {
     g.expand_to_atoms(&p.subpath)
 }
 
@@ -23,8 +23,8 @@ pub async fn cmd_subpath_set(
     let Some((tail, _)) = atoms.split_last() else {
         return Err(Error::SubpathEmpty);
     };
-    db.transact(&Want::path(explicit_id), |view, changes| {
-        let p = &view.path()?.file;
+    db.transact(&ViewRequest::path(explicit_id), |view, changes| {
+        let p = &view.path()?.row;
         if p.strategy != Strategy::TopDown {
             return Err(Error::SubpathNotTopDown);
         }
@@ -43,7 +43,7 @@ pub async fn cmd_subpath_set(
                 None => return Err(Error::UnknownId(a.clone())),
             }
         }
-        let p = PathFile {
+        let p = PathRow {
             subpath: atoms.to_vec(),
             ..p.clone()
         };
@@ -56,11 +56,11 @@ pub async fn cmd_subpath_set(
 /// Clear the stored subpath for a learning path for `mt path subpath clear`.
 pub async fn cmd_subpath_clear(db: &Db, explicit_id: Option<&str>) -> Result<String> {
     db.transact(
-        &Want::path(explicit_id).without_overlay(),
+        &ViewRequest::path(explicit_id).without_overlay(),
         |view, changes| {
-            let p = PathFile {
+            let p = PathRow {
                 subpath: Vec::new(),
-                ..view.path()?.file.clone()
+                ..view.path()?.row.clone()
             };
             changes.replace_path(&p);
             Ok(p.id)

@@ -8,12 +8,12 @@ use crate::db::Db;
 use crate::graph::{Graph, natural_id_cmp};
 use crate::progress::TargetProgress;
 use crate::types::Strategy;
-use crate::view::Want;
+use crate::view::ViewRequest;
 use crate::{Error, Result};
 
-pub use crate::schema::PathFile;
+pub use crate::schema::PathRow;
 
-impl PathFile {
+impl PathRow {
     /// Return a new path toward `targets`, or fail if `targets` is empty or `g` cannot expand a target.
     ///
     /// The path stores each cluster target as given, without its atoms.
@@ -81,14 +81,14 @@ pub async fn cmd_path_new(
     targets: &[String],
     strategy: Strategy,
 ) -> Result<String> {
-    let p = PathFile::create(&*db.curriculum().graph()?, goal, targets, strategy)?;
+    let p = PathRow::create(&*db.curriculum().graph()?, goal, targets, strategy)?;
     store_new_path(db, &p).await?;
     Ok(p.id)
 }
 
 /// Store the new path `p` and its creation event.
-pub async fn store_new_path(db: &Db, p: &PathFile) -> Result<()> {
-    db.transact(&Want::nothing(), |view, changes| {
+pub async fn store_new_path(db: &Db, p: &PathRow) -> Result<()> {
+    db.transact(&ViewRequest::nothing(), |view, changes| {
         changes.create_path(view, p)
     })
     .await
@@ -100,11 +100,11 @@ pub async fn cmd_path_strategy(
     explicit_id: Option<&str>,
     strategy: Strategy,
 ) -> Result<String> {
-    let want = Want::path(explicit_id).without_overlay();
+    let want = ViewRequest::path(explicit_id).without_overlay();
     db.transact(&want, |view, changes| {
-        let p = PathFile {
+        let p = PathRow {
             strategy,
-            ..view.path()?.file.clone()
+            ..view.path()?.row.clone()
         };
         changes.replace_path(&p);
         Ok(p.id)
@@ -143,18 +143,18 @@ pub async fn cmd_path_list(db: &Db) -> Result<()> {
 ///
 /// A path with targets that the curriculum cannot expand reports those target IDs instead of failing the list.
 pub async fn compute_path_list(db: &Db) -> Result<PathListView> {
-    let view = db.snapshot(&Want::all_paths()).await?;
+    let view = db.snapshot(&ViewRequest::all_paths()).await?;
     let g = view.graph()?;
     let paths = view
         .paths()
         .into_iter()
         .map(|p| {
-            let resolved = p.file.resolve_each_target(&g)?;
+            let resolved = p.row.resolve_each_target(&g)?;
             Ok(PathSummary {
-                id: p.file.id.clone(),
-                goal: p.file.goal.clone(),
-                strategy: p.file.strategy,
-                created_at: p.file.created_at,
+                id: p.row.id.clone(),
+                goal: p.row.goal.clone(),
+                strategy: p.row.strategy,
+                created_at: p.row.created_at,
                 updated_at: p.updated_at,
                 targets: TargetProgress::of(&g, &resolved.atoms, &p.progress()),
                 unresolved_targets: resolved.unresolved,

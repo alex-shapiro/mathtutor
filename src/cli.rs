@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use argh::FromArgs;
 
-use crate::surface::{Recovery, Tool};
+use crate::surface::{AgentCommand, Recovery};
 use crate::types;
 
 /// Manage math lessons and spaced-repetition quizzes over a curriculum graph.
@@ -33,34 +33,34 @@ pub enum Cmd {
 
 impl Cmd {
     /// Return the agent command of this command, or `None` for an operator command.
-    pub fn tool(&self) -> Option<Tool> {
+    pub fn agent_command(&self) -> Option<AgentCommand> {
         let tool = match self {
             Cmd::Path(p) => match &p.op {
-                PathOp::List(_) => Tool::GetPaths,
-                PathOp::New(_) => Tool::NewPath,
-                PathOp::State(_) => Tool::GetState,
-                PathOp::Next(_) => Tool::GetNext,
-                PathOp::Strategy(_) => Tool::SetStrategy,
+                PathOp::List(_) => AgentCommand::GetPaths,
+                PathOp::New(_) => AgentCommand::NewPath,
+                PathOp::State(_) => AgentCommand::GetState,
+                PathOp::Next(_) => AgentCommand::GetNext,
+                PathOp::Strategy(_) => AgentCommand::SetStrategy,
                 PathOp::Subpath(s) => match s.op {
-                    SubpathOp::Set(_) => Tool::SubpathSet,
-                    SubpathOp::Clear(_) => Tool::SubpathClear,
+                    SubpathOp::Set(_) => AgentCommand::SubpathSet,
+                    SubpathOp::Clear(_) => AgentCommand::SubpathClear,
                 },
-                PathOp::Syllabus(_) => Tool::GetSyllabus,
-                PathOp::Tree(_) => Tool::GetTree,
+                PathOp::Syllabus(_) => AgentCommand::GetSyllabus,
+                PathOp::Tree(_) => AgentCommand::GetTree,
             },
             Cmd::Graph(g) => match g.op {
-                GraphOp::Show(_) => Tool::GetItem,
-                GraphOp::List(_) => Tool::GetChildren,
+                GraphOp::Show(_) => AgentCommand::GetItem,
+                GraphOp::List(_) => AgentCommand::GetChildren,
                 GraphOp::Check(_) | GraphOp::Dump(_) => return None,
             },
             Cmd::Lesson(l) => match l.op {
-                LessonOp::Upsert(_) => Tool::UpsertLesson,
+                LessonOp::Upsert(_) => AgentCommand::UpsertLesson,
             },
             Cmd::Quiz(q) => match q.op {
-                QuizOp::Create(_) => Tool::CreateQuiz,
-                QuizOp::Update(_) => Tool::UpdateQuiz,
-                QuizOp::Delete(_) => Tool::DeleteQuiz,
-                QuizOp::Answer(_) => Tool::AnswerQuiz,
+                QuizOp::Create(_) => AgentCommand::CreateQuiz,
+                QuizOp::Update(_) => AgentCommand::UpdateQuiz,
+                QuizOp::Delete(_) => AgentCommand::DeleteQuiz,
+                QuizOp::Answer(_) => AgentCommand::AnswerQuiz,
             },
             Cmd::Instruct(_) | Cmd::ImportTurso(_) => return None,
             #[cfg(feature = "mcp")]
@@ -73,7 +73,9 @@ impl Cmd {
     pub fn recovery(&self) -> Recovery {
         match self {
             Cmd::ImportTurso(_) => Recovery::RunImportAgain,
-            _ => self.tool().map_or(Recovery::Repeat, Tool::recovery),
+            _ => self
+                .agent_command()
+                .map_or(Recovery::Repeat, AgentCommand::recovery),
         }
     }
 }
@@ -537,24 +539,24 @@ mod tests {
             &["quiz", "delete", "a.q1"],
             &["quiz", "answer", "a.q1", "--rating", "good"],
         ];
-        let tools: Vec<Tool> = samples
+        let tools: Vec<AgentCommand> = samples
             .iter()
             .map(|args| {
                 let cmd = Mt::from_args(&["mt"], args).expect("valid args").cmd;
-                let tool = cmd.tool().expect("an agent command");
+                let tool = cmd.agent_command().expect("an agent command");
                 assert!(args.join(" ").starts_with(tool.cli()), "{tool:?}: {args:?}");
                 assert_eq!(cmd.recovery(), tool.recovery());
                 tool
             })
             .collect();
-        assert_eq!(tools, Tool::ALL);
+        assert_eq!(tools, AgentCommand::ALL);
     }
 
     #[test]
     fn operator_commands_have_no_tool() {
         for args in [&["import-turso"][..], &["graph", "dump"], &["instruct"]] {
             let cmd = Mt::from_args(&["mt"], args).expect("valid args").cmd;
-            assert_eq!(cmd.tool(), None);
+            assert_eq!(cmd.agent_command(), None);
         }
         let import = Mt::from_args(&["mt"], &["import-turso"]).unwrap().cmd;
         assert_eq!(import.recovery(), Recovery::RunImportAgain);

@@ -12,7 +12,7 @@ use baserunna_client::bytes::Bytes;
 use baserunna_client::{BoxFuture, HttpTransport, Transport, TransportError, http};
 use chrono::{DateTime, Duration, Utc};
 use mathtutor::Error;
-use mathtutor::cards::{self, CardRow};
+use mathtutor::cards::{self, Card};
 use mathtutor::db::{Db, Op, ts};
 use mathtutor::error::ErrorKind;
 use mathtutor::event_log::{self, Event, EventKind};
@@ -20,7 +20,7 @@ use mathtutor::import::{self, Turso};
 use mathtutor::overlay;
 use mathtutor::schema::OAuthClient;
 use mathtutor::types::{Rating, Strategy};
-use mathtutor::view::Want;
+use mathtutor::view::ViewRequest;
 use serde::{Deserialize, Serialize};
 
 mod common;
@@ -330,10 +330,10 @@ fn legacy() -> Tables {
     t
 }
 
-fn legacy_cards() -> Vec<CardRow> {
+fn legacy_cards() -> Vec<Card> {
     let a: Vec<Event> = events().into_iter().filter(|e| e.path == "p_a").collect();
     let projection = cards::Projection::from_events(&a).unwrap();
-    let mut cards: Vec<CardRow> = projection.cards.into_values().collect();
+    let mut cards: Vec<Card> = projection.cards.into_values().collect();
     cards.sort_by(|x, y| x.quiz_id.cmp(&y.quiz_id));
     cards
 }
@@ -353,7 +353,7 @@ const CARD_COLUMNS: &[&str] = &[
     "lapses",
 ];
 
-fn card_rows(cards: &[CardRow]) -> Vec<Vec<CellValue>> {
+fn card_rows(cards: &[Card]) -> Vec<Vec<CellValue>> {
     cards
         .iter()
         .filter_map(|c| {
@@ -391,28 +391,28 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
     );
     assert!(r.mismatches.is_empty(), "{:?}", r.mismatches);
 
-    let view = db.snapshot(&Want::all_paths()).await.unwrap();
+    let view = db.snapshot(&ViewRequest::all_paths()).await.unwrap();
     let [a, b, c] = view.paths()[..] else {
         panic!("{} paths", view.paths().len());
     };
-    assert_eq!((a.file.id.as_str(), a.file.goal.as_str()), ("p_a", "first"));
-    assert_eq!(a.file.strategy, Strategy::TopDown);
-    assert_eq!(a.file.targets, ["fnd.2.1.1", "fnd.2"]);
-    assert_eq!(a.file.subpath, ["fnd.1.1.1", "fnd.2.1.1"]);
-    assert_eq!(a.file.created_at, at(0));
+    assert_eq!((a.row.id.as_str(), a.row.goal.as_str()), ("p_a", "first"));
+    assert_eq!(a.row.strategy, Strategy::TopDown);
+    assert_eq!(a.row.targets, ["fnd.2.1.1", "fnd.2"]);
+    assert_eq!(a.row.subpath, ["fnd.1.1.1", "fnd.2.1.1"]);
+    assert_eq!(a.row.created_at, at(0));
     assert_eq!(
         a.updated_at,
         at(9),
         "activity is the latest event, not the import"
     );
     assert_eq!(
-        (b.file.id.as_str(), b.file.strategy),
+        (b.row.id.as_str(), b.row.strategy),
         ("p_b", Strategy::BottomUp)
     );
-    assert_eq!(b.file.targets, ["fnd.1"]);
-    assert_eq!(b.file.subpath, Vec::<String>::new());
+    assert_eq!(b.row.targets, ["fnd.1"]);
+    assert_eq!(b.row.subpath, Vec::<String>::new());
     assert_eq!(b.updated_at, at(30));
-    assert_eq!((c.file.id.as_str(), c.updated_at), ("p_c", at(40)));
+    assert_eq!((c.row.id.as_str(), c.updated_at), ("p_c", at(40)));
 
     let stored = event_log::load(&db, "p_a").await.unwrap();
     let expected: Vec<Event> = events().into_iter().filter(|e| e.path == "p_a").collect();
@@ -455,8 +455,8 @@ async fn import_makes_the_path_with_the_latest_event_the_most_recent() {
     let r = import(tables, &db).await.expect("import");
 
     assert!(r.mismatches.is_empty(), "{:?}", r.mismatches);
-    let view = db.snapshot(&Want::path(None)).await.unwrap();
-    assert_eq!(view.path().unwrap().file.id, "p_a");
+    let view = db.snapshot(&ViewRequest::path(None)).await.unwrap();
+    assert_eq!(view.path().unwrap().row.id, "p_a");
 }
 
 fn tables_with_wrong_card() -> Tables {
@@ -485,16 +485,16 @@ async fn open_import_blocks_a_handle_opened_before_it_until_it_verifies() {
     let db = common::empty_db().await;
     import(tables_with_wrong_card(), &db).await.expect("first");
 
-    let read = db.snapshot(&Want::overlay()).await.unwrap_err();
+    let read = db.snapshot(&ViewRequest::overlay()).await.unwrap_err();
     assert!(matches!(read, Error::ImportInProgress), "{read}");
     let write = db
-        .transact(&Want::overlay(), |v, changes| {
+        .transact(&ViewRequest::overlay(), |v, changes| {
             overlay::upsert_lesson(changes, v, "fnd.1.1.1", "edit during the import")
         })
         .await
         .unwrap_err();
     assert!(matches!(write, Error::ImportInProgress), "{write}");
-    let recent = db.snapshot(&Want::path(None)).await.unwrap_err();
+    let recent = db.snapshot(&ViewRequest::path(None)).await.unwrap_err();
     let events = event_log::load(&db, "p_a").await.unwrap_err();
     let missing_stream = event_log::load(&db, "p_none").await.unwrap_err();
     for e in [recent, events, missing_stream] {
@@ -509,7 +509,7 @@ async fn open_import_blocks_a_handle_opened_before_it_until_it_verifies() {
 
     let r = import(legacy(), &db).await.expect("resume");
     assert!(r.mismatches.is_empty(), "{:?}", r.mismatches);
-    db.snapshot(&Want::overlay())
+    db.snapshot(&ViewRequest::overlay())
         .await
         .expect("a verified import allows commands");
 }
@@ -525,7 +525,7 @@ async fn completed_import_rejects_rerun_and_keeps_newer_content() {
         .find(|(_, a)| a.lesson.is_some())
         .map(|(id, _)| id.clone())
         .expect("imported lesson");
-    db.transact(&Want::overlay(), |v, changes| {
+    db.transact(&ViewRequest::overlay(), |v, changes| {
         overlay::upsert_lesson(changes, v, &atom, "newer")
     })
     .await
@@ -683,7 +683,7 @@ async fn import_reports_a_libsql_write_that_lands_after_its_first_read() {
         "{:?}",
         r.mismatches
     );
-    let blocked = db.snapshot(&Want::overlay()).await.unwrap_err();
+    let blocked = db.snapshot(&ViewRequest::overlay()).await.unwrap_err();
     assert!(matches!(blocked, Error::ImportInProgress), "{blocked}");
 }
 
@@ -728,7 +728,7 @@ async fn malformed_history_fails_before_the_import_claims_the_target() {
         matches!(&e, Error::BadRow(m) if m.contains("rating")),
         "{e}"
     );
-    db.snapshot(&Want::overlay())
+    db.snapshot(&ViewRequest::overlay())
         .await
         .expect("the target stays unclaimed");
 }
@@ -745,7 +745,7 @@ async fn an_unknown_payload_field_fails_before_the_import_claims_the_target() {
     let e = import(tables, &db).await.unwrap_err();
 
     assert!(matches!(&e, Error::BadRow(m) if m.contains("hint")), "{e}");
-    db.snapshot(&Want::overlay())
+    db.snapshot(&ViewRequest::overlay())
         .await
         .expect("the target stays unclaimed");
 }
@@ -777,7 +777,7 @@ async fn import_reports_source_rows_that_it_did_not_store() {
             "events: 9 rows in libSQL, but the import stored 8",
         ]
     );
-    let blocked = db.snapshot(&Want::overlay()).await.unwrap_err();
+    let blocked = db.snapshot(&ViewRequest::overlay()).await.unwrap_err();
     assert!(matches!(blocked, Error::ImportInProgress), "{blocked}");
 }
 
@@ -894,7 +894,7 @@ async fn import_rejects_database_at_another_migration() {
         matches!(&e, Error::Turso(m) if m.contains("migration 3")),
         "{e}"
     );
-    let view = db.snapshot(&Want::all_paths()).await.unwrap();
+    let view = db.snapshot(&ViewRequest::all_paths()).await.unwrap();
     assert!(view.paths().is_empty() && view.overlay().unwrap().atoms.is_empty());
 }
 

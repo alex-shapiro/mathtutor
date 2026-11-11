@@ -1,7 +1,7 @@
 //! Agent playbook for each surface, rendered from one template.
 
 use crate::Result;
-use crate::surface::{Field, Step, Surface, Tool, Value};
+use crate::surface::{AgentCommand, Field, Step, Surface, Value};
 use crate::types::{Difficulty, QuizType, Rating};
 
 /// Playbook template.
@@ -73,11 +73,11 @@ const TERMS: &[(&str, &str, &str)] = &[
 ];
 
 /// Name and command of each term in [`TEMPLATE`] that names an agent command.
-const TOOL_TERMS: &[(&str, Tool)] = &[
-    ("next_name", Tool::GetNext),
-    ("answer_name", Tool::AnswerQuiz),
-    ("update_quiz_name", Tool::UpdateQuiz),
-    ("delete_quiz_name", Tool::DeleteQuiz),
+const TOOL_TERMS: &[(&str, AgentCommand)] = &[
+    ("next_name", AgentCommand::GetNext),
+    ("answer_name", AgentCommand::AnswerQuiz),
+    ("update_quiz_name", AgentCommand::UpdateQuiz),
+    ("delete_quiz_name", AgentCommand::DeleteQuiz),
 ];
 
 /// Name and field of each term in [`TEMPLATE`] that names a command argument.
@@ -94,13 +94,13 @@ pub fn playbook_steps() -> Vec<(&'static str, Step)> {
     vec![
         (
             "upsert_lesson",
-            Step::new(Tool::UpsertLesson, path())
+            Step::new(AgentCommand::UpsertLesson, path())
                 .arg(Field::Atom, atom())
                 .arg(Field::Body, Value::Text("lesson")),
         ),
         (
             "create_quiz",
-            Step::new(Tool::CreateQuiz, path())
+            Step::new(AgentCommand::CreateQuiz, path())
                 .arg(Field::Atom, atom())
                 .arg(Field::Difficulty, Value::Choice(Difficulty::SPELLINGS))
                 .arg(Field::Question, Value::Text("question"))
@@ -110,14 +110,14 @@ pub fn playbook_steps() -> Vec<(&'static str, Step)> {
         ),
         (
             "answer_quiz",
-            Step::new(Tool::AnswerQuiz, path())
+            Step::new(AgentCommand::AnswerQuiz, path())
                 .arg(Field::QuizId, quiz())
                 .arg(Field::Rating, Value::Choice(Rating::SPELLINGS))
                 .arg(Field::UserAnswer, Value::Text("verbatim reply")),
         ),
         (
             "update_quiz",
-            Step::new(Tool::UpdateQuiz, path())
+            Step::new(AgentCommand::UpdateQuiz, path())
                 .arg(Field::QuizId, quiz())
                 .optional(Field::Question, Value::Text("question"))
                 .optional(Field::Answer, Value::Text("answer"))

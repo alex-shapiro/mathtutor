@@ -12,10 +12,10 @@ use crate::db::client::api::Selection;
 use crate::db::{Db, Op, Row, Txn, run_txn, ts};
 use crate::event_log::{self, Event};
 use crate::overlay::{Overlay, RowChange};
-use crate::path::PathFile;
+use crate::path::PathRow;
 use crate::schema::{ImportMarker, LessonRow, OAuthClient, QuizRow, RemovedQuizRow};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
-use crate::view::{OVERLAY_VERSION_KEY, PathState, View, Want};
+use crate::view::{OVERLAY_VERSION_KEY, PathState, View, ViewRequest};
 use crate::{Error, Result};
 
 const SCHEMA_VERSION: i64 = 4;
@@ -418,7 +418,7 @@ impl TryFrom<LegacyOAuthClientRow> for OAuthClient {
 struct Legacy {
     /// Number of rows that each source table returned before decoding.
     row_counts: RowCounts,
-    paths: Vec<PathFile>,
+    paths: Vec<PathRow>,
     events: HashMap<String, Vec<Event>>,
     overlay: Vec<RowChange>,
     cards: HashMap<String, Vec<LegacyCardRow>>,
@@ -454,9 +454,9 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
         &mut rows,
         SourceTable::PathSubpath,
     )?);
-    let mut paths: Vec<PathFile> = decode_rows::<LegacyPathRow>(&mut rows, SourceTable::Paths)?
+    let mut paths: Vec<PathRow> = decode_rows::<LegacyPathRow>(&mut rows, SourceTable::Paths)?
         .into_iter()
-        .map(|p| PathFile {
+        .map(|p| PathRow {
             targets: targets.remove(&p.id).unwrap_or_default(),
             subpath: subpaths.remove(&p.id).unwrap_or_default(),
             id: p.id,
@@ -574,7 +574,7 @@ async fn claim_import_target(db: &Db) -> Result<()> {
 
 async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
     let first_path = Op::QueryRows {
-        table: PathFile::TABLE.into(),
+        table: PathRow::TABLE.into(),
         selection: Selection::default(),
         limit: 1,
         reverse: false,
@@ -589,7 +589,7 @@ async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
         Some(ImportMarker::Complete) => return Err(Error::ImportAlreadyComplete),
         None => {}
     }
-    if overlay_version.entry()?.is_some() || !paths.rows::<PathFile>()?.is_empty() {
+    if overlay_version.entry()?.is_some() || !paths.rows::<PathRow>()?.is_empty() {
         return Err(Error::ImportTargetNotEmpty);
     }
     txn.set_import_marker(ImportMarker::Open);
@@ -606,7 +606,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         ..Report::default()
     };
     for batch in legacy.overlay.chunks(IMPORT_WRITE_BATCH) {
-        db.transact(&Want::overlay(), |view, changes| {
+        db.transact(&ViewRequest::overlay(), |view, changes| {
             batch
                 .iter()
                 .try_for_each(|c| changes.overlay(view, c.clone()))
@@ -617,8 +617,8 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     for clients in legacy.oauth_clients.chunks(IMPORT_WRITE_BATCH) {
         auth.replace_oauth_clients(clients).await?;
     }
-    let history = |p: &PathFile| legacy.events.get(&p.id).map_or(&[][..], Vec::as_slice);
-    let mut paths: Vec<&PathFile> = legacy.paths.iter().collect();
+    let history = |p: &PathRow| legacy.events.get(&p.id).map_or(&[][..], Vec::as_slice);
+    let mut paths: Vec<&PathRow> = legacy.paths.iter().collect();
     paths.sort_by_key(|p| latest_activity(p, history(p)));
     for p in paths {
         let events = history(p);
@@ -632,7 +632,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     let source = read_legacy(turso).await?;
     let stored = db
         .without_overlay_cache()
-        .snapshot(&Want::all_paths())
+        .snapshot(&ViewRequest::all_paths())
         .await?;
     report
         .mismatches
@@ -640,7 +640,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     let stored_paths: HashMap<&str, &PathState> = stored
         .paths()
         .into_iter()
-        .map(|s| (s.file.id.as_str(), s))
+        .map(|s| (s.row.id.as_str(), s))
         .collect();
     let mut stored_events = 0;
     for p in &source.paths {
@@ -686,14 +686,14 @@ fn verify_overlay(stored: &Overlay, changes: &[RowChange]) -> Result<Vec<String>
 }
 
 /// Write path `p`, its `events`, and the `cards` and `taught` rows that the events produce in one transaction, or return `false` if the path exists.
-async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
+async fn import_path(db: &Db, p: &PathRow, events: &[Event]) -> Result<bool> {
     let existing = db
-        .snapshot(&Want::path(Some(&p.id)).without_overlay())
+        .snapshot(&ViewRequest::path(Some(&p.id)).without_overlay())
         .await?;
     if existing.path().is_ok() {
         return Ok(false);
     }
-    db.transact(&Want::nothing(), |view, changes| {
+    db.transact(&ViewRequest::nothing(), |view, changes| {
         changes.create_path_with_history(view, p, events, latest_activity(p, events))
     })
     .await?;
@@ -701,13 +701,13 @@ async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
 }
 
 /// Return the time of the latest event of path `p`, or its creation time if `events` is empty.
-fn latest_activity(p: &PathFile, events: &[Event]) -> DateTime<Utc> {
+fn latest_activity(p: &PathRow, events: &[Event]) -> DateTime<Utc> {
     events.iter().map(|e| e.ts).max().unwrap_or(p.created_at)
 }
 
 /// Compare `stored`, the stored state of `path`, and `stored_events` with the legacy `events` and cards of `path`, and return the differences.
 fn verify_path(
-    path: &PathFile,
+    path: &PathRow,
     events: &[Event],
     legacy: &[LegacyCardRow],
     stored: Option<&PathState>,
@@ -726,7 +726,7 @@ fn verify_path(
             events.len()
         ));
     }
-    let stored_path = &path_state.file;
+    let stored_path = &path_state.row;
     if stored_path.goal != path.goal
         || stored_path.strategy != path.strategy
         || stored_path.targets != path.targets
@@ -735,7 +735,7 @@ fn verify_path(
     {
         out.push(format!("{path_id}: stored path differs from libSQL"));
     }
-    let mut answered: BTreeMap<&str, (&cards::CardRow, CardState)> = path_state
+    let mut answered: BTreeMap<&str, (&cards::Card, CardState)> = path_state
         .projection
         .cards
         .values()
@@ -797,11 +797,11 @@ async fn verify_row_counts(
         (SourceTable::Paths, paths.len()),
         (
             SourceTable::PathTargets,
-            paths.iter().map(|p| p.file.targets.len()).sum(),
+            paths.iter().map(|p| p.row.targets.len()).sum(),
         ),
         (
             SourceTable::PathSubpath,
-            paths.iter().map(|p| p.file.subpath.len()).sum(),
+            paths.iter().map(|p| p.row.subpath.len()).sum(),
         ),
         (SourceTable::Events, stored_events),
         (
@@ -860,8 +860,8 @@ pub async fn cmd_import_turso(db: &Db, url: &str, token: Option<String>) -> Resu
 mod tests {
     use super::*;
 
-    fn answered_path() -> (PathFile, Vec<Event>, PathState) {
-        let path = PathFile {
+    fn answered_path() -> (PathRow, Vec<Event>, PathState) {
+        let path = PathRow {
             id: "p".into(),
             goal: "g".into(),
             created_at: Utc::now(),
@@ -877,7 +877,7 @@ mod tests {
         };
         let events = vec![Event::now("p", answered)];
         let state = PathState {
-            file: path.clone(),
+            row: path.clone(),
             updated_at: Utc::now(),
             projection: cards::Projection::from_events(&events).unwrap(),
         };

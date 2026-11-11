@@ -11,10 +11,10 @@ use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::graph::Curriculum;
 use mathtutor::overlay::QuizDraft;
-use mathtutor::path::PathFile;
+use mathtutor::path::PathRow;
 use mathtutor::schema::TableSet;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
-use mathtutor::view::Want;
+use mathtutor::view::ViewRequest;
 use mathtutor::{Error, answer, cards, overlay, path, state, store};
 
 mod common;
@@ -54,7 +54,10 @@ async fn create_if_missing_creates_the_database_and_every_table_once() {
         "second call finds it"
     );
     let fresh = Db::connect(&cfg).unwrap();
-    fresh.snapshot(&Want::path(None)).await.expect("read");
+    fresh
+        .snapshot(&ViewRequest::path(None))
+        .await
+        .expect("read");
 }
 
 /// Return the Baserunna client of the database of `cfg`.
@@ -78,7 +81,7 @@ async fn setup_completes_after_an_interrupted_first_setup() {
 
     assert_eq!(table_names(&cfg).await, TABLES);
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
-    db.snapshot(&Want::path(None)).await.expect("read");
+    db.snapshot(&ViewRequest::path(None)).await.expect("read");
 }
 
 #[tokio::test]
@@ -135,7 +138,7 @@ async fn commands_reject_a_missing_database_without_creating_it() {
     let cfg = common::fresh_config();
     let db = Db::connect(&cfg).unwrap();
 
-    let recent = db.snapshot(&Want::path(None)).await.unwrap_err();
+    let recent = db.snapshot(&ViewRequest::path(None)).await.unwrap_err();
     let explicit = path::cmd_path_strategy(&db, Some(PATH_ID), Strategy::TopDown)
         .await
         .unwrap_err();
@@ -264,7 +267,9 @@ async fn learner_commands_ignore_the_authorization_schema_version() {
         .unwrap();
 
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
-    db.snapshot(&Want::path(Some(PATH_ID))).await.unwrap();
+    db.snapshot(&ViewRequest::path(Some(PATH_ID)))
+        .await
+        .unwrap();
 
     let e = db.with_auth_tables().check_usable().await.unwrap_err();
     assert!(
@@ -280,7 +285,7 @@ async fn the_server_handle_creates_and_checks_the_authorization_tables() {
     assert_eq!(table_names(&cfg).await, TABLES);
 
     let server = db.with_auth_tables();
-    server.snapshot(&Want::overlay()).await.unwrap();
+    server.snapshot(&ViewRequest::overlay()).await.unwrap();
     let mut names = table_names(&cfg).await;
     names.retain(|n| !TABLES.contains(&n.as_str()));
     let mut auth: Vec<String> = TableSet::Auth
@@ -290,13 +295,13 @@ async fn the_server_handle_creates_and_checks_the_authorization_tables() {
         .collect();
     auth.sort();
     assert_eq!(names, auth);
-    server.snapshot(&Want::overlay()).await.unwrap();
+    server.snapshot(&ViewRequest::overlay()).await.unwrap();
 
     raw_db(&cfg)
         .write(&[Op::put("mathtutor_auth_state", r#"{"schema":"99"}"#)])
         .await
         .unwrap();
-    let e = server.snapshot(&Want::overlay()).await.unwrap_err();
+    let e = server.snapshot(&ViewRequest::overlay()).await.unwrap_err();
     assert!(
         matches!(
             &e,
@@ -307,7 +312,7 @@ async fn the_server_handle_creates_and_checks_the_authorization_tables() {
         ),
         "{e:?}"
     );
-    db.snapshot(&Want::overlay()).await.unwrap();
+    db.snapshot(&ViewRequest::overlay()).await.unwrap();
 }
 
 #[tokio::test]
@@ -335,7 +340,7 @@ async fn the_server_handle_replaces_authorization_tables_of_an_older_version() {
     .unwrap();
 
     let server = db.with_auth_tables();
-    server.snapshot(&Want::overlay()).await.unwrap();
+    server.snapshot(&ViewRequest::overlay()).await.unwrap();
 
     let clients = raw.get_table("oauth_clients").await.unwrap();
     let expected = TableSet::Auth.tables().remove(0);
@@ -356,7 +361,7 @@ async fn a_handle_checks_the_database_state_in_every_request() {
     let cfg = common::fresh_config();
     let db = common::create_db(&cfg).await;
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
-    let want = Want::path(Some(PATH_ID));
+    let want = ViewRequest::path(Some(PATH_ID));
     db.snapshot(&want).await.unwrap();
     let raw = raw_db(&cfg);
     let state = raw.read_one(Op::get("mathtutor_state")).await.unwrap();
@@ -418,7 +423,9 @@ async fn commands_check_the_database_in_their_first_request() {
     );
 
     let (db, traffic) = counting_db(&cfg);
-    db.snapshot(&Want::path(Some(PATH_ID))).await.unwrap();
+    db.snapshot(&ViewRequest::path(Some(PATH_ID)))
+        .await
+        .unwrap();
     assert_eq!(
         traffic.requests.load(Ordering::Relaxed),
         1,
@@ -436,11 +443,11 @@ async fn most_recent_path_follows_logged_events() {
         let db = db.clone();
         async move {
             let view = db
-                .snapshot(&mathtutor::view::Want::path(None))
+                .snapshot(&mathtutor::view::ViewRequest::path(None))
                 .await
                 .unwrap();
             let p = view.path().unwrap();
-            (p.file.id.clone(), p.updated_at)
+            (p.row.id.clone(), p.updated_at)
         }
     };
     assert_eq!(recent(&db).await.0, "p_b", "the last created path");
@@ -465,27 +472,27 @@ async fn most_recent_path_follows_logged_events() {
 #[tokio::test]
 async fn most_recent_path_follows_commit_order_instead_of_the_activity_time() {
     let db = common::empty_db().await;
-    let ahead = PathFile {
+    let ahead = PathRow {
         id: "p_clock_ahead".into(),
         ..common::path_with(&[])
     };
     let created = Event::now(&ahead.id, EventKind::PathCreated {});
     let future = mathtutor::db::ts::parse("2099-01-01T00:00:00.000Z").unwrap();
-    db.transact(&Want::nothing(), |view, changes| {
+    db.transact(&ViewRequest::nothing(), |view, changes| {
         changes.create_path_with_history(view, &ahead, std::slice::from_ref(&created), future)
     })
     .await
     .unwrap();
     common::seed_path(&db, "p_later", &[], Strategy::BottomUp).await;
 
-    let view = db.snapshot(&Want::path(None)).await.unwrap();
+    let view = db.snapshot(&ViewRequest::path(None)).await.unwrap();
 
-    assert_eq!(view.path().unwrap().file.id, "p_later");
-    let all = db.snapshot(&Want::all_paths()).await.unwrap();
+    assert_eq!(view.path().unwrap().row.id, "p_later");
+    let all = db.snapshot(&ViewRequest::all_paths()).await.unwrap();
     let shown = all
         .paths()
         .iter()
-        .find(|p| p.file.id == ahead.id)
+        .find(|p| p.row.id == ahead.id)
         .unwrap()
         .updated_at;
     assert_eq!(shown, future, "the activity time stays for display");
@@ -504,9 +511,9 @@ async fn opening_an_existing_database_preserves_data() {
     let db = Db::connect(&cfg).unwrap();
     assert_eq!(table_names(&cfg).await, TABLES);
     let ps = common::path_state(&db, PATH_ID).await;
-    assert_eq!(ps.file.goal, "test goal");
-    assert_eq!(ps.file.targets, ["fnd.2"]);
-    assert_eq!(ps.file.strategy, Strategy::TopDown);
+    assert_eq!(ps.row.goal, "test goal");
+    assert_eq!(ps.row.targets, ["fnd.2"]);
+    assert_eq!(ps.row.strategy, Strategy::TopDown);
     let ov = common::overlay(&db).await;
     assert_eq!(ov.atoms[ATOM].lesson.as_deref(), Some("kept"));
 }
@@ -620,7 +627,7 @@ async fn append_rejects_a_path_outside_the_view_and_keeps_its_history() {
     common::append(&db, &[common::answered("a.q1", Rating::Good)]).await;
 
     let e = db
-        .transact(&Want::overlay(), |view, changes| {
+        .transact(&ViewRequest::overlay(), |view, changes| {
             changes.append(view, &common::answered("a.q1", Rating::Again))
         })
         .await
@@ -637,13 +644,13 @@ async fn append_rejects_a_path_outside_the_view_and_keeps_its_history() {
 #[tokio::test]
 async fn append_accepts_events_of_a_path_that_the_same_write_creates() {
     let db = common::empty_db().await;
-    let p = PathFile {
+    let p = PathRow {
         id: "p_new".into(),
         ..common::path_with(&[])
     };
     let taught = Event::now(&p.id, EventKind::LessonTaught { atom: "a".into() });
 
-    db.transact(&Want::nothing(), |view, changes| {
+    db.transact(&ViewRequest::nothing(), |view, changes| {
         changes.create_path(view, &p)?;
         changes.append(view, &taught)
     })
@@ -664,7 +671,7 @@ async fn path_created_for_an_existing_path_is_rejected_and_keeps_its_rows() {
     common::append(&db, &[common::taught("a")]).await;
 
     let e = db
-        .transact(&Want::nothing(), |view, changes| {
+        .transact(&ViewRequest::nothing(), |view, changes| {
             changes.append(view, &Event::now(PATH_ID, EventKind::PathCreated {}))?;
             changes.append(view, &common::taught("a"))
         })
@@ -685,14 +692,14 @@ async fn path_created_for_an_existing_path_is_rejected_and_keeps_its_rows() {
 #[tokio::test]
 async fn a_new_path_rejects_a_path_created_event_of_another_path() {
     let db = common::fresh_db(PATH_ID).await;
-    let p = PathFile {
+    let p = PathRow {
         id: "p_history".into(),
         ..common::path_with(&[])
     };
     let other = Event::now(PATH_ID, EventKind::PathCreated {});
 
     let e = db
-        .transact(&Want::nothing(), |view, changes| {
+        .transact(&ViewRequest::nothing(), |view, changes| {
             changes.create_path_with_history(view, &p, std::slice::from_ref(&other), Utc::now())
         })
         .await
@@ -702,7 +709,7 @@ async fn a_new_path_rejects_a_path_created_event_of_another_path() {
         matches!(&e, Error::PathCreatedOutsideCreation(id) if id == PATH_ID),
         "{e:?}"
     );
-    let view = db.snapshot(&Want::path(Some(&p.id))).await.unwrap();
+    let view = db.snapshot(&ViewRequest::path(Some(&p.id))).await.unwrap();
     assert!(view.path().is_err(), "the failed write set stores nothing");
 }
 
@@ -710,7 +717,7 @@ async fn a_new_path_rejects_a_path_created_event_of_another_path() {
 async fn a_new_path_is_written_with_its_full_history_and_activity_time() {
     let db = common::empty_db().await;
     let t0 = mathtutor::db::ts::parse("2026-05-26T10:00:00.123Z").unwrap();
-    let p = PathFile {
+    let p = PathRow {
         id: "p_history".into(),
         ..common::path_with(&[])
     };
@@ -722,7 +729,7 @@ async fn a_new_path_is_written_with_its_full_history_and_activity_time() {
         .collect();
     let active_at = t0 + Duration::days(1);
 
-    db.transact(&Want::nothing(), |view, changes| {
+    db.transact(&ViewRequest::nothing(), |view, changes| {
         changes.create_path_with_history(view, &p, &history, active_at)
     })
     .await
@@ -737,14 +744,14 @@ async fn a_new_path_is_written_with_its_full_history_and_activity_time() {
 #[tokio::test]
 async fn a_new_path_rejects_history_of_another_path() {
     let db = common::empty_db().await;
-    let p = PathFile {
+    let p = PathRow {
         id: "p_history".into(),
         ..common::path_with(&[])
     };
     let other = common::presented("a.q1");
 
     let e = db
-        .transact(&Want::nothing(), |view, changes| {
+        .transact(&ViewRequest::nothing(), |view, changes| {
             changes.create_path_with_history(view, &p, std::slice::from_ref(&other), Utc::now())
         })
         .await
@@ -754,7 +761,7 @@ async fn a_new_path_rejects_history_of_another_path() {
         matches!(&e, Error::PathNotLoaded(id) if id == PATH_ID),
         "{e:?}"
     );
-    let e = db.snapshot(&Want::path(Some(&p.id))).await.unwrap();
+    let e = db.snapshot(&ViewRequest::path(Some(&p.id))).await.unwrap();
     assert!(e.path().is_err(), "the failed write set stores nothing");
 }
 
@@ -898,7 +905,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
     let read = |db: &Db| {
         let db = db.clone();
         async move {
-            db.snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
+            db.snapshot(&mathtutor::view::ViewRequest::path(Some(PATH_ID)))
                 .await
                 .unwrap()
         }
@@ -964,7 +971,7 @@ async fn write_with_a_cold_cache_reads_overlay_rows_outside_the_transaction() {
             "{table} in {queried:?}"
         );
     }
-    let view = db.snapshot(&Want::overlay()).await.unwrap();
+    let view = db.snapshot(&ViewRequest::overlay()).await.unwrap();
     assert_eq!(
         view.overlay().unwrap().atoms["fnd.1.1.1"].lesson.as_deref(),
         Some("first")
@@ -986,7 +993,7 @@ async fn transaction_restarts_with_an_overlay_that_another_client_writes() {
     let other = Db::connect(&cfg).unwrap();
     let mut seen = Vec::new();
 
-    db.transact(&Want::path(Some(PATH_ID)), |view, _| {
+    db.transact(&ViewRequest::path(Some(PATH_ID)), |view, _| {
         seen.push(
             view.overlay().unwrap().atoms["fnd.1.1.1"]
                 .lesson
@@ -1061,7 +1068,7 @@ async fn overlay_changes_restart_a_transaction_within_the_retry_limit() {
         },
     );
 
-    let want = Want::path(Some(PATH_ID));
+    let want = ViewRequest::path(Some(PATH_ID));
     let attempt = db.transact(&want, |_, _| Ok(()));
     let e = tokio::time::timeout(std::time::Duration::from_mins(1), attempt)
         .await
@@ -1146,7 +1153,7 @@ async fn own_overlay_writes_keep_the_cache_valid() {
     traffic.received.store(0, Ordering::Relaxed);
 
     let view = db
-        .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
+        .snapshot(&mathtutor::view::ViewRequest::path(Some(PATH_ID)))
         .await
         .unwrap();
     let warm = traffic.received.load(Ordering::Relaxed);
@@ -1198,10 +1205,10 @@ async fn path_next_makes_its_path_the_most_recent_even_without_an_event() {
         "create_lesson"
     );
     let view = db
-        .snapshot(&mathtutor::view::Want::path(None))
+        .snapshot(&mathtutor::view::ViewRequest::path(None))
         .await
         .unwrap();
-    assert_eq!(view.path().unwrap().file.id, "p_a_older");
+    assert_eq!(view.path().unwrap().row.id, "p_a_older");
 }
 
 #[tokio::test]
@@ -1217,10 +1224,10 @@ async fn write_for_a_path_makes_it_the_most_recent() {
         .unwrap();
 
     let view = db
-        .snapshot(&mathtutor::view::Want::path(None))
+        .snapshot(&mathtutor::view::ViewRequest::path(None))
         .await
         .unwrap();
-    assert_eq!(view.path().unwrap().file.id, "p_a_older");
+    assert_eq!(view.path().unwrap().row.id, "p_a_older");
 }
 
 #[tokio::test]
@@ -1228,7 +1235,7 @@ async fn a_view_without_the_overlay_has_no_merged_graph() {
     let db = common::fresh_db(PATH_ID).await;
 
     let view = db
-        .snapshot(&Want::path(Some(PATH_ID)).without_overlay())
+        .snapshot(&ViewRequest::path(Some(PATH_ID)).without_overlay())
         .await
         .unwrap();
 
@@ -1241,7 +1248,7 @@ async fn a_view_without_the_overlay_has_no_merged_graph() {
 async fn merged_graph_is_shared_until_the_overlay_version_changes() {
     let db = common::fresh_db(PATH_ID).await;
     let merged = async || {
-        db.snapshot(&Want::overlay())
+        db.snapshot(&ViewRequest::overlay())
             .await
             .unwrap()
             .graph()
@@ -1324,7 +1331,7 @@ async fn failed_read_reports_unapplied_outcome() {
     let db = Db::with_transport(&common::fresh_config(), DisconnectedTransport);
 
     let e = db
-        .snapshot(&mathtutor::view::Want::overlay())
+        .snapshot(&mathtutor::view::ViewRequest::overlay())
         .await
         .unwrap_err();
 
@@ -1340,7 +1347,7 @@ async fn retried_command_keeps_the_most_recent_path_of_its_first_attempt() {
         path: path.into(),
         ..common::answered("atom.x.q1", Rating::Good)
     };
-    let want_old = mathtutor::view::Want::path(Some("p_old"));
+    let want_old = mathtutor::view::ViewRequest::path(Some("p_old"));
     db.transact(&want_old, |view, changes| {
         changes.append(view, &answered("p_old"))
     })
@@ -1349,24 +1356,27 @@ async fn retried_command_keeps_the_most_recent_path_of_its_first_attempt() {
     let other = db.clone();
     let mut selected = Vec::new();
 
-    db.transact(&mathtutor::view::Want::path(None), |view, changes| {
-        selected.push(view.path()?.file.id.clone());
-        changes.append(view, &answered(&view.path()?.file.id))?;
-        if selected.len() == 1 {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    other
-                        .transact(
-                            &mathtutor::view::Want::path(Some("p_new")),
-                            |view, changes| changes.append(view, &answered("p_new")),
-                        )
-                        .await
-                        .unwrap();
+    db.transact(
+        &mathtutor::view::ViewRequest::path(None),
+        |view, changes| {
+            selected.push(view.path()?.row.id.clone());
+            changes.append(view, &answered(&view.path()?.row.id))?;
+            if selected.len() == 1 {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        other
+                            .transact(
+                                &mathtutor::view::ViewRequest::path(Some("p_new")),
+                                |view, changes| changes.append(view, &answered("p_new")),
+                            )
+                            .await
+                            .unwrap();
+                    });
                 });
-            });
-        }
-        Ok(())
-    })
+            }
+            Ok(())
+        },
+    )
     .await
     .unwrap();
 
@@ -1398,7 +1408,7 @@ async fn recreating_database_invalidates_overlay_cache() {
     upsert_lesson(&uncached, "new").await;
     let reader = Db::connect(&cfg).unwrap();
     let view = reader
-        .snapshot(&mathtutor::view::Want::overlay())
+        .snapshot(&mathtutor::view::ViewRequest::overlay())
         .await
         .unwrap();
 
@@ -1423,7 +1433,7 @@ async fn a_handle_reads_the_cache_file_only_when_a_command_needs_the_overlay() {
         .unwrap();
     let (second, traffic) = counting_db(&cfg);
     second
-        .snapshot(&Want::path(Some(PATH_ID)).without_overlay())
+        .snapshot(&ViewRequest::path(Some(PATH_ID)).without_overlay())
         .await
         .unwrap();
 
@@ -1431,7 +1441,7 @@ async fn a_handle_reads_the_cache_file_only_when_a_command_needs_the_overlay() {
         std::fs::remove_file(file.unwrap().path()).unwrap();
     }
     traffic.received.store(0, Ordering::Relaxed);
-    let view = second.snapshot(&Want::overlay()).await.unwrap();
+    let view = second.snapshot(&ViewRequest::overlay()).await.unwrap();
 
     assert_eq!(
         view.overlay().unwrap().atoms["fnd.1.1.1"].lesson.as_deref(),
@@ -1461,7 +1471,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
 
     let (second, traffic) = counting_db(&cfg);
     let view = second
-        .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
+        .snapshot(&mathtutor::view::ViewRequest::path(Some(PATH_ID)))
         .await
         .unwrap();
     assert_eq!(
@@ -1481,7 +1491,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         .unwrap();
     let third = Db::connect(&cfg).unwrap();
     let view = third
-        .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
+        .snapshot(&mathtutor::view::ViewRequest::path(Some(PATH_ID)))
         .await
         .unwrap();
     assert_eq!(
@@ -1502,7 +1512,7 @@ async fn a_rejected_token_names_the_server_and_the_settings() {
     let errors = [
         db.check_usable().await.unwrap_err(),
         db.create_if_missing().await.unwrap_err(),
-        db.snapshot(&Want::overlay()).await.unwrap_err(),
+        db.snapshot(&ViewRequest::overlay()).await.unwrap_err(),
         path::cmd_path_new(&db, "g", &["fnd.1.1.1".into()], Strategy::BottomUp)
             .await
             .unwrap_err(),
@@ -1557,7 +1567,7 @@ async fn a_key_limited_to_another_database_is_a_configuration_error() {
     };
     let db = Db::connect(&cfg).unwrap();
 
-    let e = db.snapshot(&Want::overlay()).await.unwrap_err();
+    let e = db.snapshot(&ViewRequest::overlay()).await.unwrap_err();
 
     assert!(matches!(e, Error::KeyDenied { .. }), "{e:?}");
     assert_names_the_key_settings(&e, &cfg);
@@ -1569,7 +1579,7 @@ async fn a_read_only_key_fails_its_first_write_with_a_configuration_error() {
     common::create_db(&cfg).await;
     let cfg = with_key(&cfg, Some(&cfg.db), true).await;
     let db = Db::connect(&cfg).unwrap();
-    db.snapshot(&Want::overlay())
+    db.snapshot(&ViewRequest::overlay())
         .await
         .expect("a read-only key reads");
 

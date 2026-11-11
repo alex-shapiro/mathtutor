@@ -12,7 +12,7 @@ pub enum Surface {
 /// Command or tool call that an agent sends, with a placeholder for each value that the agent supplies.
 #[derive(Debug, Clone)]
 pub struct Step {
-    tool: Tool,
+    tool: AgentCommand,
     args: Vec<StepArg>,
 }
 
@@ -25,7 +25,7 @@ struct StepArg {
 
 /// Agent command, which is both an MCP tool and an `mt` subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tool {
+pub enum AgentCommand {
     GetPaths,
     NewPath,
     SetStrategy,
@@ -44,89 +44,89 @@ pub enum Tool {
     AnswerQuiz,
 }
 
-impl Tool {
+impl AgentCommand {
     /// Every agent command.
-    pub const ALL: &[Tool] = &[
-        Tool::GetPaths,
-        Tool::NewPath,
-        Tool::SetStrategy,
-        Tool::SubpathSet,
-        Tool::SubpathClear,
-        Tool::GetNext,
-        Tool::GetState,
-        Tool::GetTree,
-        Tool::GetSyllabus,
-        Tool::GetItem,
-        Tool::GetChildren,
-        Tool::UpsertLesson,
-        Tool::CreateQuiz,
-        Tool::UpdateQuiz,
-        Tool::DeleteQuiz,
-        Tool::AnswerQuiz,
+    pub const ALL: &[AgentCommand] = &[
+        AgentCommand::GetPaths,
+        AgentCommand::NewPath,
+        AgentCommand::SetStrategy,
+        AgentCommand::SubpathSet,
+        AgentCommand::SubpathClear,
+        AgentCommand::GetNext,
+        AgentCommand::GetState,
+        AgentCommand::GetTree,
+        AgentCommand::GetSyllabus,
+        AgentCommand::GetItem,
+        AgentCommand::GetChildren,
+        AgentCommand::UpsertLesson,
+        AgentCommand::CreateQuiz,
+        AgentCommand::UpdateQuiz,
+        AgentCommand::DeleteQuiz,
+        AgentCommand::AnswerQuiz,
     ];
 
     /// Return the `mt` subcommand words of this command.
     pub fn cli(self) -> &'static str {
         match self {
-            Tool::GetPaths => "path list",
-            Tool::NewPath => "path new",
-            Tool::SetStrategy => "path strategy",
-            Tool::SubpathSet => "path subpath set",
-            Tool::SubpathClear => "path subpath clear",
-            Tool::GetNext => "path next",
-            Tool::GetState => "path state",
-            Tool::GetTree => "path tree",
-            Tool::GetSyllabus => "path syllabus",
-            Tool::GetItem => "graph show",
-            Tool::GetChildren => "graph list",
-            Tool::UpsertLesson => "lesson upsert",
-            Tool::CreateQuiz => "quiz create",
-            Tool::UpdateQuiz => "quiz update",
-            Tool::DeleteQuiz => "quiz delete",
-            Tool::AnswerQuiz => "quiz answer",
+            AgentCommand::GetPaths => "path list",
+            AgentCommand::NewPath => "path new",
+            AgentCommand::SetStrategy => "path strategy",
+            AgentCommand::SubpathSet => "path subpath set",
+            AgentCommand::SubpathClear => "path subpath clear",
+            AgentCommand::GetNext => "path next",
+            AgentCommand::GetState => "path state",
+            AgentCommand::GetTree => "path tree",
+            AgentCommand::GetSyllabus => "path syllabus",
+            AgentCommand::GetItem => "graph show",
+            AgentCommand::GetChildren => "graph list",
+            AgentCommand::UpsertLesson => "lesson upsert",
+            AgentCommand::CreateQuiz => "quiz create",
+            AgentCommand::UpdateQuiz => "quiz update",
+            AgentCommand::DeleteQuiz => "quiz delete",
+            AgentCommand::AnswerQuiz => "quiz answer",
         }
     }
 
     /// Return the MCP tool name of this command.
     pub fn mcp(self) -> &'static str {
         match self {
-            Tool::GetPaths => "get_paths",
-            Tool::NewPath => "new_path",
-            Tool::SetStrategy => "set_strategy",
-            Tool::SubpathSet => "subpath_set",
-            Tool::SubpathClear => "subpath_clear",
-            Tool::GetNext => "get_next",
-            Tool::GetState => "get_state",
-            Tool::GetTree => "get_tree",
-            Tool::GetSyllabus => "get_syllabus",
-            Tool::GetItem => "get_item",
-            Tool::GetChildren => "get_children",
-            Tool::UpsertLesson => "upsert_lesson",
-            Tool::CreateQuiz => "create_quiz",
-            Tool::UpdateQuiz => "update_quiz",
-            Tool::DeleteQuiz => "delete_quiz",
-            Tool::AnswerQuiz => "answer_quiz",
+            AgentCommand::GetPaths => "get_paths",
+            AgentCommand::NewPath => "new_path",
+            AgentCommand::SetStrategy => "set_strategy",
+            AgentCommand::SubpathSet => "subpath_set",
+            AgentCommand::SubpathClear => "subpath_clear",
+            AgentCommand::GetNext => "get_next",
+            AgentCommand::GetState => "get_state",
+            AgentCommand::GetTree => "get_tree",
+            AgentCommand::GetSyllabus => "get_syllabus",
+            AgentCommand::GetItem => "get_item",
+            AgentCommand::GetChildren => "get_children",
+            AgentCommand::UpsertLesson => "upsert_lesson",
+            AgentCommand::CreateQuiz => "create_quiz",
+            AgentCommand::UpdateQuiz => "update_quiz",
+            AgentCommand::DeleteQuiz => "delete_quiz",
+            AgentCommand::AnswerQuiz => "answer_quiz",
         }
     }
 
     /// Return the safe next step after this command fails with an unknown outcome.
     pub fn recovery(self) -> Recovery {
         match self {
-            Tool::NewPath => Recovery::ListPathsFirst,
-            Tool::CreateQuiz | Tool::AnswerQuiz => Recovery::GetNext,
-            Tool::GetPaths
-            | Tool::SetStrategy
-            | Tool::SubpathSet
-            | Tool::SubpathClear
-            | Tool::GetNext
-            | Tool::GetState
-            | Tool::GetTree
-            | Tool::GetSyllabus
-            | Tool::GetItem
-            | Tool::GetChildren
-            | Tool::UpsertLesson
-            | Tool::UpdateQuiz
-            | Tool::DeleteQuiz => Recovery::Repeat,
+            AgentCommand::NewPath => Recovery::ListPathsFirst,
+            AgentCommand::CreateQuiz | AgentCommand::AnswerQuiz => Recovery::GetNext,
+            AgentCommand::GetPaths
+            | AgentCommand::SetStrategy
+            | AgentCommand::SubpathSet
+            | AgentCommand::SubpathClear
+            | AgentCommand::GetNext
+            | AgentCommand::GetState
+            | AgentCommand::GetTree
+            | AgentCommand::GetSyllabus
+            | AgentCommand::GetItem
+            | AgentCommand::GetChildren
+            | AgentCommand::UpsertLesson
+            | AgentCommand::UpdateQuiz
+            | AgentCommand::DeleteQuiz => Recovery::Repeat,
         }
     }
 }
@@ -197,7 +197,7 @@ pub enum Value {
 
 impl Step {
     /// Return a step that invokes `tool` on path `path`.
-    pub fn new(tool: Tool, path: Value) -> Self {
+    pub fn new(tool: AgentCommand, path: Value) -> Self {
         Self {
             tool,
             args: vec![StepArg {
@@ -230,8 +230,8 @@ impl Step {
         self
     }
 
-    /// Return the tool that this step invokes.
-    pub fn tool(&self) -> Tool {
+    /// Return the agent command that this step invokes.
+    pub fn agent_command(&self) -> AgentCommand {
         self.tool
     }
 
@@ -397,11 +397,11 @@ mod tests {
 
     #[test]
     fn writes_that_must_not_repeat_have_their_own_recovery() {
-        assert_eq!(Tool::NewPath.recovery(), Recovery::ListPathsFirst);
-        assert_eq!(Tool::CreateQuiz.recovery(), Recovery::GetNext);
-        assert_eq!(Tool::AnswerQuiz.recovery(), Recovery::GetNext);
-        assert_eq!(Tool::DeleteQuiz.recovery(), Recovery::Repeat);
-        assert_eq!(Tool::GetNext.recovery(), Recovery::Repeat);
+        assert_eq!(AgentCommand::NewPath.recovery(), Recovery::ListPathsFirst);
+        assert_eq!(AgentCommand::CreateQuiz.recovery(), Recovery::GetNext);
+        assert_eq!(AgentCommand::AnswerQuiz.recovery(), Recovery::GetNext);
+        assert_eq!(AgentCommand::DeleteQuiz.recovery(), Recovery::Repeat);
+        assert_eq!(AgentCommand::GetNext.recovery(), Recovery::Repeat);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use crate::db::{Db, Op};
 use crate::graph::Quiz;
 use crate::schema::{LessonRow, QuizRow, RemovedQuizRow};
 use crate::types::{Difficulty, QuizType};
-use crate::view::{Changes, View, Want};
+use crate::view::{View, ViewRequest, WriteSet};
 
 /// In-memory snapshot of the curriculum overlay.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -220,7 +220,7 @@ impl QuizPatch {
 }
 
 /// Set the lesson body for `atom_id` in the overlay that `view` loaded.
-pub fn upsert_lesson(changes: &mut Changes, view: &View, atom_id: &str, body: &str) -> Result<()> {
+pub fn upsert_lesson(changes: &mut WriteSet, view: &View, atom_id: &str, body: &str) -> Result<()> {
     let row = LessonRow {
         atom_id: atom_id.into(),
         body: body.into(),
@@ -229,13 +229,13 @@ pub fn upsert_lesson(changes: &mut Changes, view: &View, atom_id: &str, body: &s
 }
 
 /// Insert a new quiz into the overlay that `view` loaded.
-pub fn add_quiz(changes: &mut Changes, view: &View, atom_id: &str, q: &Quiz) -> Result<()> {
+pub fn add_quiz(changes: &mut WriteSet, view: &View, atom_id: &str, q: &Quiz) -> Result<()> {
     changes.overlay(view, RowChange::InsertQuiz(QuizRow::new(atom_id, q)))
 }
 
 /// Replace `base` in the overlay that `view` loaded with `patch` applied.
 pub fn amend_quiz(
-    changes: &mut Changes,
+    changes: &mut WriteSet,
     view: &View,
     atom_id: &str,
     base: &Quiz,
@@ -246,7 +246,12 @@ pub fn amend_quiz(
 }
 
 /// Mark `quiz_id` as removed in the overlay that `view` loaded.
-pub fn remove_quiz(changes: &mut Changes, view: &View, atom_id: &str, quiz_id: &str) -> Result<()> {
+pub fn remove_quiz(
+    changes: &mut WriteSet,
+    view: &View,
+    atom_id: &str,
+    quiz_id: &str,
+) -> Result<()> {
     let row = RemovedQuizRow {
         quiz_id: quiz_id.into(),
         atom_id: atom_id.into(),
@@ -256,7 +261,7 @@ pub fn remove_quiz(changes: &mut Changes, view: &View, atom_id: &str, quiz_id: &
 
 /// Print the curriculum overlay as AYML (`mt graph dump`).
 pub async fn cmd_graph_dump(db: &Db) -> Result<()> {
-    let view = db.snapshot(&Want::overlay()).await?;
+    let view = db.snapshot(&ViewRequest::overlay()).await?;
     crate::print_ayml(view.overlay()?)
 }
 

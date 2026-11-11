@@ -7,7 +7,7 @@ use fsrs::{FSRS, MemoryState};
 
 use crate::event_log::{Event, EventKind};
 use crate::progress::PathProgress;
-use crate::schema::{CardRecord, TaughtRow};
+use crate::schema::{CardRow, TaughtRow};
 use crate::types::Rating;
 use crate::{Error, Result};
 
@@ -25,8 +25,9 @@ pub struct CardState {
     pub difficulty: f32,
 }
 
+/// Review state and answer history of one quiz on one path.
 #[derive(Debug, Clone)]
-pub struct CardRow {
+pub struct Card {
     pub path_id: String,
     pub quiz_id: String,
     pub state: Option<CardState>,
@@ -38,7 +39,7 @@ pub struct CardRow {
     pub recent: Vec<Rating>,
 }
 
-impl CardRow {
+impl Card {
     pub fn new(path_id: &str, quiz_id: &str) -> Self {
         Self {
             path_id: path_id.to_string(),
@@ -98,7 +99,7 @@ pub fn apply_answer(
 #[derive(Debug, Clone, Default)]
 pub struct Projection {
     /// Card of each presented or answered quiz, keyed by quiz ID.
-    pub cards: HashMap<String, CardRow>,
+    pub cards: HashMap<String, Card>,
     /// Lesson presentations of each taught or authored atom, keyed by atom ID.
     pub taught: HashMap<String, Taught>,
 }
@@ -129,7 +130,7 @@ impl Projection {
             EventKind::QuizPresented { quiz, .. } | EventKind::QuizAnswered { quiz, .. } => {
                 let c = self.cards.entry(quiz.clone()).or_insert_with(|| {
                     base.and_then(|b| b.cards.get(quiz).cloned())
-                        .unwrap_or_else(|| CardRow::new(&e.path, quiz))
+                        .unwrap_or_else(|| Card::new(&e.path, quiz))
                 });
                 apply_card_event(c, e)?;
             }
@@ -170,7 +171,7 @@ impl Taught {
     }
 }
 
-fn apply_card_event(c: &mut CardRow, e: &Event) -> Result<()> {
+fn apply_card_event(c: &mut Card, e: &Event) -> Result<()> {
     match &e.kind {
         EventKind::QuizPresented { .. } => {
             c.presented += 1;
@@ -192,8 +193,8 @@ fn apply_card_event(c: &mut CardRow, e: &Event) -> Result<()> {
     Ok(())
 }
 
-impl From<&CardRow> for CardRecord {
-    fn from(c: &CardRow) -> Self {
+impl From<&Card> for CardRow {
+    fn from(c: &Card) -> Self {
         Self {
             path_id: c.path_id.clone(),
             quiz_id: c.quiz_id.clone(),
@@ -211,10 +212,10 @@ impl From<&CardRow> for CardRecord {
     }
 }
 
-impl TryFrom<CardRecord> for CardRow {
+impl TryFrom<CardRow> for Card {
     type Error = Error;
 
-    fn try_from(r: CardRecord) -> Result<Self> {
+    fn try_from(r: CardRow) -> Result<Self> {
         let bad =
             |what: &str| Error::CardsCorrupt(format!("{what} in {}/{}", r.path_id, r.quiz_id));
         let state = match (r.stability, r.difficulty, r.due_at, r.last_reviewed_at) {

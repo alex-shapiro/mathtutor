@@ -3,7 +3,7 @@ use crate::db::Db;
 use crate::event_log::{Event, EventKind};
 
 use crate::types::Rating;
-use crate::view::Want;
+use crate::view::ViewRequest;
 
 pub async fn cmd_quiz_answer(
     db: &Db,
@@ -12,8 +12,8 @@ pub async fn cmd_quiz_answer(
     user_answer: Option<String>,
     path_id: Option<&str>,
 ) -> Result<()> {
-    db.transact(&Want::path(path_id), |view, changes| {
-        let id = view.path()?.file.id.clone();
+    db.transact(&ViewRequest::path(path_id), |view, changes| {
+        let id = view.path()?.row.id.clone();
         // Verify that the quiz exists in the merged graph before recording an event.
         let g = view.graph()?;
         let (atom, _) = g.quiz(quiz_id)?;

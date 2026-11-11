@@ -15,11 +15,11 @@ use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{Event, EventKind};
 use mathtutor::graph::{FlatConcept, Graph, Quiz};
 use mathtutor::overlay::Overlay;
-use mathtutor::path::PathFile;
+use mathtutor::path::PathRow;
 use mathtutor::progress::PathProgress;
 use mathtutor::scheduler::{Action, NextMode, PathPlan};
 use mathtutor::types::{Difficulty, Rating, Strategy};
-use mathtutor::view::{Changes, PathState, View, Want};
+use mathtutor::view::{PathState, View, ViewRequest, WriteSet};
 use tempfile::TempDir;
 
 pub const PATH_ID: &str = "p_test";
@@ -154,7 +154,7 @@ pub async fn seed_path(db: &Db, path_id: &str, targets: &[&str], strategy: Strat
     let created = DateTime::parse_from_rfc3339("2026-05-26T00:00:00Z")
         .unwrap()
         .to_utc();
-    let p = PathFile {
+    let p = PathRow {
         id: path_id.into(),
         goal: "test goal".into(),
         created_at: created,
@@ -162,7 +162,7 @@ pub async fn seed_path(db: &Db, path_id: &str, targets: &[&str], strategy: Strat
         strategy,
         subpath: Vec::new(),
     };
-    db.transact(&Want::nothing(), |view, changes| {
+    db.transact(&ViewRequest::nothing(), |view, changes| {
         changes.create_path(view, &p)
     })
     .await
@@ -170,8 +170,8 @@ pub async fn seed_path(db: &Db, path_id: &str, targets: &[&str], strategy: Strat
 }
 
 /// Commit mutations from `f` against `path_id`.
-pub async fn write(db: &Db, path_id: &str, mut f: impl FnMut(&View, &mut Changes)) {
-    db.transact(&Want::path(Some(path_id)), |view, changes| {
+pub async fn write(db: &Db, path_id: &str, mut f: impl FnMut(&View, &mut WriteSet)) {
+    db.transact(&ViewRequest::path(Some(path_id)), |view, changes| {
         f(view, changes);
         Ok(())
     })
@@ -185,7 +185,7 @@ pub async fn append(db: &Db, events: &[Event]) {
         .first()
         .map_or(PATH_ID, |e| e.path.as_str())
         .to_string();
-    db.transact(&Want::path(Some(&path_id)), |view, changes| {
+    db.transact(&ViewRequest::path(Some(&path_id)), |view, changes| {
         events.iter().try_for_each(|e| changes.append(view, e))
     })
     .await
@@ -195,7 +195,10 @@ pub async fn append(db: &Db, events: &[Event]) {
 /// Load the overlay from its stored rows, and assert that it equals the overlay that `db` caches.
 pub async fn overlay(db: &Db) -> Overlay {
     let read = async |db: &Db| {
-        let view = db.snapshot(&Want::overlay()).await.expect("snapshot");
+        let view = db
+            .snapshot(&ViewRequest::overlay())
+            .await
+            .expect("snapshot");
         view.overlay().expect("overlay").clone()
     };
     let cached = read(db).await;
@@ -210,7 +213,7 @@ pub async fn overlay(db: &Db) -> Overlay {
 
 /// Load the stored state for `path_id`.
 pub async fn path_state(db: &Db, path_id: &str) -> PathState {
-    db.snapshot(&Want::path(Some(path_id)))
+    db.snapshot(&ViewRequest::path(Some(path_id)))
         .await
         .expect("snapshot")
         .path()
@@ -272,12 +275,12 @@ pub fn complete_atom(id: &str, prereqs: &[&str]) -> FlatConcept {
     )
 }
 
-pub fn path_with(targets: &[&str]) -> PathFile {
+pub fn path_with(targets: &[&str]) -> PathRow {
     path_with_strategy(targets, Strategy::BottomUp)
 }
 
-pub fn path_with_strategy(targets: &[&str], strategy: Strategy) -> PathFile {
-    PathFile {
+pub fn path_with_strategy(targets: &[&str], strategy: Strategy) -> PathRow {
+    PathRow {
         id: PATH_ID.into(),
         goal: "test".into(),
         created_at: Utc::now(),
@@ -354,9 +357,9 @@ pub fn progress_of(events: &[Event]) -> PathProgress {
 }
 
 /// Return the state of path `p` after `events`.
-pub fn state_of(p: &PathFile, events: &[Event]) -> PathState {
+pub fn state_of(p: &PathRow, events: &[Event]) -> PathState {
     PathState {
-        file: p.clone(),
+        row: p.clone(),
         updated_at: p.created_at,
         projection: Projection::from_events(events).expect("project events"),
     }
@@ -365,7 +368,7 @@ pub fn state_of(p: &PathFile, events: &[Event]) -> PathState {
 /// Return the next action in `mode` of path `p` over `g` after `events`, at time `now`.
 pub fn next_action_at(
     g: &Graph,
-    p: &PathFile,
+    p: &PathRow,
     events: &[Event],
     now: DateTime<Utc>,
     mode: NextMode,
@@ -377,12 +380,12 @@ pub fn next_action_at(
 }
 
 /// Return the next action in `mode` of path `p` over `g` after `events`.
-pub fn next_action(g: &Graph, p: &PathFile, events: &[Event], mode: NextMode) -> Action {
+pub fn next_action(g: &Graph, p: &PathRow, events: &[Event], mode: NextMode) -> Action {
     next_action_at(g, p, events, Utc::now(), mode)
 }
 
 /// Return the atoms of path `p` over `g` with untaught lessons after `events`, in teaching order.
-pub fn upcoming(g: &Graph, p: &PathFile, events: &[Event]) -> Vec<String> {
+pub fn upcoming(g: &Graph, p: &PathRow, events: &[Event]) -> Vec<String> {
     let state = state_of(p, events);
     PathPlan::new(&state, Arc::new(g.clone()), Utc::now())
         .expect("plan")

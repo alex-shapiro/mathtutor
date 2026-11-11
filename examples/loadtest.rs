@@ -24,7 +24,7 @@ use mathtutor::overlay;
 use mathtutor::overlay::QuizDraft;
 use mathtutor::scheduler::Action;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
-use mathtutor::view::Want;
+use mathtutor::view::ViewRequest;
 use mathtutor::{answer, cards, path, scheduler, state, store, syllabus};
 
 /// Baserunna request kind, derived from its endpoint.
@@ -477,7 +477,10 @@ fn targets() -> Vec<String> {
 
 async fn seed(db: &Db, atoms: usize, lesson_bytes: usize) {
     const BATCH: usize = 100;
-    let view = db.snapshot(&Want::overlay()).await.expect("snapshot");
+    let view = db
+        .snapshot(&ViewRequest::overlay())
+        .await
+        .expect("snapshot");
     let have = view.overlay().expect("overlay").atoms.len();
     if have >= atoms {
         return;
@@ -499,7 +502,7 @@ async fn seed(db: &Db, atoms: usize, lesson_bytes: usize) {
             .iter()
             .map(|id| ((*id).clone(), sample_text(&mut rng, lesson_bytes)))
             .collect();
-        db.transact(&Want::overlay(), |view, changes| {
+        db.transact(&ViewRequest::overlay(), |view, changes| {
             for (id, body) in &lessons {
                 overlay::upsert_lesson(changes, view, id, body)?;
                 for (i, d) in [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard]
@@ -551,7 +554,7 @@ async fn verify(base: &DbConfig, ledger: &Ledger) {
         }
         let replayed = cards::Projection::from_events(&events).expect("project events");
         let view = db
-            .snapshot(&Want::path(Some(path_id)))
+            .snapshot(&ViewRequest::path(Some(path_id)))
             .await
             .expect("snapshot");
         let stored = &view.path().expect("path").projection.cards;

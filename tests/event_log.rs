@@ -3,7 +3,7 @@
 use chrono::{DateTime, Duration, Utc};
 use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::types::{Rating, Strategy};
-use mathtutor::view::Want;
+use mathtutor::view::ViewRequest;
 use mathtutor::{Error, db::Db};
 
 mod common;
@@ -253,7 +253,7 @@ async fn due_returns_only_past_due_in_order() {
 async fn failed_transaction_does_not_write_events_or_cards() {
     let db = common::fresh_db(PATH_ID).await;
     let r: Result<(), Error> = db
-        .transact(&Want::path(Some(PATH_ID)), |view, changes| {
+        .transact(&ViewRequest::path(Some(PATH_ID)), |view, changes| {
             changes.append(
                 view,
                 &answered(PATH_ID, "atom.x", "atom.x.q1", Rating::Good),

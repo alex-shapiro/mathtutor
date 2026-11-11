@@ -10,7 +10,7 @@ use crate::graph::{FlatConcept, Graph};
 use crate::progress::{AtomStatus, PathCompletion, PathProgress, ReachProgress, TargetProgress};
 use crate::scheduler::{self, PathPlan};
 use crate::types::Strategy;
-use crate::view::Want;
+use crate::view::ViewRequest;
 use crate::{Error, Result};
 
 /// Prerequisite tree of a learning path, grouped by curriculum area.
@@ -65,9 +65,9 @@ pub async fn compute_tree(
     explicit_id: Option<&str>,
     depth: Option<u32>,
 ) -> Result<TreeView> {
-    let view = db.snapshot(&Want::path(explicit_id)).await?;
+    let view = db.snapshot(&ViewRequest::path(explicit_id)).await?;
     let plan = PathPlan::of(&view)?;
-    let (p, g, progress) = (&plan.state.file, &plan.graph, &plan.progress);
+    let (p, g, progress) = (&plan.state.row, &plan.graph, &plan.progress);
     let target_atoms = &plan.targets;
     let subpath = &plan.subpath;
     let completion = PathCompletion::of(g, target_atoms, &plan.reachable, progress);

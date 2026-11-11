@@ -16,7 +16,7 @@ use crate::schema::OAuthRow;
 use crate::schema::{
     self, DbState, ImportMarker, OAUTH_CLIENT_TTL, OAuthClient, SchemaState, TableSet,
 };
-use crate::view::{Changes, OverlayCache, OverlayWrite};
+use crate::view::{OverlayCache, OverlayWrite, WriteSet};
 use crate::{Error, Result};
 
 pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
@@ -592,8 +592,8 @@ impl Txn {
     }
 
     /// Queue the writes of `changes`, and return its overlay edits if it has any.
-    pub(crate) fn write_changes(&mut self, changes: Changes) -> Option<OverlayWrite> {
-        let (ops, overlay_write) = changes.into_ops();
+    pub(crate) fn queue_write_set(&mut self, write_set: WriteSet) -> Option<OverlayWrite> {
+        let (ops, overlay_write) = write_set.into_ops();
         self.queue(ops);
         overlay_write
     }

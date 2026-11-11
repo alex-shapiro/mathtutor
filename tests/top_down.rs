@@ -8,7 +8,7 @@ use common::{
 
 use mathtutor::db::Db;
 use mathtutor::graph::Graph;
-use mathtutor::path::{self, PathFile};
+use mathtutor::path::{self, PathRow};
 use mathtutor::scheduler::{Action, NextMode};
 use mathtutor::types::Strategy;
 use mathtutor::{Error, subpath};
@@ -201,15 +201,15 @@ async fn save(db: &Db, targets: &[&str], strategy: Strategy) -> String {
     PATH_ID.into()
 }
 
-async fn load_path(db: &Db, id: &str) -> PathFile {
-    path_state(db, id).await.file
+async fn load_path(db: &Db, id: &str) -> PathRow {
+    path_state(db, id).await.row
 }
 
 async fn replace_subpath(db: &Db, id: &str, atoms: &[String]) {
     common::write(db, id, |view, changes| {
-        let p = PathFile {
+        let p = PathRow {
             subpath: atoms.to_vec(),
-            ..view.path().unwrap().file.clone()
+            ..view.path().unwrap().row.clone()
         };
         changes.replace_path(&p);
     })

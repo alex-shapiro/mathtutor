@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::db::Db;
 use crate::graph::{Curriculum, FlatConcept, Graph, natural_id_cmp};
 use crate::progress::{AtomStatus, PathProgress};
-use crate::view::Want;
+use crate::view::ViewRequest;
 use crate::{Error, Result};
 
 /// Data that a curriculum lookup reads.
@@ -94,12 +94,14 @@ pub async fn compute_children(
 pub async fn graph_for(lookup: Lookup<'_>) -> Result<(Arc<Graph>, Option<PathProgress>)> {
     match lookup {
         Lookup::Curriculum(curriculum) => Ok((curriculum.graph()?, None)),
-        Lookup::Db { db, path: None } => Ok((db.snapshot(&Want::overlay()).await?.graph()?, None)),
+        Lookup::Db { db, path: None } => {
+            Ok((db.snapshot(&ViewRequest::overlay()).await?.graph()?, None))
+        }
         Lookup::Db {
             db,
             path: Some(path_id),
         } => {
-            let view = db.snapshot(&Want::path(Some(path_id))).await?;
+            let view = db.snapshot(&ViewRequest::path(Some(path_id))).await?;
             let progress = view.path()?.progress();
             Ok((view.graph()?, Some(progress)))
         }
