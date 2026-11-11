@@ -242,18 +242,26 @@ impl Db {
         sets.chain(ops.iter().cloned()).collect()
     }
 
-    /// Check the states that a request read before `ops`, and return the results of `ops`.
-    fn pass_gate(&self, mut results: Vec<OpResult>) -> Result<Vec<OpResult>> {
+    /// Check the states that a request read before `ops`, and return the learner import marker and the results of `ops`.
+    fn pass_gate(
+        &self,
+        mut results: Vec<OpResult>,
+    ) -> Result<(Option<ImportMarker>, Vec<OpResult>)> {
         let sets = self.checked_sets();
         if results.len() < sets.len() {
             return Err(Error::BadRow("request returned no state".into()));
         }
         let rest = results.split_off(sets.len());
+        let mut import = None;
         for (&set, result) in sets.iter().zip(results) {
             let entry = result.entry()?;
-            self.check_state(set, DbState::from_entry(set, entry.as_ref()))?;
+            let state = DbState::from_entry(set, entry.as_ref());
+            if set == TableSet::Learner {
+                import = state.import;
+            }
+            self.check_state(set, state)?;
         }
-        Ok(rest)
+        Ok((import, rest))
     }
 
     /// Return the error for a failed request, and report a missing database or a blocked state instead of a missing table or stream.
@@ -317,7 +325,7 @@ impl Db {
 
     async fn read_once(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
         match self.client.read(&self.gated(ops)).await {
-            Ok(results) => self.pass_gate(results),
+            Ok(results) => self.pass_gate(results).map(|(_, rest)| rest),
             Err(e) => Err(self.gate_failure(e).await.into_not_applied()),
         }
     }
@@ -402,6 +410,7 @@ impl Db {
             inner: self.client.begin(),
             checked: false,
             ran_table_setup: false,
+            import: None,
             db: self.clone(),
         }
     }
@@ -501,6 +510,8 @@ pub(crate) struct Txn {
     checked: bool,
     /// The checks of this transaction found missing or outdated tables and set them up.
     ran_table_setup: bool,
+    /// Import marker that the checks of this transaction read.
+    import: Option<ImportMarker>,
     db: Db,
 }
 
@@ -516,7 +527,10 @@ impl Txn {
         }
         self.checked = true;
         let result = match self.inner.run(&self.db.gated(ops)).await {
-            Ok(results) => self.db.pass_gate(results),
+            Ok(results) => self.db.pass_gate(results).map(|(import, rest)| {
+                self.import = import;
+                rest
+            }),
             Err(e) => Err(self.db.gate_failure(e).await),
         };
         if let Err(e) = &result
@@ -565,6 +579,11 @@ impl Txn {
     #[cfg(feature = "mcp")]
     pub(crate) fn delete_oauth<R: OAuthRow>(&mut self, pk: &str) {
         self.queue([Op::delete_row::<R>(pk)]);
+    }
+
+    /// Return the import marker that the database and import checks of the first request of this transaction read.
+    pub(crate) fn import_marker(&self) -> Option<ImportMarker> {
+        self.import
     }
 
     /// Queue `marker` as the progress of an import into this database.

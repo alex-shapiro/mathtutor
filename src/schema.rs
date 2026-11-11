@@ -15,10 +15,10 @@ use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{Error, Result};
 
 /// Key that records the schema version of the learner tables and the progress of `mt import-turso`.
-pub(crate) const STATE_KEY: &str = "mathtutor_state";
+const STATE_KEY: &str = "mathtutor_state";
 
 /// Key that records the schema version of the authorization tables.
-pub(crate) const AUTH_STATE_KEY: &str = "mathtutor_auth_state";
+const AUTH_STATE_KEY: &str = "mathtutor_auth_state";
 
 /// Group of tables that one schema version covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
