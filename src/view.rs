@@ -1,7 +1,7 @@
 //! Transactional database snapshots and atomic write sets.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
 use chrono::{DateTime, Utc};
@@ -49,12 +49,23 @@ pub(crate) fn read_cached_overlay(path: &Path) -> Option<CachedOverlay> {
     Some((f.version, Arc::new(f.overlay)))
 }
 
+/// Return a temporary sibling of `path` that no other write of the cache uses.
+fn cache_temp_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".{}.{:016x}.tmp",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    path.with_file_name(name)
+}
+
 fn write_cached_overlay(path: &Path, version: &str, overlay: &Overlay) {
     let write = || -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = path.with_extension("tmp");
+        let tmp = cache_temp_path(path);
         let f = CacheFile {
             version: version.to_string(),
             overlay: overlay.clone(),
@@ -774,5 +785,20 @@ impl Plan {
         }
         self.view.paths = paths;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_writes_use_distinct_temporary_files_beside_the_cache() {
+        let cache = Path::new("/tmp/mt/overlay-host-db.json");
+        let (a, b) = (cache_temp_path(cache), cache_temp_path(cache));
+        assert_ne!(a, b);
+        assert_eq!(a.parent(), cache.parent());
+        let name = a.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("overlay-host-db.json."), "{name}");
     }
 }
