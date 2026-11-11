@@ -476,7 +476,7 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
         decode_rows(&mut rows, SourceTable::OverlayLessons)?,
         decode_rows(&mut rows, SourceTable::OverlayQuizzes)?,
         decode_rows(&mut rows, SourceTable::OverlayRemovedQuizzes)?,
-    );
+    )?;
     let mut cards_by_path: HashMap<String, Vec<LegacyCardRow>> = HashMap::new();
     for c in decode_rows::<LegacyCardRow>(&mut rows, SourceTable::Cards)? {
         cards_by_path.entry(c.path_id.clone()).or_default().push(c);
@@ -504,12 +504,12 @@ fn group_events(rows: Vec<LegacyEventRow>) -> Result<HashMap<String, Vec<Event>>
     Ok(by_path)
 }
 
-/// Return the overlay row changes that store the legacy overlay rows.
+/// Return the overlay row changes that store the legacy overlay rows, or fail if the atom of a removed quiz is unknown.
 fn overlay_changes(
     lessons: Vec<LegacyLessonRow>,
     quizzes: Vec<LegacyQuizRow>,
     removed: Vec<LegacyRemovedRow>,
-) -> Vec<RowChange> {
+) -> Result<Vec<RowChange>> {
     let quiz_atoms: HashMap<String, String> = quizzes
         .iter()
         .map(|q| (q.quiz_id.clone(), q.atom_id.clone()))
@@ -532,16 +532,26 @@ fn overlay_changes(
         })
     });
     let removed = removed.into_iter().map(|r| {
-        RowChange::PutRemoved(RemovedQuizRow {
-            atom_id: r
-                .atom_id
-                .or_else(|| quiz_atoms.get(&r.quiz_id).cloned())
-                .or_else(|| legacy_quiz_atom(&r.quiz_id).map(str::to_string))
-                .unwrap_or_else(|| r.quiz_id.clone()),
+        let atom_id = r
+            .atom_id
+            .or_else(|| quiz_atoms.get(&r.quiz_id).cloned())
+            .or_else(|| legacy_quiz_atom(&r.quiz_id).map(str::to_string))
+            .ok_or_else(|| {
+                Error::BadRow(format!(
+                    "libSQL overlay_removed_quizzes: no atom for quiz {}",
+                    r.quiz_id
+                ))
+            })?;
+        Ok(RowChange::PutRemoved(RemovedQuizRow {
+            atom_id,
             quiz_id: r.quiz_id,
-        })
+        }))
     });
-    lessons.chain(quizzes).chain(removed).collect()
+    lessons
+        .map(Ok)
+        .chain(quizzes.map(Ok))
+        .chain(removed)
+        .collect()
 }
 
 /// Return the atom of `quiz_id` in the `<atom>.q<N>` form that libSQL releases gave every quiz ID.
@@ -927,6 +937,25 @@ mod tests {
         };
         let differs = check(Some(&state), &events, &other_reps);
         assert!(differs[0].contains("libSQL has (reps 2"), "{differs:?}");
+    }
+
+    #[test]
+    fn a_removed_quiz_without_a_known_atom_fails_the_decode() {
+        let removed = |quiz_id: &str| LegacyRemovedRow {
+            quiz_id: quiz_id.into(),
+            atom_id: None,
+        };
+        let changes = overlay_changes(Vec::new(), Vec::new(), vec![removed("fnd.1.1.1.q2")]);
+        let Ok([RowChange::PutRemoved(row)]) = changes.as_deref() else {
+            panic!("{changes:?}");
+        };
+        assert_eq!(row.atom_id, "fnd.1.1.1");
+
+        let e = overlay_changes(Vec::new(), Vec::new(), vec![removed("custom")]).unwrap_err();
+        assert!(
+            matches!(&e, Error::BadRow(m) if m.contains("custom")),
+            "{e:?}"
+        );
     }
 
     #[test]
