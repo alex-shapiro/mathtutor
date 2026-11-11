@@ -11,7 +11,7 @@ use crate::cards::{self, CardState};
 use crate::db::client::api::Selection;
 use crate::db::{Db, Op, Row, Txn, run_txn, ts};
 use crate::event_log::{self, Event};
-use crate::overlay::{Overlay, OverlayRows, RowChange};
+use crate::overlay::{Overlay, RowChange};
 use crate::path::PathFile;
 use crate::schema::{
     DbState, ImportMarker, LessonRow, OAuthClient, QuizRow, RemovedQuizRow, STATE_KEY, TableSet,
@@ -671,11 +671,10 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
 
 /// Compare the `stored` overlay with the overlay that the legacy row `changes` store.
 fn verify_overlay(stored: &Overlay, changes: &[RowChange]) -> Result<Vec<String>> {
-    let mut rows = OverlayRows::default();
+    let mut legacy = Overlay::default();
     for change in changes {
-        rows.apply(change.clone());
+        legacy.apply(change.clone());
     }
-    let legacy = rows.overlay();
     let atoms: BTreeSet<&String> = legacy.atoms.keys().chain(stored.atoms.keys()).collect();
     let mut out = Vec::new();
     for atom in atoms {

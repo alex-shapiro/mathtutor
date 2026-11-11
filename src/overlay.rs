@@ -29,81 +29,84 @@ pub struct OverlayAtom {
     pub removed: BTreeSet<String>,
 }
 
-/// Stored rows of the overlay, keyed by primary key.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct OverlayRows {
-    lessons: BTreeMap<String, LessonRow>,
-    quizzes: BTreeMap<String, QuizRow>,
-    removed: BTreeMap<String, RemovedQuizRow>,
+impl OverlayAtom {
+    fn is_empty(&self) -> bool {
+        self.lesson.is_none() && self.quizzes.is_empty() && self.removed.is_empty()
+    }
 }
 
-impl OverlayRows {
-    /// Collect the rows that a read of the overlay tables returned.
-    pub fn new(
+impl Overlay {
+    /// Return the overlay that the rows of the overlay tables store.
+    pub fn from_rows(
         lessons: Vec<LessonRow>,
         quizzes: Vec<QuizRow>,
         removed: Vec<RemovedQuizRow>,
     ) -> Self {
-        Self {
-            lessons: lessons
-                .into_iter()
-                .map(|r| (r.atom_id.clone(), r))
-                .collect(),
-            quizzes: quizzes
-                .into_iter()
-                .map(|r| (r.quiz_id.clone(), r))
-                .collect(),
-            removed: removed
-                .into_iter()
-                .map(|r| (r.quiz_id.clone(), r))
-                .collect(),
+        let mut atoms: BTreeMap<String, OverlayAtom> = BTreeMap::new();
+        for r in lessons {
+            atoms.entry(r.atom_id).or_default().lesson = Some(r.body);
         }
+        for r in quizzes {
+            let atom = atoms.entry(r.atom_id.clone()).or_default();
+            atom.quizzes.push(Quiz::from(r));
+        }
+        for r in removed {
+            atoms
+                .entry(r.atom_id)
+                .or_default()
+                .removed
+                .insert(r.quiz_id);
+        }
+        for atom in atoms.values_mut() {
+            atom.quizzes.sort_by(|a, b| a.id.cmp(&b.id));
+        }
+        Overlay { atoms }
     }
 
-    /// Apply `change` as the database applies its operation.
+    /// Apply `change` as the database applies its operation to the overlay rows.
     pub(crate) fn apply(&mut self, change: RowChange) {
         match change {
             RowChange::PutLesson(r) => {
-                self.lessons.insert(r.atom_id.clone(), r);
+                self.atoms.entry(r.atom_id).or_default().lesson = Some(r.body);
             }
             RowChange::InsertQuiz(r) | RowChange::PutQuiz(r) => {
-                self.quizzes.insert(r.quiz_id.clone(), r);
+                self.edit_atoms(|a| a.quizzes.retain(|q| q.id != r.quiz_id));
+                let quizzes = &mut self.atoms.entry(r.atom_id.clone()).or_default().quizzes;
+                let at = quizzes.partition_point(|q| q.id < r.quiz_id);
+                quizzes.insert(at, Quiz::from(r));
             }
             RowChange::PutRemoved(r) => {
-                self.removed.insert(r.quiz_id.clone(), r);
+                self.edit_atoms(|a| {
+                    a.removed.remove(&r.quiz_id);
+                });
+                self.atoms
+                    .entry(r.atom_id)
+                    .or_default()
+                    .removed
+                    .insert(r.quiz_id);
             }
         }
     }
 
-    /// Return the overlay that these rows store.
-    pub fn overlay(&self) -> Overlay {
-        let mut atoms: BTreeMap<String, OverlayAtom> = BTreeMap::new();
-        for r in self.lessons.values() {
-            atoms.entry(r.atom_id.clone()).or_default().lesson = Some(r.body.clone());
+    /// Apply `edit` to every atom, and drop each atom that the edit leaves empty.
+    fn edit_atoms(&mut self, mut edit: impl FnMut(&mut OverlayAtom)) {
+        self.atoms.retain(|_, a| {
+            edit(a);
+            !a.is_empty()
+        });
+    }
+}
+
+impl From<QuizRow> for Quiz {
+    fn from(r: QuizRow) -> Self {
+        Quiz {
+            id: r.quiz_id,
+            difficulty: r.difficulty,
+            kind: r.kind,
+            question: r.question,
+            answer: r.answer,
+            rubric: r.rubric,
         }
-        for r in self.quizzes.values() {
-            let quiz = Quiz {
-                id: r.quiz_id.clone(),
-                difficulty: r.difficulty,
-                kind: r.kind,
-                question: r.question.clone(),
-                answer: r.answer.clone(),
-                rubric: r.rubric.clone(),
-            };
-            atoms
-                .entry(r.atom_id.clone())
-                .or_default()
-                .quizzes
-                .push(quiz);
-        }
-        for r in self.removed.values() {
-            atoms
-                .entry(r.atom_id.clone())
-                .or_default()
-                .removed
-                .insert(r.quiz_id.clone());
-        }
-        Overlay { atoms }
     }
 }
 
@@ -260,6 +263,57 @@ pub async fn cmd_graph_dump(db: &Db) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn quiz_row(atom: &str, id: &str) -> QuizRow {
+        QuizRow::new(
+            atom,
+            &Quiz {
+                id: id.into(),
+                ..base()
+            },
+        )
+    }
+
+    fn removed_row(atom: &str, id: &str) -> RemovedQuizRow {
+        RemovedQuizRow {
+            atom_id: atom.into(),
+            quiz_id: id.into(),
+        }
+    }
+
+    #[test]
+    fn applied_changes_give_the_overlay_of_the_resulting_rows() {
+        let lesson = LessonRow {
+            atom_id: "a".into(),
+            body: "b".into(),
+        };
+        let changes = [
+            RowChange::PutLesson(lesson.clone()),
+            RowChange::InsertQuiz(quiz_row("b", "q2")),
+            RowChange::InsertQuiz(quiz_row("b", "q1")),
+            RowChange::PutQuiz(quiz_row("c", "q2")),
+            RowChange::PutRemoved(removed_row("d", "x")),
+            RowChange::PutRemoved(removed_row("e", "x")),
+        ];
+        let mut applied = Overlay::default();
+        for change in changes {
+            applied.apply(change);
+        }
+
+        let stored = Overlay::from_rows(
+            vec![lesson],
+            vec![quiz_row("c", "q2"), quiz_row("b", "q1")],
+            vec![removed_row("e", "x")],
+        );
+        assert_eq!(
+            serde_json::to_value(&applied).unwrap(),
+            serde_json::to_value(&stored).unwrap()
+        );
+        assert_eq!(
+            applied.atoms.keys().collect::<Vec<_>>(),
+            ["a", "b", "c", "e"]
+        );
+    }
 
     fn base() -> Quiz {
         Quiz {

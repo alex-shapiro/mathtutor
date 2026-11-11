@@ -12,7 +12,7 @@ use crate::db::client::{self, Entry};
 use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
 use crate::event_log::{Event, EventKind};
 use crate::graph::{Curriculum, Graph};
-use crate::overlay::{Overlay, OverlayRows, RowChange};
+use crate::overlay::{Overlay, RowChange};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::schema::{
@@ -26,21 +26,19 @@ pub(crate) const OVERLAY_VERSION_KEY: &str = "overlay_version";
 /// Version string of a database before any overlay writes.
 const UNWRITTEN_OVERLAY_VERSION: &str = "";
 
-/// Overlay rows at a stored version, with the overlay that they store and the curriculum graph that it amends merged on first use.
+/// Overlay at a stored version, with the curriculum graph that it amends merged on first use.
 #[derive(Debug)]
 pub(crate) struct CachedOverlay {
     version: String,
-    rows: OverlayRows,
     overlay: Overlay,
     merged: OnceLock<Arc<Graph>>,
 }
 
 impl CachedOverlay {
-    fn new(version: String, rows: OverlayRows) -> Arc<Self> {
+    fn new(version: String, overlay: Overlay) -> Arc<Self> {
         Arc::new(Self {
             version,
-            overlay: rows.overlay(),
-            rows,
+            overlay,
             merged: OnceLock::new(),
         })
     }
@@ -56,10 +54,11 @@ fn new_overlay_version() -> String {
     format!("{:032x}", rand::random::<u128>())
 }
 
+/// Content of the overlay cache file, which a write borrows and a read owns.
 #[derive(serde::Serialize, serde::Deserialize)]
-struct CacheFile {
-    version: String,
-    rows: OverlayRows,
+struct CacheFile<V, O> {
+    version: V,
+    overlay: O,
 }
 
 /// Overlay cache of a database handle.
@@ -71,8 +70,8 @@ pub(crate) struct OverlayCache {
 }
 
 fn read_cached_overlay(path: &Path) -> Option<Arc<CachedOverlay>> {
-    let f: CacheFile = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    Some(CachedOverlay::new(f.version, f.rows))
+    let f: CacheFile<String, Overlay> = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    Some(CachedOverlay::new(f.version, f.overlay))
 }
 
 /// Return a temporary sibling of `path` that no other write of the cache uses.
@@ -86,16 +85,13 @@ fn cache_temp_path(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-fn write_cached_overlay(path: &Path, version: &str, rows: &OverlayRows) {
+fn write_cached_overlay(path: &Path, version: &str, overlay: &Overlay) {
     let write = || -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let tmp = cache_temp_path(path);
-        let f = CacheFile {
-            version: version.to_string(),
-            rows: rows.clone(),
-        };
+        let f = CacheFile { version, overlay };
         std::fs::write(&tmp, serde_json::to_vec(&f)?)?;
         std::fs::rename(tmp, path)
     };
@@ -544,7 +540,7 @@ impl Db {
             new_version
         };
         if let (Some(file), Some(n)) = (&self.cache_file, new_version) {
-            write_cached_overlay(file, &n.version, &n.rows);
+            write_cached_overlay(file, &n.version, &n.overlay);
         }
     }
 
@@ -568,11 +564,11 @@ impl Db {
     /// Cache the overlay `base` that a transaction checked with its committed `write` applied, or clear the cache if the transaction did not check an overlay.
     fn remember_overlay_write(&self, base: Option<Arc<CachedOverlay>>, write: OverlayWrite) {
         let next = base.map(|base| {
-            let mut rows = base.rows.clone();
+            let mut overlay = base.overlay.clone();
             for change in write.changes {
-                rows.apply(change);
+                overlay.apply(change);
             }
-            CachedOverlay::new(write.version, rows)
+            CachedOverlay::new(write.version, overlay)
         });
         self.cache_overlay(next);
     }
@@ -796,7 +792,7 @@ impl Plan {
             OverlayPlan::Check(cached) => Some(cached),
             OverlayPlan::Read => Some(CachedOverlay::new(
                 self.overlay_version.take().unwrap_or_default(),
-                OverlayRows::new(
+                Overlay::from_rows(
                     take(&mut self.lessons),
                     take(&mut self.quizzes),
                     take(&mut self.removed_quizzes),
