@@ -85,11 +85,11 @@ impl AtomStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuizSlot {
-    /// The atom has no quiz of the difficulty.
+    /// The atom lacks a quiz of this difficulty.
     Missing,
-    /// The atom has a quiz of the difficulty, but no quiz of the difficulty has a passing answer.
+    /// The atom has a quiz of this difficulty without a passing answer.
     Authored,
-    /// A quiz of the difficulty has an answer rated `hard`, `good`, or `easy`.
+    /// A quiz of this difficulty has an answer rated `hard`, `good`, or `easy`.
     Correct,
 }
 

@@ -74,7 +74,7 @@ pub struct NewPathArgs {
     pub goal: String,
     /// Target atom or cluster IDs, at least 1.
     pub targets: Vec<String>,
-    /// Initial traversal strategy (`bottom_up` or `top_down`).
+    /// Initial traversal strategy: `bottom_up` or `top_down`.
     #[serde(default)]
     pub strategy: Strategy,
 }
@@ -87,7 +87,7 @@ pub struct PathOnlyArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct SetStrategyArgs {
     pub path_id: String,
-    /// Traversal strategy (`bottom_up` or `top_down`).
+    /// Traversal strategy: `bottom_up` or `top_down`.
     pub strategy: Strategy,
 }
 
@@ -101,7 +101,7 @@ pub struct SubpathSetArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct GetNextArgs {
     pub path_id: String,
-    /// Action filter (`default`, `new`, or `due`).
+    /// Action filter: `default`, `new`, or `due`.
     #[serde(default)]
     pub mode: scheduler::NextMode,
 }
@@ -117,7 +117,7 @@ pub struct GetTreeArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct GetSyllabusArgs {
     pub path_id: String,
-    /// Maximum number of upcoming atoms to return (default 10).
+    /// Maximum number of upcoming atoms to return. Defaults to 10.
     #[serde(default = "default_syllabus_n")]
     pub n: usize,
 }
@@ -208,7 +208,7 @@ impl MathTutorServer {
         )
     }
 
-    #[tool(description = "Switch a path traversal strategy (bottom_up or top_down).")]
+    #[tool(description = "Switch a path traversal strategy between bottom_up and top_down.")]
     async fn set_strategy(
         &self,
         Parameters(args): Parameters<SetStrategyArgs>,
@@ -287,7 +287,7 @@ impl MathTutorServer {
         )
     }
 
-    #[tool(description = "Return details for a curriculum node (atom or cluster).")]
+    #[tool(description = "Return details for an atom or cluster in the curriculum.")]
     async fn get_item(
         &self,
         Parameters(args): Parameters<GetItemArgs>,
@@ -734,7 +734,7 @@ async fn health() -> &'static str {
     "ok"
 }
 
-/// Time that the server reuses the result of a readiness check, so that `/ready` sends at most one Baserunna request in each interval.
+/// Time that the server reuses the result of a readiness check, so that `/ready` sends at most 1 Baserunna request in each interval.
 const READY_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Longest time that a readiness check waits for the database before it reports a failure.
@@ -749,7 +749,7 @@ struct Readiness {
     checking: Arc<AtomicBool>,
 }
 
-/// Result of one readiness check.
+/// Result of a readiness check.
 #[derive(Clone, Copy)]
 struct ReadyCheck {
     at: Instant,
@@ -804,7 +804,7 @@ impl Readiness {
     }
 }
 
-/// Claim of the one readiness check that runs at a time, released when the check ends or its request stops.
+/// Claim of the active readiness check, released if the check finishes or its request stops.
 struct CheckClaim<'a>(&'a AtomicBool);
 
 impl<'a> CheckClaim<'a> {
@@ -882,7 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_outcome_error_names_the_safe_next_call() {
+    fn unknown_outcome_error_includes_the_safe_next_call() {
         let result = encode::<()>(AgentCommand::AnswerQuiz, Err(lost_commit())).unwrap();
         let body = result.structured_content.expect("structured error");
         assert_eq!(body["kind"], json!("outcome_unknown"));
@@ -920,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn the_fly_app_names_its_baserunna_server() {
+    fn fly_config_sets_the_baserunna_server_url() {
         let fly = include_str!("../../fly.toml");
         let env = fly
             .split("[env]")

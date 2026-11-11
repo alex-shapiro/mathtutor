@@ -146,7 +146,7 @@ pub fn router(state: OAuthState) -> Router {
         .with_state(state)
 }
 
-/// Forbid every site to show `resp` in a frame, so that no site can overlay the sign-in form and trick the owner into a sign-in.
+/// Prevent sites from framing `resp` to protect the sign-in form against clickjacking.
 async fn deny_framing(mut resp: Response) -> Response {
     let headers = resp.headers_mut();
     headers.insert(
@@ -157,7 +157,7 @@ async fn deny_framing(mut resp: Response) -> Response {
     resp
 }
 
-/// Refuse a request from a client address over its request limit before the route reads the database.
+/// Reject a request from a client address over its request limit before the route reads the database.
 async fn limit_requests(
     State(s): State<OAuthState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -471,7 +471,7 @@ async fn token_authorization_code(
     let tokens = run_txn!(&s.db, |txn| {
         exchange_code(&mut txn, code, client_id, redirect_uri, verifier).await
     })?;
-    tracing::info!(%client_id, "access + refresh tokens issued (auth_code)");
+    tracing::info!(%client_id, "access and refresh tokens issued from authorization code");
     Ok(Json(tokens.into()))
 }
 
@@ -486,7 +486,7 @@ async fn token_refresh(
 
     // Delete the presented refresh token and insert a new pair in the same transaction.
     let tokens = run_txn!(&s.db, |txn| rotate_refresh(&mut txn, provided, &req).await)?;
-    tracing::info!(client_id = %tokens.client_id, "tokens rotated (refresh_token)");
+    tracing::info!(client_id = %tokens.client_id, "tokens rotated from refresh token");
     Ok(Json(tokens.into()))
 }
 
@@ -591,9 +591,9 @@ async fn keep_client(txn: &mut Txn, client_id: &str) -> Result<(), OAuthError> {
     Ok(())
 }
 
-/// Accept a requested scope that is absent or names only [`MCP_SCOPE`], the one scope that this server grants.
+/// Accept a requested scope that is absent or specifies only [`MCP_SCOPE`], the sole scope that this server grants.
 ///
-/// RFC 6749 section 3.3 lets the server apply a default scope if the client omits one.
+/// RFC 6749 section 3.3 lets the server apply a default scope if the client omits it.
 fn check_scope(requested: Option<&str>) -> Result<(), OAuthError> {
     let mut requested = requested.into_iter().flat_map(str::split_whitespace);
     if requested.all(|s| s == MCP_SCOPE) {
@@ -661,7 +661,7 @@ const MAX_CACHED_ACCESS_TOKENS: usize = 1_000;
 
 /// Access tokens that give access to the MCP tools, with a memory cache of the valid tokens.
 ///
-/// The server has no revocation endpoint, so a cached token stays valid exactly as long as its row.
+/// The server omits a revocation endpoint, so a cached token stays valid until its row expires.
 #[derive(Clone)]
 pub struct AccessTokens {
     db: Db,
@@ -1026,7 +1026,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_request_can_omit_the_scope_or_name_only_mcp() {
+    fn check_scope_accepts_an_omitted_scope_or_mcp() {
         assert!(check_scope(None).is_ok());
         assert!(check_scope(Some("")).is_ok());
         assert!(check_scope(Some("mcp")).is_ok());
@@ -1069,7 +1069,7 @@ mod tests {
         assert_eq!(tokens.lock().len(), MAX_CACHED_ACCESS_TOKENS);
         assert!(
             !tokens.cached("valid", now),
-            "the token that expires first leaves"
+            "the earliest-expiring token is evicted"
         );
         assert!(tokens.cached("t0", now));
     }

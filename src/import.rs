@@ -205,7 +205,7 @@ fn decode_rows<T: DeserializeOwned>(rows: &mut SourceRows, table: SourceTable) -
 /// Declare [`SourceTable`] with the name of each source table and the query that reads it.
 macro_rules! source_tables {
     ($($table:ident = $name:literal => $query:expr,)+) => {
-        /// Table of a libSQL source database, read by one query of [`read_legacy`].
+        /// Table of a libSQL source database, read by a query of [`read_legacy`].
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         enum SourceTable {
             $($table,)+
@@ -295,7 +295,7 @@ struct LegacyEventRow {
     atom_id: Option<String>,
     quiz_id: Option<String>,
     rating: Option<i64>,
-    /// JSON object with the fields of the event that have no column.
+    /// JSON object with the event fields that lack a column.
     payload: Option<String>,
 }
 
@@ -538,7 +538,7 @@ fn overlay_changes(
             .or_else(|| legacy_quiz_atom(&r.quiz_id).map(str::to_string))
             .ok_or_else(|| {
                 Error::BadRow(format!(
-                    "libSQL overlay_removed_quizzes: no atom for quiz {}",
+                    "libSQL overlay_removed_quizzes: missing atom for quiz {}",
                     r.quiz_id
                 ))
             })?;
@@ -695,7 +695,7 @@ fn verify_overlay(stored: &Overlay, changes: &[RowChange]) -> Result<Vec<String>
     Ok(out)
 }
 
-/// Write path `p`, its `events`, and the `cards` and `taught` rows that the events produce in one transaction, or return `false` if the path exists.
+/// Write path `p`, its `events`, and the `cards` and `taught` rows that the events produce in a single transaction, or return `false` if the path exists.
 async fn import_path(db: &Db, p: &PathRow, events: &[Event]) -> Result<bool> {
     let existing = db.read_one(Op::get_row::<PathRow>(&p.id)).await?;
     if existing.row::<PathRow>()?.is_some() {
@@ -908,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn a_path_verifies_against_its_stored_state_without_a_server() {
+    fn verify_path_compares_a_path_with_its_stored_state() {
         let (path, events, state) = answered_path();
         let card = legacy_card(&state);
         let check =
@@ -938,7 +938,7 @@ mod tests {
     }
 
     #[test]
-    fn a_removed_quiz_without_a_known_atom_fails_the_decode() {
+    fn overlay_changes_rejects_a_removed_quiz_without_a_known_atom() {
         let removed = |quiz_id: &str| LegacyRemovedRow {
             quiz_id: quiz_id.into(),
             atom_id: None,
@@ -965,7 +965,7 @@ mod tests {
     }
 
     #[test]
-    fn integers_keep_their_type_and_blobs_read_as_null() {
+    fn into_objects_preserves_integers_and_maps_blobs_to_null() {
         let r: StmtResult = serde_json::from_str(
             r#"{"cols":[{"name":"n"},{"name":"b"},{"name":"s"}],
                 "rows":[[{"type":"integer","value":"9007199254740993"},{"type":"blob","base64":"AA=="},{"type":"text","value":"x"}]]}"#,

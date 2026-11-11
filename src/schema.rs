@@ -20,7 +20,7 @@ const STATE_KEY: &str = "mathtutor_state";
 /// Key that records the schema version of the authorization tables.
 const AUTH_STATE_KEY: &str = "mathtutor_auth_state";
 
-/// Group of tables that one schema version covers.
+/// Group of tables that a single schema version covers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableSet {
     /// Learner history and overlay tables, which every command uses.
@@ -122,7 +122,7 @@ fn state_write_op(set: TableSet, import: Option<ImportMarker>) -> Op {
         schema: set.version().to_string(),
         import,
     };
-    let value = serde_json::to_vec(&state).expect("a stored state serializes");
+    let value = serde_json::to_vec(&state).expect("StoredState serialization is infallible");
     Op::put(set.state_key(), value)
 }
 
@@ -363,7 +363,7 @@ row_table! {
 }
 
 row_table! {
-    /// Row in the `oauth_addr_counts` table: the events of one client address that one limit counts.
+    /// Row in the `oauth_addr_counts` table: the events of a client address that a rate limit counts.
     pub struct OAuthAddrCount in "oauth_addr_counts", primary key (key) {
         /// Name of the limit and the client address, such as `password_failures/203.0.113.7`.
         pub key: String,
@@ -384,7 +384,7 @@ row_table! {
     }
 }
 
-/// Row of an OAuth table, which no learner command reads or writes.
+/// Row of an OAuth table, used only by the MCP server.
 #[cfg(feature = "mcp")]
 pub(crate) trait OAuthRow: Row {}
 
@@ -465,10 +465,10 @@ pub(crate) async fn state(db: &client::Db, set: TableSet) -> Result<DbState> {
 
 /// Create every missing table of `set` and record the schema version of the set, unless the database already records a state for it.
 ///
-/// Fails with [`Error::ForeignTable`] if `set` is the learner set and the database holds a table that no table set defines, and with [`Error::TableMismatch`] if a table exists with other columns.
+/// Fails with [`Error::ForeignTable`] if `set` is the learner set and the database holds a table outside both table sets, and with [`Error::TableMismatch`] if a table exists with other columns.
 pub(crate) async fn create_tables(db: &client::Db, set: TableSet) -> Result<()> {
     if set == TableSet::Learner {
-        refuse_foreign_tables(db).await?;
+        reject_foreign_tables(db).await?;
     }
     for t in set.tables() {
         let stored = db.create_table(&t).await?.table;
@@ -538,8 +538,8 @@ impl Endpoint for DropTable {
     }
 }
 
-/// Fail with [`Error::ForeignTable`] if `db` holds a table that no table set defines, such as a table of another application.
-async fn refuse_foreign_tables(db: &client::Db) -> Result<()> {
+/// Fail with [`Error::ForeignTable`] if `db` holds a table outside both table sets, such as a table of another application.
+async fn reject_foreign_tables(db: &client::Db) -> Result<()> {
     let ours: Vec<String> = [TableSet::Learner, TableSet::Auth]
         .into_iter()
         .flat_map(TableSet::tables)

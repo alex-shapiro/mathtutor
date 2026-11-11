@@ -603,7 +603,7 @@ async fn main() {
     let shared_path = (share == "path").then(|| Arc::new(Mutex::new(None)));
     let max = steps.iter().copied().max().unwrap_or(1);
     println!(
-        "opening {max} learners on {} (sharing: {})",
+        "opening {max} learners on {}, sharing {}",
         base.url,
         if share.is_empty() { "nothing" } else { &share }
     );
@@ -712,7 +712,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn server_timing_parses_every_metric() {
+    fn parse_reads_every_server_timing_metric() {
         let t = ServerTiming::parse(
             "total;dur=80.5, store;dur=75.2;desc=2, commit;dur=74.9, wait;dur=1.5",
         );

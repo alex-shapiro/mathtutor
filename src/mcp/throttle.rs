@@ -72,7 +72,7 @@ impl ClientAddrSource {
 
 /// Return the key that groups `addr` with the other addresses of its client.
 ///
-/// One IPv6 client usually controls a whole `/64` network.
+/// A single IPv6 client usually controls a `/64` network.
 fn addr_key(addr: IpAddr) -> IpAddr {
     match addr {
         IpAddr::V4(_) => addr,
@@ -319,7 +319,7 @@ pub(crate) struct AddrLimits {
 }
 
 impl AddrLimits {
-    /// Create the limits of the clients that `client_addrs` names, with counts stored in `db`.
+    /// Create the limits for the client addresses from `client_addrs`, with counts stored in `db`.
     pub(crate) fn new(db: &Db, client_addrs: ClientAddrSource) -> Self {
         Self {
             client_addrs,
@@ -340,7 +340,7 @@ impl AddrLimits {
         self.password_failures.try_count(addr, Utc::now()).await
     }
 
-    /// Forget the incorrect passwords of `addr` after a correct one.
+    /// Forget the incorrect passwords of `addr` after a valid password.
     pub(crate) async fn record_password_success(&self, addr: IpAddr) -> Result<()> {
         self.password_failures.reset(addr).await
     }
@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn ipv6_addresses_of_one_network_share_a_key() {
+    fn ipv6_addresses_in_a_slash_64_network_share_a_key() {
         let a: IpAddr = "2001:db8:1:2::1".parse().unwrap();
         let b: IpAddr = "2001:db8:1:2:ffff::9".parse().unwrap();
         let c: IpAddr = "2001:db8:1:3::1".parse().unwrap();
@@ -465,7 +465,7 @@ mod tests {
     }
 
     #[test]
-    fn a_proxy_header_names_the_client_only_if_configured() {
+    fn client_addr_uses_a_proxy_header_only_if_configured() {
         let peer: SocketAddr = "10.0.0.1:443".parse().unwrap();
         let mut headers = HeaderMap::new();
         headers.insert("fly-client-ip", "203.0.113.7".parse().unwrap());

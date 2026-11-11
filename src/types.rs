@@ -1,24 +1,24 @@
 //! Shared domain enums for quiz ratings, difficulties, strategies, and formats.
 
-/// String that is not a spelling of an enum of this module.
+/// Error returned when a string does not match any variant of an enum in this module.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("invalid {what} '{value}' (expected {expected})", expected = .spellings.join(" | "))]
-pub struct InvalidSpelling {
+#[error("invalid {what} '{value}' (expected {expected})", expected = .names.join(" | "))]
+pub struct InvalidVariantName {
     what: &'static str,
     value: String,
-    spellings: &'static [&'static str],
+    names: &'static [&'static str],
 }
 
-/// Declare an enum of unit variants with one spelling each, and derive every string form of the enum from that table.
+/// Declare an enum of unit variants with a string name per variant.
 ///
-/// The enum gets `ALL`, `SPELLINGS`, `as_str`, `Display`, `FromStr`, serde, and, with the `mcp` feature, a JSON schema that lists the spellings. `argh` parses the enum through `FromStr`.
-macro_rules! spelled_enum {
+/// Generates `ALL`, `NAMES`, `as_str`, `Display`, `FromStr`, serde traits, and a `schemars::JsonSchema` implementation under the `mcp` feature.
+macro_rules! named_enum {
     (
         $(#[$attr:meta])*
         pub enum $name:ident, what: $what:literal {
             $(
                 $(#[$variant_attr:meta])*
-                $variant:ident = $spelling:literal,
+                $variant:ident = $variant_name:literal,
             )+
         }
     ) => {
@@ -29,16 +29,16 @@ macro_rules! spelled_enum {
         }
 
         impl $name {
-            /// Every variant, in declaration order.
+            /// Every variant in declaration order.
             pub const ALL: &'static [Self] = &[$(Self::$variant,)+];
 
-            /// Spelling of each variant, in declaration order.
-            pub const SPELLINGS: &'static [&'static str] = &[$($spelling,)+];
+            /// Name of each variant in declaration order.
+            pub const NAMES: &'static [&'static str] = &[$($variant_name,)+];
 
-            /// Return the spelling of this variant.
+            /// Return the string name of this variant.
             pub fn as_str(self) -> &'static str {
                 match self {
-                    $(Self::$variant => $spelling,)+
+                    $(Self::$variant => $variant_name,)+
                 }
             }
         }
@@ -50,14 +50,14 @@ macro_rules! spelled_enum {
         }
 
         impl std::str::FromStr for $name {
-            type Err = InvalidSpelling;
-            fn from_str(s: &str) -> Result<Self, InvalidSpelling> {
+            type Err = InvalidVariantName;
+            fn from_str(s: &str) -> Result<Self, InvalidVariantName> {
                 match s {
-                    $($spelling => Ok(Self::$variant),)+
-                    other => Err(InvalidSpelling {
+                    $($variant_name => Ok(Self::$variant),)+
+                    other => Err(InvalidVariantName {
                         what: $what,
                         value: other.to_string(),
-                        spellings: Self::SPELLINGS,
+                        names: Self::NAMES,
                     }),
                 }
             }
@@ -87,13 +87,13 @@ macro_rules! spelled_enum {
             }
 
             fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-                schemars::json_schema!({ "type": "string", "enum": Self::SPELLINGS })
+                schemars::json_schema!({ "type": "string", "enum": Self::NAMES })
             }
         }
     };
 }
 
-spelled_enum! {
+named_enum! {
     /// FSRS recall rating for a quiz answer.
     pub enum Rating, what: "rating" {
         Again = "again",
@@ -116,13 +116,13 @@ impl From<Rating> for i64 {
 }
 
 impl Rating {
-    /// Return the rating of FSRS grade `grade`, or `None` if no rating has the grade.
+    /// Return the rating for FSRS grade `grade`, or `None` if `grade` is out of range.
     pub fn from_grade(grade: i64) -> Option<Self> {
         Rating::ALL.iter().copied().find(|r| i64::from(*r) == grade)
     }
 }
 
-spelled_enum! {
+named_enum! {
     /// Quiz difficulty level.
     pub enum Difficulty, what: "difficulty" {
         Easy = "easy",
@@ -131,7 +131,7 @@ spelled_enum! {
     }
 }
 
-spelled_enum! {
+named_enum! {
     /// Learning path traversal strategy.
     #[derive(Default)]
     pub enum Strategy, what: "strategy" {
@@ -141,7 +141,7 @@ spelled_enum! {
     }
 }
 
-spelled_enum! {
+named_enum! {
     /// Quiz response format.
     #[derive(Default)]
     pub enum QuizType, what: "quiz type" {
@@ -155,25 +155,25 @@ spelled_enum! {
 mod tests {
     use super::*;
 
-    /// Check that every variant of `T` reads and writes its spelling in every form.
-    fn check_spellings<T>(all: &[T], spellings: &[&str])
+    /// Check that every variant of `T` round-trips through its string name.
+    fn check_variant_names<T>(all: &[T], names: &[&str])
     where
         T: Copy
             + PartialEq
             + std::fmt::Debug
             + std::fmt::Display
-            + std::str::FromStr<Err = InvalidSpelling>
+            + std::str::FromStr<Err = InvalidVariantName>
             + serde::Serialize
             + serde::de::DeserializeOwned,
     {
-        assert_eq!(all.len(), spellings.len());
-        for (value, spelling) in all.iter().zip(spellings) {
-            assert_eq!(&value.to_string(), spelling);
-            assert_eq!(spelling.parse::<T>().unwrap(), *value);
-            assert_eq!(serde_json::to_value(value).unwrap(), *spelling);
-            let read: T = serde_json::from_value((*spelling).into()).unwrap();
+        assert_eq!(all.len(), names.len());
+        for (value, name) in all.iter().zip(names) {
+            assert_eq!(&value.to_string(), name);
+            assert_eq!(name.parse::<T>().unwrap(), *value);
+            assert_eq!(serde_json::to_value(value).unwrap(), *name);
+            let read: T = serde_json::from_value((*name).into()).unwrap();
             assert_eq!(read, *value);
-            let parsed: T = argh::FromArgValue::from_arg_value(spelling).unwrap();
+            let parsed: T = argh::FromArgValue::from_arg_value(name).unwrap();
             assert_eq!(parsed, *value);
         }
         assert!("unknown".parse::<T>().is_err());
@@ -181,16 +181,16 @@ mod tests {
     }
 
     #[test]
-    fn each_enum_has_one_spelling_for_input_and_output() {
-        check_spellings(Rating::ALL, Rating::SPELLINGS);
-        check_spellings(Difficulty::ALL, Difficulty::SPELLINGS);
-        check_spellings(Strategy::ALL, Strategy::SPELLINGS);
-        check_spellings(QuizType::ALL, QuizType::SPELLINGS);
+    fn each_enum_uses_matching_names_for_input_and_output() {
+        check_variant_names(Rating::ALL, Rating::NAMES);
+        check_variant_names(Difficulty::ALL, Difficulty::NAMES);
+        check_variant_names(Strategy::ALL, Strategy::NAMES);
+        check_variant_names(QuizType::ALL, QuizType::NAMES);
         assert!("bottom-up".parse::<Strategy>().is_err());
     }
 
     #[test]
-    fn invalid_value_errors_list_the_spellings() {
+    fn invalid_value_errors_list_the_variant_names() {
         let e = "great".parse::<Rating>().unwrap_err().to_string();
         assert!(e.contains("again | hard | good | easy"), "{e}");
     }

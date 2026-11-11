@@ -439,7 +439,7 @@ pub struct QuizAnswerCmd {
 #[argh(subcommand, name = "instruct")]
 pub struct InstructCmd {}
 
-/// Import paths, overlay records, and events from a libSQL (Turso) database into Baserunna.
+/// Import paths, overlay records, and events from a libSQL database into Baserunna.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "import-turso")]
 pub struct ImportTursoCmd {
@@ -510,7 +510,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn each_agent_command_parses_as_its_tool() {
+    fn cli_parser_maps_each_agent_command_to_its_tool() {
         let samples: &[&[&str]] = &[
             &["path", "list"],
             &["path", "new", "goal", "--targets", "a"],
@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn operator_commands_have_no_tool() {
+    fn operator_commands_return_none_for_agent_command() {
         for args in [&["import-turso"][..], &["graph", "dump"], &["instruct"]] {
             let cmd = Mt::from_args(&["mt"], args).expect("valid args").cmd;
             assert_eq!(cmd.agent_command(), None);

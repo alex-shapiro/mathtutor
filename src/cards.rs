@@ -25,7 +25,7 @@ pub struct CardState {
     pub difficulty: f32,
 }
 
-/// Review state and answer history of one quiz on one path.
+/// Review state and answer history of a quiz on a path.
 #[derive(Debug, Clone)]
 pub struct Card {
     pub path_id: String,

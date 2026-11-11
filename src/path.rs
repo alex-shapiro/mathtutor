@@ -134,7 +134,7 @@ pub struct PathListView {
     pub paths: Vec<PathSummary>,
 }
 
-/// Print all learning path summaries as AYML (`mt path list`).
+/// Print all learning path summaries as AYML for `mt path list`.
 pub async fn cmd_path_list(db: &Db) -> Result<()> {
     crate::print_ayml(&compute_path_list(db).await?)
 }

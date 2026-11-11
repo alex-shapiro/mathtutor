@@ -74,7 +74,7 @@ fn read_cached_overlay(path: &Path) -> Option<Arc<CachedOverlay>> {
     Some(CachedOverlay::new(f.version, f.overlay))
 }
 
-/// Return a temporary sibling of `path` that no other write of the cache uses.
+/// Return a unique temporary sibling of `path`.
 fn cache_temp_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(format!(
@@ -164,7 +164,7 @@ impl ViewRequest {
 #[derive(Debug, Clone)]
 pub struct PathState {
     pub row: PathRow,
-    /// Time of the latest write for the path, or its creation time if the path has no recorded write.
+    /// Time of the latest write for the path, or its creation time if the path lacks a recorded write.
     pub updated_at: DateTime<Utc>,
     pub projection: Projection,
 }
@@ -733,7 +733,7 @@ impl Plan {
 
     /// Accumulate `results` of the pending reads, and return the reads of the next pages.
     ///
-    /// Returns `None` when the reads are complete or the overlay is stale.
+    /// Returns `None` if the reads are complete or the overlay is stale.
     fn absorb(&mut self, results: Vec<OpResult>) -> Result<Option<Vec<Op>>> {
         let pending = std::mem::take(&mut self.pending);
         for ((slot, op), r) in pending.into_iter().zip(results) {

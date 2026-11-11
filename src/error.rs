@@ -37,10 +37,10 @@ pub enum Error {
     #[error("'{0}' is a cluster, not an atom")]
     NotAtom(String),
 
-    /// The selected path does not exist, or no path exists if the command named no path.
+    /// The selected path does not exist, or the database has zero paths.
     #[error("{}", match .0 {
         Some(id) => format!("learning path '{id}' not found"),
-        None => "no learning path exists".to_string(),
+        None => "zero learning paths exist".to_string(),
     })]
     NoPath(Option<String>),
 
@@ -75,7 +75,7 @@ pub enum Error {
     MissingToken,
 
     #[error(
-        "the Baserunna server at {url} rejected BASERUNNA_TOKEN; check that BASERUNNA_URL names the server that issued the key and that BASERUNNA_TOKEN is a current key"
+        "the Baserunna server at {url} rejected BASERUNNA_TOKEN; check that BASERUNNA_URL specifies the server that issued the key and that BASERUNNA_TOKEN is valid"
     )]
     TokenRejected { url: String },
 
@@ -83,7 +83,7 @@ pub enum Error {
     DatabaseNotFound { db: String, url: String },
 
     #[error(
-        "the Baserunna server at {url} denied BASERUNNA_TOKEN access to database '{db}' ({reason}); check that BASERUNNA_DB names the database that the key is limited to, and that the key is not read-only"
+        "the Baserunna server at {url} denied BASERUNNA_TOKEN access to database '{db}': {reason}; check that BASERUNNA_DB matches the key's database limit and that the key is writable"
     )]
     KeyDenied {
         db: String,
@@ -92,7 +92,7 @@ pub enum Error {
     },
 
     #[error(
-        "database '{db}' does not exist at {url}, and BASERUNNA_TOKEN cannot create it ({reason}); check BASERUNNA_DB. Only a key without a database limit and without read-only access can create a database"
+        "database '{db}' does not exist at {url}, and BASERUNNA_TOKEN cannot create it: {reason}; check BASERUNNA_DB. Only an unrestricted writable key can create a database"
     )]
     KeyCannotCreate {
         db: String,
@@ -120,7 +120,7 @@ pub enum Error {
         expected: &'static str,
     },
 
-    #[error("database '{db}' has no {tables} tables")]
+    #[error("database '{db}' lacks {tables} tables")]
     TablesMissing {
         db: String,
         tables: crate::schema::TableSet,
@@ -203,7 +203,7 @@ pub enum Error {
     Serve(#[source] std::io::Error),
 }
 
-/// Define [`ErrorKind`] from one row per kind: variant, MCP name, and exit code.
+/// Define [`ErrorKind`] from a single entry per kind: variant, MCP name, and exit code.
 macro_rules! error_kinds {
     ($($(#[doc = $doc:literal])* $kind:ident = $name:literal => $code:literal,)*) => {
         /// Class of an error, which sets the exit code of `mt` and the `kind` of an MCP tool error.
@@ -321,13 +321,13 @@ impl Error {
         }
     }
 
-    /// Return the text of this error for an agent on `surface`, with the next step if the error names a missing path.
+    /// Return the text of this error for an agent on `surface`, including the recovery step for a missing path.
     pub fn message(&self, surface: Surface) -> String {
         let step = match (self, surface) {
             (Error::NoPath(Some(_)), Surface::Cli) => "run `mt path list` to list the paths",
             (Error::NoPath(Some(_)), Surface::Mcp) => "call `get_paths` to list the paths",
-            (Error::NoPath(None), Surface::Cli) => "run `mt path new` to create one",
-            (Error::NoPath(None), Surface::Mcp) => "call `new_path` to create one",
+            (Error::NoPath(None), Surface::Cli) => "run `mt path new` to create a path",
+            (Error::NoPath(None), Surface::Mcp) => "call `new_path` to create a path",
             _ => return self.to_string(),
         };
         format!("{self}; {step}")
@@ -409,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_path_names_its_id_and_the_list_step_of_the_surface() {
+    fn missing_path_error_includes_its_id_and_the_list_step_for_the_surface() {
         let missing = Error::NoPath(Some("p_2026_05_09_173042_k3x9".into()));
         assert_eq!(
             missing.message(Surface::Cli),
@@ -429,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn open_import_error_gives_learners_no_operator_steps() {
+    fn open_import_error_omits_operator_steps_for_learners() {
         let shown = Error::ImportInProgress.to_string();
         assert!(shown.contains("migration"), "{shown}");
         assert!(!shown.contains("mt "), "{shown}");

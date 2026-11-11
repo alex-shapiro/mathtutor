@@ -325,7 +325,7 @@ pub fn answered(quiz_id: &str, rating: Rating) -> Event {
     )
 }
 
-/// Return the presentation of quiz `quiz_id`, whose ID is its atom ID with one more segment.
+/// Return the presentation of quiz `quiz_id`, whose ID is its atom ID plus a quiz suffix.
 pub fn presented(quiz_id: &str) -> Event {
     Event::now(
         PATH_ID,

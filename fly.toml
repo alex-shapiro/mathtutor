@@ -6,7 +6,7 @@
 # MT_ADMIN_PASSWORD
 # MT_API_KEY
 # BASERUNNA_TOKEN
-# BASERUNNA_DB (optional, default mathtutor)
+# BASERUNNA_DB: optional; defaults to mathtutor
 
 app = 'mathtutor'
 primary_region = 'ewr'

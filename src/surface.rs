@@ -431,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_steps_name_only_mcp_tools() {
+    fn mcp_steps_reference_only_mcp_tools() {
         for recovery in [
             Recovery::ListPathsFirst,
             Recovery::GetNext,

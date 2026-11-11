@@ -574,20 +574,20 @@ async fn import_writes_projections_with_their_path_and_reads_each_stream_once() 
 
     assert!(r.mismatches.is_empty(), "{:?}", r.mismatches);
     let requests = requests.lock().unwrap();
-    let names = |op: &serde_json::Value, name: &str, field: &str, value: &str| {
+    let matches_op = |op: &serde_json::Value, name: &str, field: &str, value: &str| {
         op["op"] == name && op[field] == value
     };
     let stream_reads = requests
         .iter()
         .flatten()
-        .filter(|op| names(op, "read_stream", "stream", "events.p_a"))
+        .filter(|op| matches_op(op, "read_stream", "stream", "events.p_a"))
         .count();
     assert_eq!(stream_reads, 1, "only the verification reads the stream");
     let write = requests
         .iter()
         .find(|ops| {
             ops.iter()
-                .any(|op| names(op, "append", "stream", "events.p_a"))
+                .any(|op| matches_op(op, "append", "stream", "events.p_a"))
         })
         .expect("the write of p_a");
     for table in ["paths", "cards", "taught"] {

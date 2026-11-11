@@ -117,7 +117,7 @@ fn mt_on(cfg: &DbConfig, args: &[&str]) -> Output {
 }
 
 #[tokio::test]
-async fn a_rejected_new_path_creates_no_database() {
+async fn rejected_new_path_does_not_create_a_database() {
     let cfg = common::fresh_config();
     for args in [
         &["path", "new", "g", "--targets", "nope.1"][..],

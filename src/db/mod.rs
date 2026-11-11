@@ -104,7 +104,7 @@ impl Db {
             .map_err(|e| self.setup_error(e))
     }
 
-    /// Return the error of a failed table setup, which applied no writes of the command.
+    /// Return the error of a failed table setup, which did not apply the command's writes.
     fn setup_error(&self, e: Error) -> Error {
         self.explain_key_error(e).into_not_applied()
     }
@@ -255,7 +255,7 @@ impl Db {
     ) -> Result<(Option<ImportMarker>, Vec<OpResult>)> {
         let sets = self.checked_sets();
         if results.len() < sets.len() {
-            return Err(Error::BadRow("request returned no state".into()));
+            return Err(Error::BadRow("request did not return a state".into()));
         }
         let rest = results.split_off(sets.len());
         let mut import = None;
@@ -349,7 +349,7 @@ impl Db {
         let mut results = self.read(std::slice::from_ref(&op)).await?;
         results
             .pop()
-            .ok_or_else(|| Error::BadRow("read returned no result".into()))
+            .ok_or_else(|| Error::BadRow("read did not return a result".into()))
     }
 
     /// Read `op` and every next page of its result at the latest version, without a transaction.
@@ -366,7 +366,7 @@ impl Db {
         }
     }
 
-    /// Read every page of stream `stream` after the database and import checks, or no pages if the stream does not exist.
+    /// Read every page of stream `stream` after the database and import checks, or an empty list if the stream does not exist.
     pub(crate) async fn read_stream(&self, stream: String) -> Result<Vec<OpResult>> {
         match self.read_pages(Op::read_stream(stream, 0)).await {
             Err(Error::Baserunna(e)) if e.code() == Some(ErrorCode::NotFound) => Ok(Vec::new()),
@@ -386,7 +386,7 @@ impl Db {
         self.commit(&[Op::delete_row::<R>(pk)]).await
     }
 
-    /// Store `clients` in one transaction without an expiry, replacing a stored client with the same ID.
+    /// Store `clients` in a single transaction without an expiry, replacing a stored client with the same ID.
     pub(crate) async fn replace_oauth_clients(&self, clients: &[OAuthClient]) -> Result<()> {
         let ops: Vec<Op> = clients
             .iter()
@@ -546,7 +546,7 @@ impl Txn {
         result
     }
 
-    /// Run the database and import checks if no request of this transaction has run them.
+    /// Run the database and import checks unless an earlier request of this transaction already ran them.
     async fn check_gate(&mut self) -> Result<()> {
         if !self.checked {
             self.run(&[]).await?;
@@ -560,7 +560,7 @@ impl Txn {
         let mut results = self.run(&[Op::get_row::<R>(pk)]).await?;
         let result = results
             .pop()
-            .ok_or_else(|| Error::BadRow("transaction returned no result".into()))?;
+            .ok_or_else(|| Error::BadRow("transaction did not return a result".into()))?;
         Ok(result.row()?)
     }
 

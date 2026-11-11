@@ -124,7 +124,7 @@ impl QuizRow {
     }
 }
 
-/// Change of one overlay row.
+/// Change of a single overlay row.
 #[derive(Debug, Clone)]
 pub enum RowChange {
     PutLesson(LessonRow),
@@ -150,7 +150,7 @@ impl RowChange {
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct QuizDraft {
-    /// Difficulty slot (`easy`, `medium`, or `hard`).
+    /// Difficulty slot: `easy`, `medium`, or `hard`.
     pub difficulty: Difficulty,
     /// Question text.
     pub question: String,
@@ -159,7 +159,7 @@ pub struct QuizDraft {
     /// Optional grading rubric.
     #[serde(default)]
     pub rubric: Option<String>,
-    /// Quiz format (`free_text` or `multiple_choice`, default `free_text`).
+    /// Quiz format: `free_text` or `multiple_choice`. Defaults to `free_text`.
     #[serde(default)]
     pub kind: QuizType,
 }
@@ -182,7 +182,7 @@ impl QuizDraft {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct QuizPatch {
-    /// Updated difficulty slot (`easy`, `medium`, or `hard`).
+    /// Updated difficulty slot: `easy`, `medium`, or `hard`.
     #[serde(default)]
     pub difficulty: Option<Difficulty>,
     /// Updated question text.
@@ -194,7 +194,7 @@ pub struct QuizPatch {
     /// Updated grading rubric.
     #[serde(default)]
     pub rubric: Option<String>,
-    /// Updated quiz format (`free_text` or `multiple_choice`).
+    /// Updated quiz format: `free_text` or `multiple_choice`.
     #[serde(default)]
     pub kind: Option<QuizType>,
 }
@@ -259,7 +259,7 @@ pub fn remove_quiz(
     changes.overlay(view, RowChange::PutRemoved(row))
 }
 
-/// Print the curriculum overlay as AYML (`mt graph dump`).
+/// Print the curriculum overlay as AYML for `mt graph dump`.
 pub async fn cmd_graph_dump(db: &Db) -> Result<()> {
     let view = db.snapshot(&ViewRequest::overlay()).await?;
     crate::print_ayml(view.overlay()?)

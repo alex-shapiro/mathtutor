@@ -101,7 +101,7 @@ async fn second_store_on_same_atom_emits_amended_then_taught() {
         .unwrap();
     store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "second".into(), Some(&path_id))
         .await
-        .expect("second store succeeds (upsert)");
+        .expect("second store succeeds");
 
     assert_eq!(
         event_kinds(&db, &path_id).await,
@@ -115,7 +115,7 @@ async fn second_store_on_same_atom_emits_amended_then_taught() {
 }
 
 #[tokio::test]
-async fn repeated_lesson_upsert_after_a_lost_response_counts_one_teaching() {
+async fn repeated_lesson_upsert_after_a_lost_response_records_a_single_teaching() {
     let cfg = common::fresh_config();
     let seeded = common::create_db(&cfg).await;
     common::seed_path(

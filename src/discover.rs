@@ -90,7 +90,7 @@ pub async fn compute_children(
     }))
 }
 
-/// Load the graph of `lookup`, with the progress of its path if it names a path.
+/// Load the graph of `lookup`, with the progress of its path if a path is specified.
 pub async fn graph_for(lookup: Lookup<'_>) -> Result<(Arc<Graph>, Option<PathProgress>)> {
     match lookup {
         Lookup::Curriculum(curriculum) => Ok((curriculum.graph()?, None)),

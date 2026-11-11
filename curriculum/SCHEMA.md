@@ -25,7 +25,7 @@ areas:
 
 `slug` and `prefix` must match the `area` and `prefix` fields in the referenced area file.
 
-## Area file (`schema_version: 2`)
+## Area file
 
 ```yaml
 schema_version: 2
@@ -70,8 +70,8 @@ A node is an **atom** if `children` is omitted or empty. A node with non-empty `
 | `summary`          | Yes      | Short area description                  |
 | `motivation`       | Yes      | Multi-line area motivation              |
 | `cross_references` | No       | Related area slugs                      |
-| `children`         | Yes (v2) | Top-level nodes in the area             |
-| `topics`           | Yes (v1) | Legacy three-level hierarchy            |
+| `children`         | Yes, v2  | Top-level nodes in the area             |
+| `topics`           | Yes, v1  | Legacy three-level hierarchy            |
 
 ### Node fields
 
@@ -92,7 +92,7 @@ Inline quiz format:
 quizzes:
   - id: fnd.1.1.1.q1
     difficulty: easy        # easy | medium | hard
-    type: free_text         # free_text (default) | multiple_choice
+    type: free_text         # free_text is default | multiple_choice
     question: "..."
     answer: "..."
     rubric: "..."           # optional

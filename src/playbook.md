@@ -14,7 +14,7 @@ Read commands write to stdout:
 
 Write commands print a confirmation to stderr, including the ID of a new quiz or path.
 
-Put each text value in single quotes, and write each single quote in the text as `'\''`. The shell does not change other characters in single quotes, including `$`, `\`, `"`, and line breaks:
+Put each text value in single quotes. Write each single quote in the text as `'\''`. The shell keeps other characters in single quotes unchanged, including `$`, `\`, `"`, and line breaks:
 
     mt quiz answer <quiz-id> --rating good --user-answer 'It'\''s $x = 2$'
 
@@ -36,7 +36,7 @@ Call `get_paths` to list the user's learning paths.
 
 If the list is empty, ask what the user wants to learn, identify the target node IDs using `get_children` and `get_item`, and call `new_path { goal, targets, strategy? }`.
 
-If paths exist, show each goal with the time of its latest activity (`updated_at`), and ask the user which path to resume. Then call `get_state { path_id }` to display the path summary and confirm before continuing.
+If paths exist, show each goal with its `updated_at` timestamp, and ask the user which path to resume. Then call `get_state { path_id }` to display the path summary and confirm before continuing.
 <!-- end -->
 
 ### Selecting a strategy

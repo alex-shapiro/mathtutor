@@ -534,7 +534,7 @@ pub fn next_step(action: &Action, path_id: &str) -> Option<Step> {
         }
         Action::PresentQuiz { quiz_id, .. } => Step::new(AgentCommand::AnswerQuiz, path)
             .arg(Field::QuizId, Value::known(quiz_id))
-            .arg(Field::Rating, Value::Choice(Rating::SPELLINGS))
+            .arg(Field::Rating, Value::Choice(Rating::NAMES))
             .arg(Field::UserAnswer, Value::Text("verbatim reply")),
         Action::CreateLesson { atom_id } => Step::new(AgentCommand::UpsertLesson, path)
             .arg(Field::Atom, Value::known(atom_id))

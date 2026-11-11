@@ -326,7 +326,7 @@ async fn initialize_returns_server_info_and_capabilities() {
     assert_eq!(res.status(), 200);
     assert!(
         res.headers().get("mcp-session-id").is_none(),
-        "the server keeps no session"
+        "the server omits a session"
     );
     let body = res.text().await.unwrap();
     let json = parse_sse_message(&body).expect("sse json");
@@ -793,7 +793,7 @@ async fn ready_reports_a_usable_database_without_auth() {
 }
 
 #[tokio::test]
-async fn ready_reports_a_database_without_tables_as_ready_and_creates_no_table() {
+async fn ready_reports_a_database_without_tables_as_ready_without_creating_tables() {
     let cfg = common::fresh_config();
     let raw = baserunna_client::Client::new(cfg.transport().unwrap())
         .with_token(&cfg.token)
@@ -933,7 +933,7 @@ async fn well_known_routes_return_404_if_oauth_disabled() {
 }
 
 #[tokio::test]
-async fn register_issues_client_id_and_round_trips_redirect_uris() {
+async fn register_issues_client_id_and_preserves_redirect_uris() {
     let server = spawn_oauth_server().await;
     let res = register_client(&server, "Test Client").await;
     assert_ne!(res.client_id, "");
@@ -986,7 +986,7 @@ async fn an_access_token_works_only_in_the_authorization_header() {
 }
 
 #[tokio::test]
-async fn no_site_can_frame_the_sign_in_page() {
+async fn sign_in_page_forbids_framing() {
     let server = spawn_oauth_server().await;
     let reg = register_client(&server, "Framed").await;
     let pkce = PkcePair::new();
@@ -1170,7 +1170,7 @@ async fn refresh_raw(
 }
 
 #[tokio::test]
-async fn sign_in_without_scope_or_state_grants_mcp_and_adds_no_state() {
+async fn sign_in_without_scope_or_state_grants_mcp_and_omits_state() {
     let server = spawn_oauth_server().await;
     let reg = register_client(&server, "No Scope").await;
     let pkce = PkcePair::new();
@@ -1205,7 +1205,7 @@ async fn sign_in_without_scope_or_state_grants_mcp_and_adds_no_state() {
 }
 
 #[tokio::test]
-async fn refresh_that_names_mcp_keeps_a_grant_without_a_requested_scope() {
+async fn refresh_with_mcp_scope_keeps_a_grant_without_a_requested_scope() {
     let server = spawn_oauth_server().await;
     let reg = register_client(&server, "Scope").await;
     let pkce = PkcePair::new();
@@ -1638,7 +1638,7 @@ async fn repeated_incorrect_passwords_delay_the_next_sign_in() {
 }
 
 #[tokio::test]
-async fn the_sign_in_delay_and_an_open_form_survive_a_restart_with_a_new_database_key() {
+async fn sign_in_delay_and_open_form_persist_across_a_restart_with_a_new_database_key() {
     let cfg = common::fresh_config();
     let auth = AuthConfig {
         admin_password: Some(ADMIN_PASSWORD.into()),
@@ -1766,7 +1766,7 @@ async fn an_expired_sign_in_form_shows_a_new_form() {
 }
 
 #[tokio::test]
-async fn the_sign_in_page_names_the_client_and_the_redirect_host() {
+async fn sign_in_page_shows_the_client_and_the_redirect_host() {
     let server = spawn_oauth_server().await;
     let redirect = "https://connector.example:8443/callback";
     let reg: RegisterResponseDe = oauth_client()
@@ -1812,7 +1812,7 @@ async fn the_sign_in_page_names_the_client_and_the_redirect_host() {
 }
 
 #[tokio::test]
-async fn registrations_from_one_address_are_limited() {
+async fn registrations_from_an_address_are_limited() {
     let server = spawn_oauth_server().await;
     for i in 0..10 {
         register_client(&server, &format!("client {i}")).await;
@@ -1911,7 +1911,7 @@ async fn a_token_request_from_an_unknown_client_asks_it_to_register_again() {
 }
 
 #[tokio::test]
-async fn a_validated_access_token_needs_no_further_database_read() {
+async fn validated_access_token_skips_further_database_reads() {
     use mathtutor::db::Op;
     use mathtutor::mcp::oauth::secret_hash;
     use mathtutor::schema::OAuthAccessToken;
@@ -1982,7 +1982,7 @@ async fn new_path_accepts_a_target_inside_another_target() {
 }
 
 #[tokio::test]
-async fn sign_in_and_token_requests_from_one_address_are_limited() {
+async fn sign_in_and_token_requests_from_an_address_are_limited() {
     let server = spawn_oauth_server().await;
     let token_request = || {
         oauth_client()

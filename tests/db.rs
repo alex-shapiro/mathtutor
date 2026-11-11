@@ -180,7 +180,7 @@ async fn a_limited_key_creates_the_tables_in_a_database_that_the_console_created
 }
 
 #[tokio::test]
-async fn commands_refuse_a_database_that_holds_the_tables_of_another_application() {
+async fn commands_reject_a_database_that_holds_the_tables_of_another_application() {
     let cfg = common::fresh_config();
     let raw = raw_db(&cfg);
     raw.ensure().await.unwrap();
@@ -292,7 +292,7 @@ async fn lost_setup_db() -> Db {
 }
 
 #[tokio::test]
-async fn a_lost_response_during_table_setup_applies_no_write_of_the_command() {
+async fn lost_response_during_table_setup_does_not_apply_command_writes() {
     let e = lost_setup_db().await.create_if_missing().await.unwrap_err();
     assert!(!e.outcome_is_unknown(), "{e:?}");
     assert_eq!(e.exit_code(), 1, "{e:?}");
@@ -527,7 +527,7 @@ async fn commands_check_the_database_in_their_first_request() {
 }
 
 #[tokio::test]
-async fn a_subpath_write_reads_no_overlay() {
+async fn subpath_write_skips_the_overlay() {
     let cfg = common::fresh_config();
     let seeded = common::create_db(&cfg).await;
     common::seed_path(&seeded, PATH_ID, &["fnd.1.1.2"], Strategy::TopDown).await;
@@ -638,7 +638,7 @@ async fn opening_an_existing_database_preserves_data() {
 }
 
 #[tokio::test]
-async fn events_round_trip_in_order_with_every_field() {
+async fn event_log_preserves_order_and_every_field() {
     let db = common::fresh_db(PATH_ID).await;
     let t0 = mathtutor::db::ts::parse("2026-05-26T10:00:00.123Z").unwrap();
     let full = Event {
@@ -676,7 +676,7 @@ async fn event_log_of_a_path_without_a_stream_is_empty() {
 }
 
 #[tokio::test]
-async fn event_log_pages_across_multiple_reads() {
+async fn event_log_load_reads_across_multiple_pages() {
     let db = common::fresh_db(PATH_ID).await;
     let ts = mathtutor::db::ts::parse("2026-05-26T10:00:00.123Z").unwrap();
     let events: Vec<Event> = (0..1205)
@@ -1039,7 +1039,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
     let cold = traffic.received.swap(0, Ordering::Relaxed);
     assert!(
         cold > 20_000,
-        "first read downloads the overlay ({cold} bytes)"
+        "first read downloads the overlay: {cold} bytes"
     );
 
     let second = read(&reader).await;
@@ -1052,7 +1052,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
     let warm = traffic.received.swap(0, Ordering::Relaxed);
     assert!(
         warm < 2_000,
-        "a valid cache skips the overlay ({warm} bytes)"
+        "a valid cache skips the overlay: {warm} bytes"
     );
 
     common::write(&writer, PATH_ID, |v, c| {
@@ -1276,10 +1276,7 @@ async fn own_overlay_writes_keep_the_cache_valid() {
         .await
         .unwrap();
     let warm = traffic.received.load(Ordering::Relaxed);
-    assert!(
-        warm < 2_000,
-        "the writer's cache stays valid ({warm} bytes)"
-    );
+    assert!(warm < 2_000, "the writer's cache stays valid: {warm} bytes");
     let cached = view.overlay().unwrap().atoms["fnd.1.1.1"].clone();
     let fresh = common::overlay(&db).await;
     let stored = common::overlay(&Db::connect(&cfg).unwrap()).await;
@@ -1350,7 +1347,7 @@ async fn write_for_a_path_makes_it_the_most_recent() {
 }
 
 #[tokio::test]
-async fn a_view_without_the_overlay_has_no_merged_graph() {
+async fn view_without_the_overlay_omits_the_merged_graph() {
     let db = common::fresh_db(PATH_ID).await;
 
     let view = db
@@ -1538,7 +1535,7 @@ async fn recreating_database_invalidates_overlay_cache() {
 }
 
 #[tokio::test]
-async fn a_handle_reads_the_cache_file_only_when_a_command_needs_the_overlay() {
+async fn handle_reads_the_cache_file_only_if_a_command_needs_the_overlay() {
     let dir = tempfile::TempDir::new().unwrap();
     let cfg = DbConfig {
         cache_dir: Some(dir.path().to_path_buf()),
@@ -1569,7 +1566,7 @@ async fn a_handle_reads_the_cache_file_only_when_a_command_needs_the_overlay() {
     let cold = traffic.received.load(Ordering::Relaxed);
     assert!(
         cold > 20_000,
-        "the overlay came from the server ({cold} bytes)"
+        "the overlay came from the server: {cold} bytes"
     );
 }
 
@@ -1598,7 +1595,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         Some(body.as_str())
     );
     let warm = traffic.received.swap(0, Ordering::Relaxed);
-    assert!(warm < 2_000, "the disk copy was used ({warm} bytes)");
+    assert!(warm < 2_000, "the disk copy was used: {warm} bytes");
 
     let other = Db::connect(&DbConfig {
         cache_dir: None,
@@ -1620,7 +1617,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
 }
 
 #[tokio::test]
-async fn a_rejected_token_names_the_server_and_the_settings() {
+async fn rejected_token_error_includes_the_server_and_settings() {
     let cfg = common::fresh_config();
     common::create_db(&cfg).await;
     let wrong = DbConfig {
@@ -1665,8 +1662,8 @@ async fn with_key(cfg: &DbConfig, limit: Option<&str>, read_only: bool) -> DbCon
     }
 }
 
-/// Assert that `e` is a configuration error that names the database and the server of `cfg`.
-fn assert_names_the_key_settings(e: &Error, cfg: &DbConfig) {
+/// Assert that `e` is a configuration error that includes the database and the server of `cfg`.
+fn assert_key_error_includes_settings(e: &Error, cfg: &DbConfig) {
     let message = e.to_string();
     assert_eq!(e.exit_code(), 2, "{e:?}");
     assert!(message.contains(&format!("'{}'", cfg.db)), "{message}");
@@ -1689,7 +1686,7 @@ async fn a_key_limited_to_another_database_is_a_configuration_error() {
     let e = db.snapshot(&ViewRequest::overlay()).await.unwrap_err();
 
     assert!(matches!(e, Error::KeyDenied { .. }), "{e:?}");
-    assert_names_the_key_settings(&e, &cfg);
+    assert_key_error_includes_settings(&e, &cfg);
 }
 
 #[tokio::test]
@@ -1708,7 +1705,7 @@ async fn a_read_only_key_fails_its_first_write_with_a_configuration_error() {
 
     assert!(matches!(e, Error::KeyDenied { .. }), "{e:?}");
     assert!(e.to_string().contains("read-only"), "{e}");
-    assert_names_the_key_settings(&e, &cfg);
+    assert_key_error_includes_settings(&e, &cfg);
 }
 
 #[tokio::test]
@@ -1732,5 +1729,5 @@ async fn a_limited_key_reports_a_missing_database_before_its_limit() {
             .starts_with(&format!("database '{}' does not exist", cfg.db)),
         "{e}"
     );
-    assert_names_the_key_settings(&e, &cfg);
+    assert_key_error_includes_settings(&e, &cfg);
 }

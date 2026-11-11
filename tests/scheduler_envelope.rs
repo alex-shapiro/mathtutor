@@ -185,7 +185,7 @@ async fn next_envelope(db: &Db, path_id: &str, surface: Surface) -> serde_json::
 }
 
 #[tokio::test]
-async fn next_step_names_the_path_and_the_verbatim_answer_on_each_surface() {
+async fn next_step_includes_the_path_and_the_verbatim_answer_on_each_surface() {
     let db = common::empty_db().await;
     let id = path::cmd_path_new(&db, "g", &["fnd.1.1.2".into()], Strategy::TopDown)
         .await
