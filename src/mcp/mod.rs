@@ -495,8 +495,7 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
         cache_dir: None,
         ..cfg
     };
-    let db = Db::connect(&cfg)?;
-    db.require_database().await?;
+    let db = Db::connect(&cfg)?.with_auth_tables().await?;
     let shutdown = CancellationToken::new();
 
     let mcp_config = StreamableHttpServerConfig::default()

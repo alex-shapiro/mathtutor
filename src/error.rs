@@ -84,13 +84,17 @@ pub enum Error {
     TableMismatch { db: String, table: String },
 
     #[error(
-        "database '{db}' stores schema version '{found}', but this mt release uses version '{expected}'"
+        "database '{db}' stores {tables} schema version '{found}', but this mt release uses version '{expected}'"
     )]
     SchemaMismatch {
         db: String,
+        tables: crate::schema::TableSet,
         found: String,
         expected: &'static str,
     },
+
+    #[error("database '{db}' has no authorization tables; restart mt mcp to create them")]
+    AuthTablesMissing { db: String },
 
     #[error("malformed row: {0}")]
     BadRow(String),
@@ -278,7 +282,9 @@ impl Error {
             Error::Baserunna(baserunna_client::Error::Decode { .. })
             | Error::BadRow(_)
             | Error::CardsCorrupt(_) => ErrorKind::Corrupt,
-            Error::Baserunna(_) | Error::SchemaMismatch { .. } => ErrorKind::Database,
+            Error::Baserunna(_)
+            | Error::SchemaMismatch { .. }
+            | Error::AuthTablesMissing { .. } => ErrorKind::Database,
             Error::Json(_) => ErrorKind::Json,
             Error::Fsrs(_) => ErrorKind::Fsrs,
             Error::Turso(_)

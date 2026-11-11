@@ -9,10 +9,67 @@ use crate::db::{Op, Row, client, ts};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{Error, Result};
 
-pub(crate) const VERSION: &str = "3";
-
-/// Key that records the schema version of the tables and the progress of `mt import-turso`.
+/// Key that records the schema version of the learner tables and the progress of `mt import-turso`.
 pub(crate) const STATE_KEY: &str = "mathtutor_state";
+
+/// Key that records the schema version of the authorization tables.
+pub(crate) const AUTH_STATE_KEY: &str = "mathtutor_auth_state";
+
+/// Group of tables that one schema version covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableSet {
+    /// Learner history and overlay tables, which every command uses.
+    Learner,
+    /// OAuth tables, which only `mt mcp` uses.
+    Auth,
+}
+
+impl TableSet {
+    /// Return the schema version of this table set in this release.
+    pub fn version(self) -> &'static str {
+        match self {
+            TableSet::Learner => "3",
+            TableSet::Auth => "1",
+        }
+    }
+
+    /// Return the definition of every table in this set.
+    pub fn tables(self) -> Vec<NewTable> {
+        match self {
+            TableSet::Learner => vec![
+                PathFile::new_table(),
+                LessonRow::new_table(),
+                QuizRow::new_table(),
+                RemovedQuizRow::new_table(),
+                CardRecord::new_table(),
+                TaughtRow::new_table(),
+            ],
+            TableSet::Auth => vec![
+                OAuthClient::new_table(),
+                OAuthCode::new_table(),
+                OAuthAccessToken::new_table(),
+                OAuthRefreshToken::new_table(),
+            ],
+        }
+    }
+
+    /// Return the key that records the schema version of this set.
+    fn state_key(self) -> &'static str {
+        match self {
+            TableSet::Learner => STATE_KEY,
+            TableSet::Auth => AUTH_STATE_KEY,
+        }
+    }
+}
+
+impl std::fmt::Display for TableSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            TableSet::Learner => "learner",
+            TableSet::Auth => "authorization",
+        })
+    }
+}
 
 /// Stored progress of `mt import-turso` on a database.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,13 +80,13 @@ pub enum ImportMarker {
 }
 
 impl ImportMarker {
-    /// Return the write operation that stores this marker with the schema version of this release.
+    /// Return the write operation that stores this marker with the learner schema version of this release.
     pub(crate) fn write_op(self) -> Op {
-        state_write_op(Some(self))
+        state_write_op(TableSet::Learner, Some(self))
     }
 }
 
-/// Value stored at [`STATE_KEY`].
+/// Value stored at the state key of a table set.
 #[derive(Serialize, Deserialize)]
 struct StoredState {
     schema: String,
@@ -37,14 +94,14 @@ struct StoredState {
     import: Option<ImportMarker>,
 }
 
-/// Return the operation that stores the schema version of this release and `import`.
-fn state_write_op(import: Option<ImportMarker>) -> Op {
+/// Return the operation that stores the schema version of `set` in this release and `import`.
+fn state_write_op(set: TableSet, import: Option<ImportMarker>) -> Op {
     let state = StoredState {
-        schema: VERSION.to_string(),
+        schema: set.version().to_string(),
         import,
     };
     let value = serde_json::to_vec(&state).expect("a stored state serializes");
-    Op::put(STATE_KEY, value)
+    Op::put(set.state_key(), value)
 }
 
 /// Return the stream key for the event log of `path_id`.
@@ -302,35 +359,19 @@ impl OAuthRow for OAuthAccessToken {}
 #[cfg(feature = "mcp")]
 impl OAuthRow for OAuthRefreshToken {}
 
-/// Return the schema definition for all tables.
-pub fn tables() -> Vec<NewTable> {
-    vec![
-        PathFile::new_table(),
-        LessonRow::new_table(),
-        QuizRow::new_table(),
-        RemovedQuizRow::new_table(),
-        CardRecord::new_table(),
-        TaughtRow::new_table(),
-        OAuthClient::new_table(),
-        OAuthCode::new_table(),
-        OAuthAccessToken::new_table(),
-        OAuthRefreshToken::new_table(),
-    ]
-}
-
-/// Schema state of a database.
+/// Schema state of a table set in a database.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SchemaState {
     /// The database does not exist.
     NoDatabase,
-    /// The database exists without Math Tutor tables.
+    /// The database exists without the tables of the set.
     NoTables,
     Current,
     /// The database stores a schema version that this release does not use.
     Other(String),
 }
 
-/// Schema state and import progress of a database, read from [`STATE_KEY`].
+/// Schema state of a table set and import progress of a database, read from the state key of the set.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DbState {
     pub schema: SchemaState,
@@ -338,8 +379,8 @@ pub(crate) struct DbState {
 }
 
 impl DbState {
-    /// Decode the state from the entry stored at [`STATE_KEY`] of an existing database.
-    pub(crate) fn from_entry(entry: Option<&Entry>) -> Self {
+    /// Decode the state of `set` from the entry stored at its state key in an existing database.
+    pub(crate) fn from_entry(set: TableSet, entry: Option<&Entry>) -> Self {
         let Some(value) = entry.map(|e| e.value.data().cloned().unwrap_or_default()) else {
             return Self {
                 schema: SchemaState::NoTables,
@@ -348,7 +389,7 @@ impl DbState {
         };
         match serde_json::from_slice::<StoredState>(&value) {
             Ok(stored) => Self {
-                schema: if stored.schema == VERSION {
+                schema: if stored.schema == set.version() {
                     SchemaState::Current
                 } else {
                     SchemaState::Other(stored.schema)
@@ -363,15 +404,15 @@ impl DbState {
     }
 }
 
-/// Return the operation that reads the state of a database.
-pub(crate) fn state_op() -> Op {
-    Op::get(STATE_KEY)
+/// Return the operation that reads the state of `set` in a database.
+pub(crate) fn state_op(set: TableSet) -> Op {
+    Op::get(set.state_key())
 }
 
-/// Read the state of `db`.
-pub(crate) async fn state(db: &client::Db) -> Result<DbState> {
-    match db.read_one(state_op()).await {
-        Ok(r) => Ok(DbState::from_entry(r.entry()?.as_ref())),
+/// Read the state of `set` in `db`.
+pub(crate) async fn state(db: &client::Db, set: TableSet) -> Result<DbState> {
+    match db.read_one(state_op(set)).await {
+        Ok(r) => Ok(DbState::from_entry(set, r.entry()?.as_ref())),
         Err(e) if e.code() == Some(ErrorCode::NotFound) => Ok(DbState {
             schema: SchemaState::NoDatabase,
             import: None,
@@ -380,11 +421,11 @@ pub(crate) async fn state(db: &client::Db) -> Result<DbState> {
     }
 }
 
-/// Create every missing table and record the schema version.
+/// Create every missing table of `set` and record the schema version of the set.
 ///
 /// Fails with [`Error::TableMismatch`] if a table exists with other columns.
-pub(crate) async fn create_tables(db: &client::Db) -> Result<()> {
-    for t in tables() {
+pub(crate) async fn create_tables(db: &client::Db, set: TableSet) -> Result<()> {
+    for t in set.tables() {
         let stored = db.create_table(&t).await?.table;
         if !defines(&t, &stored) {
             return Err(Error::TableMismatch {
@@ -393,7 +434,7 @@ pub(crate) async fn create_tables(db: &client::Db) -> Result<()> {
             });
         }
     }
-    db.write(&[state_write_op(None)]).await?;
+    db.write(&[state_write_op(set, None)]).await?;
     Ok(())
 }
 
@@ -445,5 +486,30 @@ mod tests {
         columns.sort();
         fields.sort();
         assert_eq!(columns, fields);
+    }
+
+    /// Return the FNV-1a hash of the JSON definition of `tables`.
+    fn fingerprint(tables: &[NewTable]) -> String {
+        let json = serde_json::to_vec(tables).unwrap();
+        let hash = json.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+            (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+        });
+        format!("{hash:016x}")
+    }
+
+    #[test]
+    fn each_table_set_has_the_version_of_its_definition() {
+        let pinned = |set: TableSet| (set.version(), fingerprint(&set.tables()));
+        let hint = "a table changed: raise the version of its set, then pin the new fingerprint";
+        assert_eq!(
+            pinned(TableSet::Learner),
+            ("3", "da597d822afa7638".into()),
+            "{hint}"
+        );
+        assert_eq!(
+            pinned(TableSet::Auth),
+            ("1", "eaca2f10d9758fc0".into()),
+            "{hint}"
+        );
     }
 }

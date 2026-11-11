@@ -14,7 +14,7 @@ use crate::event_log::{self, Event};
 use crate::graph::{self, Quiz};
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
-use crate::schema::{DbState, ImportMarker, OAuthClient, STATE_KEY};
+use crate::schema::{DbState, ImportMarker, OAuthClient, STATE_KEY, TableSet};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::{OVERLAY_VERSION_KEY, PathState, View, Want};
 use crate::{Error, Result};
@@ -566,7 +566,7 @@ async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
     let [marker, overlay_version, paths]: [_; 3] = results
         .try_into()
         .map_err(|_| Error::BadRow("import target read returned the wrong result count".into()))?;
-    match DbState::from_entry(marker.entry()?.as_ref()).import {
+    match DbState::from_entry(TableSet::Learner, marker.entry()?.as_ref()).import {
         Some(ImportMarker::Open) => return Ok(()),
         Some(ImportMarker::Complete) => return Err(Error::ImportAlreadyComplete),
         None => {}
@@ -594,8 +594,9 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         })
         .await?;
     }
+    let auth = db.with_auth_tables().await?;
     for clients in legacy.oauth_clients.chunks(IMPORT_WRITE_BATCH) {
-        db.replace_oauth_clients(clients).await?;
+        auth.replace_oauth_clients(clients).await?;
     }
     let history = |p: &PathFile| legacy.events.get(&p.id).map_or(&[][..], Vec::as_slice);
     let mut paths: Vec<&PathFile> = legacy.paths.iter().collect();

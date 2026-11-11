@@ -12,6 +12,7 @@ use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::graph::Curriculum;
 use mathtutor::overlay::QuizDraft;
 use mathtutor::path::PathFile;
+use mathtutor::schema::TableSet;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
 use mathtutor::view::Want;
 use mathtutor::{Error, answer, cards, overlay, path, store};
@@ -22,13 +23,9 @@ use common::PATH_ID;
 
 const ATOM: &str = "fnd.2.1.1";
 
-const TABLES: [&str; 10] = [
+const TABLES: [&str; 6] = [
     "cards",
     "lessons",
-    "oauth_access_tokens",
-    "oauth_clients",
-    "oauth_codes",
-    "oauth_refresh_tokens",
     "paths",
     "quizzes",
     "removed_quizzes",
@@ -72,7 +69,7 @@ async fn setup_completes_after_an_interrupted_first_setup() {
     let cfg = common::fresh_config();
     let raw = raw_db(&cfg);
     raw.ensure().await.unwrap();
-    for t in &mathtutor::schema::tables()[..3] {
+    for t in &TableSet::Learner.tables()[..3] {
         raw.create_table(t).await.unwrap();
     }
     let db = Db::connect(&cfg).unwrap();
@@ -165,6 +162,61 @@ async fn commands_reject_a_database_without_math_tutor_tables() {
     let e = db.snapshot(&Want::path(Some(PATH_ID))).await.unwrap_err();
 
     assert_database_not_found(&e, &cfg);
+}
+
+#[tokio::test]
+async fn learner_commands_ignore_the_authorization_schema_version() {
+    let cfg = common::fresh_config();
+    let db = common::create_db(&cfg).await;
+    let raw = raw_db(&cfg);
+    raw.write(&[Op::put("mathtutor_auth_state", r#"{"schema":"99"}"#)])
+        .await
+        .unwrap();
+
+    common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
+    db.snapshot(&Want::path(Some(PATH_ID))).await.unwrap();
+
+    let e = db.with_auth_tables().await.unwrap_err();
+    assert!(
+        matches!(&e, Error::SchemaMismatch { tables: TableSet::Auth, found, .. } if found == "99"),
+        "{e:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_server_handle_creates_and_checks_the_authorization_tables() {
+    let cfg = common::fresh_config();
+    let db = common::create_db(&cfg).await;
+    assert_eq!(table_names(&cfg).await, TABLES);
+
+    let server = db.with_auth_tables().await.unwrap();
+    let mut names = table_names(&cfg).await;
+    names.retain(|n| !TABLES.contains(&n.as_str()));
+    let mut auth: Vec<String> = TableSet::Auth
+        .tables()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    auth.sort();
+    assert_eq!(names, auth);
+    server.snapshot(&Want::overlay()).await.unwrap();
+
+    raw_db(&cfg)
+        .write(&[Op::put("mathtutor_auth_state", r#"{"schema":"99"}"#)])
+        .await
+        .unwrap();
+    let e = server.snapshot(&Want::overlay()).await.unwrap_err();
+    assert!(
+        matches!(
+            &e,
+            Error::SchemaMismatch {
+                tables: TableSet::Auth,
+                ..
+            }
+        ),
+        "{e:?}"
+    );
+    db.snapshot(&Want::overlay()).await.unwrap();
 }
 
 #[tokio::test]

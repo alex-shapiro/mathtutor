@@ -13,7 +13,9 @@ use client::api::ErrorCode;
 use crate::graph::Curriculum;
 #[cfg(feature = "mcp")]
 use crate::schema::OAuthRow;
-use crate::schema::{self, DbState, ImportMarker, OAUTH_CLIENT_TTL, OAuthClient, SchemaState};
+use crate::schema::{
+    self, DbState, ImportMarker, OAUTH_CLIENT_TTL, OAuthClient, SchemaState, TableSet,
+};
 use crate::view::{Changes, OverlayCache, OverlayWrite};
 use crate::{Error, Result};
 
@@ -76,6 +78,8 @@ pub struct Db {
     pub(crate) cache_file: Option<PathBuf>,
     pub(crate) curriculum: Arc<Curriculum>,
     allow_open_import: bool,
+    /// Each request also checks the schema version of the authorization tables.
+    checks_auth_tables: bool,
 }
 
 impl std::fmt::Debug for Db {
@@ -95,41 +99,65 @@ impl Db {
     }
 
     async fn create_tables_if_missing(&self) -> Result<bool> {
-        let state = schema::state(&self.client).await?.schema;
+        let state = schema::state(&self.client, TableSet::Learner).await?.schema;
         let created = state == SchemaState::NoDatabase;
         match state {
             SchemaState::Current => {}
-            SchemaState::Other(_) => return Err(self.schema_error(state)),
+            SchemaState::Other(_) => return Err(self.schema_error(TableSet::Learner, state)),
             SchemaState::NoDatabase => {
                 self.client.ensure().await?;
-                schema::create_tables(&self.client).await?;
+                schema::create_tables(&self.client, TableSet::Learner).await?;
             }
-            SchemaState::NoTables => schema::create_tables(&self.client).await?,
+            SchemaState::NoTables => schema::create_tables(&self.client, TableSet::Learner).await?,
         }
         Ok(created)
     }
 
-    /// Fail with [`Error::DatabaseNotFound`] or [`Error::SchemaMismatch`] unless the database holds the tables of this release.
+    /// Fail with [`Error::DatabaseNotFound`] or [`Error::SchemaMismatch`] unless the database holds the learner tables of this release.
     pub async fn require_database(&self) -> Result<()> {
-        let state = schema::state(&self.client)
+        let state = schema::state(&self.client, TableSet::Learner)
             .await
             .map_err(|e| self.name_rejected_token(e))?;
         match state.schema {
             SchemaState::Current => Ok(()),
-            other => Err(self.schema_error(other)),
+            other => Err(self.schema_error(TableSet::Learner, other)),
         }
     }
 
-    /// Return the error that reports `state` for a database that is not ready.
-    fn schema_error(&self, state: SchemaState) -> Error {
-        match state {
-            SchemaState::Other(found) => Error::SchemaMismatch {
-                db: self.name().to_string(),
+    /// Create the authorization tables if they are missing, and return a handle whose requests also check their schema version.
+    ///
+    /// Fails like [`Self::require_database`] if the learner tables are not ready.
+    pub async fn with_auth_tables(&self) -> Result<Self> {
+        self.require_database().await?;
+        let state = schema::state(&self.client, TableSet::Auth)
+            .await
+            .map_err(|e| self.name_rejected_token(e))?;
+        match state.schema {
+            SchemaState::Current => {}
+            SchemaState::NoTables => schema::create_tables(&self.client, TableSet::Auth)
+                .await
+                .map_err(|e| self.name_rejected_token(e))?,
+            other => return Err(self.schema_error(TableSet::Auth, other)),
+        }
+        Ok(Self {
+            checks_auth_tables: true,
+            ..self.clone()
+        })
+    }
+
+    /// Return the error that reports `state` of `set` for a database that is not ready.
+    fn schema_error(&self, set: TableSet, state: SchemaState) -> Error {
+        let db = self.name().to_string();
+        match (set, state) {
+            (_, SchemaState::Other(found)) => Error::SchemaMismatch {
+                db,
+                tables: set,
                 found,
-                expected: schema::VERSION,
+                expected: set.version(),
             },
+            (TableSet::Auth, SchemaState::NoTables) => Error::AuthTablesMissing { db },
             _ => Error::DatabaseNotFound {
-                db: self.name().to_string(),
+                db,
                 url: self.url.to_string(),
             },
         }
@@ -168,10 +196,19 @@ impl Db {
         }
     }
 
-    /// Fail unless `state` permits this handle to use the database.
-    fn check_state(&self, state: DbState) -> Result<()> {
+    /// Return every table set whose state each request of this handle checks.
+    fn checked_sets(&self) -> &'static [TableSet] {
+        if self.checks_auth_tables {
+            &[TableSet::Learner, TableSet::Auth]
+        } else {
+            &[TableSet::Learner]
+        }
+    }
+
+    /// Fail unless `state` of `set` permits this handle to use the database.
+    fn check_state(&self, set: TableSet, state: DbState) -> Result<()> {
         if state.schema != SchemaState::Current {
-            return Err(self.schema_error(state.schema));
+            return Err(self.schema_error(set, state.schema));
         }
         if state.import == Some(ImportMarker::Open) && !self.allow_open_import {
             return Err(Error::ImportInProgress);
@@ -179,14 +216,31 @@ impl Db {
         Ok(())
     }
 
-    /// Check the state that a request read before `ops`, and return the results of `ops`.
+    /// Read and check the state of every checked table set.
+    async fn check_states(&self) -> Result<()> {
+        for &set in self.checked_sets() {
+            self.check_state(set, schema::state(&self.client, set).await?)?;
+        }
+        Ok(())
+    }
+
+    /// Return `ops` after the reads of the table set states that each request checks.
+    fn gated(&self, ops: &[Op]) -> Vec<Op> {
+        let sets = self.checked_sets().iter().map(|&set| schema::state_op(set));
+        sets.chain(ops.iter().cloned()).collect()
+    }
+
+    /// Check the states that a request read before `ops`, and return the results of `ops`.
     fn pass_gate(&self, mut results: Vec<OpResult>) -> Result<Vec<OpResult>> {
-        if results.is_empty() {
+        let sets = self.checked_sets();
+        if results.len() < sets.len() {
             return Err(Error::BadRow("request returned no state".into()));
         }
-        let rest = results.split_off(1);
-        let entry = results.pop().map(OpResult::entry).transpose()?.flatten();
-        self.check_state(DbState::from_entry(entry.as_ref()))?;
+        let rest = results.split_off(sets.len());
+        for (&set, result) in sets.iter().zip(results) {
+            let entry = result.entry()?;
+            self.check_state(set, DbState::from_entry(set, entry.as_ref()))?;
+        }
         Ok(rest)
     }
 
@@ -195,8 +249,8 @@ impl Db {
         if e.code() != Some(ErrorCode::NotFound) {
             return self.name_rejected_token(e.into());
         }
-        match schema::state(&self.client).await {
-            Ok(state) => self.check_state(state).err().unwrap_or_else(|| e.into()),
+        match self.check_states().await {
+            Ok(()) => e.into(),
             Err(check) => self.name_rejected_token(check),
         }
     }
@@ -215,7 +269,7 @@ impl Db {
 
     /// Read `ops` at the latest version after the database and import checks.
     pub(crate) async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
-        match self.client.read(&gated(ops)).await {
+        match self.client.read(&self.gated(ops)).await {
             Ok(results) => self.pass_gate(results),
             Err(e) => Err(self.gate_failure(e).await.into_not_applied()),
         }
@@ -319,6 +373,7 @@ impl Db {
             cache_file,
             curriculum: cfg.curriculum.clone(),
             allow_open_import: false,
+            checks_auth_tables: false,
         }
     }
 }
@@ -381,7 +436,7 @@ impl Txn {
             return Ok(self.inner.run(ops).await?);
         }
         self.checked = true;
-        match self.inner.run(&gated(ops)).await {
+        match self.inner.run(&self.db.gated(ops)).await {
             Ok(results) => self.db.pass_gate(results),
             Err(e) => Err(self.db.gate_failure(e).await),
         }
@@ -433,13 +488,6 @@ impl Txn {
     fn queue(&mut self, ops: impl IntoIterator<Item = Op>) {
         self.inner.write(ops);
     }
-}
-
-/// Return `ops` after the read of the database state that each request checks.
-fn gated(ops: &[Op]) -> Vec<Op> {
-    std::iter::once(schema::state_op())
-        .chain(ops.iter().cloned())
-        .collect()
 }
 
 fn cache_name(url: &str, db: &str) -> String {
