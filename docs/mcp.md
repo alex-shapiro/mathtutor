@@ -66,6 +66,8 @@ Only the metadata routes, `/oauth/register`, and `/oauth/token` send CORS header
 
 `Dockerfile` and `fly.toml` deploy `mt mcp` to Fly.io via `.github/workflows/deploy-mcp.yml`.
 
+Set `MT_PUBLIC_URL` or `--public-url` to the public base URL of the server, such as `https://mathtutor.fly.dev`. The OAuth metadata gives this URL as the issuer and as the base of each OAuth endpoint. Without it, the server gives `http://<bind address>`, and a connector cannot sign in. `fly.toml` sets it in its `[env]` section. The connector URL is `<public URL>/mcp`.
+
 ### Health checks
 
 - **`/health`:** Returns `200 ok` without a Baserunna request. The server starts and answers `/health` before its first Baserunna request. The Fly service check uses it, so a Baserunna outage does not take the server out of routing or make Fly restart it, also if the outage starts while the machine is stopped.
