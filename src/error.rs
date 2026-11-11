@@ -67,6 +67,11 @@ pub enum Error {
     DatabaseNotFound { db: String, url: String },
 
     #[error(
+        "database '{db}' has a '{table}' table whose columns differ from this mt release; check BASERUNNA_DB"
+    )]
+    TableMismatch { db: String, table: String },
+
+    #[error(
         "database '{db}' stores schema version '{found}', but this mt release uses version '{expected}'"
     )]
     SchemaMismatch {
@@ -241,6 +246,7 @@ impl Error {
             Error::ConflictingFlags(_, _) => ErrorKind::ConflictingFlags,
             Error::MissingToken
             | Error::DatabaseNotFound { .. }
+            | Error::TableMismatch { .. }
             | Error::MissingTursoUrl
             | Error::MissingAuth
             | Error::BadBindAddr(_)

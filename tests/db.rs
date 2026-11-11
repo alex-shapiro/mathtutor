@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use baserunna_client::api::ListTablesQuery;
+use baserunna_client::api::{ColumnType, ListTablesQuery, NewColumn, NewTable};
 use baserunna_client::bytes::Bytes;
 use baserunna_client::{BoxFuture, Client, HttpTransport, Transport, TransportError, http};
 use chrono::{Duration, Utc};
@@ -57,6 +57,57 @@ async fn create_if_missing_creates_the_database_and_every_table_once() {
     );
     let fresh = Db::connect(&cfg).unwrap();
     fresh.snapshot(&Want::path(None)).await.expect("read");
+}
+
+/// Return the Baserunna client of the database of `cfg`.
+fn raw_db(cfg: &DbConfig) -> baserunna_client::Db {
+    Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db)
+}
+
+#[tokio::test]
+async fn setup_completes_after_an_interrupted_first_setup() {
+    let cfg = common::fresh_config();
+    let raw = raw_db(&cfg);
+    raw.ensure().await.unwrap();
+    for t in &mathtutor::schema::tables()[..3] {
+        raw.create_table(t).await.unwrap();
+    }
+    let db = Db::connect(&cfg).unwrap();
+
+    db.create_if_missing().await.unwrap();
+
+    assert_eq!(table_names(&cfg).await, TABLES);
+    common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
+    db.snapshot(&Want::path(None)).await.expect("read");
+}
+
+#[tokio::test]
+async fn setup_rejects_an_existing_table_with_other_columns() {
+    let cfg = common::fresh_config();
+    let raw = raw_db(&cfg);
+    raw.ensure().await.unwrap();
+    let paths = NewTable {
+        name: "paths".into(),
+        columns: vec![NewColumn::new("id", ColumnType::String)],
+        primary_key: vec!["id".into()],
+        indexes: Vec::new(),
+        if_not_exists: false,
+    };
+    raw.create_table(&paths).await.unwrap();
+
+    let e = Db::connect(&cfg)
+        .unwrap()
+        .create_if_missing()
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(&e, Error::TableMismatch { table, .. } if table == "paths"),
+        "{e:?}"
+    );
+    assert!(e.to_string().contains("BASERUNNA_DB"), "{e}");
 }
 
 /// Assert that `e` reports the missing database of `cfg`.

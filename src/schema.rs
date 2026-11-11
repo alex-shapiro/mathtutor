@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::db::client::Entry;
-use crate::db::client::api::{ColumnType, ErrorCode, NewColumn, NewTable};
+use crate::db::client::api::{ColumnType, ErrorCode, NewColumn, NewTable, Table};
 use crate::db::{Op, Row, client, ts};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{Error, Result};
@@ -340,13 +340,28 @@ pub(crate) async fn state(db: &client::Db) -> Result<SchemaState> {
     }
 }
 
-/// Create every table and record the schema version.
+/// Create every missing table and record the schema version.
+///
+/// Fails with [`Error::TableMismatch`] if a table exists with other columns.
 pub(crate) async fn create_tables(db: &client::Db) -> Result<()> {
     for t in tables() {
-        db.create_table(&t).await?;
+        let stored = db.create_table(&t).await?.table;
+        if !defines(&t, &stored) {
+            return Err(Error::TableMismatch {
+                db: db.name().to_string(),
+                table: t.name,
+            });
+        }
     }
     db.write(&[Op::put(VERSION_KEY, VERSION)]).await?;
     Ok(())
+}
+
+/// Return `true` if `table` has the primary key and the columns of `def`.
+fn defines(def: &NewTable, table: &Table) -> bool {
+    let defined = def.columns.iter().map(|c| (&c.name, c.ty, c.nullable));
+    let stored = table.columns.iter().map(|c| (&c.name, c.ty, c.nullable));
+    table.primary_key == def.primary_key && defined.eq(stored)
 }
 
 #[cfg(test)]
