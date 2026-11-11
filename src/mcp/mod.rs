@@ -287,10 +287,13 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetItemArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let path = args.path_id.as_deref().map(|p| (&self.db, p));
+        let lookup = discover::Lookup::Db {
+            db: &self.db,
+            path: args.path_id.as_deref(),
+        };
         encode(
             Operation::Repeatable,
-            discover::compute_item(self.db.curriculum(), &args.id, path).await,
+            discover::compute_item(lookup, &args.id).await,
         )
     }
 
@@ -299,16 +302,14 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetChildrenArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let path = args.path_id.as_deref().map(|p| (&self.db, p));
+        let lookup = discover::Lookup::Db {
+            db: &self.db,
+            path: args.path_id.as_deref(),
+        };
         encode(
             Operation::Repeatable,
-            discover::compute_children(
-                self.db.curriculum(),
-                args.id.as_deref(),
-                path,
-                args.recursive.unwrap_or(false),
-            )
-            .await,
+            discover::compute_children(lookup, args.id.as_deref(), args.recursive.unwrap_or(false))
+                .await,
         )
     }
 

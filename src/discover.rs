@@ -11,32 +11,28 @@ use crate::scheduler;
 use crate::view::Want;
 use crate::{Error, Result};
 
-/// Print curriculum item `id` as AYML, with the progress of path `path` if it is provided.
-pub async fn cmd_graph_show(
-    curriculum: &Curriculum,
-    id: &str,
-    path: Option<(&Db, &str)>,
-) -> Result<()> {
-    emit(&compute_item(curriculum, id, path).await?)
+/// Data that a curriculum lookup reads.
+#[derive(Clone, Copy)]
+pub enum Lookup<'a> {
+    /// The curriculum alone, read without the database.
+    Curriculum(&'a Curriculum),
+    /// The curriculum merged with the overlay of `db`, with the progress of path `path` if it is provided.
+    Db { db: &'a Db, path: Option<&'a str> },
 }
 
-/// Print the curriculum items under `id` as AYML, with the progress of path `path` if it is provided.
-pub async fn cmd_graph_list(
-    curriculum: &Curriculum,
-    id: Option<&str>,
-    path: Option<(&Db, &str)>,
-    recursive: bool,
-) -> Result<()> {
-    emit(&compute_children(curriculum, id, path, recursive).await?)
+/// Print curriculum item `id` from `lookup` as AYML.
+pub async fn cmd_graph_show(lookup: Lookup<'_>, id: &str) -> Result<()> {
+    emit(&compute_item(lookup, id).await?)
 }
 
-/// Return curriculum item `id`, with the progress of path `path` if it is provided.
-pub async fn compute_item(
-    curriculum: &Curriculum,
-    id: &str,
-    path: Option<(&Db, &str)>,
-) -> Result<ConceptView> {
-    let (g, progress) = graph_for(curriculum, path).await?;
+/// Print the curriculum items under `id` from `lookup` as AYML.
+pub async fn cmd_graph_list(lookup: Lookup<'_>, id: Option<&str>, recursive: bool) -> Result<()> {
+    emit(&compute_children(lookup, id, recursive).await?)
+}
+
+/// Return curriculum item `id` from `lookup`.
+pub async fn compute_item(lookup: Lookup<'_>, id: &str) -> Result<ConceptView> {
+    let (g, progress) = graph_for(lookup).await?;
     let c = concept(&g, id)?;
     let mut view = concept_view(&g, c);
     if let (ConceptView::Atom(av), Some(progress)) = (&mut view, &progress) {
@@ -45,16 +41,13 @@ pub async fn compute_item(
     Ok(view)
 }
 
-/// Return the children of `id`, or the curriculum areas if `id` is `None`, with every descendant if `recursive` is set.
-///
-/// Each atom includes the progress of path `path` if it is provided.
+/// Return the children of `id` from `lookup`, or the curriculum areas if `id` is `None`, with every descendant if `recursive` is set.
 pub async fn compute_children(
-    curriculum: &Curriculum,
+    lookup: Lookup<'_>,
     id: Option<&str>,
-    path: Option<(&Db, &str)>,
     recursive: bool,
 ) -> Result<ListView> {
-    let (g, progress) = graph_for(curriculum, path).await?;
+    let (g, progress) = graph_for(lookup).await?;
     let brief = |c: &FlatConcept| ChildBrief {
         id: c.id.clone(),
         name: c.name.clone(),
@@ -98,17 +91,20 @@ pub async fn compute_children(
     }))
 }
 
-/// Load the merged graph and the progress of path `path` if it is provided, or the graph of `curriculum` otherwise.
-pub async fn graph_for(
-    curriculum: &Curriculum,
-    path: Option<(&Db, &str)>,
-) -> Result<(Arc<Graph>, Option<PathProgress>)> {
-    let Some((db, path_id)) = path else {
-        return Ok((curriculum.graph()?, None));
-    };
-    let view = db.snapshot(&Want::path(Some(path_id))).await?;
-    let progress = view.path()?.progress();
-    Ok((view.graph()?, Some(progress)))
+/// Load the graph of `lookup`, with the progress of its path if it names a path.
+pub async fn graph_for(lookup: Lookup<'_>) -> Result<(Arc<Graph>, Option<PathProgress>)> {
+    match lookup {
+        Lookup::Curriculum(curriculum) => Ok((curriculum.graph()?, None)),
+        Lookup::Db { db, path: None } => Ok((db.snapshot(&Want::overlay()).await?.graph()?, None)),
+        Lookup::Db {
+            db,
+            path: Some(path_id),
+        } => {
+            let view = db.snapshot(&Want::path(Some(path_id))).await?;
+            let progress = view.path()?.progress();
+            Ok((view.graph()?, Some(progress)))
+        }
+    }
 }
 
 /// Curriculum areas, or the children of a curriculum node.

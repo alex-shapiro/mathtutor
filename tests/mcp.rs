@@ -1275,3 +1275,26 @@ fn parse_sse_message(body: &str) -> Option<Value> {
     }
     None
 }
+
+#[tokio::test]
+async fn item_lookup_without_a_path_reports_authored_lessons() {
+    let server = spawn_server().await;
+    let session = handshake(&server).await;
+    let created = call_tool(
+        &server,
+        &session,
+        "new_path",
+        json!({ "goal": "Test", "targets": ["fnd.1.1.2"] }),
+    )
+    .await;
+    let path_id = created["structuredContent"]["path_id"].clone();
+    let item = json!({ "id": "fnd.1.1.2" });
+    let before = call_tool(&server, &session, "get_item", item.clone()).await;
+    assert_eq!(before["structuredContent"]["has_lesson"], json!(false));
+
+    let lesson = json!({ "atom": "fnd.1.1.2", "body": "b", "path_id": path_id });
+    call_tool(&server, &session, "upsert_lesson", lesson).await;
+    let after = call_tool(&server, &session, "get_item", item).await;
+    assert_eq!(after["structuredContent"]["has_lesson"], json!(true));
+    server.stop().await;
+}

@@ -782,7 +782,11 @@ async fn commands_use_the_curriculum_of_the_database_config() {
 #[tokio::test]
 async fn graph_lookup_rejects_an_unknown_path() {
     let db = common::empty_db().await;
-    let result = mathtutor::discover::graph_for(db.curriculum(), Some((&db, "typo"))).await;
+    let lookup = mathtutor::discover::Lookup::Db {
+        db: &db,
+        path: Some("typo"),
+    };
+    let result = mathtutor::discover::graph_for(lookup).await;
     assert!(matches!(result, Err(Error::NoPath)));
 }
 

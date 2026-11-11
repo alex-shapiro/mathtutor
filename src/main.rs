@@ -74,6 +74,14 @@ impl Context {
         db::Db::connect(&self.db_config()?)
     }
 
+    /// Return the lookup of path `path` in `db`, or of the curriculum alone if `db` is `None`.
+    fn lookup<'a>(&'a self, db: Option<&'a db::Db>, path: Option<&'a str>) -> discover::Lookup<'a> {
+        match db {
+            Some(db) => discover::Lookup::Db { db, path },
+            None => discover::Lookup::Curriculum(&self.curriculum),
+        }
+    }
+
     /// Connect to the learner database, create it if it does not exist, and report a creation on stderr.
     async fn create_db(&self) -> Result<db::Db> {
         let db = self.db()?;
@@ -221,13 +229,12 @@ async fn dispatch_graph(ctx: &Context, op: GraphOp) -> Result<()> {
         }
         GraphOp::Show(c) => {
             let db = c.path.as_ref().map(|_| ctx.db()).transpose()?;
-            let path = db.as_ref().zip(c.path.as_deref());
-            discover::cmd_graph_show(&ctx.curriculum, &c.id, path).await
+            discover::cmd_graph_show(ctx.lookup(db.as_ref(), c.path.as_deref()), &c.id).await
         }
         GraphOp::List(c) => {
             let db = c.path.as_ref().map(|_| ctx.db()).transpose()?;
-            let path = db.as_ref().zip(c.path.as_deref());
-            discover::cmd_graph_list(&ctx.curriculum, c.id.as_deref(), path, c.recursive).await
+            let lookup = ctx.lookup(db.as_ref(), c.path.as_deref());
+            discover::cmd_graph_list(lookup, c.id.as_deref(), c.recursive).await
         }
         GraphOp::Dump(_) => overlay::cmd_graph_dump(&ctx.db()?).await,
     }

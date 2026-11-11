@@ -1,6 +1,7 @@
 //! Unit tests for `Graph` lookup helpers and `graph::run_check`.
 
 use mathtutor::Error;
+use mathtutor::discover::Lookup;
 use mathtutor::graph;
 use mathtutor::types::Difficulty;
 
@@ -288,9 +289,10 @@ fn invalid_arguments_exit_with_the_usage_code_and_help_succeeds() {
 #[tokio::test]
 async fn recursive_children_list_every_descendant_in_natural_order() {
     let curriculum = graph::Curriculum::embedded();
-    let view = mathtutor::discover::compute_children(&curriculum, Some("fnd.1"), None, true)
-        .await
-        .unwrap();
+    let view =
+        mathtutor::discover::compute_children(Lookup::Curriculum(&curriculum), Some("fnd.1"), true)
+            .await
+            .unwrap();
     let mathtutor::discover::ListView::Children(view) = view else {
         panic!("expected children of a node");
     };
@@ -305,9 +307,13 @@ async fn recursive_children_list_every_descendant_in_natural_order() {
     assert_eq!(ids, sorted);
     assert!(view.descendants.iter().all(|d| d.status.is_none()));
 
-    let flat = mathtutor::discover::compute_children(&curriculum, Some("fnd.1"), None, false)
-        .await
-        .unwrap();
+    let flat = mathtutor::discover::compute_children(
+        Lookup::Curriculum(&curriculum),
+        Some("fnd.1"),
+        false,
+    )
+    .await
+    .unwrap();
     let mathtutor::discover::ListView::Children(flat) = flat else {
         panic!("expected children of a node");
     };
