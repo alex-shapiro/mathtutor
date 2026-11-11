@@ -54,7 +54,7 @@ async fn load_returns_empty_overlay_on_fresh_db() {
 }
 
 #[tokio::test]
-async fn upsert_lesson_writes_row_and_round_trips() {
+async fn upsert_lesson_writes_and_loads_row() {
     let db = fresh_db().await;
 
     edit(&db, |v, c| {
@@ -86,7 +86,7 @@ async fn upsert_lesson_overwrites_existing_overlay_row() {
 }
 
 #[tokio::test]
-async fn add_quiz_writes_row_and_round_trips() {
+async fn add_quiz_writes_and_loads_row() {
     let db = fresh_db().await;
 
     edit(&db, |v, c| {
@@ -342,7 +342,7 @@ async fn graph_atom_helper_rejects_clusters_and_unknowns() {
     let db = fresh_db().await;
     let g = merged(&db).await;
 
-    assert!(g.atom(WITH_LESSON_ATOM).is_ok(), "real atom is resolved");
+    assert!(g.atom(WITH_LESSON_ATOM).is_ok(), "real atom is found");
     assert!(
         matches!(g.atom("fnd.1"), Err(mathtutor::Error::NotAtom(_))),
         "cluster must fail with NotAtom",
@@ -372,7 +372,7 @@ async fn graph_quiz_helper_finds_overlay_authored_ids() {
     .await;
 
     let g = merged(&db).await;
-    let (atom, quiz) = g.quiz("fnd.1.1.1.q9").expect("overlay quiz is resolved");
+    let (atom, quiz) = g.quiz("fnd.1.1.1.q9").expect("overlay quiz is found");
     assert_eq!(atom.id, WITH_LESSON_ATOM);
     assert_eq!(quiz.id, "fnd.1.1.1.q9");
 }

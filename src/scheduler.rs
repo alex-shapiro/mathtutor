@@ -232,7 +232,7 @@ impl Action {
         }
     }
 
-    /// Return the atom ID associated with this action, or `None` if the action has no atom.
+    /// Return the atom ID for this action, or `None` for `NoReviewsDue` and `Done`.
     pub fn atom_id(&self) -> Option<&str> {
         match self {
             Action::CreateLesson { atom_id }
@@ -273,7 +273,7 @@ pub fn atom_action(c: &FlatConcept, progress: &PathProgress) -> Option<Action> {
         })
 }
 
-/// Return `true` if `atom_id` is in `g` and needs no further action on a path with `progress`.
+/// Return `true` if `atom_id` is in `g` and is complete on a path with `progress`.
 pub fn is_atom_complete(g: &Graph, progress: &PathProgress, atom_id: &str) -> bool {
     g.by_id
         .get(atom_id)

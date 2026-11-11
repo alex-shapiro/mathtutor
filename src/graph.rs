@@ -1015,7 +1015,7 @@ fn detect_cycles(
     }
 }
 
-/// Validate the curriculum files of `source`, print the report, and fail if the report has issues (`mt graph check`).
+/// Validate the curriculum files of `source`, print the report, and fail if the report has issues for `mt graph check`.
 pub fn cmd_graph_check(source: &CurriculumSource) -> Result<()> {
     let report = run_check(source)?;
     let printed = crate::print_stdout(&report.to_string());

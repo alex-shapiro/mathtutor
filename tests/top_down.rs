@@ -234,7 +234,7 @@ async fn strategy_persists_and_switches() {
 }
 
 #[tokio::test]
-async fn subpath_round_trips_and_clears() {
+async fn subpath_persists_and_clears() {
     let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 

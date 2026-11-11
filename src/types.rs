@@ -1,6 +1,6 @@
 //! Shared domain enums for quiz ratings, difficulties, strategies, and formats.
 
-/// Error returned when a string does not match any variant of an enum in this module.
+/// Error returned if a string does not match any variant of an enum in this module.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("invalid {what} '{value}' (expected {expected})", expected = .names.join(" | "))]
 pub struct InvalidVariantName {

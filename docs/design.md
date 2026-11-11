@@ -230,19 +230,19 @@ Database setup and key checks follow these rules:
 - **Table creation:** Every command that reads or writes learner state creates the tables in an empty existing database, such as a console-created database. If table creation stops early, the next command finishes it. A command fails with exit code `2` if the database holds a table from another application.
 - **MCP startup:** `mt mcp` starts without a database request. If the database exists without tables, the first tool call creates the learner tables and the first OAuth request creates the authorization tables. `/ready` reports a missing or unusable database.
 
-| Data                   | Storage type          | Purpose                                                            |
-| ---------------------- | --------------------- | ------------------------------------------------------------------ |
-| `paths`                | Table, by path ID     | Path goal, strategy, target IDs, and active subpath                |
-| `events.<path id>`     | Stream                | Append-only learning history for a path                            |
-| `cards`                | Table, by path + quiz | Derived FSRS card state and answer statistics                      |
-| `taught`               | Table, by path + atom | Derived set of lessons taught on a path                            |
-| `lessons`              | Table, by atom ID     | User-authored lesson bodies in the overlay                         |
-| `quizzes`              | Table, by quiz ID     | User-authored or updated quizzes in the overlay                    |
-| `removed_quizzes`      | Table, by quiz ID     | Deleted quiz tombstones in the overlay                             |
-| `activity/<path id>`   | Key                   | Timestamp of the latest write for a path                           |
-| `overlay_version`      | Key                   | Random token replaced on every overlay write                       |
-| `mathtutor_state`      | Key                   | Schema version of the learner tables and the progress of an import |
-| `mathtutor_auth_state` | Key                   | Schema version of the authorization tables of `mt mcp`             |
+| Data                   | Storage type          | Purpose                                        |
+| ---------------------- | --------------------- | ---------------------------------------------- |
+| `paths`                | Table, by path ID     | Path goal, strategy, targets, and subpath      |
+| `events.<path id>`     | Stream                | Append-only learning history for a path        |
+| `cards`                | Table, by path + quiz | Derived FSRS card state and answer statistics  |
+| `taught`               | Table, by path + atom | Derived set of lessons taught on a path        |
+| `lessons`              | Table, by atom ID     | User-authored lesson bodies in the overlay     |
+| `quizzes`              | Table, by quiz ID     | User-authored or updated quizzes in overlay    |
+| `removed_quizzes`      | Table, by quiz ID     | Deleted quiz tombstones in the overlay         |
+| `activity/<path id>`   | Key                   | Timestamp of the latest write for a path       |
+| `overlay_version`      | Key                   | Random token replaced on every overlay write   |
+| `mathtutor_state`      | Key                   | Learner schema version and import progress     |
+| `mathtutor_auth_state` | Key                   | Authorization schema version for `mt mcp`      |
 
 The learner tables and the authorization tables have separate schema versions. The authorization tables are the OAuth tables in `docs/mcp.md`. Only `mt mcp` and `mt import-turso` create them, so an authorization schema change does not stop the CLI on a device. If the stored authorization tables have an older version, the first OAuth request drops and recreates them while preserving `oauth_clients` if its definition matches the new release. Connectors must sign in again without re-registering, and learner data stays unchanged. A server rejects tables written by a newer release. A test pins a fingerprint of each table set to its version so that any table change requires a version bump.
 
@@ -296,12 +296,13 @@ Each path records learning activity in an append-only `events.<path id>` stream 
 }
 ```
 
-| Kind                                                              | Fields                                                    |
-| ----------------------------------------------------------------- | --------------------------------------------------------- |
-| `path_created`                                                    | None                                                      |
-| `lesson_authored`, `lesson_amended`, `lesson_taught`              | `atom`                                                    |
-| `quiz_authored`, `quiz_presented`, `quiz_amended`, `quiz_removed` | `atom`, `quiz`                                            |
-| `quiz_answered`                                                   | `quiz`, `rating`, and optionally `atom` and `user_answer` |
+| Kind                                                 | Fields                                    |
+| ---------------------------------------------------- | ----------------------------------------- |
+| `path_created`                                       | None                                      |
+| `lesson_authored`, `lesson_amended`, `lesson_taught` | `atom`                                    |
+| `quiz_authored`, `quiz_presented`                    | `atom`, `quiz`                            |
+| `quiz_amended`, `quiz_removed`                       | `atom`, `quiz`                            |
+| `quiz_answered`                                      | `quiz`, `rating`, optional `atom`, answer |
 
 A read rejects an event that is missing a required field or contains an unexpected field for its kind.
 

@@ -10,7 +10,7 @@ use crate::types;
 /// Manage math lessons and spaced-repetition quizzes over a curriculum graph.
 #[derive(FromArgs, Debug)]
 pub struct Mt {
-    /// curriculum directory to use instead of the embedded curriculum (default: `$MT_GRAPH`)
+    /// curriculum directory to use instead of the embedded curriculum, defaulting to `$MT_GRAPH`
     #[argh(option)]
     pub graph: Option<PathBuf>,
 
@@ -114,11 +114,11 @@ pub struct PathNewCmd {
     #[argh(positional)]
     pub goal: String,
 
-    /// target atom or cluster IDs, at least 1 (comma-separated or repeated)
+    /// target atom or cluster IDs, at least 1, comma-separated or repeated
     #[argh(option)]
     pub targets: Vec<String>,
 
-    /// initial traversal strategy: `bottom_up` (default) or `top_down`
+    /// initial traversal strategy: `bottom_up` by default, or `top_down`
     #[argh(option, default = "types::Strategy::BottomUp")]
     pub strategy: types::Strategy,
 }
@@ -127,7 +127,7 @@ pub struct PathNewCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "state")]
 pub struct PathStateCmd {
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
@@ -136,7 +136,7 @@ pub struct PathStateCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "next")]
 pub struct PathNextCmd {
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
@@ -153,11 +153,11 @@ pub struct PathNextCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "syllabus")]
 pub struct PathSyllabusCmd {
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// maximum number of upcoming atoms to return (default: 10)
+    /// maximum number of upcoming atoms to return, defaulting to 10
     #[argh(option, short = 'n', default = "10")]
     pub n: usize,
 }
@@ -166,11 +166,11 @@ pub struct PathSyllabusCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "tree")]
 pub struct PathTreeCmd {
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// maximum number of levels below each area (default: unlimited)
+    /// maximum number of levels below each area, unlimited by default
     #[argh(option)]
     pub depth: Option<u32>,
 }
@@ -183,7 +183,7 @@ pub struct PathStrategyCmd {
     #[argh(positional)]
     pub strategy: types::Strategy,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
@@ -207,11 +207,11 @@ pub enum SubpathOp {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "set")]
 pub struct PathSubpathSetCmd {
-    /// atom IDs in teaching order ending with a target atom (comma-separated or repeated)
+    /// atom IDs in teaching order ending with a target atom, comma-separated or repeated
     #[argh(option)]
     pub atoms: Vec<String>,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
@@ -220,7 +220,7 @@ pub struct PathSubpathSetCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "clear")]
 pub struct PathSubpathClearCmd {
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
@@ -259,7 +259,7 @@ pub struct GraphShowCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "list")]
 pub struct GraphListCmd {
-    /// parent node ID (omit to list all areas)
+    /// parent node ID, or omit to list all areas
     #[argh(positional)]
     pub id: Option<String>,
 
@@ -276,7 +276,7 @@ pub struct GraphListCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "check")]
 pub struct GraphCheckCmd {
-    /// curriculum directory to validate (default: the curriculum of `--graph`)
+    /// curriculum directory to validate, defaulting to the curriculum of `--graph`
     #[argh(option, short = 'p')]
     pub path: Option<PathBuf>,
 }
@@ -312,7 +312,7 @@ pub struct LessonUpsertCmd {
     #[argh(option)]
     pub body: String,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
@@ -358,11 +358,11 @@ pub struct QuizCreateCmd {
     #[argh(option)]
     pub rubric: Option<String>,
 
-    /// quiz format: `free_text` (default) or `multiple_choice`
+    /// quiz format: `free_text` by default, or `multiple_choice`
     #[argh(option, long = "type", default = "types::QuizType::FreeText")]
     pub quiz_type: types::QuizType,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
@@ -395,7 +395,7 @@ pub struct QuizUpdateCmd {
     #[argh(option, long = "type")]
     pub quiz_type: Option<types::QuizType>,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
@@ -408,7 +408,7 @@ pub struct QuizDeleteCmd {
     #[argh(positional)]
     pub quiz: String,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
@@ -429,7 +429,7 @@ pub struct QuizAnswerCmd {
     #[argh(option, long = "user-answer")]
     pub user_answer: Option<String>,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
@@ -443,7 +443,7 @@ pub struct InstructCmd {}
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "import-turso")]
 pub struct ImportTursoCmd {
-    /// libSQL database URL (default: `$TURSO_URL`)
+    /// libSQL database URL, defaulting to `$TURSO_URL`
     #[argh(option)]
     pub url: Option<String>,
 }
@@ -453,23 +453,23 @@ pub struct ImportTursoCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "mcp")]
 pub struct McpCmd {
-    /// bind address (default: `127.0.0.1:8080`)
+    /// bind address, defaulting to `127.0.0.1:8080`
     #[argh(option, default = "default_mcp_addr()")]
     pub addr: String,
 
-    /// static bearer token for API authentication (overrides `$MT_API_KEY`)
+    /// static bearer token for API authentication, overriding `$MT_API_KEY`
     #[argh(option)]
     pub api_key: Option<String>,
 
-    /// administrator password for OAuth 2.1 login (overrides `$MT_ADMIN_PASSWORD`)
+    /// administrator password for OAuth 2.1 login, overriding `$MT_ADMIN_PASSWORD`
     #[argh(option)]
     pub admin_password: Option<String>,
 
-    /// public base URL advertised in OAuth metadata (overrides `$MT_PUBLIC_URL`)
+    /// public base URL advertised in OAuth metadata, overriding `$MT_PUBLIC_URL`
     #[argh(option)]
     pub public_url: Option<String>,
 
-    /// header that a trusted proxy sets to the client address, such as `Fly-Client-IP` (overrides `$MT_CLIENT_IP_HEADER`; default: the TCP peer address)
+    /// header that a trusted proxy sets to the client address, such as `Fly-Client-IP`, overriding `$MT_CLIENT_IP_HEADER` and defaulting to the TCP peer address
     #[argh(option)]
     pub client_ip_header: Option<String>,
 

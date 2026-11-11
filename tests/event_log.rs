@@ -29,7 +29,7 @@ fn answered(path: &str, atom: &str, quiz: &str, rating: Rating) -> Event {
 }
 
 #[tokio::test]
-async fn append_and_load_round_trip() {
+async fn append_and_load_preserve_events() {
     let db = common::fresh_db(PATH_ID).await;
     common::append(
         &db,

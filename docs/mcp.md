@@ -36,14 +36,14 @@ Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticat
 
 ### Built-in OAuth 2.1 authorization server
 
-| Path                                      | Method | Purpose                                                |
-| ----------------------------------------- | ------ | ------------------------------------------------------ |
-| `/.well-known/oauth-protected-resource`   | GET    | RFC 9728 protected resource metadata                   |
-| `/.well-known/oauth-authorization-server` | GET    | RFC 8414 authorization server metadata                 |
-| `/oauth/register`                         | POST   | RFC 7591 dynamic client registration                   |
-| `/oauth/authorize`                        | GET    | Renders the login form with a signed CSRF token        |
-| `/oauth/authorize`                        | POST   | Verifies `MT_ADMIN_PASSWORD` and issues an auth code   |
-| `/oauth/token`                            | POST   | Exchanges an auth code with S256 PKCE or refresh token |
+| Path                                      | Method | Purpose                                   |
+| ----------------------------------------- | ------ | ----------------------------------------- |
+| `/.well-known/oauth-protected-resource`   | GET    | RFC 9728 protected resource metadata      |
+| `/.well-known/oauth-authorization-server` | GET    | RFC 8414 authorization server metadata    |
+| `/oauth/register`                         | POST   | RFC 7591 dynamic client registration      |
+| `/oauth/authorize`                        | GET    | Renders the login form with a CSRF token  |
+| `/oauth/authorize`                        | POST   | Checks `MT_ADMIN_PASSWORD`, issues a code |
+| `/oauth/token`                            | POST   | Exchanges an S256 PKCE code or refresh    |
 
 Only the metadata routes, `/oauth/register`, and `/oauth/token` send CORS headers so that browser-based MCP clients on other origins can call them. `/oauth/authorize` omits CORS headers so that external websites cannot read the sign-in form.
 

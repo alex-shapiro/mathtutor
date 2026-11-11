@@ -66,7 +66,7 @@ impl TableSet {
 
     /// Return `true` if this release drops and recreates the tables of this set that schema version `found` describes.
     ///
-    /// Only the authorization tables qualify, because they hold only tokens and limit counts that a new sign-in recreates, and client registrations that the replacement keeps. A newer version stays, so that a server of an older release cannot erase the tables of a newer one.
+    /// Only the authorization tables qualify, because they hold only tokens and limit counts that a new sign-in recreates, and client registrations that the replacement keeps. A newer version stays, so that a server of an older release cannot erase the tables of a newer release.
     pub(crate) fn replaces(self, found: &str) -> bool {
         let older = match (found.parse::<u32>(), self.version().parse::<u32>()) {
             (Ok(found), Ok(current)) => found < current,
