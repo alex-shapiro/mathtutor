@@ -14,6 +14,9 @@ pub enum Error {
     #[error("ayml parse: {path}: {message}")]
     AymlParse { path: PathBuf, message: String },
 
+    #[error("the curriculum check failed; see the issues above")]
+    GraphCheckFailed,
+
     #[error("ayml serialize: {0}")]
     AymlSerialize(String),
 
@@ -179,6 +182,7 @@ impl Error {
             | Error::BadBindAddr(_)
             | Error::BadPublicUrl(_) => 2,
             Error::FileIo { .. }
+            | Error::GraphCheckFailed
             | Error::AymlParse { .. }
             | Error::AymlSerialize(_)
             | Error::NoPath

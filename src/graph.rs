@@ -920,6 +920,17 @@ fn detect_cycles(
     }
 }
 
+/// Validate the curriculum files of `source`, print the report, and fail if the report has issues (`mt graph check`).
+pub fn cmd_graph_check(source: &CurriculumSource) -> Result<()> {
+    let report = run_check(source)?;
+    report.print();
+    if report.issues.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::GraphCheckFailed)
+    }
+}
+
 impl CheckReport {
     pub fn print(&self) {
         println!();
