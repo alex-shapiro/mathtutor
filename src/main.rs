@@ -174,6 +174,15 @@ async fn run_mcp(ctx: &Context, c: cli::McpCmd) -> Result<()> {
                 .or_else(|| std::env::var("MT_ADMIN_PASSWORD").ok()),
         ),
         public_url: nonempty(c.public_url.or_else(|| std::env::var("MT_PUBLIC_URL").ok())),
+        client_addrs: match nonempty(
+            c.client_ip_header
+                .or_else(|| std::env::var("MT_CLIENT_IP_HEADER").ok()),
+        ) {
+            Some(name) => mcp::ClientAddrSource::Header(
+                name.parse().map_err(|_| Error::BadClientIpHeader(name))?,
+            ),
+            None => mcp::ClientAddrSource::Peer,
+        },
     };
     mcp::run(&c.addr, auth, ctx.db_config()?).await
 }

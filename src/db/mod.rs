@@ -11,7 +11,9 @@ pub use baserunna_client::{self as client, Op, OpResult, Row, Transport};
 use client::api::ErrorCode;
 
 use crate::graph::Curriculum;
-use crate::schema::{self, DbState, ImportMarker, OAuthRow, SchemaState};
+#[cfg(feature = "mcp")]
+use crate::schema::OAuthRow;
+use crate::schema::{self, DbState, ImportMarker, OAUTH_CLIENT_TTL, OAuthClient, SchemaState};
 use crate::view::{Changes, OverlayCache, OverlayWrite};
 use crate::{Error, Result};
 
@@ -228,23 +230,23 @@ impl Db {
         }
     }
 
-    /// Insert OAuth row `row`, which the server deletes after `ttl` if `ttl` is set.
+    /// Insert OAuth row `row`, which the server deletes after `ttl`.
     #[cfg(feature = "mcp")]
-    pub(crate) async fn insert_oauth<R: OAuthRow>(
-        &self,
-        row: &R,
-        ttl: Option<Duration>,
-    ) -> Result<()> {
-        let op = match ttl {
-            Some(ttl) => Op::insert_expiring(row, ttl),
-            None => Op::insert(row),
-        };
-        self.commit(&[op]).await
+    pub(crate) async fn insert_oauth<R: OAuthRow>(&self, row: &R, ttl: Duration) -> Result<()> {
+        self.commit(&[Op::insert_expiring(row, ttl)]).await
     }
 
-    /// Insert or replace OAuth rows `rows` in one transaction.
-    pub(crate) async fn upsert_oauth<R: OAuthRow>(&self, rows: &[R]) -> Result<()> {
-        let ops: Vec<Op> = rows.iter().map(Op::upsert).collect();
+    /// Store `clients` in one transaction, replacing a stored client with the same ID, and keep each for [`OAUTH_CLIENT_TTL`].
+    pub(crate) async fn replace_oauth_clients(&self, clients: &[OAuthClient]) -> Result<()> {
+        let ops: Vec<Op> = clients
+            .iter()
+            .flat_map(|c| {
+                [
+                    Op::delete_row::<OAuthClient>(&c.client_id),
+                    Op::insert_expiring(c, OAUTH_CLIENT_TTL),
+                ]
+            })
+            .collect();
         self.commit(&ops).await
     }
 

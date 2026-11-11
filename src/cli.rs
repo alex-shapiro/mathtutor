@@ -455,6 +455,10 @@ pub struct McpCmd {
     #[argh(option)]
     pub public_url: Option<String>,
 
+    /// header that a trusted proxy sets to the client address, such as `Fly-Client-IP` (overrides `$MT_CLIENT_IP_HEADER`; default: the TCP peer address)
+    #[argh(option)]
+    pub client_ip_header: Option<String>,
+
     #[argh(subcommand)]
     pub op: Option<McpOp>,
 }

@@ -152,6 +152,9 @@ pub enum Error {
     #[error("invalid public URL '{0}'")]
     BadPublicUrl(String),
 
+    #[error("invalid client IP header name '{0}'")]
+    BadClientIpHeader(String),
+
     #[error("bind {addr}: {source}")]
     Bind {
         addr: String,
@@ -255,7 +258,8 @@ impl Error {
             | Error::MissingTursoUrl
             | Error::MissingAuth
             | Error::BadBindAddr(_)
-            | Error::BadPublicUrl(_) => ErrorKind::Config,
+            | Error::BadPublicUrl(_)
+            | Error::BadClientIpHeader(_) => ErrorKind::Config,
             Error::NoPath => ErrorKind::NoPath,
             Error::NoLesson(_) => ErrorKind::NoLesson,
             Error::NoHome => ErrorKind::NoHome,

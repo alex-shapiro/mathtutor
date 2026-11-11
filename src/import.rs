@@ -581,7 +581,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         .await?;
     }
     for clients in legacy.oauth_clients.chunks(IMPORT_WRITE_BATCH) {
-        db.upsert_oauth(clients).await?;
+        db.replace_oauth_clients(clients).await?;
     }
     let history = |p: &PathFile| legacy.events.get(&p.id).map_or(&[][..], Vec::as_slice);
     let mut paths: Vec<&PathFile> = legacy.paths.iter().collect();

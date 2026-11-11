@@ -45,6 +45,9 @@ use crate::{answer, discover, path, scheduler, state, store, subpath, syllabus, 
 type CrateResult<T> = std::result::Result<T, Error>;
 
 pub mod oauth;
+mod throttle;
+
+pub use throttle::ClientAddrSource;
 
 #[derive(Clone)]
 pub struct MathTutorServer {
@@ -455,6 +458,8 @@ pub struct AuthConfig {
     pub admin_password: Option<String>,
     /// Public issuer URL from `MT_PUBLIC_URL` or `--public-url`.
     pub public_url: Option<String>,
+    /// Source of the client address that limits sign-in attempts and client registrations.
+    pub client_addrs: ClientAddrSource,
 }
 
 impl AuthConfig {
@@ -525,7 +530,12 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
         .route("/health", get(health));
 
     if let Some(password) = auth.admin_password.as_deref() {
-        let oauth_state = oauth::OAuthState::new(db.clone(), password, public_url.clone());
+        let oauth_state = oauth::OAuthState::new(
+            db.clone(),
+            password,
+            public_url.clone(),
+            auth.client_addrs.clone(),
+        );
         app = app.merge(oauth::router(oauth_state));
     }
 
@@ -553,6 +563,7 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
         }
     };
 
+    let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal)
         .await

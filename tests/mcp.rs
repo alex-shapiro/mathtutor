@@ -1451,3 +1451,94 @@ async fn item_lookup_without_a_path_reports_authored_lessons() {
     assert_eq!(after["structuredContent"]["has_lesson"], json!(true));
     server.stop().await;
 }
+
+#[tokio::test]
+async fn repeated_incorrect_passwords_delay_the_next_sign_in() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Guesser").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&server, &reg.client_id, &pkce.challenge, None, None);
+    let form_html = oauth_client()
+        .get(&auth_url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    for _ in 0..5 {
+        let res = submit_login(&server, &form_html, "wrong").await;
+        assert_eq!(res.status(), 401);
+    }
+
+    let res = submit_login(&server, &form_html, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 429, "the correct password must wait too");
+    assert_eq!(res.headers()["retry-after"], "1");
+    assert!(res.text().await.unwrap().contains("Try again in 1 second."));
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let res = submit_login(&server, &form_html, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 303, "the wait ends after the delay");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn registrations_from_one_address_are_limited() {
+    let server = spawn_oauth_server().await;
+    for i in 0..10 {
+        register_client(&server, &format!("client {i}")).await;
+    }
+    let res = oauth_client()
+        .post(server.url("/oauth/register"))
+        .json(&json!({ "redirect_uris": ["http://localhost/cb"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 429);
+    assert!(res.headers().contains_key("retry-after"));
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"], "too_many_requests");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_token_grant_keeps_the_client_registration_for_the_refresh_token_lifetime() {
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    let reg = register_client(&server, "Expiring").await;
+    let days_left = async || {
+        let res: Value = client()
+            .post(format!("{}/v1/dbs/{}/txn", cfg.url, cfg.db))
+            .bearer_auth(&cfg.token)
+            .json(&json!({
+                "ops": [{ "op": "get_row", "table": "oauth_clients", "pk": reg.client_id }],
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let expires_at = res["results"][0]["expires_at"].as_i64().expect("ttl");
+        let day = 86_400_000;
+        (expires_at - chrono::Utc::now().timestamp_millis() + day / 2) / day
+    };
+    assert_eq!(days_left().await, 1, "an unused registration expires");
+
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+    assert_eq!(days_left().await, 30, "a code exchange renews the client");
+
+    let res = refresh_raw(&server, &reg.client_id, &tokens.refresh_token, None).await;
+    assert_eq!(res.status(), 200, "a refresh renews the client again");
+    assert_eq!(days_left().await, 30);
+    server.stop().await;
+}

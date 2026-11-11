@@ -1,10 +1,12 @@
 //! OAuth 2.1 authorization server for `mt mcp`.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::{
     Form, Json, Router,
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -19,13 +21,19 @@ use subtle::ConstantTimeEq;
 use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 
+use super::throttle::{self, ClientAddrSource, RegistrationLimit, SignInThrottle};
 use crate::db::{Db, Op, Txn, run_txn};
-use crate::schema::{OAuthAccessToken, OAuthClient, OAuthCode, OAuthRefreshToken};
+use crate::schema::{
+    OAUTH_CLIENT_TTL, OAuthAccessToken, OAuthClient, OAuthCode, OAuthRefreshToken,
+};
 
 const AUTHORIZATION_CODE_TTL: Duration = Duration::seconds(60);
 const ACCESS_TOKEN_TTL: Duration = Duration::hours(1);
 const REFRESH_TOKEN_TTL: Duration = Duration::days(30);
 const CSRF_TTL: Duration = Duration::minutes(15);
+
+/// Time after registration at which the server deletes a client without a token grant.
+const UNUSED_CLIENT_TTL: Duration = Duration::days(1);
 
 /// Scope that gives access to the MCP tools, and the only scope that this server grants.
 const MCP_SCOPE: &str = "mcp";
@@ -37,10 +45,18 @@ pub struct OAuthState {
     admin_password: Arc<[u8]>,
     public_url: Arc<Url>,
     csrf_key: Arc<[u8; 32]>,
+    client_addrs: ClientAddrSource,
+    sign_in: Arc<SignInThrottle>,
+    registrations: Arc<RegistrationLimit>,
 }
 
 impl OAuthState {
-    pub fn new(db: Db, admin_password: &str, public_url: Url) -> Self {
+    pub fn new(
+        db: Db,
+        admin_password: &str,
+        public_url: Url,
+        client_addrs: ClientAddrSource,
+    ) -> Self {
         let mut csrf_key = [0u8; 32];
         rand::rng().fill_bytes(&mut csrf_key);
         Self {
@@ -48,6 +64,9 @@ impl OAuthState {
             admin_password: Arc::from(admin_password.as_bytes().to_vec().into_boxed_slice()),
             public_url: Arc::new(public_url),
             csrf_key: Arc::new(csrf_key),
+            client_addrs,
+            sign_in: Arc::default(),
+            registrations: Arc::default(),
         }
     }
 
@@ -124,8 +143,15 @@ struct RegisterResponse {
 
 async fn register(
     State(s): State<OAuthState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, OAuthError> {
+    let addr = s.client_addrs.client_addr(peer, &headers);
+    if let Err(wait) = s.registrations.try_register(addr, Instant::now()) {
+        tracing::warn!(%addr, "client registration limit reached");
+        return Err(OAuthError::TooManyRequests(wait));
+    }
     if req.redirect_uris.is_empty() {
         return Err(OAuthError::invalid_request(
             "redirect_uris must not be empty",
@@ -140,7 +166,8 @@ async fn register(
         redirect_uris: req.redirect_uris,
         created_at: Utc::now(),
     };
-    s.db.insert_oauth(&client, None).await?;
+    s.db.insert_oauth(&client, std_ttl(UNUSED_CLIENT_TTL))
+        .await?;
 
     tracing::info!(
         client_id = %client.client_id,
@@ -218,6 +245,8 @@ struct AuthorizePost {
 
 async fn authorize_post(
     State(s): State<OAuthState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Form(f): Form<AuthorizePost>,
 ) -> Result<Response, OAuthError> {
     let q = f.query;
@@ -227,12 +256,27 @@ async fn authorize_post(
         tracing::warn!(client_id = %client.client_id, "csrf token rejected on authorize POST");
         return Err(OAuthError::invalid_request("invalid or expired csrf token"));
     }
+    let addr = s.client_addrs.client_addr(peer, &headers);
+    if let Err(wait) = s.sign_in.try_attempt(addr, Instant::now()) {
+        tracing::warn!(%addr, client_id = %client.client_id, "sign-in attempt delayed");
+        let secs = throttle::retry_after_secs(wait);
+        let unit = if secs == 1 { "second" } else { "seconds" };
+        let message = format!("Too many incorrect passwords. Try again in {secs} {unit}.");
+        let html = render_login_form(&q, &csrf_mint(&s.csrf_key, &q), Some(&message));
+        return Ok((
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, secs.to_string())],
+            Html(html),
+        )
+            .into_response());
+    }
     if !constant_time_eq(s.admin_password.as_ref(), f.password.as_bytes()) {
-        tracing::warn!(client_id = %client.client_id, "admin password rejected");
+        tracing::warn!(%addr, client_id = %client.client_id, "admin password rejected");
         let csrf = csrf_mint(&s.csrf_key, &q);
         let html = render_login_form(&q, &csrf, Some("Incorrect password."));
         return Ok((StatusCode::UNAUTHORIZED, Html(html)).into_response());
     }
+    s.sign_in.record_success(addr);
 
     let secret = random_token();
     let code = OAuthCode {
@@ -245,7 +289,7 @@ async fn authorize_post(
         resource: q.resource.clone(),
         expires_at: Utc::now() + AUTHORIZATION_CODE_TTL,
     };
-    s.db.insert_oauth(&code, Some(std_ttl(AUTHORIZATION_CODE_TTL)))
+    s.db.insert_oauth(&code, std_ttl(AUTHORIZATION_CODE_TTL))
         .await?;
 
     tracing::info!(client_id = %client.client_id, "authorization code issued");
@@ -432,6 +476,7 @@ async fn exchange_code(
     let scope = redeem(row, client_id, redirect_uri, verifier)?;
     let tokens = IssuedTokens::new(client_id, scope);
     txn.delete_oauth::<OAuthCode>(&code_hash);
+    renew_client(txn, client_id).await?;
     tokens.insert(txn);
     Ok(tokens)
 }
@@ -448,8 +493,20 @@ async fn rotate_refresh(
     let scope = refreshed_scope(stored.scope, req.scope.as_deref())?;
     let tokens = IssuedTokens::new(&stored.client_id, scope);
     txn.delete_oauth::<OAuthRefreshToken>(&token_hash);
+    renew_client(txn, &stored.client_id).await?;
     tokens.insert(txn);
     Ok(tokens)
+}
+
+/// Keep the registration of `client_id` for [`OAUTH_CLIENT_TTL`] after a token grant, or fail if the client does not exist.
+async fn renew_client(txn: &mut Txn, client_id: &str) -> Result<(), OAuthError> {
+    let Some(client) = txn.get_oauth::<OAuthClient>(client_id).await? else {
+        tracing::warn!(%client_id, "token grant for an unknown client");
+        return Err(OAuthError::InvalidGrant);
+    };
+    txn.delete_oauth::<OAuthClient>(client_id);
+    txn.insert_oauth(&client, OAUTH_CLIENT_TTL);
+    Ok(())
 }
 
 /// Return the scope that an authorization request grants, which is [`MCP_SCOPE`] if the request omits a scope.
@@ -697,6 +754,8 @@ pub enum OAuthError {
     UnsupportedResponseType,
     #[error("unsupported_grant_type: {0}")]
     UnsupportedGrantType(String),
+    #[error("too_many_requests")]
+    TooManyRequests(std::time::Duration),
     #[error(transparent)]
     Internal(#[from] crate::Error),
 }
@@ -724,6 +783,8 @@ impl crate::db::client::TxnError for OAuthError {
 
 impl IntoResponse for OAuthError {
     fn into_response(self) -> Response {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         let (status, code, description) = match &self {
             OAuthError::InvalidRequest(msg) => {
                 (StatusCode::BAD_REQUEST, "invalid_request", msg.clone())
@@ -748,6 +809,15 @@ impl IntoResponse for OAuthError {
                 "unsupported_grant_type",
                 format!("grant_type `{g}` is not supported"),
             ),
+            OAuthError::TooManyRequests(wait) => {
+                let secs = throttle::retry_after_secs(*wait);
+                headers.insert(header::RETRY_AFTER, HeaderValue::from(secs));
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "too_many_requests",
+                    format!("too many requests from this address; try again in {secs} seconds"),
+                )
+            }
             OAuthError::Internal(e) => {
                 tracing::error!(error = %e, "oauth: internal error");
                 (
@@ -757,8 +827,6 @@ impl IntoResponse for OAuthError {
                 )
             }
         };
-        let mut headers = HeaderMap::new();
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
         let body = serde_json::json!({
             "error": code,
             "error_description": description,
@@ -770,6 +838,12 @@ impl IntoResponse for OAuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_client_registration_outlives_the_refresh_token_of_its_last_grant() {
+        assert_eq!(OAUTH_CLIENT_TTL, std_ttl(REFRESH_TOKEN_TTL));
+        assert!(UNUSED_CLIENT_TTL < REFRESH_TOKEN_TTL);
+    }
 
     #[test]
     fn authorization_grants_the_mcp_scope_by_default() {

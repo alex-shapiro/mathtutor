@@ -46,7 +46,15 @@ Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticat
 - **Expirations:** Single-use authorization codes expire in 60 seconds. Access tokens expire in 1 hour. Refresh tokens expire in 30 days and rotate on each refresh.
 - **PKCE:** `S256` code challenge is mandatory.
 - **Scope:** The server grants only the `mcp` scope. An authorization request without a scope receives `mcp`. A request for another scope fails with `invalid_scope`. A refresh request can keep or narrow the scope of its grant. The server accepts only an access token whose scope includes `mcp`.
+- **Client registrations:** Registration is open, because MCP connectors register themselves. The server deletes a client 1 day after registration if the client gets no token. Each code exchange and refresh keeps the client for 30 more days, the lifetime of the new refresh token.
 - **Tables:** `oauth_clients`, `oauth_codes`, `oauth_access_tokens`, and `oauth_refresh_tokens` are stored in the Baserunna database using native row TTLs for expiration. Code and token rows are keyed by the SHA-256 digest of the secret, so the database does not hold usable bearer secrets.
+
+### Limits per client address
+
+- **Sign-in:** After 5 incorrect passwords from an address, each next attempt must wait. The wait starts at 1 second and doubles after each further failure, up to 15 minutes. The server forgets the failures of an address after a correct password, or 1 hour after the last failure. A delayed attempt receives `429 Too Many Requests` with a `Retry-After` header, and the server does not check its password.
+- **Registration:** An address can register 10 clients per hour. More registrations receive `429 Too Many Requests` with a `Retry-After` header.
+- **Client address:** The server uses the TCP peer address. Behind a proxy, set `MT_CLIENT_IP_HEADER` or `--client-ip-header` to the header that the proxy sets to the client address. Use only a header that the proxy replaces, because a client can send any header. `fly.toml` sets `Fly-Client-IP`. All IPv6 addresses of one `/64` network share their limits.
+- **Memory:** The limits are kept in the memory of the server, so a restart resets them. Each limit keeps at most 10,000 addresses.
 
 ## Deployment
 
