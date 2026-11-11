@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::db::client::Entry;
-use crate::db::client::api::{ColumnType, ErrorCode, NewColumn, NewTable, Table};
+use crate::db::client::api::{ColumnType, ErrorCode, ListTablesQuery, NewColumn, NewTable, Table};
 use crate::db::{Op, Row, client, ts};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{Error, Result};
@@ -439,8 +439,9 @@ pub(crate) async fn state(db: &client::Db, set: TableSet) -> Result<DbState> {
 
 /// Create every missing table of `set` and record the schema version of the set.
 ///
-/// Fails with [`Error::TableMismatch`] if a table exists with other columns.
+/// Fails with [`Error::ForeignTable`] if the database holds a table that no table set defines, and with [`Error::TableMismatch`] if a table exists with other columns.
 pub(crate) async fn create_tables(db: &client::Db, set: TableSet) -> Result<()> {
+    refuse_foreign_tables(db).await?;
     for t in set.tables() {
         let stored = db.create_table(&t).await?.table;
         if !defines(&t, &stored) {
@@ -452,6 +453,29 @@ pub(crate) async fn create_tables(db: &client::Db, set: TableSet) -> Result<()> 
     }
     db.write(&[state_write_op(set, None)]).await?;
     Ok(())
+}
+
+/// Fail with [`Error::ForeignTable`] if `db` holds a table that no table set defines, such as a table of another application.
+async fn refuse_foreign_tables(db: &client::Db) -> Result<()> {
+    let ours: Vec<String> = [TableSet::Learner, TableSet::Auth]
+        .into_iter()
+        .flat_map(TableSet::tables)
+        .map(|t| t.name)
+        .collect();
+    let mut query = ListTablesQuery::default();
+    loop {
+        let page = db.list_tables(query.clone()).await?;
+        if let Some(foreign) = page.tables.into_iter().find(|t| !ours.contains(&t.name)) {
+            return Err(Error::ForeignTable {
+                db: db.name().to_string(),
+                table: foreign.name,
+            });
+        }
+        match page.next_cursor {
+            Some(cursor) => query.cursor = Some(cursor),
+            None => return Ok(()),
+        }
+    }
 }
 
 /// Return `true` if `table` has the primary key and the columns of `def`.

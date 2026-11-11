@@ -106,6 +106,11 @@ pub enum Error {
     TableMismatch { db: String, table: String },
 
     #[error(
+        "database '{db}' holds table '{table}', which Math Tutor does not use, so mt does not add its tables; check BASERUNNA_DB"
+    )]
+    ForeignTable { db: String, table: String },
+
+    #[error(
         "database '{db}' stores {tables} schema version '{found}', but this mt release uses version '{expected}'"
     )]
     SchemaMismatch {
@@ -278,6 +283,7 @@ impl Error {
             | Error::KeyCannotCreate { .. }
             | Error::DatabaseNotFound { .. }
             | Error::TableMismatch { .. }
+            | Error::ForeignTable { .. }
             | Error::MissingTursoUrl
             | Error::MissingAuth
             | Error::WeakApiKey { .. }

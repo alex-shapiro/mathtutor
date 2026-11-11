@@ -177,6 +177,35 @@ async fn a_limited_key_creates_the_tables_in_a_database_that_the_console_created
 }
 
 #[tokio::test]
+async fn commands_refuse_a_database_that_holds_the_tables_of_another_application() {
+    let cfg = common::fresh_config();
+    let raw = raw_db(&cfg);
+    raw.ensure().await.unwrap();
+    let notes = NewTable {
+        name: "notes".into(),
+        columns: vec![NewColumn::new("id", ColumnType::String)],
+        primary_key: vec!["id".into()],
+        indexes: Vec::new(),
+        if_not_exists: false,
+    };
+    raw.create_table(&notes).await.unwrap();
+    let db = Db::connect(&cfg).unwrap();
+
+    let read = state::compute_state(&db, None).await.unwrap_err();
+    let create = db.create_if_missing().await.unwrap_err();
+
+    for e in [read, create] {
+        assert!(
+            matches!(&e, Error::ForeignTable { table, .. } if table == "notes"),
+            "{e:?}"
+        );
+        assert!(e.to_string().contains("BASERUNNA_DB"), "{e}");
+        assert_eq!(e.exit_code(), 2);
+    }
+    assert_eq!(table_names(&cfg).await, ["notes"]);
+}
+
+#[tokio::test]
 async fn learner_commands_ignore_the_authorization_schema_version() {
     let cfg = common::fresh_config();
     let db = common::create_db(&cfg).await;
