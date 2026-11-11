@@ -36,7 +36,7 @@ After cutover, Baserunna is the only store for learner history. It runs on a sin
 
 ### Repeated answers after an unknown outcome
 
-Exit code `3` tells the agent to advance instead of repeating a command with an unknown outcome. Path state cannot distinguish a single answer from a duplicate.
+Exit code `3` tells the agent to advance instead of repeating a command with an unknown outcome. Path state cannot distinguish a single answer from a duplicate. The recovery step for `mt path next` and `get_next` is a repeat, and a repeat after a lost response logs a second `quiz_presented` event, which raises the presentation count that the envelope reports.
 
 - **Add an idempotency token to `mt path next` and `mt quiz answer`:** Duplicate submissions become no-ops. Agents must pass an extra field through the CLI and MCP contracts.
 - **Rely on the instruction:** The contracts stay unchanged. Correctness depends on agent compliance.
@@ -72,7 +72,9 @@ The event log is append-only and lacks a command to void a mistyped or duplicate
 
 ### Schema changes across installed versions
 
-`schema::ensure` creates missing tables and writes its schema version. It does not add columns to existing tables or block older binaries from overwriting a newer version marker.
+`Db::create_if_missing` creates missing tables and writes the schema version. It does not add columns to existing tables or block older binaries from overwriting a newer version marker.
+
+The schema version covers only the shape of the tables. It does not cover the logic that computes `cards` rows: the FSRS crate version and `cards::apply_event`. Devices on different releases write cards that different logic computed, and no check detects stale rows. Record a projection version beside the schema version, and rebuild `cards` from the event streams when the version changes.
 
 - **Run ordered migrations and reject newer schemas:** Upgrades become additive. Older binaries exit with an upgrade prompt.
 - **Defer until the next schema change:** Avoids migration machinery until the schema changes.
