@@ -61,6 +61,13 @@ Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticat
 
 `Dockerfile` and `fly.toml` deploy `mt mcp` to Fly.io via `.github/workflows/deploy-mcp.yml`.
 
+### Health checks
+
+- **`/health`:** Returns `200 ok` without a Baserunna request. The Fly service check uses it, so a Baserunna outage does not take the server out of routing or make Fly restart it.
+- **`/ready`:** Reads the state of the database and returns `200 ready` if the tools can use it. Otherwise it returns `503` with the error kind, such as `{"ready": false, "kind": "config"}` for a missing database or a rejected key. The server reuses each result for 10 seconds, so unauthenticated requests to `/ready` send at most one Baserunna request in each interval. The top-level check in `fly.toml` and the last step of the deploy workflow use it, so a deployment that cannot use its database fails.
+
+Neither route needs authentication.
+
 Required secrets:
 
 ```sh

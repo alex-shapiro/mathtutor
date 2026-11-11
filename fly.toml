@@ -32,6 +32,17 @@ grace_period = '10s'
 method = 'GET'
 path = '/health'
 
+# Reports a database that the server cannot use, such as after a revoked key, an open
+# import, or a schema change. A failed check stops `fly deploy` but does not stop routing.
+[checks.database]
+type = 'http'
+port = 8080
+method = 'GET'
+path = '/ready'
+interval = '60s'
+timeout = '10s'
+grace_period = '30s'
+
 [[vm]]
 cpu_kind = 'shared'
 memory = '256mb'

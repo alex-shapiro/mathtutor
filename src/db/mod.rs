@@ -301,6 +301,11 @@ impl Db {
         }
     }
 
+    /// Fail unless the database exists and every table set that this handle checks is current and open to it.
+    pub async fn check_usable(&self) -> Result<()> {
+        self.read(&[]).await.map(|_| ())
+    }
+
     /// Read `op` at the latest version after the database and import checks.
     pub(crate) async fn read_one(&self, op: Op) -> Result<OpResult> {
         let mut results = self.read(std::slice::from_ref(&op)).await?;

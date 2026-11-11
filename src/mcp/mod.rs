@@ -1,15 +1,15 @@
 //! Streamable HTTP MCP server for `mt mcp`.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
-    Router,
+    Json, Router,
     body::Body,
     extract::{ConnectInfo, Query, State},
     http::{self, Request, StatusCode, header::AUTHORIZATION},
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::get,
 };
 use rmcp::{
@@ -36,6 +36,7 @@ use url::Url;
 
 use crate::Error;
 use crate::db::{Db, DbConfig};
+use crate::error::ErrorKind;
 use crate::overlay::{QuizDraft, QuizPatch};
 use crate::surface::{Operation, Surface};
 use crate::types::{Rating, Strategy};
@@ -539,7 +540,8 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
         .nest_service("/mcp", mcp_service)
         .route_layer(middleware::from_fn(log_request_body))
         .route_layer(middleware::from_fn_with_state(auth_state, auth_middleware))
-        .route("/health", get(health));
+        .route("/health", get(health))
+        .route("/ready", get(ready).with_state(Readiness::new(db.clone())));
 
     if let Some(password) = auth.admin_password.as_deref() {
         let oauth_state = oauth::OAuthState::new(
@@ -768,6 +770,62 @@ async fn log_request_body(req: Request<Body>, next: Next) -> Response {
 
 async fn health() -> &'static str {
     "ok"
+}
+
+/// Time that the server reuses the result of a readiness check, so that `/ready` sends at most one Baserunna request in each interval.
+const READY_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Last result of the readiness check of the database.
+#[derive(Clone)]
+struct Readiness {
+    db: Db,
+    last: Arc<tokio::sync::Mutex<Option<ReadyCheck>>>,
+}
+
+/// Result of one readiness check.
+#[derive(Clone, Copy)]
+struct ReadyCheck {
+    at: Instant,
+    /// Kind of the error if the database was not usable.
+    failure: Option<ErrorKind>,
+}
+
+impl Readiness {
+    fn new(db: Db) -> Self {
+        Self {
+            db,
+            last: Arc::default(),
+        }
+    }
+}
+
+/// Return `200` if the tools can use the database, or `503` with the error kind.
+async fn ready(State(readiness): State<Readiness>) -> Response {
+    let failure = {
+        let mut last = readiness.last.lock().await;
+        match *last {
+            Some(check) if check.at.elapsed() < READY_CHECK_INTERVAL => check.failure,
+            _ => {
+                let failure = readiness.db.check_usable().await.err().map(|e| {
+                    tracing::warn!(error = %e, "readiness check failed");
+                    e.kind()
+                });
+                *last = Some(ReadyCheck {
+                    at: Instant::now(),
+                    failure,
+                });
+                failure
+            }
+        }
+    };
+    match failure {
+        None => (StatusCode::OK, "ready").into_response(),
+        Some(kind) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "ready": false, "kind": kind.name() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn wait_for_shutdown() {

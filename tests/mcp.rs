@@ -655,6 +655,42 @@ async fn health_returns_200_ok_without_auth() {
 }
 
 #[tokio::test]
+async fn ready_reports_a_usable_database_without_auth() {
+    let server = spawn_server().await;
+    let res = client().get(server.url("/ready")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().await.unwrap(), "ready");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn ready_fails_while_health_passes_if_the_database_is_gone() {
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            api_key: Some(API_KEY.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db)
+        .delete()
+        .await
+        .unwrap();
+
+    let res = client().get(server.url("/ready")).send().await.unwrap();
+    assert_eq!(res.status(), 503);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body, json!({ "ready": false, "kind": "config" }));
+    let health = client().get(server.url("/health")).send().await.unwrap();
+    assert_eq!(health.status(), 200, "the machine stays alive");
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn unauthenticated_request_returns_resource_metadata_pointer() {
     let server = spawn_oauth_server().await;
     let res = oauth_client()
