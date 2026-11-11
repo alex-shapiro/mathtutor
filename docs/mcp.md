@@ -14,7 +14,7 @@
 - **`path_id`**:
   - Required for all path-scoped tools.
   - Optional for the curriculum inspection tools `get_item` and `get_children`. If omitted, those tools return static curriculum data without path completion state.
-- **Return format**: All tools return JSON. Business logic errors return a `CallToolResult` with `isError: true`.
+- **Return format**: All tools return JSON. A read tool returns the same record as the matching CLI command: `get_paths` as `mt path list`, `get_state` as `mt path state`, `get_tree` as `mt path tree`, `get_syllabus` as `mt path syllabus`, `get_item` as `mt graph show`, and `get_children` as `mt graph list`. Business logic errors return a `CallToolResult` with `isError: true`.
 
 ### Prompt
 

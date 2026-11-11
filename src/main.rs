@@ -156,7 +156,7 @@ async fn run_curriculum_lookup(curriculum: &Curriculum, op: &GraphOp) -> Option<
             Some(discover::cmd_graph_show(curriculum, &c.id, None).await)
         }
         GraphOp::List(c) if c.path.is_none() => {
-            Some(discover::cmd_graph_list(curriculum, c.id.as_deref(), None).await)
+            Some(discover::cmd_graph_list(curriculum, c.id.as_deref(), None, c.recursive).await)
         }
         _ => None,
     }
@@ -270,7 +270,7 @@ async fn dispatch_path(db: &db::Db, op: PathOp) -> Result<()> {
             .map(|id| eprintln!("path {id}: strategy → {}", c.strategy)),
         PathOp::Subpath(c) => dispatch_subpath(db, c.op).await,
         PathOp::Syllabus(c) => syllabus::cmd_path_syllabus(db, c.path.as_deref(), c.n).await,
-        PathOp::Tree(c) => tree::cmd_path_tree(db, c.path.as_deref()).await,
+        PathOp::Tree(c) => tree::cmd_path_tree(db, c.path.as_deref(), c.depth).await,
     }
 }
 
@@ -297,7 +297,7 @@ async fn dispatch_graph(db: &db::Db, op: GraphOp) -> Result<()> {
         }
         GraphOp::List(c) => {
             let path = c.path.as_deref().map(|p| (db, p));
-            discover::cmd_graph_list(db.curriculum(), c.id.as_deref(), path).await
+            discover::cmd_graph_list(db.curriculum(), c.id.as_deref(), path, c.recursive).await
         }
         GraphOp::Dump(_) => overlay::cmd_graph_dump(db).await,
     }

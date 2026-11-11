@@ -459,6 +459,52 @@ async fn get_syllabus_returns_upcoming_topics_for_new_path() {
     server.stop().await;
 }
 
+/// Call tool `name` with `arguments` and return its result.
+async fn call_tool(server: &ServerHandle, session: &str, name: &str, arguments: Value) -> Value {
+    let res = mcp_post(
+        server,
+        session,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments }
+        }),
+    )
+    .await;
+    let msg = parse_sse_message(&res.text().await.unwrap()).expect("sse");
+    msg["result"].clone()
+}
+
+#[tokio::test]
+async fn path_list_and_tree_tools_return_the_cli_views() {
+    let server = spawn_server().await;
+    let session = handshake(&server).await;
+    let created = call_tool(
+        &server,
+        &session,
+        "new_path",
+        json!({ "goal": "Test", "targets": ["fnd.1.1.2"] }),
+    )
+    .await;
+    let path_id = created["structuredContent"]["path_id"].clone();
+
+    let paths = call_tool(&server, &session, "get_paths", json!({})).await;
+    let summary = &paths["structuredContent"]["paths"][0];
+    assert_eq!(summary["id"], path_id);
+    assert_eq!(
+        summary["targets"],
+        json!({ "total": 1, "learned": 0, "learned_pct": 0 })
+    );
+
+    let tree = call_tool(&server, &session, "get_tree", json!({ "path_id": path_id })).await;
+    let tree = &tree["structuredContent"];
+    assert_eq!(tree["next"], json!("fnd.1.1.1"));
+    assert_eq!(tree["reachable"]["total"], json!(2));
+    assert_eq!(tree["areas"][0]["prefix"], json!("fnd"));
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn health_returns_200_ok_without_auth() {
     for server in [spawn_server().await, spawn_oauth_server().await] {

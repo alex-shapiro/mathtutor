@@ -25,10 +25,10 @@ mt path strategy {bottom-up,top-down} [--path P]
 mt path subpath set --atoms <ID>[,<ID>...] [--path P]
 mt path subpath clear [--path P]
 mt path syllabus [--path P] [-n N]
-mt path tree  [--path P]
+mt path tree  [--path P] [--depth N]
 
 # Curriculum lookup (read-only)
-mt graph list  [<ID>] [--path P]
+mt graph list  [<ID>] [--path P] [--recursive]
 mt graph show  <ID>   [--path P]
 mt graph check [-p DIR]
 mt graph dump
@@ -50,7 +50,7 @@ mt instruct
 mt import-turso [--url URL]
 ```
 
-If `--path P` is provided to `mt graph show` or `mt graph list`, the output includes the `lesson_taught` and `complete` fields for that path.
+If `--path P` is provided to `mt graph show` or `mt graph list`, the output includes the `lesson_taught` and `complete` fields for that path. `mt graph list --recursive` also lists every descendant of the node.
 
 ### Target ID resolution
 

@@ -29,9 +29,9 @@ mt path list                          # list paths with goal and progress
 mt path new <GOAL> --targets <ID>...  # create a learning path
 mt path state [--path P]              # show path status summary
 mt path next  [--path P]              # get the next scheduled action (AYML)
-mt path tree  [--path P]              # show the reachable prerequisite tree
+mt path tree  [--path P] [--depth N]  # show the reachable prerequisite tree
 
-mt graph list [<ID>] [--path P]       # list areas or cluster children
+mt graph list [<ID>] [--path P] [--recursive]  # list areas or cluster children
 mt graph show  <ID>  [--path P]       # show an atom, cluster, or area
 mt graph check [-p DIR]               # validate the curriculum graph
 mt graph dump                         # print the user overlay as AYML

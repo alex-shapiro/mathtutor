@@ -284,3 +284,32 @@ fn invalid_arguments_exit_with_the_usage_code_and_help_succeeds() {
     assert_eq!(mt(&["no-such-command"]), Some(2));
     assert_eq!(mt(&["--help"]), Some(0));
 }
+
+#[tokio::test]
+async fn recursive_children_list_every_descendant_in_natural_order() {
+    let curriculum = graph::Curriculum::embedded();
+    let view = mathtutor::discover::compute_children(&curriculum, Some("fnd.1"), None, true)
+        .await
+        .unwrap();
+    let mathtutor::discover::ListView::Children(view) = view else {
+        panic!("expected children of a node");
+    };
+    let ids: Vec<&str> = view.descendants.iter().map(|d| d.id.as_str()).collect();
+    assert!(!ids.contains(&"fnd.1"), "{ids:?}");
+    assert!(
+        ids.contains(&"fnd.1.1") && ids.contains(&"fnd.1.1.1"),
+        "{ids:?}"
+    );
+    let mut sorted = ids.clone();
+    sorted.sort_by(|a, b| graph::natural_id_cmp(a, b));
+    assert_eq!(ids, sorted);
+    assert!(view.descendants.iter().all(|d| d.status.is_none()));
+
+    let flat = mathtutor::discover::compute_children(&curriculum, Some("fnd.1"), None, false)
+        .await
+        .unwrap();
+    let mathtutor::discover::ListView::Children(flat) = flat else {
+        panic!("expected children of a node");
+    };
+    assert!(flat.descendants.is_empty());
+}

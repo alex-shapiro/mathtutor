@@ -394,7 +394,7 @@ impl Learner {
             return;
         }
         if roll < 7 {
-            let r = path::list_summaries(&self.db).await.map(drop);
+            let r = path::compute_path_list(&self.db).await.map(drop);
             out.push(("path list", t.elapsed(), r.map_err(|e| e.to_string())));
             return;
         }

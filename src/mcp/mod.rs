@@ -12,7 +12,6 @@ use axum::{
     response::Response,
     routing::get,
 };
-use chrono::{DateTime, Utc};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{router::prompt::PromptRouter, tool::ToolRouter, wrapper::Parameters},
@@ -37,11 +36,8 @@ use url::Url;
 
 use crate::Error;
 use crate::db::{Db, DbConfig};
-use crate::graph::{Graph, natural_id_cmp};
-use crate::progress::PathProgress;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
-use crate::view::Want;
-use crate::{answer, discover, graph, path, scheduler, state, store, subpath, syllabus, tree};
+use crate::{answer, discover, path, scheduler, state, store, subpath, syllabus, tree};
 
 // Keep distinct from `Result` because rmcp macros expand to bare `Result<_, ErrorData>`.
 type CrateResult<T> = std::result::Result<T, Error>;
@@ -198,11 +194,7 @@ pub struct AnswerQuizArgs {
 impl MathTutorServer {
     #[tool(description = "List all learning paths for this user.")]
     async fn get_paths(&self) -> std::result::Result<CallToolResult, McpError> {
-        encode(
-            list_paths(&self.db)
-                .await
-                .map(|paths| json!({ "paths": paths })),
-        )
+        encode(path::compute_path_list(&self.db).await)
     }
 
     #[tool(description = "Start a new learning path with a goal and targets.")]
@@ -263,7 +255,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetTreeArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        encode(compute_tree(&self.db, &args.path_id, args.depth).await)
+        encode(tree::compute_tree(&self.db, Some(&args.path_id), args.depth).await)
     }
 
     #[tool(description = "Preview upcoming lesson topics.")]
@@ -279,7 +271,8 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetItemArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        encode(compute_item(&self.db, &args.id, args.path_id.as_deref()).await)
+        let path = args.path_id.as_deref().map(|p| (&self.db, p));
+        encode(discover::compute_item(self.db.curriculum(), &args.id, path).await)
     }
 
     #[tool(description = "List children of a curriculum node. Omit `id` for root areas.")]
@@ -287,11 +280,12 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetChildrenArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
+        let path = args.path_id.as_deref().map(|p| (&self.db, p));
         encode(
-            compute_children(
-                &self.db,
+            discover::compute_children(
+                self.db.curriculum(),
                 args.id.as_deref(),
-                args.path_id.as_deref(),
+                path,
                 args.recursive.unwrap_or(false),
             )
             .await,
@@ -404,262 +398,6 @@ impl ServerHandler for MathTutorServer {
                 "Math Tutor MCP server. Call the `mathtutor-playbook` prompt for the \
                  full operator playbook before invoking tools.",
             )
-    }
-}
-
-#[derive(Serialize)]
-struct PathSummary {
-    id: String,
-    goal: String,
-    strategy: Strategy,
-    created_at: DateTime<Utc>,
-    targets: Vec<String>,
-}
-
-async fn list_paths(db: &Db) -> CrateResult<Vec<PathSummary>> {
-    let view = db.snapshot(&Want::all_paths().without_overlay()).await?;
-    Ok(view
-        .paths()
-        .into_iter()
-        .map(|p| PathSummary {
-            id: p.file.id.clone(),
-            goal: p.file.goal.clone(),
-            strategy: p.file.strategy,
-            created_at: p.file.created_at,
-            targets: p.file.targets.clone(),
-        })
-        .collect())
-}
-
-#[derive(Serialize)]
-struct ItemView {
-    item: discover::ShowView,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<AtomStatus>,
-}
-
-#[derive(Serialize)]
-struct AtomStatus {
-    lesson_taught: bool,
-    complete: bool,
-}
-
-async fn compute_item(db: &Db, id: &str, path_id: Option<&str>) -> CrateResult<ItemView> {
-    let path = path_id.map(|p| (db, p));
-    let (g, progress) = discover::graph_for(db.curriculum(), path).await?;
-    let item = discover::show_view(&g, id)?;
-    let status = progress.and_then(|p| status_for(&g, id, &p));
-    Ok(ItemView { item, status })
-}
-
-#[derive(Serialize)]
-struct ChildrenView {
-    view: discover::ListView,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    descendants: Vec<ChildStatus>,
-}
-
-#[derive(Serialize)]
-struct ChildStatus {
-    id: String,
-    name: String,
-    is_atom: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<AtomStatus>,
-}
-
-async fn compute_children(
-    db: &Db,
-    id: Option<&str>,
-    path_id: Option<&str>,
-    recursive: bool,
-) -> CrateResult<ChildrenView> {
-    let path = path_id.map(|p| (db, p));
-    let (g, progress) = discover::graph_for(db.curriculum(), path).await?;
-    let view = discover::list_view(&g, id)?;
-    let descendants = if recursive {
-        let roots = match id {
-            Some(s) => vec![s.to_string()],
-            None => g.areas.iter().map(|a| a.prefix.clone()).collect(),
-        };
-        gather_descendants(&g, &roots, progress.as_ref())
-    } else {
-        Vec::new()
-    };
-    Ok(ChildrenView { view, descendants })
-}
-
-fn gather_descendants(
-    g: &Graph,
-    roots: &[String],
-    progress: Option<&PathProgress>,
-) -> Vec<ChildStatus> {
-    let mut out = Vec::new();
-    let mut stack: Vec<String> = roots.to_vec();
-    while let Some(id) = stack.pop() {
-        let Some(c) = g.by_id.get(&id) else { continue };
-        for child in &c.children_ids {
-            stack.push(child.clone());
-        }
-        out.push(ChildStatus {
-            id: c.id.clone(),
-            name: c.name.clone(),
-            is_atom: c.children_ids.is_empty(),
-            status: progress.and_then(|p| status_for(g, &id, p)),
-        });
-    }
-    out.sort_by(|a, b| a.id.cmp(&b.id));
-    out
-}
-
-fn status_for(g: &Graph, id: &str, progress: &PathProgress) -> Option<AtomStatus> {
-    let c = g.by_id.get(id)?;
-    if !c.children_ids.is_empty() {
-        return None;
-    }
-    Some(AtomStatus {
-        lesson_taught: progress.lesson_taught(id),
-        complete: scheduler::is_atom_complete(g, progress, id),
-    })
-}
-
-#[derive(Serialize)]
-struct TreeView {
-    path: String,
-    goal: String,
-    targets: TreeProgress,
-    reachable: ReachProgress,
-    nodes: Vec<TreeNode>,
-}
-
-#[derive(Serialize)]
-struct TreeProgress {
-    total: usize,
-    learned: usize,
-    learned_pct: usize,
-}
-
-#[derive(Serialize)]
-struct ReachProgress {
-    total: usize,
-    taught: usize,
-    learned: usize,
-}
-
-#[derive(Serialize)]
-struct TreeNode {
-    id: String,
-    name: String,
-    is_atom: bool,
-    is_target: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<AtomStatus>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    children: Vec<TreeNode>,
-}
-
-async fn compute_tree(db: &Db, path_id: &str, depth: Option<u32>) -> CrateResult<TreeView> {
-    let view = db.snapshot(&Want::path(Some(path_id))).await?;
-    let ps = view.path()?;
-    let p = ps.file.clone();
-    let g = view.graph()?;
-    let progress = ps.progress();
-    let target_atoms = p.resolve_targets(&g)?;
-
-    let reachable = g.reachable_atoms(&target_atoms);
-    let spine = tree::build_spine(&g, &reachable);
-
-    let targets_total = target_atoms.len();
-    let targets_learned = target_atoms
-        .iter()
-        .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
-        .count();
-    let targets_pct = (targets_learned * 100)
-        .checked_div(targets_total)
-        .unwrap_or(0);
-    let reach_total = reachable.len();
-    let reach_taught = reachable
-        .iter()
-        .filter(|a| progress.lesson_taught(a))
-        .count();
-    let reach_learned = reachable
-        .iter()
-        .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
-        .count();
-
-    let target_set: std::collections::HashSet<&str> =
-        target_atoms.iter().map(String::as_str).collect();
-
-    let mut nodes = Vec::new();
-    for area in &g.areas {
-        let mut top: Vec<TreeNode> = g
-            .by_id
-            .values()
-            .filter(|c| {
-                let parts: Vec<&str> = c.id.split('.').collect();
-                parts.len() == 2 && parts[0] == area.prefix && spine.contains(&c.id)
-            })
-            .map(|c| build_tree_node(&g, &progress, &spine, &target_set, c, depth, 1))
-            .collect();
-        top.sort_by(|a, b| natural_id_cmp(&a.id, &b.id));
-        nodes.extend(top);
-    }
-
-    Ok(TreeView {
-        path: p.id,
-        goal: p.goal,
-        targets: TreeProgress {
-            total: targets_total,
-            learned: targets_learned,
-            learned_pct: targets_pct,
-        },
-        reachable: ReachProgress {
-            total: reach_total,
-            taught: reach_taught,
-            learned: reach_learned,
-        },
-        nodes,
-    })
-}
-
-fn build_tree_node(
-    g: &Graph,
-    progress: &PathProgress,
-    spine: &std::collections::HashSet<String>,
-    targets: &std::collections::HashSet<&str>,
-    c: &graph::FlatConcept,
-    max_depth: Option<u32>,
-    depth: u32,
-) -> TreeNode {
-    let is_atom = c.children_ids.is_empty();
-    let status = if is_atom {
-        Some(AtomStatus {
-            lesson_taught: progress.lesson_taught(&c.id),
-            complete: scheduler::is_atom_complete(g, progress, &c.id),
-        })
-    } else {
-        None
-    };
-    let children = if max_depth.is_some_and(|md| depth >= md) {
-        Vec::new()
-    } else {
-        let mut kids: Vec<TreeNode> = c
-            .children_ids
-            .iter()
-            .filter_map(|cid| g.by_id.get(cid))
-            .filter(|kc| spine.contains(&kc.id))
-            .map(|kc| build_tree_node(g, progress, spine, targets, kc, max_depth, depth + 1))
-            .collect();
-        kids.sort_by(|a, b| natural_id_cmp(&a.id, &b.id));
-        kids
-    };
-    TreeNode {
-        id: c.id.clone(),
-        name: c.name.clone(),
-        is_atom,
-        is_target: targets.contains(c.id.as_str()),
-        status,
-        children,
     }
 }
 

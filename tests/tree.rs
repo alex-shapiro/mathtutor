@@ -1,14 +1,63 @@
-//! Unit tests for `tree::state_badge` and `tree::build_spine`.
+//! Tests for `tree::compute_tree`, its text rendering, badges, and spine.
 
 use std::collections::HashSet;
 
+use mathtutor::graph::FlatConcept;
 use mathtutor::progress::PathProgress;
-use mathtutor::tree::{build_spine, state_badge};
-use mathtutor::types::{Difficulty, Rating};
+use mathtutor::tree::{self, TreeAtomStatus, TreeNode, build_spine};
+use mathtutor::types::{Difficulty, Rating, Strategy};
 
 mod common;
 
 use common::{atom, cluster, graph_of, quiz};
+
+fn state_badge(progress: &PathProgress, c: &FlatConcept) -> String {
+    TreeAtomStatus::of(&graph_of(vec![c.clone()]), progress, c).badge()
+}
+
+fn find<'a>(nodes: &'a [TreeNode], id: &str) -> Option<&'a TreeNode> {
+    nodes
+        .iter()
+        .find_map(|n| (n.id == id).then_some(n).or_else(|| find(&n.children, id)))
+}
+
+#[tokio::test]
+async fn compute_tree_reports_progress_targets_and_next_atom() {
+    let db = common::empty_db().await;
+    let id = mathtutor::path::cmd_path_new(&db, "g", &["fnd.1.1.2".into()], Strategy::BottomUp)
+        .await
+        .unwrap();
+    let t = tree::compute_tree(&db, Some(&id), None).await.unwrap();
+
+    assert_eq!((t.targets.total, t.targets.learned_pct), (1, 0));
+    assert_eq!(t.reachable.total, 2);
+    assert_eq!(t.next.as_deref(), Some("fnd.1.1.1"));
+    assert_eq!(t.areas.len(), 1);
+    assert_eq!(t.areas[0].prefix, "fnd");
+    let target = find(&t.areas[0].nodes, "fnd.1.1.2").expect("target node");
+    assert!(target.is_target && target.is_atom);
+    assert!(!find(&t.areas[0].nodes, "fnd.1.1.1").unwrap().is_target);
+
+    let mut text = Vec::new();
+    tree::write_tree(&mut text, &t).unwrap();
+    let text = String::from_utf8(text).unwrap();
+    assert!(text.contains("targets:     0 / 1 learned (0%)"), "{text}");
+    let line = |id: &str| text.lines().find(|l| l.contains(id)).unwrap().to_string();
+    assert!(line("fnd.1.1.1 ").ends_with("← NEXT"), "{text}");
+    assert!(line("fnd.1.1.2 ").ends_with(" *"), "{text}");
+}
+
+#[tokio::test]
+async fn compute_tree_stops_at_the_requested_depth() {
+    let db = common::empty_db().await;
+    let id = mathtutor::path::cmd_path_new(&db, "g", &["fnd.1.1.2".into()], Strategy::BottomUp)
+        .await
+        .unwrap();
+    let t = tree::compute_tree(&db, Some(&id), Some(1)).await.unwrap();
+    let top = &t.areas[0].nodes;
+    assert!(!top.is_empty());
+    assert!(top.iter().all(|n| n.children.is_empty()));
+}
 
 #[test]
 fn badge_empty_if_atom_untaught() {

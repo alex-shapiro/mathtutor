@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 
 use crate::db::Db;
 use crate::graph::{Graph, natural_id_cmp};
+use crate::progress::{PathCompletion, TargetProgress};
 use crate::types::Strategy;
 use crate::view::Want;
 use crate::{Error, Result};
@@ -88,57 +89,49 @@ pub async fn cmd_path_strategy(
     .await
 }
 
-/// Summary of progress for a learning path.
+/// Goal and target progress of a learning path.
 #[derive(Debug, serde::Serialize)]
 pub struct PathSummary {
     pub id: String,
     pub goal: String,
     pub strategy: Strategy,
     pub created_at: chrono::DateTime<Utc>,
-    pub targets: usize,
-    pub learned: usize,
-    pub learned_pct: usize,
+    pub targets: TargetProgress,
 }
 
-#[derive(serde::Serialize)]
-struct PathListView {
-    paths: Vec<PathSummary>,
+/// Learning paths of the user, ordered by creation time.
+#[derive(Debug, serde::Serialize)]
+pub struct PathListView {
+    pub paths: Vec<PathSummary>,
 }
 
 /// Print all learning path summaries as AYML (`mt path list`).
 pub async fn cmd_path_list(db: &Db) -> Result<()> {
-    let summaries = list_summaries(db).await?;
-    let view = PathListView { paths: summaries };
+    let view = compute_path_list(db).await?;
     let text = ayml::to_string(&view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
 }
 
-/// Compute progress summaries for all learning paths ordered by creation time.
-pub async fn list_summaries(db: &Db) -> Result<Vec<PathSummary>> {
+/// Compute the progress summary of every learning path.
+pub async fn compute_path_list(db: &Db) -> Result<PathListView> {
     let view = db.snapshot(&Want::all_paths()).await?;
     let g = view.graph()?;
-    view.paths()
+    let paths = view
+        .paths()
         .into_iter()
         .map(|p| {
-            let progress = p.progress();
             let atoms = p.file.resolve_targets(&g)?;
-            let targets = atoms.len();
-            let learned = atoms
-                .iter()
-                .filter(|a| crate::scheduler::is_atom_complete(&g, &progress, a))
-                .count();
             Ok(PathSummary {
                 id: p.file.id.clone(),
                 goal: p.file.goal.clone(),
                 strategy: p.file.strategy,
                 created_at: p.file.created_at,
-                targets,
-                learned,
-                learned_pct: (learned * 100).checked_div(targets).unwrap_or(0),
+                targets: PathCompletion::of(&g, &atoms, &p.progress()).targets,
             })
         })
-        .collect()
+        .collect::<Result<_>>()?;
+    Ok(PathListView { paths })
 }
 
 fn dedup_preserving_order(ids: &[String]) -> Vec<String> {

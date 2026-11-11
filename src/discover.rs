@@ -1,33 +1,108 @@
 //! Read-only curriculum lookup for `mt graph show` and `mt graph list`.
 
+use std::sync::Arc;
+
 use serde::Serialize;
 
 use crate::db::Db;
-use crate::graph::{Curriculum, FlatConcept, Graph};
+use crate::graph::{Curriculum, FlatConcept, Graph, natural_id_cmp};
 use crate::progress::PathProgress;
 use crate::scheduler;
 use crate::view::Want;
 use crate::{Error, Result};
 
-/// Print curriculum item `id`, with the progress of path `path` if it is provided.
+/// Print curriculum item `id` as AYML, with the progress of path `path` if it is provided.
 pub async fn cmd_graph_show(
     curriculum: &Curriculum,
     id: &str,
     path: Option<(&Db, &str)>,
 ) -> Result<()> {
+    emit(&compute_item(curriculum, id, path).await?)
+}
+
+/// Print the curriculum items under `id` as AYML, with the progress of path `path` if it is provided.
+pub async fn cmd_graph_list(
+    curriculum: &Curriculum,
+    id: Option<&str>,
+    path: Option<(&Db, &str)>,
+    recursive: bool,
+) -> Result<()> {
+    emit(&compute_children(curriculum, id, path, recursive).await?)
+}
+
+/// Return curriculum item `id`, with the progress of path `path` if it is provided.
+pub async fn compute_item(
+    curriculum: &Curriculum,
+    id: &str,
+    path: Option<(&Db, &str)>,
+) -> Result<ConceptView> {
     let (g, progress) = graph_for(curriculum, path).await?;
-    let mut view = show_view(&g, id)?;
-    if let Some(progress) = progress {
-        enrich_show_view(&mut view, &g, &progress, id);
+    let c = concept(&g, id)?;
+    let mut view = concept_view(&g, c);
+    if let (ConceptView::Atom(av), Some(progress)) = (&mut view, &progress) {
+        av.status = atom_status(&g, progress, id);
     }
-    emit(&view)
+    Ok(view)
+}
+
+/// Return the children of `id`, or the curriculum areas if `id` is `None`, with every descendant if `recursive` is set.
+///
+/// Each atom includes the progress of path `path` if it is provided.
+pub async fn compute_children(
+    curriculum: &Curriculum,
+    id: Option<&str>,
+    path: Option<(&Db, &str)>,
+    recursive: bool,
+) -> Result<ListView> {
+    let (g, progress) = graph_for(curriculum, path).await?;
+    let brief = |c: &FlatConcept| ChildBrief {
+        id: c.id.clone(),
+        name: c.name.clone(),
+        is_atom: c.children_ids.is_empty(),
+        status: progress.as_ref().and_then(|p| atom_status(&g, p, &c.id)),
+    };
+    let roots: Vec<&str> = match id {
+        Some(id) => vec![concept(&g, id)?.id.as_str()],
+        None => g.areas.iter().map(|a| a.prefix.as_str()).collect(),
+    };
+    let descendants = if recursive {
+        descendants(&g, &roots).into_iter().map(brief).collect()
+    } else {
+        Vec::new()
+    };
+    let Some(id) = id else {
+        return Ok(ListView::Areas(AreasView {
+            areas: g
+                .areas
+                .iter()
+                .map(|a| AreaSummary {
+                    prefix: a.prefix.clone(),
+                    slug: a.slug.clone(),
+                    summary: a.summary.clone(),
+                })
+                .collect(),
+            descendants,
+        }));
+    };
+    let c = concept(&g, id)?;
+    Ok(ListView::Children(ChildrenListView {
+        id: c.id.clone(),
+        name: c.name.clone(),
+        children: c
+            .children_ids
+            .iter()
+            .filter_map(|cid| g.by_id.get(cid))
+            .map(brief)
+            .collect(),
+        descendants,
+    }))
 }
 
 /// Load the merged graph and the progress of path `path` if it is provided, or the graph of `curriculum` otherwise.
 pub async fn graph_for(
     curriculum: &Curriculum,
     path: Option<(&Db, &str)>,
-) -> Result<(std::sync::Arc<Graph>, Option<PathProgress>)> {
+) -> Result<(Arc<Graph>, Option<PathProgress>)> {
     let Some((db, path_id)) = path else {
         return Ok((curriculum.graph()?, None));
     };
@@ -36,72 +111,40 @@ pub async fn graph_for(
     Ok((view.graph()?, Some(progress)))
 }
 
-/// Print curriculum items under `id`, with the progress of path `path` if it is provided.
-pub async fn cmd_graph_list(
-    curriculum: &Curriculum,
-    id: Option<&str>,
-    path: Option<(&Db, &str)>,
-) -> Result<()> {
-    let (g, progress) = graph_for(curriculum, path).await?;
-    let mut view = list_view(&g, id)?;
-    if let Some(progress) = progress {
-        enrich_list_view(&mut view, &g, &progress);
-    }
-    emit(&view)
-}
-
-pub fn show_view(g: &Graph, id: &str) -> Result<ShowView> {
-    let c = g
-        .by_id
-        .get(id)
-        .ok_or_else(|| Error::UnknownId(id.to_string()))?;
-    Ok(ShowView::Concept(concept_view(g, c)))
-}
-
-pub fn list_view(g: &Graph, id: Option<&str>) -> Result<ListView> {
-    let Some(id) = id else {
-        return Ok(ListView::Areas(areas_view(g)));
-    };
-    let c = g
-        .by_id
-        .get(id)
-        .ok_or_else(|| Error::UnknownId(id.to_string()))?;
-    Ok(ListView::Children(children_list_view(g, c)))
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-pub enum ShowView {
-    Concept(ConceptView),
-}
-
-#[derive(Serialize)]
+/// Curriculum areas, or the children of a curriculum node.
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum ListView {
     Areas(AreasView),
     Children(ChildrenListView),
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct AreasView {
-    areas: Vec<AreaSummary>,
+    pub areas: Vec<AreaSummary>,
+    /// Every node in the curriculum, if the lookup is recursive.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub descendants: Vec<ChildBrief>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct AreaSummary {
     pub prefix: String,
     pub slug: String,
     pub summary: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ChildrenListView {
     pub id: String,
     pub name: String,
     pub children: Vec<ChildBrief>,
+    /// Every node below this node, if the lookup is recursive.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub descendants: Vec<ChildBrief>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ChildBrief {
     pub id: String,
     pub name: String,
@@ -110,20 +153,22 @@ pub struct ChildBrief {
     pub status: Option<AtomStatus>,
 }
 
+/// Progress of a path on an atom.
 #[derive(Serialize, Debug, Clone, Copy)]
 pub struct AtomStatus {
     pub lesson_taught: bool,
     pub complete: bool,
 }
 
-#[derive(Serialize)]
+/// Curriculum atom or cluster.
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum ConceptView {
     Atom(AtomView),
     Cluster(ClusterView),
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct AtomView {
     pub id: String,
     pub name: String,
@@ -137,7 +182,7 @@ pub struct AtomView {
     pub status: Option<AtomStatus>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct ClusterView {
     pub id: String,
     pub name: String,
@@ -149,77 +194,45 @@ pub struct ClusterView {
     pub atomic_descendants: usize,
 }
 
-fn areas_view(g: &Graph) -> AreasView {
-    AreasView {
-        areas: g
-            .areas
-            .iter()
-            .map(|a| AreaSummary {
-                prefix: a.prefix.clone(),
-                slug: a.slug.clone(),
-                summary: a.summary.clone(),
-            })
-            .collect(),
-    }
-}
-
-fn children_list_view(g: &Graph, c: &FlatConcept) -> ChildrenListView {
-    ChildrenListView {
-        id: c.id.clone(),
-        name: c.name.clone(),
-        children: c
-            .children_ids
-            .iter()
-            .filter_map(|cid| g.by_id.get(cid))
-            .map(child_brief)
-            .collect(),
-    }
+fn concept<'a>(g: &'a Graph, id: &str) -> Result<&'a FlatConcept> {
+    g.by_id
+        .get(id)
+        .ok_or_else(|| Error::UnknownId(id.to_string()))
 }
 
 fn concept_view(g: &Graph, c: &FlatConcept) -> ConceptView {
-    let prerequisites: Vec<ChildBrief> = c
-        .prerequisites
-        .iter()
-        .filter_map(|pid| g.by_id.get(pid))
-        .map(child_brief)
-        .collect();
-
+    let briefs = |ids: &[String]| -> Vec<ChildBrief> {
+        ids.iter()
+            .filter_map(|id| g.by_id.get(id))
+            .map(|c| ChildBrief {
+                id: c.id.clone(),
+                name: c.name.clone(),
+                is_atom: c.children_ids.is_empty(),
+                status: None,
+            })
+            .collect()
+    };
     if c.children_ids.is_empty() {
         ConceptView::Atom(AtomView {
             id: c.id.clone(),
             name: c.name.clone(),
             description: c.description.clone(),
             is_atom: true,
-            prerequisites,
+            prerequisites: briefs(&c.prerequisites),
             has_lesson: c.lesson.is_some(),
             quizzes: c.quizzes.len(),
             status: None,
         })
     } else {
-        let children: Vec<ChildBrief> = c
-            .children_ids
-            .iter()
-            .filter_map(|cid| g.by_id.get(cid))
-            .map(child_brief)
-            .collect();
         ConceptView::Cluster(ClusterView {
             id: c.id.clone(),
             name: c.name.clone(),
             description: c.description.clone(),
             is_atom: false,
-            prerequisites,
-            children,
+            prerequisites: briefs(&c.prerequisites),
+            children: briefs(&c.children_ids),
             atomic_descendants: count_atomic_descendants(g, &c.id),
         })
-    }
-}
-
-fn child_brief(c: &FlatConcept) -> ChildBrief {
-    ChildBrief {
-        id: c.id.clone(),
-        name: c.name.clone(),
-        is_atom: c.children_ids.is_empty(),
-        status: None,
     }
 }
 
@@ -234,21 +247,21 @@ fn atom_status(g: &Graph, progress: &PathProgress, atom_id: &str) -> Option<Atom
     })
 }
 
-fn enrich_show_view(view: &mut ShowView, g: &Graph, progress: &PathProgress, id: &str) {
-    if let ShowView::Concept(ConceptView::Atom(av)) = view {
-        av.status = atom_status(g, progress, id);
-    }
-}
-
-fn enrich_list_view(view: &mut ListView, g: &Graph, progress: &PathProgress) {
-    let ListView::Children(cv) = view else {
-        return;
-    };
-    for child in &mut cv.children {
-        if child.is_atom {
-            child.status = atom_status(g, progress, &child.id);
+/// Return every node below `roots` in natural ID order.
+fn descendants<'a>(g: &'a Graph, roots: &[&str]) -> Vec<&'a FlatConcept> {
+    let mut out = Vec::new();
+    let mut stack: Vec<&str> = roots.to_vec();
+    while let Some(id) = stack.pop() {
+        let Some(c) = g.by_id.get(id) else { continue };
+        for child in &c.children_ids {
+            if let Some(cc) = g.by_id.get(child) {
+                out.push(cc);
+                stack.push(&cc.id);
+            }
         }
     }
+    out.sort_by(|a, b| natural_id_cmp(&a.id, &b.id));
+    out
 }
 
 fn count_atomic_descendants(g: &Graph, id: &str) -> usize {

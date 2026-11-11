@@ -1,8 +1,10 @@
-//! Unit and integration tests for `state::compute_progress` and `state::compute_state`.
+//! Unit and integration tests for `PathCompletion::of` and `state::compute_state`.
 
 use chrono::{Duration, Utc};
 use mathtutor::cards::{CardRow, CardState};
-use mathtutor::progress::PathProgress;
+use mathtutor::graph::Graph;
+use mathtutor::path::PathFile;
+use mathtutor::progress::{PathCompletion, PathProgress, ReachProgress, TargetProgress};
 use mathtutor::state;
 
 mod common;
@@ -11,13 +13,18 @@ use common::{
     PATH_ID, complete_atom, complete_events, empty_atom, graph_of, path_with, progress_of, taught,
 };
 
+fn completion(g: &Graph, p: &PathFile, progress: &PathProgress) -> (TargetProgress, ReachProgress) {
+    let c = PathCompletion::of(g, &p.resolve_targets(g).unwrap(), progress);
+    (c.targets, c.reachable)
+}
+
 #[test]
 fn target_complete_counts_toward_both_targets_and_reachable() {
     let g = graph_of(vec![complete_atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = complete_events("a");
 
-    let (t, r) = state::compute_progress(&g, &p, &progress_of(&events)).unwrap();
+    let (t, r) = completion(&g, &p, &progress_of(&events));
     assert_eq!(t.total, 1);
     assert_eq!(t.learned, 1);
     assert_eq!(t.learned_pct, 100);
@@ -35,7 +42,7 @@ fn prereq_complete_counts_toward_reachable_only() {
     let p = path_with(&["target"]);
     let events = complete_events("pre");
 
-    let (t, r) = state::compute_progress(&g, &p, &progress_of(&events)).unwrap();
+    let (t, r) = completion(&g, &p, &progress_of(&events));
     assert_eq!(t.total, 1);
     assert_eq!(t.learned, 0, "target itself is not yet complete");
     assert_eq!(t.learned_pct, 0);
@@ -49,7 +56,7 @@ fn taught_counts_lesson_taught_in_path_regardless_of_quiz_progress() {
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
 
-    let (t, r) = state::compute_progress(&g, &p, &progress_of(&events)).unwrap();
+    let (t, r) = completion(&g, &p, &progress_of(&events));
     assert_eq!(t.learned, 0);
     assert_eq!(r.taught, 1);
     assert_eq!(r.learned, 0);
@@ -60,7 +67,7 @@ fn empty_path_yields_zero_progress_without_division_panic() {
     let g = graph_of(vec![]);
     let p = path_with(&[]);
 
-    let (t, r) = state::compute_progress(&g, &p, &PathProgress::default()).unwrap();
+    let (t, r) = completion(&g, &p, &PathProgress::default());
     assert_eq!(t.total, 0);
     assert_eq!(t.learned, 0);
     assert_eq!(t.learned_pct, 0, "zero targets must not divide by zero");
@@ -78,7 +85,7 @@ fn reachable_includes_transitive_prereqs() {
     ]);
     let p = path_with(&["c"]);
 
-    let (_t, r) = state::compute_progress(&g, &p, &PathProgress::default()).unwrap();
+    let (_t, r) = completion(&g, &p, &PathProgress::default());
     assert_eq!(r.total, 3);
 }
 
@@ -92,7 +99,7 @@ fn learned_pct_rounds_down() {
     let p = path_with(&["a", "b", "c"]);
     let events = complete_events("a");
 
-    let (t, _r) = state::compute_progress(&g, &p, &progress_of(&events)).unwrap();
+    let (t, _r) = completion(&g, &p, &progress_of(&events));
     assert_eq!(t.learned, 1);
     assert_eq!(t.learned_pct, 33);
 }
@@ -184,12 +191,12 @@ fn write_state_emits_past_due_line() {
         strategy: mathtutor::types::Strategy::BottomUp,
         created_at: Utc::now(),
         updated_at: Utc::now(),
-        targets: state::TargetProgress {
+        targets: TargetProgress {
             total: 0,
             learned: 0,
             learned_pct: 0,
         },
-        reachable: Some(state::ReachProgress {
+        reachable: Some(ReachProgress {
             total: 0,
             taught: 0,
             learned: 0,

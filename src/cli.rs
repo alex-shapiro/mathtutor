@@ -119,6 +119,10 @@ pub struct PathTreeCmd {
     /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
+
+    /// maximum number of levels below each area (default: unlimited)
+    #[argh(option)]
+    pub depth: Option<u32>,
 }
 
 /// Change the traversal strategy for a learning path.
@@ -212,6 +216,10 @@ pub struct GraphListCmd {
     /// path ID used to include per-atom completion status
     #[argh(option, short = 'p')]
     pub path: Option<String>,
+
+    /// also list every descendant of the node
+    #[argh(switch)]
+    pub recursive: bool,
 }
 
 /// Validate the curriculum graph.

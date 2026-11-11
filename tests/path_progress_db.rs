@@ -106,3 +106,23 @@ async fn loads_only_rows_for_the_named_path() {
     assert!(other.lesson_taught("atom.other"));
     assert!(other.quiz_answered_correctly("atom.other.q1"));
 }
+
+#[tokio::test]
+async fn path_list_reports_target_progress_of_each_path() {
+    let db = common::empty_db().await;
+    let id = mathtutor::path::cmd_path_new(&db, "g", &["fnd.1.1.2".into()], Strategy::BottomUp)
+        .await
+        .unwrap();
+    let list = mathtutor::path::compute_path_list(&db).await.unwrap();
+    assert_eq!(list.paths.len(), 1);
+    let summary = &list.paths[0];
+    assert_eq!(summary.id, id);
+    assert_eq!(
+        (
+            summary.targets.total,
+            summary.targets.learned,
+            summary.targets.learned_pct
+        ),
+        (1, 0, 0)
+    );
+}
