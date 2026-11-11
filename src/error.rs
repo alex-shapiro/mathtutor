@@ -35,6 +35,11 @@ pub enum Error {
     #[error("learning path not found")]
     NoPath,
 
+    #[error(
+        "path '{0}' is not loaded in this transaction; mt must load a path before it records events for the path"
+    )]
+    PathNotLoaded(String),
+
     #[error("HOME not set; set MATHTUTOR_HOME or HOME")]
     NoHome,
 
@@ -177,6 +182,7 @@ impl Error {
             | Error::AymlParse { .. }
             | Error::AymlSerialize(_)
             | Error::NoPath
+            | Error::PathNotLoaded(_)
             | Error::NoHome
             | Error::NoLesson(_)
             | Error::Fsrs(_)

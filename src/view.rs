@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use crate::cards::{self, CardRow, ProjectionTarget};
 use crate::db::client::Entry;
 use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
-use crate::event_log::Event;
+use crate::event_log::{Event, EventKind};
 use crate::graph::Graph;
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
@@ -272,8 +272,13 @@ impl Changes {
     }
 
     /// Append `e` to its path event stream and update derived `cards` and `taught` rows.
+    ///
+    /// Fails with [`Error::PathNotLoaded`] unless `view` holds the path of `e` or this write set creates the path.
     pub fn append(&mut self, view: &View, e: &Event) -> Result<()> {
         let base = view.paths.get(&e.path);
+        if base.is_none() && e.kind != EventKind::PathCreated && !self.creates_path(&e.path) {
+            return Err(Error::PathNotLoaded(e.path.clone()));
+        }
         match cards::projection_target(e)? {
             ProjectionTarget::Taught { atom_id } => {
                 let key = (e.path.clone(), atom_id.to_string());
@@ -299,6 +304,13 @@ impl Changes {
             .or_default()
             .push(e.clone());
         Ok(())
+    }
+
+    /// Return `true` if this write set appends the `path_created` event of `path_id`.
+    fn creates_path(&self, path_id: &str) -> bool {
+        self.events
+            .get(path_id)
+            .is_some_and(|events| events.iter().any(|e| e.kind == EventKind::PathCreated))
     }
 
     fn into_ops(self, overlay_version: Option<&str>) -> Vec<Op> {

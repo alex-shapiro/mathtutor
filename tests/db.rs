@@ -311,6 +311,43 @@ async fn concurrent_answers_are_recorded_once_each() {
 }
 
 #[tokio::test]
+async fn append_rejects_a_path_outside_the_view_and_keeps_its_history() {
+    let db = common::fresh_db(PATH_ID).await;
+    common::append(&db, &[common::answered("a.q1", Rating::Good)]).await;
+
+    let e = db
+        .transact(&Want::overlay(), |view, changes| {
+            changes.append(view, &common::answered("a.q1", Rating::Again))
+        })
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(&e, Error::PathNotLoaded(id) if id == PATH_ID),
+        "{e:?}"
+    );
+    let card = &common::path_state(&db, PATH_ID).await.cards["a.q1"];
+    assert_eq!((card.reps, card.lapses), (1, 0));
+}
+
+#[tokio::test]
+async fn append_accepts_events_after_the_path_created_event_in_one_write() {
+    let db = common::empty_db().await;
+    let created = event_log::path_created("p_new".into());
+    let taught = event_log::lesson_taught("p_new".into(), "a".into());
+
+    db.transact(&Want::nothing(), |view, changes| {
+        changes.append(view, &created)?;
+        changes.append(view, &taught)
+    })
+    .await
+    .unwrap();
+
+    let events = event_log::load(&db, "p_new").await.unwrap();
+    assert_eq!(events.len(), 2);
+}
+
+#[tokio::test]
 async fn recompute_reproduces_incremental_rows_exactly() {
     let db = common::fresh_db(PATH_ID).await;
     let t0 = Utc::now() - Duration::days(30);

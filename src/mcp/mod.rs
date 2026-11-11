@@ -751,6 +751,7 @@ fn error_kind(e: &Error) -> &'static str {
         Error::NotAtom(_) => "not_atom",
         Error::AtomNotFound(_) => "atom_not_found",
         Error::NoPath => "no_path",
+        Error::PathNotLoaded(_) => "internal",
         Error::NoLesson(_) => "no_lesson",
         Error::InvalidRating(_) => "invalid_rating",
         Error::InvalidDifficulty(_) => "invalid_difficulty",
