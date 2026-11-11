@@ -95,7 +95,7 @@ impl Db {
     pub async fn create_if_missing(&self) -> Result<bool> {
         self.create_tables_if_missing()
             .await
-            .map_err(|e| self.name_rejected_token(e))
+            .map_err(|e| self.explain_key_error(e))
     }
 
     async fn create_tables_if_missing(&self) -> Result<bool> {
@@ -105,7 +105,10 @@ impl Db {
             SchemaState::Current => {}
             SchemaState::Other(_) => return Err(self.schema_error(TableSet::Learner, state)),
             SchemaState::NoDatabase => {
-                self.client.ensure().await?;
+                self.client
+                    .ensure()
+                    .await
+                    .map_err(|e| self.creation_error(e))?;
                 schema::create_tables(&self.client, TableSet::Learner).await?;
             }
             SchemaState::NoTables => schema::create_tables(&self.client, TableSet::Learner).await?,
@@ -117,7 +120,7 @@ impl Db {
     pub async fn require_database(&self) -> Result<()> {
         let state = schema::state(&self.client, TableSet::Learner)
             .await
-            .map_err(|e| self.name_rejected_token(e))?;
+            .map_err(|e| self.explain_key_error(e))?;
         match state.schema {
             SchemaState::Current => Ok(()),
             other => Err(self.schema_error(TableSet::Learner, other)),
@@ -131,12 +134,12 @@ impl Db {
         self.require_database().await?;
         let state = schema::state(&self.client, TableSet::Auth)
             .await
-            .map_err(|e| self.name_rejected_token(e))?;
+            .map_err(|e| self.explain_key_error(e))?;
         match state.schema {
             SchemaState::Current => {}
             SchemaState::NoTables => schema::create_tables(&self.client, TableSet::Auth)
                 .await
-                .map_err(|e| self.name_rejected_token(e))?,
+                .map_err(|e| self.explain_key_error(e))?,
             other => return Err(self.schema_error(TableSet::Auth, other)),
         }
         Ok(Self {
@@ -247,24 +250,47 @@ impl Db {
     /// Return the error for a failed request, and report a missing database or a blocked state instead of a missing table or stream.
     async fn gate_failure(&self, e: client::Error) -> Error {
         if e.code() != Some(ErrorCode::NotFound) {
-            return self.name_rejected_token(e.into());
+            return self.explain_key_error(e.into());
         }
         match self.check_states().await {
             Ok(()) => e.into(),
-            Err(check) => self.name_rejected_token(check),
+            Err(check) => self.explain_key_error(check),
         }
     }
 
-    /// Return [`Error::TokenRejected`] if `e` reports that the server rejected the token, or `e` otherwise.
-    fn name_rejected_token(&self, e: Error) -> Error {
+    /// Return the configuration error that `e` reports if the server rejected or limited the key, or `e` otherwise.
+    fn explain_key_error(&self, e: Error) -> Error {
         match &e {
-            Error::Baserunna(c) if c.code() == Some(ErrorCode::Unauthenticated) => {
-                Error::TokenRejected {
-                    url: self.url.to_string(),
-                }
-            }
+            Error::Baserunna(c) => self.key_error(c).unwrap_or(e),
             _ => e,
         }
+    }
+
+    /// Return [`Error::TokenRejected`] or [`Error::KeyDenied`] if `e` reports that the server rejected or limited the key.
+    fn key_error(&self, e: &client::Error) -> Option<Error> {
+        match e.code()? {
+            ErrorCode::Unauthenticated => Some(Error::TokenRejected {
+                url: self.url.to_string(),
+            }),
+            ErrorCode::PermissionDenied => Some(Error::KeyDenied {
+                db: self.name().to_string(),
+                url: self.url.to_string(),
+                reason: api_message(e),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Return the error for a failed creation of this database.
+    fn creation_error(&self, e: client::Error) -> Error {
+        if e.code() == Some(ErrorCode::PermissionDenied) {
+            return Error::KeyCannotCreate {
+                db: self.name().to_string(),
+                url: self.url.to_string(),
+                reason: api_message(&e),
+            };
+        }
+        e.into()
     }
 
     /// Read `ops` at the latest version after the database and import checks.
@@ -423,7 +449,13 @@ impl Retry {
             Ok(out) => txn.check_gate().await.map(|()| out).map_err(E::from),
             Err(e) => Err(e),
         };
-        self.inner.finish(txn.inner, result).await
+        let db = txn.db.clone();
+        self.inner.finish(txn.inner, result).await.map_err(|e| {
+            match e.client_error().and_then(|c| db.key_error(c)) {
+                Some(key_error) => E::from(key_error),
+                None => e,
+            }
+        })
     }
 }
 
@@ -439,7 +471,11 @@ impl Txn {
     /// Execute `ops` in the transaction.
     pub(crate) async fn run(&mut self, ops: &[Op]) -> Result<Vec<OpResult>> {
         if self.checked {
-            return Ok(self.inner.run(ops).await?);
+            return self
+                .inner
+                .run(ops)
+                .await
+                .map_err(|e| self.db.explain_key_error(e.into()));
         }
         self.checked = true;
         match self.inner.run(&self.db.gated(ops)).await {
@@ -493,6 +529,15 @@ impl Txn {
     /// Queue write operations to send with the next request or the commit.
     fn queue(&mut self, ops: impl IntoIterator<Item = Op>) {
         self.inner.write(ops);
+    }
+}
+
+/// Return the message of the API error in `e`.
+fn api_message(e: &client::Error) -> String {
+    match e {
+        client::Error::Api { error, .. } => error.message.clone(),
+        client::Error::NotApplied(inner) => api_message(inner),
+        other => other.to_string(),
     }
 }
 

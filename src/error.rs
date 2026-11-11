@@ -79,6 +79,24 @@ pub enum Error {
     DatabaseNotFound { db: String, url: String },
 
     #[error(
+        "the Baserunna server at {url} denied BASERUNNA_TOKEN access to database '{db}' ({reason}); check that BASERUNNA_DB names the database that the key is limited to, and that the key is not read-only"
+    )]
+    KeyDenied {
+        db: String,
+        url: String,
+        reason: String,
+    },
+
+    #[error(
+        "database '{db}' does not exist at {url}, and BASERUNNA_TOKEN cannot create it ({reason}); check BASERUNNA_DB. Only a key without a database limit and without read-only access can create a database"
+    )]
+    KeyCannotCreate {
+        db: String,
+        url: String,
+        reason: String,
+    },
+
+    #[error(
         "database '{db}' has a '{table}' table whose columns differ from this mt release; check BASERUNNA_DB"
     )]
     TableMismatch { db: String, table: String },
@@ -270,6 +288,8 @@ impl Error {
             Error::ConflictingFlags(_, _) => ErrorKind::ConflictingFlags,
             Error::MissingToken
             | Error::TokenRejected { .. }
+            | Error::KeyDenied { .. }
+            | Error::KeyCannotCreate { .. }
             | Error::DatabaseNotFound { .. }
             | Error::TableMismatch { .. }
             | Error::MissingTursoUrl

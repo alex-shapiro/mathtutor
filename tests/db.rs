@@ -3,7 +3,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use baserunna_client::api::{ColumnType, ListTablesQuery, NewColumn, NewTable};
+use baserunna_client::api::{ColumnType, ListTablesQuery, NewApiKey, NewColumn, NewTable};
 use baserunna_client::bytes::Bytes;
 use baserunna_client::{BoxFuture, Client, HttpTransport, Op, Transport, TransportError, http};
 use chrono::{Duration, Utc};
@@ -1326,4 +1326,93 @@ async fn a_rejected_token_names_the_server_and_the_settings() {
         assert!(message.contains("BASERUNNA_TOKEN"), "{message}");
         assert_eq!(e.exit_code(), 2);
     }
+}
+
+/// Return a configuration of `cfg` that uses a new Baserunna key with `limit` and `read_only`.
+async fn with_key(cfg: &DbConfig, limit: Option<&str>, read_only: bool) -> DbConfig {
+    let session = Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
+    let key = session
+        .create_api_key(&NewApiKey {
+            name: "test".into(),
+            db: limit.map(String::from),
+            read_only,
+            rate_limit: None,
+        })
+        .await
+        .unwrap()
+        .key;
+    DbConfig {
+        token: key,
+        ..cfg.clone()
+    }
+}
+
+/// Assert that `e` is a configuration error that names the database and the server of `cfg`.
+fn assert_names_the_key_settings(e: &Error, cfg: &DbConfig) {
+    let message = e.to_string();
+    assert_eq!(e.exit_code(), 2, "{e:?}");
+    assert!(message.contains(&format!("'{}'", cfg.db)), "{message}");
+    assert!(message.contains(&cfg.url), "{message}");
+    assert!(message.contains("BASERUNNA_DB"), "{message}");
+}
+
+#[tokio::test]
+async fn a_key_limited_to_another_database_is_a_configuration_error() {
+    let own = common::fresh_config();
+    common::create_db(&own).await;
+    let other = common::fresh_config();
+    common::create_db(&other).await;
+    let cfg = DbConfig {
+        db: other.db.clone(),
+        ..with_key(&own, Some(&own.db), false).await
+    };
+    let db = Db::connect(&cfg).unwrap();
+
+    let e = db.snapshot(&Want::overlay()).await.unwrap_err();
+
+    assert!(matches!(e, Error::KeyDenied { .. }), "{e:?}");
+    assert_names_the_key_settings(&e, &cfg);
+}
+
+#[tokio::test]
+async fn a_read_only_key_fails_its_first_write_with_a_configuration_error() {
+    let cfg = common::fresh_config();
+    common::create_db(&cfg).await;
+    let cfg = with_key(&cfg, Some(&cfg.db), true).await;
+    let db = Db::connect(&cfg).unwrap();
+    db.snapshot(&Want::overlay())
+        .await
+        .expect("a read-only key reads");
+
+    let e = path::cmd_path_new(&db, "g", &["fnd.1.1.1".into()], Strategy::BottomUp)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(e, Error::KeyDenied { .. }), "{e:?}");
+    assert!(e.to_string().contains("read-only"), "{e}");
+    assert_names_the_key_settings(&e, &cfg);
+}
+
+#[tokio::test]
+async fn a_limited_key_reports_a_missing_database_before_its_limit() {
+    let own = common::fresh_config();
+    common::create_db(&own).await;
+    let cfg = DbConfig {
+        db: common::fresh_config().db,
+        ..with_key(&own, Some(&own.db), false).await
+    };
+
+    let e = Db::connect(&cfg)
+        .unwrap()
+        .create_if_missing()
+        .await
+        .unwrap_err();
+
+    assert!(matches!(e, Error::KeyCannotCreate { .. }), "{e:?}");
+    assert!(
+        e.to_string()
+            .starts_with(&format!("database '{}' does not exist", cfg.db)),
+        "{e}"
+    );
+    assert_names_the_key_settings(&e, &cfg);
 }
