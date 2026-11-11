@@ -252,12 +252,9 @@ async fn dispatch_graph(ctx: &Context, op: GraphOp) -> Result<()> {
 async fn dispatch_lesson(db: &db::Db, op: LessonOp) -> Result<()> {
     match op {
         LessonOp::Upsert(c) => {
-            let atom = c.atom.clone();
-            store::cmd_lesson_upsert(db, &c.atom, c.body, c.path.as_deref())
-                .await
-                .map(|()| {
-                    eprintln!("upserted lesson: {atom}");
-                })
+            store::cmd_lesson_upsert(db, &c.atom, c.body, c.path.as_deref()).await?;
+            eprintln!("upserted lesson: {}", c.atom);
+            Ok(())
         }
     }
 }
@@ -289,21 +286,15 @@ async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> Result<()> {
             Ok(())
         }
         QuizOp::Delete(c) => {
-            let quiz = c.quiz.clone();
-            store::cmd_quiz_delete(db, &c.quiz, c.path.as_deref())
-                .await
-                .map(|()| {
-                    eprintln!("deleted quiz: {quiz}");
-                })
+            store::cmd_quiz_delete(db, &c.quiz, c.path.as_deref()).await?;
+            eprintln!("deleted quiz: {}", c.quiz);
+            Ok(())
         }
         QuizOp::Answer(c) => {
-            let quiz = c.quiz.clone();
-            let rating = c.rating;
             answer::cmd_quiz_answer(db, &c.quiz, c.rating, c.user_answer, c.path.as_deref())
-                .await
-                .map(|()| {
-                    eprintln!("recorded {rating} for {quiz}");
-                })
+                .await?;
+            eprintln!("recorded {} for {}", c.rating, c.quiz);
+            Ok(())
         }
     }
 }

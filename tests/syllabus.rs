@@ -1,13 +1,9 @@
 //! Tests for `syllabus::upcoming` and the agreement of the syllabus with the scheduler.
 
-use chrono::Utc;
-
 use mathtutor::db::{Db, DbConfig};
-use mathtutor::event_log::{Event, EventKind};
 use mathtutor::graph::Curriculum;
-use mathtutor::graph::{FlatConcept, Graph};
+use mathtutor::graph::Graph;
 use mathtutor::overlay::QuizDraft;
-use mathtutor::path::PathFile;
 use mathtutor::progress::PathProgress;
 use mathtutor::scheduler::{self, Action, NextMode};
 use mathtutor::surface::Surface;
@@ -16,46 +12,9 @@ use mathtutor::{answer, path, store, subpath, syllabus};
 
 mod common;
 
-const PATH_ID: &str = "p_test";
-
-fn atom(id: &str, prereqs: &[&str]) -> FlatConcept {
-    FlatConcept {
-        id: id.into(),
-        name: format!("Atom {id}"),
-        description: Some(format!("desc {id}")),
-        prerequisites: prereqs.iter().map(|s| (*s).to_string()).collect(),
-        children_ids: Vec::new(),
-        lesson: None,
-        quizzes: Vec::new(),
-    }
-}
-
-fn cluster(id: &str, children: &[&str]) -> FlatConcept {
-    FlatConcept {
-        id: id.into(),
-        name: format!("Cluster {id}"),
-        description: None,
-        prerequisites: Vec::new(),
-        children_ids: children.iter().map(|s| (*s).to_string()).collect(),
-        lesson: None,
-        quizzes: Vec::new(),
-    }
-}
-
-fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
-    Graph::of_concepts(concepts)
-}
-
-fn path_with(targets: &[&str]) -> PathFile {
-    PathFile {
-        id: PATH_ID.into(),
-        goal: "test".into(),
-        created_at: Utc::now(),
-        targets: targets.iter().map(|s| (*s).to_string()).collect(),
-        strategy: Strategy::BottomUp,
-        subpath: Vec::new(),
-    }
-}
+use common::{
+    cluster, empty_atom as atom, graph_of, lesson_authored, path_with, path_with_strategy, taught,
+};
 
 fn upcoming_atoms(g: &Graph, targets: &[String], progress: &PathProgress) -> Vec<String> {
     syllabus::upcoming(g, Strategy::BottomUp, targets, &[], progress)
@@ -68,16 +27,6 @@ fn upcoming_top_down(
     subpath: &[String],
 ) -> Vec<String> {
     syllabus::upcoming(g, Strategy::TopDown, targets, subpath, progress)
-}
-
-fn taught(atom_id: &str) -> Event {
-    let atom = atom_id.into();
-    Event::now(PATH_ID, EventKind::LessonTaught { atom })
-}
-
-fn authored(atom_id: &str) -> Event {
-    let atom = atom_id.into();
-    Event::now(PATH_ID, EventKind::LessonAuthored { atom })
 }
 
 #[test]
@@ -115,7 +64,7 @@ fn taught_target_is_skipped() {
 fn lesson_authored_event_counts_as_taught() {
     let g = graph_of(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
-    let events = vec![authored("a")];
+    let events = vec![lesson_authored("a")];
     assert_eq!(
         upcoming_atoms(&g, &p.targets, &common::progress_of(&events)),
         Vec::<String>::new()
@@ -211,17 +160,10 @@ fn n_truncates_atoms_but_total_remaining_is_full_count() {
     assert_eq!(truncated, vec!["a".to_string(), "b".to_string()]);
 }
 
-fn top_down(targets: &[&str]) -> PathFile {
-    PathFile {
-        strategy: Strategy::TopDown,
-        ..path_with(targets)
-    }
-}
-
 #[test]
 fn top_down_lists_targets_not_prereqs() {
     let g = graph_of(vec![atom("p", &[]), atom("t", &["p"])]);
-    let p = top_down(&["t"]);
+    let p = path_with_strategy(&["t"], Strategy::TopDown);
     assert_eq!(
         upcoming_top_down(&g, &p.targets, &PathProgress::default(), &[]),
         vec!["t".to_string()],
@@ -231,7 +173,7 @@ fn top_down_lists_targets_not_prereqs() {
 #[test]
 fn top_down_prefixes_subpath_before_targets() {
     let g = graph_of(vec![atom("p", &[]), atom("q", &[]), atom("t", &["p", "q"])]);
-    let p = top_down(&["t"]);
+    let p = path_with_strategy(&["t"], Strategy::TopDown);
     let subpath = vec!["q".to_string(), "t".to_string()];
     assert_eq!(
         upcoming_top_down(&g, &p.targets, &PathProgress::default(), &subpath),
@@ -242,7 +184,7 @@ fn top_down_prefixes_subpath_before_targets() {
 #[test]
 fn top_down_skips_taught_subpath_and_target_atoms() {
     let g = graph_of(vec![atom("p", &[]), atom("t", &["p"])]);
-    let p = top_down(&["t"]);
+    let p = path_with_strategy(&["t"], Strategy::TopDown);
     let subpath = vec!["p".to_string(), "t".to_string()];
     assert_eq!(
         upcoming_top_down(

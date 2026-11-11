@@ -28,3 +28,6 @@ jobs:
 
       - name: Run tests
         run: cargo test
+
+      - name: Run tests without the MCP server
+        run: cargo test --no-default-features

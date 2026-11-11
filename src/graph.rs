@@ -484,12 +484,12 @@ impl Graph {
     }
 }
 
-/// Compare dot-separated concept IDs segment by segment, ordering numeric segments by integer value.
 /// Return the atom ID prefix of a quiz ID, such as `fnd.1.1.1` for `fnd.1.1.1.q3`.
 pub fn atom_from_quiz_id(quiz_id: &str) -> Option<&str> {
     quiz_id.rfind(".q").map(|pos| &quiz_id[..pos])
 }
 
+/// Compare dot-separated concept IDs segment by segment, ordering numeric segments by integer value.
 pub fn natural_id_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let (mut sa, mut sb) = (a.split('.'), b.split('.'));
