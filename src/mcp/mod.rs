@@ -24,7 +24,7 @@ use rmcp::{
     service::RequestContext,
     tool, tool_handler, tool_router,
     transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        StreamableHttpServerConfig, StreamableHttpService, session::never::NeverSessionManager,
     },
 };
 use schemars::JsonSchema;
@@ -518,6 +518,7 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
     let shutdown = CancellationToken::new();
 
     let mcp_config = StreamableHttpServerConfig::default()
+        .with_stateful_mode(false)
         .with_sse_keep_alive(Some(Duration::from_secs(15)))
         .with_cancellation_token(shutdown.child_token())
         .disable_allowed_hosts();
@@ -529,7 +530,7 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
 
     let mcp_service = StreamableHttpService::new(
         factory,
-        Arc::new(LocalSessionManager::default()),
+        Arc::new(NeverSessionManager::default()),
         mcp_config,
     );
 

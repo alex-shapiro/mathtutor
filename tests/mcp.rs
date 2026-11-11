@@ -249,13 +249,10 @@ async fn initialize_returns_server_info_and_capabilities() {
         .await
         .unwrap();
     assert_eq!(res.status(), 200);
-    let session = res
-        .headers()
-        .get("mcp-session-id")
-        .expect("session id header")
-        .to_str()
-        .unwrap()
-        .to_string();
+    assert!(
+        res.headers().get("mcp-session-id").is_none(),
+        "the server keeps no session"
+    );
     let body = res.text().await.unwrap();
     let json = parse_sse_message(&body).expect("sse json");
     let result = json
@@ -282,18 +279,15 @@ async fn initialize_returns_server_info_and_capabilities() {
         "name comes from rmcp's build env helper"
     );
 
-    assert_ne!(session, "");
     server.stop().await;
 }
 
 #[tokio::test]
 async fn tools_list_includes_every_documented_tool() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -338,11 +332,9 @@ async fn tools_list_includes_every_documented_tool() {
 #[tokio::test]
 async fn get_next_advertises_mode_enum_in_schema() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
     )
     .await;
@@ -375,11 +367,9 @@ async fn get_next_advertises_mode_enum_in_schema() {
 #[tokio::test]
 async fn prompts_list_includes_playbook() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -403,11 +393,9 @@ async fn prompts_list_includes_playbook() {
 #[tokio::test]
 async fn get_paths_returns_empty_list_on_fresh_db() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -451,9 +439,8 @@ async fn server_caches_the_overlay_only_in_memory() {
         },
     )
     .await;
-    let session = handshake(&server).await;
 
-    let result = call_tool(&server, &session, "get_paths", json!({})).await;
+    let result = call_tool(&server, "get_paths", json!({})).await;
 
     assert_eq!(result["structuredContent"], json!({ "paths": [] }));
     let files: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
@@ -464,11 +451,9 @@ async fn server_caches_the_overlay_only_in_memory() {
 #[tokio::test]
 async fn unknown_atom_id_returns_structured_business_error() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -506,11 +491,9 @@ async fn unknown_atom_id_returns_structured_business_error() {
 #[tokio::test]
 async fn get_syllabus_returns_upcoming_topics_for_new_path() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -530,7 +513,6 @@ async fn get_syllabus_returns_upcoming_topics_for_new_path() {
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 3,
@@ -555,10 +537,9 @@ async fn get_syllabus_returns_upcoming_topics_for_new_path() {
 }
 
 /// Call tool `name` with `arguments` and return its result.
-async fn call_tool(server: &ServerHandle, session: &str, name: &str, arguments: Value) -> Value {
+async fn call_tool(server: &ServerHandle, name: &str, arguments: Value) -> Value {
     let res = mcp_post(
         server,
-        session,
         &json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -574,17 +555,15 @@ async fn call_tool(server: &ServerHandle, session: &str, name: &str, arguments: 
 #[tokio::test]
 async fn path_tools_return_the_cli_views_with_mcp_next_steps() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
     let created = call_tool(
         &server,
-        &session,
         "new_path",
         json!({ "goal": "Test", "targets": ["fnd.1.1.2"] }),
     )
     .await;
     let path_id = created["structuredContent"]["path_id"].clone();
 
-    let paths = call_tool(&server, &session, "get_paths", json!({})).await;
+    let paths = call_tool(&server, "get_paths", json!({})).await;
     let summary = &paths["structuredContent"]["paths"][0];
     assert_eq!(summary["id"], path_id);
     assert_eq!(
@@ -592,12 +571,12 @@ async fn path_tools_return_the_cli_views_with_mcp_next_steps() {
         json!({ "total": 1, "learned": 0, "learned_pct": 0 })
     );
 
-    let next = call_tool(&server, &session, "get_next", json!({ "path_id": path_id })).await;
+    let next = call_tool(&server, "get_next", json!({ "path_id": path_id })).await;
     let step = next["structuredContent"]["next_step"].as_str().unwrap();
     assert!(step.contains(&format!("path_id: {path_id}")), "{step}");
     assert!(!step.starts_with("mt "), "{step}");
 
-    let tree = call_tool(&server, &session, "get_tree", json!({ "path_id": path_id })).await;
+    let tree = call_tool(&server, "get_tree", json!({ "path_id": path_id })).await;
     let tree = &tree["structuredContent"];
     assert_eq!(tree["next"], json!("fnd.1.1.1"));
     assert_eq!(tree["reachable"]["total"], json!(2));
@@ -606,19 +585,41 @@ async fn path_tools_return_the_cli_views_with_mcp_next_steps() {
 }
 
 #[tokio::test]
+async fn a_second_server_on_the_same_database_answers_without_an_initialize() {
+    let cfg = common::fresh_config();
+    let auth = AuthConfig {
+        api_key: Some(API_KEY.into()),
+        ..AuthConfig::default()
+    };
+    let first = spawn_server_on(cfg.clone(), auth.clone()).await;
+    let created = call_tool(
+        &first,
+        "new_path",
+        json!({ "goal": "Test", "targets": ["fnd.1.1.2"] }),
+    )
+    .await;
+    let path_id = created["structuredContent"]["path_id"].clone();
+    first.stop().await;
+
+    let second = spawn_server_on(cfg, auth).await;
+    let next = call_tool(&second, "get_next", json!({ "path_id": path_id })).await;
+    assert_ne!(next["isError"], json!(true), "{next}");
+    assert_eq!(next["structuredContent"]["path"], path_id);
+    second.stop().await;
+}
+
+#[tokio::test]
 async fn quiz_tools_accept_the_shared_quiz_fields() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
     let created = call_tool(
         &server,
-        &session,
         "new_path",
         json!({ "goal": "Test", "targets": ["fnd.1.1.2"], "strategy": "top_down" }),
     )
     .await;
     let path_id = created["structuredContent"]["path_id"].clone();
     let lesson = json!({ "atom": "fnd.1.1.2", "body": "b", "path_id": path_id });
-    call_tool(&server, &session, "upsert_lesson", lesson).await;
+    call_tool(&server, "upsert_lesson", lesson).await;
 
     let quiz = json!({
         "atom": "fnd.1.1.2",
@@ -627,15 +628,15 @@ async fn quiz_tools_accept_the_shared_quiz_fields() {
         "answer": "a",
         "path_id": path_id,
     });
-    let created = call_tool(&server, &session, "create_quiz", quiz).await;
+    let created = call_tool(&server, "create_quiz", quiz).await;
     assert_ne!(created["isError"], json!(true), "{created}");
     let quiz_id = created["structuredContent"]["quiz_id"].clone();
     assert_eq!(quiz_id, json!("fnd.1.1.2.q1"));
 
     let patch = json!({ "quiz_id": quiz_id, "question": "q2", "path_id": path_id });
-    let updated = call_tool(&server, &session, "update_quiz", patch).await;
+    let updated = call_tool(&server, "update_quiz", patch).await;
     assert_ne!(updated["isError"], json!(true), "{updated}");
-    let next = call_tool(&server, &session, "get_next", json!({ "path_id": path_id })).await;
+    let next = call_tool(&server, "get_next", json!({ "path_id": path_id })).await;
     let quiz = &next["structuredContent"]["payload"]["quiz"];
     assert_eq!(
         (&quiz["question"], &quiz["answer"]),
@@ -843,10 +844,8 @@ async fn full_authorization_code_flow_yields_a_working_access_token() {
     assert_ne!(tokens.refresh_token, "");
     assert_eq!(tokens.token_type, "Bearer");
 
-    let session = handshake_with_token(&server, &tokens.access_token).await;
     let res = mcp_post_with_token(
         &server,
-        &session,
         &tokens.access_token,
         &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
     )
@@ -1019,7 +1018,9 @@ async fn refresh_that_names_mcp_keeps_a_grant_without_a_requested_scope() {
     let refreshed: Value = res.json().await.unwrap();
     assert_eq!(refreshed["scope"], "mcp");
     let access = refreshed["access_token"].as_str().unwrap();
-    handshake_with_token(&server, access).await;
+    let list_tools = json!({"jsonrpc":"2.0","id":2,"method":"tools/list"});
+    let res = mcp_post_with_token(&server, access, &list_tools).await;
+    assert_eq!(res.status(), 200);
     server.stop().await;
 }
 
@@ -1124,8 +1125,13 @@ async fn stored_codes_and_tokens_are_keyed_by_the_hash_of_the_secret() {
         assert_ne!(key, secret, "{table} stores the secret");
         assert_eq!(key, secret_hash(secret), "{table}");
     }
-    let session = handshake_with_token(&server, &tokens.access_token).await;
-    assert!(!session.is_empty(), "the access token still authenticates");
+    let res = mcp_post_with_token(
+        &server,
+        &tokens.access_token,
+        &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    )
+    .await;
+    assert_eq!(res.status(), 200, "the access token still authenticates");
     server.stop().await;
 }
 
@@ -1317,51 +1323,8 @@ async fn exchange_code(
     res.json::<TokenResponseDe>().await.unwrap()
 }
 
-async fn handshake_with_token(server: &ServerHandle, token: &str) -> String {
-    let res = client()
-        .post(server.url("/mcp"))
-        .header(AUTHORIZATION, format!("Bearer {token}"))
-        .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .body(initialize_body())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 200, "OAuth-bearer initialize must succeed");
-    let session = res
-        .headers()
-        .get("mcp-session-id")
-        .expect("session id")
-        .to_str()
-        .unwrap()
-        .to_string();
-    let _ = res.text().await;
-
-    let res = client()
-        .post(server.url("/mcp"))
-        .header(AUTHORIZATION, format!("Bearer {token}"))
-        .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .header("mcp-session-id", &session)
-        .header("mcp-protocol-version", "2025-06-18")
-        .body(
-            json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized"
-            })
-            .to_string(),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert!(res.status().is_success());
-    let _ = res.text().await;
-    session
-}
-
 async fn mcp_post_with_token(
     server: &ServerHandle,
-    session: &str,
     token: &str,
     body: &Value,
 ) -> reqwest::Response {
@@ -1370,7 +1333,6 @@ async fn mcp_post_with_token(
         .header(AUTHORIZATION, format!("Bearer {token}"))
         .header(ACCEPT, "application/json, text/event-stream")
         .header(CONTENT_TYPE, "application/json")
-        .header("mcp-session-id", session)
         .header("mcp-protocol-version", "2025-06-18")
         .body(body.to_string())
         .send()
@@ -1392,61 +1354,8 @@ fn initialize_body() -> String {
     .to_string()
 }
 
-async fn handshake(server: &ServerHandle) -> String {
-    let res = client()
-        .post(server.url("/mcp"))
-        .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
-        .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .body(initialize_body())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 200, "initialize must succeed");
-    let session = res
-        .headers()
-        .get("mcp-session-id")
-        .expect("session id")
-        .to_str()
-        .unwrap()
-        .to_string();
-    let _ = res.text().await;
-
-    let res = client()
-        .post(server.url("/mcp"))
-        .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
-        .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .header("mcp-session-id", &session)
-        .header("mcp-protocol-version", "2025-06-18")
-        .body(
-            json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized"
-            })
-            .to_string(),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert!(res.status().is_success(), "initialized notification");
-    let _ = res.text().await;
-
-    session
-}
-
-async fn mcp_post(server: &ServerHandle, session: &str, body: &Value) -> reqwest::Response {
-    client()
-        .post(server.url("/mcp"))
-        .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
-        .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .header("mcp-session-id", session)
-        .header("mcp-protocol-version", "2025-06-18")
-        .body(body.to_string())
-        .send()
-        .await
-        .unwrap()
+async fn mcp_post(server: &ServerHandle, body: &Value) -> reqwest::Response {
+    mcp_post_with_token(server, API_KEY, body).await
 }
 
 // Skip non-JSON SSE priming events and return the first JSON-RPC payload.
@@ -1470,22 +1379,20 @@ fn parse_sse_message(body: &str) -> Option<Value> {
 #[tokio::test]
 async fn item_lookup_without_a_path_reports_authored_lessons() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
     let created = call_tool(
         &server,
-        &session,
         "new_path",
         json!({ "goal": "Test", "targets": ["fnd.1.1.2"] }),
     )
     .await;
     let path_id = created["structuredContent"]["path_id"].clone();
     let item = json!({ "id": "fnd.1.1.2" });
-    let before = call_tool(&server, &session, "get_item", item.clone()).await;
+    let before = call_tool(&server, "get_item", item.clone()).await;
     assert_eq!(before["structuredContent"]["has_lesson"], json!(false));
 
     let lesson = json!({ "atom": "fnd.1.1.2", "body": "b", "path_id": path_id });
-    call_tool(&server, &session, "upsert_lesson", lesson).await;
-    let after = call_tool(&server, &session, "get_item", item).await;
+    call_tool(&server, "upsert_lesson", lesson).await;
+    let after = call_tool(&server, "get_item", item).await;
     assert_eq!(after["structuredContent"]["has_lesson"], json!(true));
     server.stop().await;
 }
@@ -1720,7 +1627,9 @@ async fn a_validated_access_token_needs_no_further_database_read() {
     let pkce = PkcePair::new();
     let code = full_authorize(&server, &reg.client_id, &pkce).await;
     let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
-    let session = handshake_with_token(&server, &tokens.access_token).await;
+    let list_tools = json!({"jsonrpc":"2.0","id":2,"method":"tools/list"});
+    let first = mcp_post_with_token(&server, &tokens.access_token, &list_tools).await;
+    assert_eq!(first.status(), 200);
 
     let raw = baserunna_client::Client::new(cfg.transport().unwrap())
         .with_token(&cfg.token)
@@ -1730,13 +1639,7 @@ async fn a_validated_access_token_needs_no_further_database_read() {
         .await
         .unwrap();
 
-    let res = mcp_post_with_token(
-        &server,
-        &session,
-        &tokens.access_token,
-        &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
-    )
-    .await;
+    let res = mcp_post_with_token(&server, &tokens.access_token, &list_tools).await;
     assert_eq!(res.status(), 200, "the server reads the token from memory");
     server.stop().await;
 }
@@ -1744,17 +1647,15 @@ async fn a_validated_access_token_needs_no_further_database_read() {
 #[tokio::test]
 async fn new_path_accepts_a_target_inside_another_target() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
     let created = call_tool(
         &server,
-        &session,
         "new_path",
         json!({ "goal": "Overlap", "targets": ["la.5", "la.5.4"] }),
     )
     .await;
     assert_ne!(created["isError"], json!(true), "{created}");
     let path_id = created["structuredContent"]["path_id"].clone();
-    let next = call_tool(&server, &session, "get_next", json!({ "path_id": path_id })).await;
+    let next = call_tool(&server, "get_next", json!({ "path_id": path_id })).await;
     assert_ne!(next["isError"], json!(true), "{next}");
     server.stop().await;
 }

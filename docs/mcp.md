@@ -6,6 +6,7 @@
 
 - **Feature flag:** The `mcp` feature in `Cargo.toml` enables the HTTP server and `mt mcp` subcommand.
 - **Transport:** Streamable HTTP and SSE via `axum` and `rmcp`.
+- **Sessions:** The server keeps no MCP session. Each tool takes the path that it acts on, so any server process can answer any request, also after a restart or on a different machine of the app.
 
 ## Interface
 
