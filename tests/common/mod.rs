@@ -10,6 +10,7 @@ use baserunna::limits::LimitConfig;
 use baserunna::node::{Node, NodeConfig, Services};
 use baserunna::store::MemStore;
 use chrono::{DateTime, Utc};
+use mathtutor::cards::Projection;
 use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{Event, EventKind};
 use mathtutor::graph::{FlatConcept, Graph, Quiz};
@@ -346,19 +347,9 @@ pub fn complete_events(atom_id: &str) -> Vec<Event> {
     ]
 }
 
-/// Fold `events` into a `PathProgress` in memory.
+/// Return the progress that the production projection derives from `events`.
 pub fn progress_of(events: &[Event]) -> PathProgress {
-    let mut p = PathProgress::default();
-    for e in events {
-        match &e.kind {
-            EventKind::LessonTaught { atom } | EventKind::LessonAuthored { atom } => {
-                p.taught_atoms.insert(atom.clone());
-            }
-            EventKind::QuizAnswered { quiz, rating, .. } if rating.is_correct() => {
-                p.correct_quizzes.insert(quiz.clone());
-            }
-            _ => {}
-        }
-    }
-    p
+    Projection::from_events(events)
+        .expect("project events")
+        .progress()
 }

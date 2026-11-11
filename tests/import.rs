@@ -331,7 +331,10 @@ fn legacy() -> Tables {
 
 fn legacy_cards() -> Vec<CardRow> {
     let a: Vec<Event> = events().into_iter().filter(|e| e.path == "p_a").collect();
-    cards::fold_history("p_a", &a).unwrap().0
+    let projection = cards::Projection::from_events(&a).unwrap();
+    let mut cards: Vec<CardRow> = projection.cards.into_values().collect();
+    cards.sort_by(|x, y| x.quiz_id.cmp(&y.quiz_id));
+    cards
 }
 
 const EVENT_COLUMNS: &[&str] = &[
@@ -428,7 +431,7 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
     );
 
     for want in legacy_cards() {
-        let got = &a.cards[&want.quiz_id];
+        let got = &a.projection.cards[&want.quiz_id];
         assert_eq!(
             (got.reps, got.lapses, got.presented),
             (want.reps, want.lapses, want.presented)
@@ -436,8 +439,8 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
         assert_eq!(got.state.map(|s| s.due), want.state.map(|s| s.due));
         assert_eq!(got.recent, want.recent);
     }
-    assert_eq!(a.taught["fnd.2.1.1"].count, 1);
-    assert!(b.cards.is_empty() && b.taught.is_empty());
+    assert_eq!(a.projection.taught["fnd.2.1.1"].count, 1);
+    assert!(b.projection.cards.is_empty() && b.projection.taught.is_empty());
 }
 
 fn tables_with_wrong_card() -> Tables {

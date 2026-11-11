@@ -158,7 +158,7 @@ async fn quiz_answered_creates_card() {
     .await;
 
     let ps = common::path_state(&db, PATH_ID).await;
-    let card = ps.cards.get("atom.x.q1").expect("card stored");
+    let card = ps.projection.cards.get("atom.x.q1").expect("card stored");
     let state = card.state.expect("FSRS state after an answer");
     assert_eq!(card.reps, 1);
     assert_eq!(card.lapses, 0);
@@ -177,7 +177,7 @@ async fn again_rating_increments_lapses() {
     }
 
     let ps = common::path_state(&db, PATH_ID).await;
-    let card = &ps.cards["atom.x.q1"];
+    let card = &ps.projection.cards["atom.x.q1"];
     assert_eq!(card.reps, 3);
     assert_eq!(card.lapses, 2);
     assert_eq!(
@@ -217,13 +217,13 @@ async fn non_answer_events_leave_cards_unscheduled() {
     .await;
 
     let ps = common::path_state(&db, PATH_ID).await;
-    let card = &ps.cards["atom.x.q1"];
+    let card = &ps.projection.cards["atom.x.q1"];
     assert!(card.state.is_none(), "presented-only card lacks FSRS state");
     assert_eq!(card.reps, 0);
     assert_eq!(card.presented, 1);
     assert!(card.last_presented_at.is_some());
-    assert!(!ps.cards.contains_key("atom.x.q2"));
-    assert_eq!(ps.cards.len(), 1);
+    assert!(!ps.projection.cards.contains_key("atom.x.q2"));
+    assert_eq!(ps.projection.cards.len(), 1);
     assert_eq!(
         ps.due(Utc::now() + Duration::days(365)),
         Vec::<(String, DateTime<Utc>)>::new()
@@ -265,5 +265,5 @@ async fn failed_transaction_does_not_write_events_or_cards() {
 
     assert_eq!(logged(&db, PATH_ID).await, []);
     let ps = common::path_state(&db, PATH_ID).await;
-    assert!(ps.cards.is_empty());
+    assert!(ps.projection.cards.is_empty());
 }

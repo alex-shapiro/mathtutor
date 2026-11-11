@@ -26,7 +26,7 @@ pub async fn cmd_lesson_upsert(
         let atom = atom_id.to_string();
         let taught = Event::now(&id, EventKind::LessonTaught { atom: atom.clone() });
         if stored == Some(body.as_str()) {
-            if ps.taught.contains_key(atom_id) {
+            if ps.projection.taught.contains_key(atom_id) {
                 return Ok(());
             }
             return changes.append(view, &taught);

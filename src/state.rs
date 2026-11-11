@@ -151,7 +151,7 @@ fn most_recent_completed_target<'a>(
         .max_by_key(|c| {
             c.quizzes
                 .iter()
-                .filter_map(|q| ps.cards.get(&q.id)?.first_correct_at)
+                .filter_map(|q| ps.projection.cards.get(&q.id)?.first_correct_at)
                 .max()
         })
 }

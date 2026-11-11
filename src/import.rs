@@ -646,7 +646,7 @@ async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
     if existing.row::<PathFile>()?.is_some() {
         return Ok(false);
     }
-    let (cards, taught) = cards::fold_history(&p.id, events)?;
+    let rows = cards::Projection::from_events(events)?;
     let latest = events.iter().map(|e| e.ts).max().unwrap_or(p.created_at);
     let stream = events_stream(&p.id);
     let mut ops = vec![
@@ -658,9 +658,13 @@ async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
             .chunks(PAGE_MAX)
             .map(|c| Op::append(stream.clone(), c)),
     );
-    ops.extend(cards.iter().map(|c| Op::upsert(&CardRecord::from(c))));
     ops.extend(
-        taught
+        rows.cards
+            .values()
+            .map(|c| Op::upsert(&CardRecord::from(c))),
+    );
+    ops.extend(
+        rows.taught
             .into_iter()
             .map(|(atom_id, t)| Op::upsert(&t.into_row(&p.id, atom_id))),
     );
@@ -700,6 +704,7 @@ async fn verify_path(
         out.push(format!("{path_id}: stored path differs from libSQL"));
     }
     let mut answered: BTreeMap<&str, (&cards::CardRow, CardState)> = path_state
+        .projection
         .cards
         .values()
         .filter_map(|c| Some((c.quiz_id.as_str(), (c, c.state?))))
@@ -782,7 +787,7 @@ async fn verify_row_counts(
             "cards",
             paths
                 .iter()
-                .flat_map(|p| p.cards.values())
+                .flat_map(|p| p.projection.cards.values())
                 .filter(|c| c.state.is_some())
                 .count(),
         ),

@@ -6,7 +6,7 @@ use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Utc};
 
-use crate::cards::{self, CardRow, ProjectionTarget};
+use crate::cards::{CardRow, Projection, Taught};
 use crate::db::client::Entry;
 use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
 use crate::event_log::{Event, EventKind};
@@ -160,45 +160,19 @@ pub struct PathState {
     pub file: PathFile,
     /// Time of the latest write for the path, or its creation time if the path has no recorded write.
     pub updated_at: DateTime<Utc>,
-    pub cards: HashMap<String, CardRow>,
-    pub taught: HashMap<String, Taught>,
-}
-
-/// Presentation count and last presentation timestamp for a lesson on a path.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Taught {
-    pub count: u32,
-    pub last_at: Option<DateTime<Utc>>,
-}
-
-impl Taught {
-    pub fn into_row(self, path_id: &str, atom_id: String) -> TaughtRow {
-        TaughtRow {
-            path_id: path_id.to_string(),
-            atom_id,
-            count: self.count,
-            last_at: self.last_at,
-        }
-    }
+    pub projection: Projection,
 }
 
 impl PathState {
     /// Return the [`PathProgress`] derived from this path state.
     pub fn progress(&self) -> PathProgress {
-        PathProgress {
-            taught_atoms: self.taught.keys().cloned().collect(),
-            correct_quizzes: self
-                .cards
-                .values()
-                .filter(|c| c.reps > c.lapses)
-                .map(|c| c.quiz_id.clone())
-                .collect(),
-        }
+        self.projection.progress()
     }
 
     /// Return quiz cards due at or before `now`, ordered from earliest to latest due timestamp.
     pub fn due(&self, now: DateTime<Utc>) -> Vec<(String, DateTime<Utc>)> {
         let mut due: Vec<_> = self
+            .projection
             .cards
             .values()
             .filter_map(|c| Some((c.quiz_id.clone(), c.state?.due)))
@@ -272,8 +246,8 @@ pub struct Changes {
     /// Writes of `paths` rows.
     ops: Vec<Op>,
     overlay: Vec<Edit>,
-    cards: BTreeMap<(String, String), CardRow>,
-    taught: BTreeMap<(String, String), Taught>,
+    /// Derived rows that the appended events change, keyed by path ID.
+    projections: BTreeMap<String, Projection>,
     events: BTreeMap<String, Vec<Event>>,
     active_paths: BTreeSet<String>,
 }
@@ -314,25 +288,10 @@ impl Changes {
         if base.is_none() && !creates && !self.creates_path(&e.path) {
             return Err(Error::PathNotLoaded(e.path.clone()));
         }
-        match cards::projection_target(e) {
-            ProjectionTarget::Taught { atom_id } => {
-                let key = (e.path.clone(), atom_id.to_string());
-                let t = self.taught.entry(key).or_insert_with(|| {
-                    base.and_then(|p| p.taught.get(atom_id).cloned())
-                        .unwrap_or_default()
-                });
-                cards::apply_taught_event(t, e);
-            }
-            ProjectionTarget::Card { quiz_id } => {
-                let key = (e.path.clone(), quiz_id.to_string());
-                let c = self.cards.entry(key).or_insert_with(|| {
-                    base.and_then(|p| p.cards.get(quiz_id).cloned())
-                        .unwrap_or_else(|| CardRow::new(&e.path, quiz_id))
-                });
-                cards::apply_event(c, e)?;
-            }
-            ProjectionTarget::None => {}
-        }
+        self.projections
+            .entry(e.path.clone())
+            .or_default()
+            .apply(e, base.map(|p| &p.projection))?;
         self.touch_path(&e.path);
         self.events
             .entry(e.path.clone())
@@ -356,16 +315,20 @@ impl Changes {
             ops.extend(self.overlay.iter().flat_map(Edit::ops));
             ops.push(Op::put(OVERLAY_VERSION_KEY, version.to_string()));
         }
-        ops.extend(
-            self.cards
-                .values()
-                .map(|c| Op::upsert(&CardRecord::from(c))),
-        );
-        ops.extend(
-            self.taught
-                .into_iter()
-                .map(|((path_id, atom_id), t)| Op::upsert(&t.into_row(&path_id, atom_id))),
-        );
+        for (path_id, projection) in self.projections {
+            ops.extend(
+                projection
+                    .cards
+                    .values()
+                    .map(|c| Op::upsert(&CardRecord::from(c))),
+            );
+            ops.extend(
+                projection
+                    .taught
+                    .into_iter()
+                    .map(|(atom_id, t)| Op::upsert(&t.into_row(&path_id, atom_id))),
+            );
+        }
         for path_id in &self.active_paths {
             ops.push(Op::put(activity_key(path_id), ts::format(Utc::now())));
         }
@@ -766,15 +729,16 @@ impl Plan {
                 let state = PathState {
                     updated_at,
                     file,
-                    cards: HashMap::new(),
-                    taught: HashMap::new(),
+                    projection: Projection::default(),
                 };
                 (state.file.id.clone(), state)
             })
             .collect();
         for r in take(&mut self.cards) {
             if let Some(p) = paths.get_mut(&r.path_id) {
-                p.cards.insert(r.quiz_id.clone(), CardRow::try_from(r)?);
+                p.projection
+                    .cards
+                    .insert(r.quiz_id.clone(), CardRow::try_from(r)?);
             }
         }
         for t in take(&mut self.taught) {
@@ -783,7 +747,7 @@ impl Plan {
                     count: t.count,
                     last_at: t.last_at,
                 };
-                p.taught.insert(t.atom_id, taught);
+                p.projection.taught.insert(t.atom_id, taught);
             }
         }
         self.view.paths = paths;

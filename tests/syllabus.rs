@@ -57,17 +57,6 @@ fn path_with(targets: &[&str]) -> PathFile {
     }
 }
 
-fn progress_of(events: &[Event]) -> PathProgress {
-    let taught_atoms = events.iter().filter_map(|e| match &e.kind {
-        EventKind::LessonTaught { atom } | EventKind::LessonAuthored { atom } => Some(atom.clone()),
-        _ => None,
-    });
-    PathProgress {
-        taught_atoms: taught_atoms.collect(),
-        ..PathProgress::default()
-    }
-}
-
 fn upcoming_atoms(g: &Graph, targets: &[String], progress: &PathProgress) -> Vec<String> {
     syllabus::upcoming(g, Strategy::BottomUp, targets, &[], progress)
 }
@@ -117,7 +106,7 @@ fn taught_target_is_skipped() {
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
     assert_eq!(
-        upcoming_atoms(&g, &p.targets, &progress_of(&events)),
+        upcoming_atoms(&g, &p.targets, &common::progress_of(&events)),
         Vec::<String>::new()
     );
 }
@@ -128,7 +117,7 @@ fn lesson_authored_event_counts_as_taught() {
     let p = path_with(&["a"]);
     let events = vec![authored("a")];
     assert_eq!(
-        upcoming_atoms(&g, &p.targets, &progress_of(&events)),
+        upcoming_atoms(&g, &p.targets, &common::progress_of(&events)),
         Vec::<String>::new()
     );
 }
@@ -149,7 +138,7 @@ fn taught_prereq_is_skipped_but_target_remains() {
     let p = path_with(&["target"]);
     let events = vec![taught("pre")];
     assert_eq!(
-        upcoming_atoms(&g, &p.targets, &progress_of(&events)),
+        upcoming_atoms(&g, &p.targets, &common::progress_of(&events)),
         vec!["target".to_string()],
     );
 }
@@ -256,7 +245,12 @@ fn top_down_skips_taught_subpath_and_target_atoms() {
     let p = top_down(&["t"]);
     let subpath = vec!["p".to_string(), "t".to_string()];
     assert_eq!(
-        upcoming_top_down(&g, &p.targets, &progress_of(&[taught("p")]), &subpath),
+        upcoming_top_down(
+            &g,
+            &p.targets,
+            &common::progress_of(&[taught("p")]),
+            &subpath
+        ),
         vec!["t".to_string()],
     );
 }

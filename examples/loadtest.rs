@@ -567,13 +567,13 @@ async fn verify(base: &DbConfig, ledger: &Ledger) {
                 "VERIFY {db_name}/{path_id}: {logged} answers logged, {ok} acknowledged, {failed} failed"
             );
         }
-        let (replayed, _) = cards::fold_history(path_id, &events).expect("fold");
+        let replayed = cards::Projection::from_events(&events).expect("project events");
         let view = db
             .snapshot(&Want::path(Some(path_id)))
             .await
             .expect("snapshot");
-        let stored = &view.path().expect("path").cards;
-        for c in &replayed {
+        let stored = &view.path().expect("path").projection.cards;
+        for c in replayed.cards.values() {
             let s = stored
                 .get(&c.quiz_id)
                 .map(|s| (s.reps, s.lapses, s.presented));

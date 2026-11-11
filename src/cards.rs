@@ -1,14 +1,14 @@
 //! FSRS spaced-repetition card state derived from path events.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
 
 use crate::event_log::{Event, EventKind};
-use crate::schema::CardRecord;
+use crate::progress::PathProgress;
+use crate::schema::{CardRecord, TaughtRow};
 use crate::types::Rating;
-use crate::view::Taught;
 use crate::{Error, Result};
 
 const DESIRED_RETENTION: f32 = 0.9;
@@ -94,34 +94,83 @@ pub fn apply_answer(
     })
 }
 
-/// Derived row that an event changes.
-pub enum ProjectionTarget<'e> {
-    Card { quiz_id: &'e str },
-    Taught { atom_id: &'e str },
-    None,
+/// `cards` and `taught` rows of a path that its events produce.
+#[derive(Debug, Clone, Default)]
+pub struct Projection {
+    /// Card of each presented or answered quiz, keyed by quiz ID.
+    pub cards: HashMap<String, CardRow>,
+    /// Lesson presentations of each taught or authored atom, keyed by atom ID.
+    pub taught: HashMap<String, Taught>,
 }
 
-/// Return the derived row that `e` changes.
-pub fn projection_target(e: &Event) -> ProjectionTarget<'_> {
-    match &e.kind {
-        EventKind::LessonTaught { atom } | EventKind::LessonAuthored { atom } => {
-            ProjectionTarget::Taught { atom_id: atom }
+impl Projection {
+    /// Return the rows that `events` produce.
+    pub fn from_events(events: &[Event]) -> Result<Self> {
+        let mut out = Self::default();
+        for e in events {
+            out.apply(e, None)?;
         }
-        EventKind::QuizPresented { quiz, .. } | EventKind::QuizAnswered { quiz, .. } => {
-            ProjectionTarget::Card { quiz_id: quiz }
+        Ok(out)
+    }
+
+    /// Apply event `e` to the row that it changes, and start a row that this projection lacks from `base`.
+    pub fn apply(&mut self, e: &Event, base: Option<&Projection>) -> Result<()> {
+        match &e.kind {
+            EventKind::LessonTaught { atom } | EventKind::LessonAuthored { atom } => {
+                let t = self.taught.entry(atom.clone()).or_insert_with(|| {
+                    base.and_then(|b| b.taught.get(atom).cloned())
+                        .unwrap_or_default()
+                });
+                if matches!(e.kind, EventKind::LessonTaught { .. }) {
+                    t.count += 1;
+                    t.last_at = Some(e.ts);
+                }
+            }
+            EventKind::QuizPresented { quiz, .. } | EventKind::QuizAnswered { quiz, .. } => {
+                let c = self.cards.entry(quiz.clone()).or_insert_with(|| {
+                    base.and_then(|b| b.cards.get(quiz).cloned())
+                        .unwrap_or_else(|| CardRow::new(&e.path, quiz))
+                });
+                apply_card_event(c, e)?;
+            }
+            _ => {}
         }
-        _ => ProjectionTarget::None,
+        Ok(())
+    }
+
+    /// Return the taught atoms and the passed quizzes of these rows.
+    pub fn progress(&self) -> PathProgress {
+        PathProgress {
+            taught_atoms: self.taught.keys().cloned().collect(),
+            correct_quizzes: self
+                .cards
+                .values()
+                .filter(|c| c.reps > c.lapses)
+                .map(|c| c.quiz_id.clone())
+                .collect(),
+        }
     }
 }
 
-pub fn apply_taught_event(t: &mut Taught, e: &Event) {
-    if matches!(e.kind, EventKind::LessonTaught { .. }) {
-        t.count += 1;
-        t.last_at = Some(e.ts);
+/// Presentation count and last presentation timestamp for a lesson on a path.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Taught {
+    pub count: u32,
+    pub last_at: Option<DateTime<Utc>>,
+}
+
+impl Taught {
+    pub fn into_row(self, path_id: &str, atom_id: String) -> TaughtRow {
+        TaughtRow {
+            path_id: path_id.to_string(),
+            atom_id,
+            count: self.count,
+            last_at: self.last_at,
+        }
     }
 }
 
-pub fn apply_event(c: &mut CardRow, e: &Event) -> Result<()> {
+fn apply_card_event(c: &mut CardRow, e: &Event) -> Result<()> {
     match &e.kind {
         EventKind::QuizPresented { .. } => {
             c.presented += 1;
@@ -193,30 +242,4 @@ impl TryFrom<CardRecord> for CardRow {
             recent: r.recent,
         })
     }
-}
-
-/// Return the `cards` and `taught` rows of `path_id` that `events` produce, with cards ordered by quiz ID.
-pub fn fold_history(
-    path_id: &str,
-    events: &[Event],
-) -> Result<(Vec<CardRow>, BTreeMap<String, Taught>)> {
-    let mut cards: HashMap<String, CardRow> = HashMap::new();
-    let mut taught: BTreeMap<String, Taught> = BTreeMap::new();
-    for e in events {
-        match projection_target(e) {
-            ProjectionTarget::Card { quiz_id } => {
-                let c = cards
-                    .entry(quiz_id.to_string())
-                    .or_insert_with(|| CardRow::new(path_id, quiz_id));
-                apply_event(c, e)?;
-            }
-            ProjectionTarget::Taught { atom_id } => {
-                apply_taught_event(taught.entry(atom_id.to_string()).or_default(), e);
-            }
-            ProjectionTarget::None => {}
-        }
-    }
-    let mut cards: Vec<CardRow> = cards.into_values().collect();
-    cards.sort_by(|a, b| a.quiz_id.cmp(&b.quiz_id));
-    Ok((cards, taught))
 }

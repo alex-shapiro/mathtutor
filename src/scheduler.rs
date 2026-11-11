@@ -326,7 +326,7 @@ pub struct QuizHistory {
 
 /// Compute presentation and answer statistics for `quiz_id` in `ps`.
 pub fn quiz_history(ps: &PathState, quiz_id: &str) -> QuizHistory {
-    let Some(c) = ps.cards.get(quiz_id) else {
+    let Some(c) = ps.projection.cards.get(quiz_id) else {
         return QuizHistory::default();
     };
     let correct = c.reps - c.lapses;
@@ -350,7 +350,8 @@ fn percent(numerator: u32, denominator: u32) -> Option<u32> {
 
 /// Compute lesson presentation statistics for `atom_id` in `ps`.
 pub fn lesson_history(ps: &PathState, atom_id: &str) -> LessonHistory {
-    ps.taught
+    ps.projection
+        .taught
         .get(atom_id)
         .map_or_else(LessonHistory::default, |t| LessonHistory {
             repetitions: t.count,

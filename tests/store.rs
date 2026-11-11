@@ -156,7 +156,7 @@ async fn repeated_lesson_upsert_after_a_lost_response_counts_one_teaching() {
         [authored(NO_LESSON_ATOM), taught(NO_LESSON_ATOM)],
     );
     let state = common::path_state(&seeded, common::PATH_ID).await;
-    assert_eq!(state.taught[NO_LESSON_ATOM].count, 1);
+    assert_eq!(state.projection.taught[NO_LESSON_ATOM].count, 1);
 }
 
 #[tokio::test]
@@ -177,7 +177,7 @@ async fn same_lesson_body_on_a_second_path_records_only_its_teaching() {
         .unwrap();
     assert_eq!(event_kinds(&db, "p_second").await, [taught(NO_LESSON_ATOM)]);
     let state = common::path_state(&db, "p_second").await;
-    assert_eq!(state.taught[NO_LESSON_ATOM].count, 1);
+    assert_eq!(state.projection.taught[NO_LESSON_ATOM].count, 1);
 }
 
 #[tokio::test]

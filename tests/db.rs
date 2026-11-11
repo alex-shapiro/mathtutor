@@ -12,7 +12,7 @@ use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::graph::Curriculum;
 use mathtutor::overlay::QuizDraft;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
-use mathtutor::view::{PathState, Want};
+use mathtutor::view::Want;
 use mathtutor::{Error, answer, cards, overlay, path, store};
 
 mod common;
@@ -277,7 +277,7 @@ async fn concurrent_answers_are_recorded_once_each() {
     }
 
     let ps = common::path_state(&db, PATH_ID).await;
-    let card = &ps.cards[&quiz];
+    let card = &ps.projection.cards[&quiz];
     assert_eq!(card.reps, 8);
     assert_eq!(card.lapses, 4);
     assert_eq!(card.recent.len(), 8);
@@ -306,7 +306,7 @@ async fn append_rejects_a_path_outside_the_view_and_keeps_its_history() {
         matches!(&e, Error::PathNotLoaded(id) if id == PATH_ID),
         "{e:?}"
     );
-    let card = &common::path_state(&db, PATH_ID).await.cards["a.q1"];
+    let card = &common::path_state(&db, PATH_ID).await.projection.cards["a.q1"];
     assert_eq!((card.reps, card.lapses), (1, 0));
 }
 
@@ -360,12 +360,8 @@ async fn replayed_history_reproduces_incremental_rows_exactly() {
 
     let before = common::path_state(&db, PATH_ID).await;
     let events = event_log::load(&db, PATH_ID).await.unwrap();
-    let (cards, taught) = cards::fold_history(PATH_ID, &events).unwrap();
-    let after = PathState {
-        cards: cards.into_iter().map(|c| (c.quiz_id.clone(), c)).collect(),
-        taught: taught.into_iter().collect(),
-        ..before.clone()
-    };
+    let after = cards::Projection::from_events(&events).unwrap();
+    let before = before.projection;
 
     assert_eq!(before.taught, after.taught);
     assert_eq!(after.taught["a"].count, 2);
