@@ -12,7 +12,7 @@ use crate::db::client::api::Selection;
 use crate::db::{Db, Op, Row, Txn, run_txn, ts};
 use crate::event_log::{self, Event};
 use crate::graph::{self, Quiz};
-use crate::overlay::{Edit, Overlay};
+use crate::overlay::{Edit, Overlay, OverlayRows};
 use crate::path::PathFile;
 use crate::schema::{DbState, ImportMarker, OAuthClient, STATE_KEY, TableSet};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
@@ -650,10 +650,11 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
 
 /// Compare the `stored` overlay with the legacy edits.
 fn verify_overlay(stored: &Overlay, edits: &[Edit]) -> Result<Vec<String>> {
-    let mut legacy = Overlay::default();
-    for e in edits {
-        legacy.apply(e);
+    let mut rows = OverlayRows::default();
+    for change in edits.iter().flat_map(Edit::row_changes) {
+        rows.apply(change);
     }
+    let legacy = rows.overlay();
     let atoms: BTreeSet<&String> = legacy.atoms.keys().chain(stored.atoms.keys()).collect();
     let mut out = Vec::new();
     for atom in atoms {

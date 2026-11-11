@@ -12,7 +12,7 @@ use crate::db::client::{self, Entry};
 use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
 use crate::event_log::{Event, EventKind};
 use crate::graph::{Curriculum, Graph};
-use crate::overlay::{Edit, Overlay};
+use crate::overlay::{Edit, Overlay, OverlayRows};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::schema::{
@@ -26,19 +26,21 @@ pub(crate) const OVERLAY_VERSION_KEY: &str = "overlay_version";
 /// Version string of a database before any overlay writes.
 const UNWRITTEN_OVERLAY_VERSION: &str = "";
 
-/// Overlay at a stored version, with the curriculum graph that it amends merged on first use.
+/// Overlay rows at a stored version, with the overlay that they store and the curriculum graph that it amends merged on first use.
 #[derive(Debug)]
 pub(crate) struct CachedOverlay {
     version: String,
+    rows: OverlayRows,
     overlay: Overlay,
     merged: OnceLock<Arc<Graph>>,
 }
 
 impl CachedOverlay {
-    fn new(version: String, overlay: Overlay) -> Arc<Self> {
+    fn new(version: String, rows: OverlayRows) -> Arc<Self> {
         Arc::new(Self {
             version,
-            overlay,
+            overlay: rows.overlay(),
+            rows,
             merged: OnceLock::new(),
         })
     }
@@ -57,7 +59,7 @@ fn new_overlay_version() -> String {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CacheFile {
     version: String,
-    overlay: Overlay,
+    rows: OverlayRows,
 }
 
 /// Overlay cache of a database handle.
@@ -70,7 +72,7 @@ pub(crate) struct OverlayCache {
 
 fn read_cached_overlay(path: &Path) -> Option<Arc<CachedOverlay>> {
     let f: CacheFile = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    Some(CachedOverlay::new(f.version, f.overlay))
+    Some(CachedOverlay::new(f.version, f.rows))
 }
 
 /// Return a temporary sibling of `path` that no other write of the cache uses.
@@ -84,7 +86,7 @@ fn cache_temp_path(path: &Path) -> PathBuf {
     path.with_file_name(name)
 }
 
-fn write_cached_overlay(path: &Path, version: &str, overlay: &Overlay) {
+fn write_cached_overlay(path: &Path, version: &str, rows: &OverlayRows) {
     let write = || -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -92,7 +94,7 @@ fn write_cached_overlay(path: &Path, version: &str, overlay: &Overlay) {
         let tmp = cache_temp_path(path);
         let f = CacheFile {
             version: version.to_string(),
-            overlay: overlay.clone(),
+            rows: rows.clone(),
         };
         std::fs::write(&tmp, serde_json::to_vec(&f)?)?;
         std::fs::rename(tmp, path)
@@ -342,7 +344,13 @@ impl Changes {
             edits: self.overlay,
         });
         if let Some(write) = &overlay_write {
-            ops.extend(write.edits.iter().flat_map(Edit::ops));
+            ops.extend(
+                write
+                    .edits
+                    .iter()
+                    .flat_map(Edit::row_changes)
+                    .map(|c| c.op()),
+            );
             ops.push(Op::put(OVERLAY_VERSION_KEY, write.version.clone()));
         }
         for (path_id, projection) in self.projections {
@@ -537,7 +545,7 @@ impl Db {
             new_version
         };
         if let (Some(file), Some(n)) = (&self.cache_file, new_version) {
-            write_cached_overlay(file, &n.version, &n.overlay);
+            write_cached_overlay(file, &n.version, &n.rows);
         }
     }
 
@@ -561,11 +569,11 @@ impl Db {
     /// Cache the overlay `base` that a transaction checked with its committed `write` applied, or clear the cache if the transaction did not check an overlay.
     fn remember_edits(&self, base: Option<Arc<CachedOverlay>>, write: OverlayWrite) {
         let next = base.map(|base| {
-            let mut o = base.overlay.clone();
-            for e in &write.edits {
-                o.apply(e);
+            let mut rows = base.rows.clone();
+            for change in write.edits.iter().flat_map(Edit::row_changes) {
+                rows.apply(change);
             }
-            CachedOverlay::new(write.version, o)
+            CachedOverlay::new(write.version, rows)
         });
         self.cache_overlay(next);
     }
@@ -789,7 +797,7 @@ impl Plan {
             OverlayPlan::Check(cached) => Some(cached),
             OverlayPlan::Read => Some(CachedOverlay::new(
                 self.overlay_version.take().unwrap_or_default(),
-                Overlay::from_rows(
+                OverlayRows::new(
                     take(&mut self.lessons),
                     take(&mut self.quizzes),
                     take(&mut self.removed_quizzes),

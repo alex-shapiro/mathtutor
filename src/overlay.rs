@@ -29,36 +29,84 @@ pub struct OverlayAtom {
     pub removed: BTreeSet<String>,
 }
 
-impl Overlay {
-    /// Build an overlay from database rows.
-    pub fn from_rows(
+/// Stored rows of the overlay, keyed by primary key.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct OverlayRows {
+    lessons: BTreeMap<String, LessonRow>,
+    quizzes: BTreeMap<String, QuizRow>,
+    removed: BTreeMap<String, RemovedQuizRow>,
+}
+
+impl OverlayRows {
+    /// Collect the rows that a read of the overlay tables returned.
+    pub fn new(
         lessons: Vec<LessonRow>,
         quizzes: Vec<QuizRow>,
         removed: Vec<RemovedQuizRow>,
     ) -> Self {
-        let mut atoms: BTreeMap<String, OverlayAtom> = BTreeMap::new();
-        for r in lessons {
-            atoms.entry(r.atom_id).or_default().lesson = Some(r.body);
+        Self {
+            lessons: lessons
+                .into_iter()
+                .map(|r| (r.atom_id.clone(), r))
+                .collect(),
+            quizzes: quizzes
+                .into_iter()
+                .map(|r| (r.quiz_id.clone(), r))
+                .collect(),
+            removed: removed
+                .into_iter()
+                .map(|r| (r.quiz_id.clone(), r))
+                .collect(),
         }
-        for r in quizzes {
+    }
+
+    /// Apply `change` as the database applies its operation.
+    pub(crate) fn apply(&mut self, change: RowChange) {
+        match change {
+            RowChange::PutLesson(r) => {
+                self.lessons.insert(r.atom_id.clone(), r);
+            }
+            RowChange::InsertQuiz(r) | RowChange::PutQuiz(r) => {
+                self.quizzes.insert(r.quiz_id.clone(), r);
+            }
+            RowChange::PutRemoved(r) => {
+                self.removed.insert(r.quiz_id.clone(), r);
+            }
+            RowChange::DeleteRemoved(quiz_id) => {
+                self.removed.remove(&quiz_id);
+            }
+        }
+    }
+
+    /// Return the overlay that these rows store.
+    pub fn overlay(&self) -> Overlay {
+        let mut atoms: BTreeMap<String, OverlayAtom> = BTreeMap::new();
+        for r in self.lessons.values() {
+            atoms.entry(r.atom_id.clone()).or_default().lesson = Some(r.body.clone());
+        }
+        for r in self.quizzes.values() {
             let quiz = Quiz {
-                id: r.quiz_id,
+                id: r.quiz_id.clone(),
                 difficulty: r.difficulty,
                 kind: r.kind,
-                question: r.question,
-                answer: r.answer,
-                rubric: r.rubric,
+                question: r.question.clone(),
+                answer: r.answer.clone(),
+                rubric: r.rubric.clone(),
             };
-            atoms.entry(r.atom_id).or_default().quizzes.push(quiz);
-        }
-        for r in removed {
             atoms
-                .entry(r.atom_id)
+                .entry(r.atom_id.clone())
+                .or_default()
+                .quizzes
+                .push(quiz);
+        }
+        for r in self.removed.values() {
+            atoms
+                .entry(r.atom_id.clone())
                 .or_default()
                 .removed
-                .insert(r.quiz_id);
+                .insert(r.quiz_id.clone());
         }
-        Self { atoms }
+        Overlay { atoms }
     }
 }
 
@@ -94,60 +142,56 @@ pub enum Edit {
     },
 }
 
-impl Edit {
-    /// Convert this edit into database write operations.
-    pub(crate) fn ops(&self) -> Vec<Op> {
+/// Change of one overlay row.
+#[derive(Debug, Clone)]
+pub(crate) enum RowChange {
+    PutLesson(LessonRow),
+    /// Insert a quiz row, which fails if a row with the same ID exists, so that concurrent transactions cannot claim the same ID.
+    InsertQuiz(QuizRow),
+    PutQuiz(QuizRow),
+    PutRemoved(RemovedQuizRow),
+    /// Delete the removal tombstone of a quiz ID.
+    DeleteRemoved(String),
+}
+
+impl RowChange {
+    /// Return the database write operation of this change.
+    pub(crate) fn op(&self) -> Op {
         match self {
-            Edit::Lesson { atom_id, body } => vec![Op::upsert(&LessonRow {
+            RowChange::PutLesson(r) => Op::upsert(r),
+            RowChange::InsertQuiz(r) => Op::insert(r),
+            RowChange::PutQuiz(r) => Op::upsert(r),
+            RowChange::PutRemoved(r) => Op::upsert(r),
+            RowChange::DeleteRemoved(quiz_id) => Op::delete_row::<RemovedQuizRow>(quiz_id),
+        }
+    }
+}
+
+impl Edit {
+    /// Return the row changes of this edit.
+    pub(crate) fn row_changes(&self) -> Vec<RowChange> {
+        match self {
+            Edit::Lesson { atom_id, body } => vec![RowChange::PutLesson(LessonRow {
                 atom_id: atom_id.clone(),
                 body: body.clone(),
             })],
-            // Use `insert` for new quizzes so concurrent transactions cannot claim the same ID.
             Edit::Quiz {
                 atom_id,
                 quiz,
                 new: true,
-            } => vec![Op::insert(&QuizRow::new(atom_id, quiz))],
+            } => vec![RowChange::InsertQuiz(QuizRow::new(atom_id, quiz))],
             Edit::Quiz {
                 atom_id,
                 quiz,
                 new: false,
             } => vec![
-                Op::upsert(&QuizRow::new(atom_id, quiz)),
-                Op::delete_row::<RemovedQuizRow>(&quiz.id),
+                RowChange::PutQuiz(QuizRow::new(atom_id, quiz)),
+                RowChange::DeleteRemoved(quiz.id.clone()),
             ],
-            Edit::Remove { atom_id, quiz_id } => vec![Op::upsert(&RemovedQuizRow {
+            Edit::Remove { atom_id, quiz_id } => vec![RowChange::PutRemoved(RemovedQuizRow {
                 quiz_id: quiz_id.clone(),
                 atom_id: atom_id.clone(),
             })],
-        }
-    }
-}
-
-impl Overlay {
-    /// Apply `e` to the in-memory overlay.
-    pub fn apply(&mut self, e: &Edit) {
-        match e {
-            Edit::Lesson { atom_id, body } => {
-                self.atoms.entry(atom_id.clone()).or_default().lesson = Some(body.clone());
-            }
-            Edit::Quiz { atom_id, quiz, .. } => {
-                let a = self.atoms.entry(atom_id.clone()).or_default();
-                if let Some(q) = a.quizzes.iter_mut().find(|q| q.id == quiz.id) {
-                    q.clone_from(quiz);
-                } else {
-                    a.quizzes.push(quiz.clone());
-                    a.quizzes.sort_by(|x, y| x.id.cmp(&y.id));
-                }
-                a.removed.remove(&quiz.id);
-            }
-            Edit::Remove { atom_id, quiz_id } => {
-                self.atoms
-                    .entry(atom_id.clone())
-                    .or_default()
-                    .removed
-                    .insert(quiz_id.clone());
-            }
         }
     }
 }
