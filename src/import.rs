@@ -247,13 +247,15 @@ const QUERIES: [(&str, &str); 10] = [
 /// Number of rows in each table, keyed by the name of the source table.
 type RowCounts = BTreeMap<&'static str, usize>;
 
+/// Row of the libSQL `schema_migrations` query.
 #[derive(Deserialize)]
-struct Version {
+struct LegacyVersion {
     version: i64,
 }
 
+/// Row of the libSQL `paths` table.
 #[derive(Deserialize)]
-struct PathRow {
+struct LegacyPathRow {
     id: String,
     goal: String,
     #[serde(with = "ts")]
@@ -261,14 +263,16 @@ struct PathRow {
     strategy: Strategy,
 }
 
+/// Row of the libSQL `path_targets` or `path_subpath` table.
 #[derive(Deserialize)]
-struct PathAtom {
+struct LegacyPathAtom {
     path_id: String,
     id: String,
 }
 
+/// Row of the libSQL `events` table.
 #[derive(Deserialize)]
-struct EventRow {
+struct LegacyEventRow {
     #[serde(with = "ts")]
     ts: DateTime<Utc>,
     kind: String,
@@ -280,11 +284,11 @@ struct EventRow {
     payload: Option<String>,
 }
 
-impl TryFrom<EventRow> for Event {
+impl TryFrom<LegacyEventRow> for Event {
     type Error = Error;
 
     /// Decode every column and payload field of `r`, and reject a field that the kind of `r` does not record.
-    fn try_from(r: EventRow) -> Result<Self> {
+    fn try_from(r: LegacyEventRow) -> Result<Self> {
         let bad = |what: String| {
             Error::BadRow(format!(
                 "libSQL events: {what} in {} event of {} at {}",
@@ -327,14 +331,16 @@ impl TryFrom<EventRow> for Event {
     }
 }
 
+/// Row of the libSQL `overlay_lessons` table.
 #[derive(Deserialize)]
-struct LessonRow {
+struct LegacyLessonRow {
     atom_id: String,
     body: String,
 }
 
+/// Row of the libSQL `overlay_quizzes` table.
 #[derive(Deserialize)]
-struct QuizRow {
+struct LegacyQuizRow {
     atom_id: String,
     quiz_id: String,
     difficulty: Difficulty,
@@ -344,14 +350,16 @@ struct QuizRow {
     rubric: Option<String>,
 }
 
+/// Row of the libSQL `overlay_removed_quizzes` table, with the atom of the quiz if libSQL holds it.
 #[derive(Deserialize)]
-struct RemovedRow {
+struct LegacyRemovedRow {
     quiz_id: String,
     atom_id: Option<String>,
 }
 
+/// Row of the libSQL `cards` table.
 #[derive(Deserialize)]
-struct CardRow {
+struct LegacyCardRow {
     path_id: String,
     quiz_id: String,
     stability: f64,
@@ -364,8 +372,9 @@ struct CardRow {
     lapses: u32,
 }
 
+/// Row of the libSQL `oauth_clients` table.
 #[derive(Deserialize)]
-struct OAuthClientRow {
+struct LegacyOAuthClientRow {
     client_id: String,
     client_name: Option<String>,
     redirect_uris: String,
@@ -373,10 +382,10 @@ struct OAuthClientRow {
     created_at: DateTime<Utc>,
 }
 
-impl TryFrom<OAuthClientRow> for OAuthClient {
+impl TryFrom<LegacyOAuthClientRow> for OAuthClient {
     type Error = Error;
 
-    fn try_from(r: OAuthClientRow) -> Result<Self> {
+    fn try_from(r: LegacyOAuthClientRow) -> Result<Self> {
         let redirect_uris = serde_json::from_str(&r.redirect_uris)
             .map_err(|e| Error::BadRow(format!("libSQL oauth_clients.redirect_uris: {e}")))?;
         Ok(Self {
@@ -388,13 +397,14 @@ impl TryFrom<OAuthClientRow> for OAuthClient {
     }
 }
 
+/// Rows of a libSQL database, decoded into the types of this release.
 struct Legacy {
     /// Number of rows that each source table returned before decoding.
     row_counts: RowCounts,
     paths: Vec<PathFile>,
     events: HashMap<String, Vec<Event>>,
     overlay: Vec<Edit>,
-    cards: HashMap<String, Vec<CardRow>>,
+    cards: HashMap<String, Vec<LegacyCardRow>>,
     oauth_clients: Vec<OAuthClient>,
 }
 
@@ -426,7 +436,7 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
         ("cards", cards.len()),
         ("oauth_clients", oauth_clients.len()),
     ]);
-    let version = decode_rows::<Version>("schema_migrations", version)?
+    let version = decode_rows::<LegacyVersion>("schema_migrations", version)?
         .first()
         .map_or(0, |v| v.version);
     if version != SCHEMA_VERSION {
@@ -435,9 +445,9 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
         )));
     }
 
-    let mut targets = group_by_path(decode_rows::<PathAtom>("path_targets", targets)?);
-    let mut subpaths = group_by_path(decode_rows::<PathAtom>("path_subpath", subpaths)?);
-    let mut paths: Vec<PathFile> = decode_rows::<PathRow>("paths", paths)?
+    let mut targets = group_by_path(decode_rows::<LegacyPathAtom>("path_targets", targets)?);
+    let mut subpaths = group_by_path(decode_rows::<LegacyPathAtom>("path_subpath", subpaths)?);
+    let mut paths: Vec<PathFile> = decode_rows::<LegacyPathRow>("paths", paths)?
         .into_iter()
         .map(|p| PathFile {
             targets: targets.remove(&p.id).unwrap_or_default(),
@@ -460,11 +470,11 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
         decode_rows("overlay_quizzes", quizzes)?,
         decode_rows("overlay_removed_quizzes", removed)?,
     );
-    let mut cards_by_path: HashMap<String, Vec<CardRow>> = HashMap::new();
-    for c in decode_rows::<CardRow>("cards", cards)? {
+    let mut cards_by_path: HashMap<String, Vec<LegacyCardRow>> = HashMap::new();
+    for c in decode_rows::<LegacyCardRow>("cards", cards)? {
         cards_by_path.entry(c.path_id.clone()).or_default().push(c);
     }
-    let oauth_clients = decode_rows::<OAuthClientRow>("oauth_clients", oauth_clients)?
+    let oauth_clients = decode_rows::<LegacyOAuthClientRow>("oauth_clients", oauth_clients)?
         .into_iter()
         .map(OAuthClient::try_from)
         .collect::<Result<_>>()?;
@@ -478,7 +488,7 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
     })
 }
 
-fn group_events(rows: Vec<EventRow>) -> Result<HashMap<String, Vec<Event>>> {
+fn group_events(rows: Vec<LegacyEventRow>) -> Result<HashMap<String, Vec<Event>>> {
     let mut by_path: HashMap<String, Vec<Event>> = HashMap::new();
     for row in rows {
         let e = Event::try_from(row)?;
@@ -489,9 +499,9 @@ fn group_events(rows: Vec<EventRow>) -> Result<HashMap<String, Vec<Event>>> {
 
 /// Order quiz edits before tombstones because upserting a quiz deletes its tombstone row.
 fn overlay_edits(
-    lessons: Vec<LessonRow>,
-    quizzes: Vec<QuizRow>,
-    removed: Vec<RemovedRow>,
+    lessons: Vec<LegacyLessonRow>,
+    quizzes: Vec<LegacyQuizRow>,
+    removed: Vec<LegacyRemovedRow>,
 ) -> Vec<Edit> {
     let lessons = lessons.into_iter().map(|l| Edit::Lesson {
         atom_id: l.atom_id,
@@ -519,7 +529,7 @@ fn overlay_edits(
     lessons.chain(quizzes).chain(removed).collect()
 }
 
-fn group_by_path(atoms: Vec<PathAtom>) -> HashMap<String, Vec<String>> {
+fn group_by_path(atoms: Vec<LegacyPathAtom>) -> HashMap<String, Vec<String>> {
     let mut out: HashMap<String, Vec<String>> = HashMap::new();
     for a in atoms {
         out.entry(a.path_id).or_default().push(a.id);
@@ -679,7 +689,7 @@ fn latest_activity(p: &PathFile, events: &[Event]) -> DateTime<Utc> {
 fn verify_path(
     path: &PathFile,
     events: &[Event],
-    legacy: &[CardRow],
+    legacy: &[LegacyCardRow],
     stored: Option<&PathState>,
     stored_events: &[Event],
 ) -> Result<Vec<String>> {
@@ -852,10 +862,10 @@ mod tests {
         (path, events, state)
     }
 
-    fn legacy_card(state: &PathState) -> CardRow {
+    fn legacy_card(state: &PathState) -> LegacyCardRow {
         let card = &state.projection.cards["fnd.1.1.1.q1"];
         let s = card.state.unwrap();
-        CardRow {
+        LegacyCardRow {
             path_id: "p".into(),
             quiz_id: card.quiz_id.clone(),
             stability: f64::from(s.stability),
@@ -871,16 +881,17 @@ mod tests {
     fn a_path_verifies_against_its_stored_state_without_a_server() {
         let (path, events, state) = answered_path();
         let card = legacy_card(&state);
-        let check = |stored: Option<&PathState>, stored_events: &[Event], legacy: &CardRow| {
-            verify_path(
-                &path,
-                &events,
-                std::slice::from_ref(legacy),
-                stored,
-                stored_events,
-            )
-            .unwrap()
-        };
+        let check =
+            |stored: Option<&PathState>, stored_events: &[Event], legacy: &LegacyCardRow| {
+                verify_path(
+                    &path,
+                    &events,
+                    std::slice::from_ref(legacy),
+                    stored,
+                    stored_events,
+                )
+                .unwrap()
+            };
         assert_eq!(check(Some(&state), &events, &card), Vec::<String>::new());
         assert_eq!(check(None, &[], &card), ["p: path missing from Baserunna"]);
         let lost = check(Some(&state), &[], &card);
@@ -888,7 +899,7 @@ mod tests {
             lost[0].contains("0 events stored and 1 in libSQL"),
             "{lost:?}"
         );
-        let other_reps = CardRow {
+        let other_reps = LegacyCardRow {
             reps: 2,
             ..legacy_card(&state)
         };
