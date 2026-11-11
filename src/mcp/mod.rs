@@ -36,6 +36,7 @@ use url::Url;
 
 use crate::Error;
 use crate::db::{Db, DbConfig};
+use crate::surface::{Operation, Surface};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{answer, discover, path, scheduler, state, store, subpath, syllabus, tree};
 
@@ -203,7 +204,10 @@ impl MathTutorServer {
         Parameters(args): Parameters<NewPathArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let result = path::cmd_path_new(&self.db, &args.goal, &args.targets, args.strategy).await;
-        encode(result.map(|id| json!({ "path_id": id })))
+        encode_as(
+            Operation::NewPath,
+            result.map(|id| json!({ "path_id": id })),
+        )
     }
 
     #[tool(description = "Switch a path traversal strategy (bottom_up or top_down).")]
@@ -318,7 +322,10 @@ impl MathTutorServer {
             Some(&args.path_id),
         )
         .await;
-        encode(result.map(|quiz_id| json!({ "quiz_id": quiz_id })))
+        encode_as(
+            Operation::CreateQuiz,
+            result.map(|quiz_id| json!({ "quiz_id": quiz_id })),
+        )
     }
 
     #[tool(description = "Update fields of an existing quiz while preserving ID and FSRS history.")]
@@ -362,7 +369,10 @@ impl MathTutorServer {
             Some(&args.path_id),
         )
         .await;
-        encode(result.map(|()| json!({ "quiz_id": args.quiz_id, "rating": args.rating })))
+        encode_as(
+            Operation::AnswerQuiz,
+            result.map(|()| json!({ "quiz_id": args.quiz_id, "rating": args.rating })),
+        )
     }
 }
 
@@ -401,8 +411,17 @@ impl ServerHandler for MathTutorServer {
     }
 }
 
-// Wrap non-object JSON payloads because MCP requires `structuredContent` to be a JSON object.
+/// Encode `result` of a repeatable tool call as a tool result.
 fn encode<T: Serialize>(result: CrateResult<T>) -> std::result::Result<CallToolResult, McpError> {
+    encode_as(Operation::Repeatable, result)
+}
+
+/// Encode `result` of `op` as a tool result, and add the safe next step to an error with an unknown outcome.
+// Wrap non-object JSON payloads because MCP requires `structuredContent` to be a JSON object.
+fn encode_as<T: Serialize>(
+    op: Operation,
+    result: CrateResult<T>,
+) -> std::result::Result<CallToolResult, McpError> {
     match result {
         Ok(value) => {
             let json = serde_json::to_value(value)
@@ -415,7 +434,10 @@ fn encode<T: Serialize>(result: CrateResult<T>) -> std::result::Result<CallToolR
             Ok(CallToolResult::structured(object))
         }
         Err(e) => {
-            let body = json!({ "error": format!("{e}"), "kind": error_kind(&e) });
+            let mut body = json!({ "error": format!("{e}"), "kind": error_kind(&e) });
+            if e.outcome_is_unknown() {
+                body["next_step"] = json!(op.unknown_outcome_step(Surface::Mcp));
+            }
             Ok(CallToolResult::structured_error(body))
         }
     }
@@ -727,5 +749,35 @@ async fn wait_for_shutdown() {
     #[cfg(not(unix))]
     {
         ctrl_c.await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use baserunna_client::TransportError;
+
+    fn lost_commit() -> Error {
+        Error::Baserunna(baserunna_client::Error::Transport(TransportError::Unknown(
+            "reset".into(),
+        )))
+    }
+
+    #[test]
+    fn unknown_outcome_error_names_the_safe_next_call() {
+        let result = encode_as::<()>(Operation::AnswerQuiz, Err(lost_commit())).unwrap();
+        let body = result.structured_content.expect("structured error");
+        assert_eq!(body["kind"], json!("outcome_unknown"));
+        assert_eq!(
+            body["next_step"],
+            json!(Operation::AnswerQuiz.unknown_outcome_step(Surface::Mcp))
+        );
+    }
+
+    #[test]
+    fn known_outcome_error_omits_next_step() {
+        let result = encode_as::<()>(Operation::AnswerQuiz, Err(Error::NoPath)).unwrap();
+        let body = result.structured_content.expect("structured error");
+        assert!(body.get("next_step").is_none());
     }
 }

@@ -121,4 +121,4 @@ All target atoms on the path are complete. Inform the user and offer to start a 
 
 ## Errors
 
-`mt` prints errors to stderr and exits with a non-zero status code. Report the error message to the user and recover by inspecting the curriculum or path state. Exit code 3 indicates that the commit status is unknown. After `mt quiz answer` or `mt quiz create`, run `mt path next` instead of repeating the command, because a repeated answer records a second review. After `mt path new`, run `mt path list` and create the path only if it is absent. After any other command, repeat the command.
+`mt` prints errors to stderr and exits with a non-zero status code. Report the error message to the user and recover by inspecting the curriculum or path state. Exit code 3 indicates that the commit status is unknown. `mt` then prints the safe next step on stderr. Follow that step, because a repeated command can record a second review.

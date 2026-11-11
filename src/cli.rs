@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use argh::FromArgs;
 
+use crate::surface::Operation;
 use crate::types;
 
 /// Manage math lessons and spaced-repetition quizzes over a curriculum graph.
@@ -28,6 +29,22 @@ pub enum Cmd {
     ImportTurso(ImportTursoCmd),
     #[cfg(feature = "mcp")]
     Mcp(McpCmd),
+}
+
+impl Cmd {
+    /// Return the operation of this command.
+    pub fn operation(&self) -> Operation {
+        match self {
+            Cmd::ImportTurso(_) => Operation::ImportTurso,
+            Cmd::Path(p) if matches!(p.op, PathOp::New(_)) => Operation::NewPath,
+            Cmd::Quiz(q) => match q.op {
+                QuizOp::Create(_) => Operation::CreateQuiz,
+                QuizOp::Answer(_) => Operation::AnswerQuiz,
+                QuizOp::Update(_) | QuizOp::Delete(_) => Operation::Repeatable,
+            },
+            _ => Operation::Repeatable,
+        }
+    }
 }
 
 /// Manage learning paths.
@@ -449,4 +466,42 @@ pub fn flatten_ids(raw: &[String]) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn operation(args: &[&str]) -> Operation {
+        Mt::from_args(&["mt"], args)
+            .expect("valid args")
+            .cmd
+            .operation()
+    }
+
+    #[test]
+    fn writes_that_must_not_repeat_have_their_own_operation() {
+        let answer = ["quiz", "answer", "a.q1", "--rating", "good"];
+        assert_eq!(operation(&answer), Operation::AnswerQuiz);
+        let create = [
+            "quiz",
+            "create",
+            "a",
+            "--difficulty",
+            "easy",
+            "--question",
+            "q",
+            "--answer",
+            "a",
+        ];
+        assert_eq!(operation(&create), Operation::CreateQuiz);
+        let new = ["path", "new", "goal", "--targets", "a"];
+        assert_eq!(operation(&new), Operation::NewPath);
+        assert_eq!(operation(&["import-turso"]), Operation::ImportTurso);
+        assert_eq!(
+            operation(&["quiz", "delete", "a.q1"]),
+            Operation::Repeatable
+        );
+        assert_eq!(operation(&["path", "next"]), Operation::Repeatable);
+    }
 }

@@ -93,4 +93,4 @@ All target atoms on the path are complete. Inform the user and offer to start a 
 
 ## Errors
 
-Tool errors return `isError: true` with a JSON error object. Report the error message to the user and recover by inspecting the curriculum or path state. The error kind `outcome_unknown` indicates that the commit status is unknown. After `answer_quiz` or `create_quiz`, call `get_next` instead of repeating the call, because a repeated answer records a second review. After `new_path`, call `get_paths` and create the path only if it is absent. After any other call, repeat the call.
+Tool errors return `isError: true` with a JSON error object. Report the error message to the user and recover by inspecting the curriculum or path state. The error kind `outcome_unknown` indicates that the commit status is unknown. The error object then includes `next_step`, the safe next call. Follow `next_step`, because a repeated call can record a second review.

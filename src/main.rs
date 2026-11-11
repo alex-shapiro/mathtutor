@@ -11,6 +11,7 @@ use mathtutor::cli::{Cmd, GraphOp, LessonOp, Mt, PathOp, QuizOp, SubpathOp};
 use mathtutor::graph::{Curriculum, CurriculumSource};
 #[cfg(feature = "mcp")]
 use mathtutor::mcp;
+use mathtutor::surface::Surface;
 use mathtutor::{
     Error, Result, answer, db, discover, graph, import, instruct, overlay, path, scheduler, state,
     store, subpath, syllabus, tree,
@@ -111,7 +112,7 @@ async fn real_main() -> ExitCode {
         Ok(db) => db,
         Err(e) => return report_failure(&e),
     };
-    let recovery = unknown_outcome_recovery(&cli.cmd);
+    let recovery = cli.cmd.operation().unknown_outcome_step(Surface::Cli);
     match dispatch(&db, cli.cmd).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -166,22 +167,6 @@ async fn run_curriculum_lookup(curriculum: &Curriculum, op: &GraphOp) -> Option<
 fn report_failure(e: &Error) -> ExitCode {
     eprintln!("error: {e}");
     ExitCode::from(e.exit_code())
-}
-
-/// Return the safe next step after `cmd` fails with an unknown outcome.
-fn unknown_outcome_recovery(cmd: &Cmd) -> &'static str {
-    match cmd {
-        Cmd::ImportTurso(_) => {
-            "run `mt import-turso` again; a report that the import already completed means that it succeeded"
-        }
-        Cmd::Path(p) if matches!(p.op, PathOp::New(_)) => {
-            "run `mt path list` and create the path only if it is absent"
-        }
-        Cmd::Quiz(q) if matches!(q.op, QuizOp::Answer(_) | QuizOp::Create(_)) => {
-            "run `mt path next` instead of repeating the command"
-        }
-        _ => "repeat the command",
-    }
 }
 
 /// Parse the command line, and return the exit code if the process should stop.

@@ -22,6 +22,7 @@ pub mod schema;
 pub mod state;
 pub mod store;
 pub mod subpath;
+pub mod surface;
 pub mod syllabus;
 pub mod tree;
 pub mod types;
