@@ -20,7 +20,7 @@ use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 
 use crate::db::{Db, Op, Txn, run_txn};
-use crate::schema::{OAuthAccessToken, OAuthClient, OAuthCode, OAuthCodeUse, OAuthRefreshToken};
+use crate::schema::{OAuthAccessToken, OAuthClient, OAuthCode, OAuthRefreshToken};
 
 const AUTHORIZATION_CODE_TTL: Duration = Duration::seconds(60);
 const ACCESS_TOKEN_TTL: Duration = Duration::hours(1);
@@ -258,7 +258,6 @@ async fn authorize_post(
         code_challenge_method: "S256".into(),
         resource: q.resource.clone(),
         expires_at: Utc::now() + AUTHORIZATION_CODE_TTL,
-        used_at: None,
     };
     s.db.write([Op::insert_expiring(&code, std_ttl(AUTHORIZATION_CODE_TTL))])
         .await?;
@@ -436,7 +435,7 @@ impl From<IssuedTokens> for TokenResponse {
     }
 }
 
-/// Mark authorization `code` used and queue new tokens.
+/// Delete authorization `code` and queue new tokens.
 async fn exchange_code(
     txn: &mut Txn,
     code: &str,
@@ -451,10 +450,7 @@ async fn exchange_code(
         .row()?;
     let scope = redeem(row, client_id, redirect_uri, verifier)?;
     let tokens = IssuedTokens::new(client_id, scope);
-    let used = OAuthCodeUse {
-        used_at: Utc::now(),
-    };
-    txn.write([Op::update::<OAuthCode>(&code_hash, &used)]);
+    txn.write([Op::delete_row::<OAuthCode>(&code_hash)]);
     txn.write(tokens.insert_ops());
     Ok(tokens)
 }
@@ -487,12 +483,9 @@ fn redeem(
     verifier: &str,
 ) -> Result<Option<String>, OAuthError> {
     let Some(row) = row else {
+        tracing::warn!(%client_id, "auth code unknown or already used");
         return Err(OAuthError::invalid_grant());
     };
-    if row.used_at.is_some() {
-        tracing::warn!(%client_id, "auth code already used");
-        return Err(OAuthError::invalid_grant());
-    }
     if row.client_id != client_id {
         tracing::warn!(%client_id, stored_client_id = %row.client_id, "auth code client_id mismatch");
         return Err(OAuthError::invalid_grant());

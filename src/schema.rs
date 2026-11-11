@@ -173,15 +173,6 @@ row_table! {
     }
 }
 
-/// Mutable columns of a `paths` row.
-#[derive(Debug, Default, Serialize)]
-pub(crate) struct PathUpdate<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub strategy: Option<Strategy>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subpath: Option<&'a [String]>,
-}
-
 row_table! {
     /// Row in the `lessons` overlay table.
     pub struct LessonRow in "lessons", primary key (atom_id) {
@@ -269,16 +260,7 @@ row_table! {
         pub resource: Option<String>,
         #[serde(with = "ts")]
         pub expires_at: DateTime<Utc>,
-        #[serde(with = "ts::option")]
-        pub used_at: Option<DateTime<Utc>>,
     }
-}
-
-/// Update payload marking an `oauth_codes` row as redeemed.
-#[derive(Debug, Serialize)]
-pub struct OAuthCodeUse {
-    #[serde(with = "ts")]
-    pub used_at: DateTime<Utc>,
 }
 
 row_table! {

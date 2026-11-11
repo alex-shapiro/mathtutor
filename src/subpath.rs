@@ -43,8 +43,12 @@ pub async fn cmd_subpath_set(
                 None => return Err(Error::AtomNotFound(a.clone())),
             }
         }
-        changes.set_subpath(&p.id, atoms);
-        Ok(p.id.clone())
+        let p = PathFile {
+            subpath: atoms.to_vec(),
+            ..p.clone()
+        };
+        changes.replace_path(&p);
+        Ok(p.id)
     })
     .await
 }
@@ -54,9 +58,12 @@ pub async fn cmd_subpath_clear(db: &Db, explicit_id: Option<&str>) -> Result<Str
     db.transact(
         &Want::path(explicit_id).without_overlay(),
         |view, changes| {
-            let id = view.path()?.file.id.clone();
-            changes.set_subpath(&id, &[]);
-            Ok(id)
+            let p = PathFile {
+                subpath: Vec::new(),
+                ..view.path()?.file.clone()
+            };
+            changes.replace_path(&p);
+            Ok(p.id)
         },
     )
     .await

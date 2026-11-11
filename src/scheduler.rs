@@ -91,7 +91,10 @@ pub async fn compute_next(
             && !subpath.is_empty()
             && subpath.iter().all(|a| is_atom_complete(&g, &progress, a))
         {
-            changes.set_subpath(&p.id, &[]);
+            changes.replace_path(&PathFile {
+                subpath: Vec::new(),
+                ..p.clone()
+            });
         }
         Ok(envelope)
     })

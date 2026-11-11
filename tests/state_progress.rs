@@ -1,12 +1,12 @@
 //! Unit and integration tests for `PathCompletion::of` and `state::compute_state`.
 
 use chrono::{Duration, Utc};
-use mathtutor::cards::{CardRow, CardState};
 use mathtutor::graph::Graph;
 use mathtutor::overlay::QuizDraft;
 use mathtutor::path::PathFile;
 use mathtutor::progress::{PathCompletion, PathProgress, ReachProgress, TargetProgress};
 use mathtutor::state;
+use mathtutor::types::Rating;
 
 mod common;
 
@@ -105,26 +105,10 @@ fn learned_pct_rounds_down() {
     assert_eq!(t.learned_pct, 33);
 }
 
-async fn seed_card(
-    db: &mathtutor::db::Db,
-    quiz_id: &str,
-    due: chrono::DateTime<Utc>,
-    reviewed: chrono::DateTime<Utc>,
-) {
-    let card = CardRow {
-        state: Some(CardState {
-            due,
-            last_review: reviewed,
-            stability: 1.0,
-            difficulty: 5.0,
-        }),
-        reps: 1,
-        ..CardRow::new(PATH_ID, quiz_id)
-    };
-    common::write(db, PATH_ID, |_, changes| {
-        changes.set_card(card.clone());
-    })
-    .await;
+/// Record a `good` answer to `quiz_id` at `ts`, which schedules its review a few days later.
+async fn answer_at(db: &mathtutor::db::Db, quiz_id: &str, ts: chrono::DateTime<Utc>) {
+    let answer = common::at(ts, common::answered(quiz_id, Rating::Good));
+    common::append(db, &[answer]).await;
 }
 
 #[tokio::test]
@@ -142,8 +126,8 @@ async fn compute_state_past_due_excludes_future_cards() {
     let db = common::fresh_db(PATH_ID).await;
     let now = Utc::now();
 
-    for (quiz_id, offset_secs) in [("q.a", 60_i64), ("q.b", 3600), ("q.c", 86_400)] {
-        seed_card(&db, quiz_id, now + Duration::seconds(offset_secs), now).await;
+    for quiz_id in ["q.a", "q.b", "q.c"] {
+        answer_at(&db, quiz_id, now).await;
     }
 
     let s = state::compute_state(&db, Some(PATH_ID))
@@ -160,7 +144,7 @@ async fn compute_state_past_due_counts_overdue_cards() {
     mathtutor::store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some(PATH_ID))
         .await
         .unwrap();
-    for offset_secs in [-3600_i64, -60, 3600] {
+    for answered_days_ago in [40_i64, 30, 0] {
         let quiz_id = mathtutor::store::cmd_quiz_create(
             &db,
             "fnd.1.1.1",
@@ -175,8 +159,7 @@ async fn compute_state_past_due_counts_overdue_cards() {
         )
         .await
         .unwrap();
-        let due = now + Duration::seconds(offset_secs);
-        seed_card(&db, &quiz_id, due, due - Duration::seconds(1)).await;
+        answer_at(&db, &quiz_id, now - Duration::days(answered_days_ago)).await;
     }
 
     let s = state::compute_state(&db, Some(PATH_ID))

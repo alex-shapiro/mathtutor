@@ -1,7 +1,6 @@
 //! Integration tests for the event log and derived card state.
 
 use chrono::{DateTime, Duration, Utc};
-use mathtutor::cards::{CardRow, CardState};
 use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::types::{Rating, Strategy};
 use mathtutor::view::Want;
@@ -235,33 +234,15 @@ async fn non_answer_events_leave_cards_unscheduled() {
 async fn due_returns_only_past_due_in_order() {
     let db = common::fresh_db(PATH_ID).await;
     let now = Utc::now();
-    let rows: [(&str, i64); 3] = [
-        ("q.past_old", -3600),
-        ("q.past_recent", -60),
-        ("q.future", 600),
-    ];
-    let cards: Vec<CardRow> = rows
-        .iter()
-        .map(|(quiz_id, offset_secs)| {
-            let due = now + Duration::seconds(*offset_secs);
-            CardRow {
-                state: Some(CardState {
-                    due,
-                    last_review: due - Duration::seconds(1),
-                    stability: 1.0,
-                    difficulty: 5.0,
-                }),
-                reps: 1,
-                ..CardRow::new(PATH_ID, quiz_id)
-            }
-        })
-        .collect();
-    common::write(&db, PATH_ID, |_, changes| {
-        for c in &cards {
-            changes.set_card(c.clone());
-        }
-    })
-    .await;
+    for (quiz_id, answered_days_ago) in [("q.past_recent", 30), ("q.past_old", 40), ("q.future", 0)]
+    {
+        let answer = common::answered(quiz_id, Rating::Good);
+        common::append(
+            &db,
+            &[common::at(now - Duration::days(answered_days_ago), answer)],
+        )
+        .await;
+    }
 
     let due = common::path_state(&db, PATH_ID).await.due(now);
     let ids: Vec<&str> = due.iter().map(|(q, _)| q.as_str()).collect();

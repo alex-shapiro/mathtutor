@@ -15,10 +15,9 @@ use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::schema::{
-    ACTIVITY_PREFIX, CardRecord, LessonRow, PathUpdate, QuizRow, RemovedQuizRow, TaughtRow,
-    activity_key, events_stream,
+    ACTIVITY_PREFIX, CardRecord, LessonRow, QuizRow, RemovedQuizRow, TaughtRow, activity_key,
+    events_stream,
 };
-use crate::types::Strategy;
 use crate::{Error, Result};
 
 pub(crate) const OVERLAY_VERSION_KEY: &str = "overlay_version";
@@ -291,27 +290,9 @@ impl Changes {
         self.append(view, &created)
     }
 
-    /// Set the traversal strategy of `path_id`.
-    pub fn set_strategy(&mut self, path_id: &str, strategy: Strategy) {
-        let update = PathUpdate {
-            strategy: Some(strategy),
-            ..PathUpdate::default()
-        };
-        self.ops.push(Op::update::<PathFile>(path_id, &update));
-    }
-
-    /// Replace the stored subpath of `path_id`.
-    pub fn set_subpath(&mut self, path_id: &str, atoms: &[String]) {
-        let update = PathUpdate {
-            subpath: Some(atoms),
-            ..PathUpdate::default()
-        };
-        self.ops.push(Op::update::<PathFile>(path_id, &update));
-    }
-
-    /// Set the updated [`CardRow`] for its `(path_id, quiz_id)` pair.
-    pub fn set_card(&mut self, c: CardRow) {
-        self.cards.insert((c.path_id.clone(), c.quiz_id.clone()), c);
+    /// Replace the stored row of path `p.id` with `p`.
+    pub fn replace_path(&mut self, p: &PathFile) {
+        self.ops.push(Op::upsert(p));
     }
 
     /// Make `path_id` the most recent path.

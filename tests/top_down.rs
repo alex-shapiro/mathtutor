@@ -238,7 +238,14 @@ async fn load_path(db: &Db, id: &str) -> PathFile {
 }
 
 async fn replace_subpath(db: &Db, id: &str, atoms: &[String]) {
-    common::write(db, id, |_, changes| changes.set_subpath(id, atoms)).await;
+    common::write(db, id, |view, changes| {
+        let p = PathFile {
+            subpath: atoms.to_vec(),
+            ..view.path().unwrap().file.clone()
+        };
+        changes.replace_path(&p);
+    })
+    .await;
 }
 
 #[tokio::test]

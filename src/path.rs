@@ -82,9 +82,12 @@ pub async fn cmd_path_strategy(
 ) -> Result<String> {
     let want = Want::path(explicit_id).without_overlay();
     db.transact(&want, |view, changes| {
-        let id = view.path()?.file.id.clone();
-        changes.set_strategy(&id, strategy);
-        Ok(id)
+        let p = PathFile {
+            strategy,
+            ..view.path()?.file.clone()
+        };
+        changes.replace_path(&p);
+        Ok(p.id)
     })
     .await
 }
