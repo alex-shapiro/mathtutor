@@ -23,15 +23,17 @@ const MAX_FAILURE_DELAY: Duration = Duration::minutes(15);
 /// Time after the last failure at which the server forgets the failures of an address.
 const FAILURE_MEMORY: Duration = Duration::hours(1);
 
-/// Number of client registrations that an address can make in each [`REGISTRATION_WINDOW`].
-const REGISTRATIONS_PER_WINDOW: u32 = 10;
+/// Limit on client registrations from each address.
+const REGISTRATIONS: Window = Window {
+    per_window: 10,
+    window: Duration::hours(1),
+};
 
-const REGISTRATION_WINDOW: Duration = Duration::hours(1);
-
-/// Number of requests to the OAuth routes that read the database that an address can make in each [`REQUEST_WINDOW`].
-const REQUESTS_PER_WINDOW: u32 = 60;
-
-const REQUEST_WINDOW: Duration = Duration::minutes(1);
+/// Limit on requests from each address to the OAuth routes that read the database.
+const REQUESTS: Window = Window {
+    per_window: 60,
+    window: Duration::minutes(1),
+};
 
 /// Number of addresses that each limit keeps in memory.
 const MAX_TRACKED_ADDRS: usize = 10_000;
@@ -83,70 +85,63 @@ struct Count {
 }
 
 /// Rule of a limit on the events of each client address.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Rule {
-    /// Failed passwords and bearer tokens delay the next attempt.
-    Failures,
-    /// Client registrations are limited per window.
-    Registrations,
-    /// Requests to the OAuth routes that read the database are limited per window, in memory only.
-    Requests,
-}
-
-impl Rule {
-    /// Return the name of this rule in the stored key of a count.
-    fn name(self) -> &'static str {
-        match self {
-            Rule::Failures => "failures",
-            Rule::Registrations => "registrations",
-            Rule::Requests => "requests",
-        }
-    }
-
+trait Rule: Copy {
     /// Return the time after the start or last change of a count at which the count ends.
-    fn memory(self) -> Duration {
-        match self {
-            Rule::Failures => FAILURE_MEMORY,
-            Rule::Registrations => REGISTRATION_WINDOW,
-            Rule::Requests => REQUEST_WINDOW,
-        }
-    }
+    fn memory(self) -> Duration;
 
-    /// Return the count after an event at `now` that follows count `last`, or the time that the event must wait.
-    fn next(self, last: Option<Count>, now: DateTime<Utc>) -> std::result::Result<Count, Duration> {
-        match self {
-            Rule::Failures => {
-                if let Some(last) = last {
-                    let ready = last.since + failure_delay(last.n);
-                    if ready > now {
-                        return Err(ready - now);
-                    }
-                }
-                Ok(Count {
-                    n: last.map_or(0, |c| c.n).saturating_add(1),
-                    since: now,
-                })
-            }
-            Rule::Registrations | Rule::Requests => {
-                let per_window = match self {
-                    Rule::Requests => REQUESTS_PER_WINDOW,
-                    _ => REGISTRATIONS_PER_WINDOW,
-                };
-                let window = last.unwrap_or(Count { n: 0, since: now });
-                if window.n >= per_window {
-                    return Err(self.memory() - (now - window.since));
-                }
-                Ok(Count {
-                    n: window.n + 1,
-                    ..window
-                })
-            }
-        }
-    }
+    /// Return the count after an event at `now` that follows the current count `last`, or the time that the event must wait.
+    fn next(self, last: Option<Count>, now: DateTime<Utc>) -> std::result::Result<Count, Duration>;
 
     /// Return `count` if it has not ended at `now`.
     fn current(self, count: Option<Count>, now: DateTime<Utc>) -> Option<Count> {
         count.filter(|c| now - c.since < self.memory())
+    }
+}
+
+/// Rule that delays each attempt after [`FREE_FAILURES`] failed credentials, with a wait that doubles after each further failure.
+#[derive(Clone, Copy, Debug)]
+struct Backoff;
+
+impl Rule for Backoff {
+    fn memory(self) -> Duration {
+        FAILURE_MEMORY
+    }
+
+    fn next(self, last: Option<Count>, now: DateTime<Utc>) -> std::result::Result<Count, Duration> {
+        if let Some(last) = last {
+            let ready = last.since + failure_delay(last.n);
+            if ready > now {
+                return Err(ready - now);
+            }
+        }
+        Ok(Count {
+            n: last.map_or(0, |c| c.n).saturating_add(1),
+            since: now,
+        })
+    }
+}
+
+/// Rule that allows `per_window` events in each `window` that the first event starts.
+#[derive(Clone, Copy, Debug)]
+struct Window {
+    per_window: u32,
+    window: Duration,
+}
+
+impl Rule for Window {
+    fn memory(self) -> Duration {
+        self.window
+    }
+
+    fn next(self, last: Option<Count>, now: DateTime<Utc>) -> std::result::Result<Count, Duration> {
+        let window = last.unwrap_or(Count { n: 0, since: now });
+        if window.n >= self.per_window {
+            return Err(self.window - (now - window.since));
+        }
+        Ok(Count {
+            n: window.n + 1,
+            ..window
+        })
     }
 }
 
@@ -160,101 +155,24 @@ fn failure_delay(failures: u32) -> Duration {
         .map_or(MAX_FAILURE_DELAY, |d| d.min(MAX_FAILURE_DELAY))
 }
 
-/// Limit of one rule on each client address, counted in memory and in the database.
-///
-/// The memory count stops a burst of requests before it reaches the database. The stored count keeps the limit across restarts and machines.
-struct AddrLimit {
-    rule: Rule,
-    db: Db,
-    local: Mutex<LocalCounts>,
+/// Limit of rule `R` on each client address, counted only in the memory of this server, for at most [`MAX_TRACKED_ADDRS`] addresses.
+struct MemoryLimit<R> {
+    rule: R,
+    counts: Mutex<HashMap<IpAddr, Count>>,
 }
 
-/// Memory state of an [`AddrLimit`], for at most [`MAX_TRACKED_ADDRS`] addresses each.
-#[derive(Default)]
-struct LocalCounts {
-    counts: HashMap<IpAddr, Count>,
-    /// End of the last wait that the stored count of each address returned.
-    stored_waits: HashMap<IpAddr, DateTime<Utc>>,
-}
-
-impl AddrLimit {
-    fn new(rule: Rule, db: Db) -> Self {
+impl<R: Rule> MemoryLimit<R> {
+    fn new(rule: R) -> Self {
         Self {
             rule,
-            db,
-            local: Mutex::default(),
+            counts: Mutex::default(),
         }
     }
 
     /// Count an event from `addr` at `now`, or return the time that the event must wait.
-    async fn try_count(&self, addr: IpAddr, now: DateTime<Utc>) -> Result<Option<Duration>> {
+    fn try_count(&self, addr: IpAddr, now: DateTime<Utc>) -> std::result::Result<(), Duration> {
         let key = addr_key(addr);
-        if let Err(wait) = self.count_locally(key, now) {
-            return Ok(Some(wait));
-        }
-        let stored_key = self.stored_key(key);
-        let wait = run_txn!(&self.db, |txn| self
-            .count_stored(&mut txn, &stored_key, now)
-            .await)?;
-        if let Some(wait) = wait {
-            let mut local = self.lock();
-            if local.stored_waits.len() >= MAX_TRACKED_ADDRS {
-                local.stored_waits.retain(|_, end| *end > now);
-            }
-            if local.stored_waits.len() < MAX_TRACKED_ADDRS {
-                local.stored_waits.insert(key, now + wait);
-            }
-        }
-        Ok(wait)
-    }
-
-    /// Return the time that an event from `addr` at `now` must wait, as far as the memory of this server knows.
-    fn local_wait(&self, addr: IpAddr, now: DateTime<Utc>) -> Option<Duration> {
-        let key = addr_key(addr);
-        let local = self.lock();
-        let stored = local
-            .stored_waits
-            .get(&key)
-            .filter(|end| **end > now)
-            .map(|end| *end - now);
-        let counted = self
-            .rule
-            .next(self.rule.current(local.counts.get(&key).copied(), now), now)
-            .err();
-        stored.max(counted)
-    }
-
-    /// Forget the count of `addr`.
-    async fn reset(&self, addr: IpAddr) -> Result<()> {
-        let key = addr_key(addr);
-        {
-            let mut local = self.lock();
-            local.counts.remove(&key);
-            local.stored_waits.remove(&key);
-        }
-        self.db
-            .delete_oauth::<OAuthAddrCount>(&self.stored_key(key))
-            .await
-    }
-
-    fn lock(&self) -> std::sync::MutexGuard<'_, LocalCounts> {
-        self.local
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Return the key of the stored count of address key `key`.
-    fn stored_key(&self, key: IpAddr) -> String {
-        format!("{}/{key}", self.rule.name())
-    }
-
-    /// Count an event from address key `key` in memory, or return the time that the event must wait.
-    fn count_locally(&self, key: IpAddr, now: DateTime<Utc>) -> std::result::Result<(), Duration> {
-        let mut local = self.lock();
-        if let Some(end) = local.stored_waits.get(&key).filter(|end| **end > now) {
-            return Err(*end - now);
-        }
-        let counts = &mut local.counts;
+        let mut counts = lock(&self.counts);
         let next = self
             .rule
             .next(self.rule.current(counts.get(&key).copied(), now), now)?;
@@ -270,6 +188,89 @@ impl AddrLimit {
         Ok(())
     }
 
+    /// Return the time that an event from `addr` at `now` must wait, without a count.
+    fn wait(&self, addr: IpAddr, now: DateTime<Utc>) -> Option<Duration> {
+        let last = lock(&self.counts).get(&addr_key(addr)).copied();
+        self.rule.next(self.rule.current(last, now), now).err()
+    }
+
+    /// Forget the count of `addr`.
+    fn forget(&self, addr: IpAddr) {
+        lock(&self.counts).remove(&addr_key(addr));
+    }
+}
+
+/// Limit of rule `R` on each client address, counted in memory and in the database.
+///
+/// The memory count stops a burst of requests before it reaches the database. The stored count keeps the limit across restarts and machines.
+struct StoredLimit<R> {
+    /// Name of the limit in the stored key of a count.
+    name: &'static str,
+    memory: MemoryLimit<R>,
+    /// End of the last wait that the stored count of each address returned, for at most [`MAX_TRACKED_ADDRS`] addresses.
+    stored_waits: Mutex<HashMap<IpAddr, DateTime<Utc>>>,
+    db: Db,
+}
+
+impl<R: Rule> StoredLimit<R> {
+    fn new(name: &'static str, rule: R, db: Db) -> Self {
+        Self {
+            name,
+            memory: MemoryLimit::new(rule),
+            stored_waits: Mutex::default(),
+            db,
+        }
+    }
+
+    /// Count an event from `addr` at `now`, or return the time that the event must wait.
+    async fn try_count(&self, addr: IpAddr, now: DateTime<Utc>) -> Result<Option<Duration>> {
+        let key = addr_key(addr);
+        if let Some(end) = lock(&self.stored_waits).get(&key).filter(|end| **end > now) {
+            return Ok(Some(*end - now));
+        }
+        if let Err(wait) = self.memory.try_count(addr, now) {
+            return Ok(Some(wait));
+        }
+        let stored_key = self.stored_key(key);
+        let wait = run_txn!(&self.db, |txn| self
+            .count_stored(&mut txn, &stored_key, now)
+            .await)?;
+        if let Some(wait) = wait {
+            let mut waits = lock(&self.stored_waits);
+            if waits.len() >= MAX_TRACKED_ADDRS {
+                waits.retain(|_, end| *end > now);
+            }
+            if waits.len() < MAX_TRACKED_ADDRS {
+                waits.insert(key, now + wait);
+            }
+        }
+        Ok(wait)
+    }
+
+    /// Return the time that an event from `addr` at `now` must wait, as far as the memory of this server knows.
+    fn local_wait(&self, addr: IpAddr, now: DateTime<Utc>) -> Option<Duration> {
+        let stored = lock(&self.stored_waits)
+            .get(&addr_key(addr))
+            .filter(|end| **end > now)
+            .map(|end| *end - now);
+        stored.max(self.memory.wait(addr, now))
+    }
+
+    /// Forget the count of `addr`.
+    async fn reset(&self, addr: IpAddr) -> Result<()> {
+        let key = addr_key(addr);
+        self.memory.forget(addr);
+        lock(&self.stored_waits).remove(&key);
+        self.db
+            .delete_oauth::<OAuthAddrCount>(&self.stored_key(key))
+            .await
+    }
+
+    /// Return the key of the stored count of address key `key`.
+    fn stored_key(&self, key: IpAddr) -> String {
+        format!("{}/{key}", self.name)
+    }
+
     /// Count an event in the stored count `stored_key`, or return the time that the event must wait.
     async fn count_stored(
         &self,
@@ -277,6 +278,7 @@ impl AddrLimit {
         stored_key: &str,
         now: DateTime<Utc>,
     ) -> Result<Option<Duration>> {
+        let rule = self.memory.rule;
         let last = txn
             .get_oauth::<OAuthAddrCount>(stored_key)
             .await?
@@ -284,11 +286,11 @@ impl AddrLimit {
                 n: row.n,
                 since: row.since,
             });
-        let next = match self.rule.next(self.rule.current(last, now), now) {
+        let next = match rule.next(rule.current(last, now), now) {
             Ok(next) => next,
             Err(wait) => return Ok(Some(wait)),
         };
-        let ttl = (next.since + self.rule.memory() - now)
+        let ttl = (next.since + rule.memory() - now)
             .to_std()
             .unwrap_or_default();
         let row = OAuthAddrCount {
@@ -302,13 +304,20 @@ impl AddrLimit {
     }
 }
 
+/// Lock `mutex`, and use its state even if a thread panicked while it held the lock.
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Limits on failed credentials, client registrations, and OAuth requests from each client address.
 #[derive(Clone)]
 pub(crate) struct AddrLimits {
     client_addrs: ClientAddrSource,
-    failures: Arc<AddrLimit>,
-    registrations: Arc<AddrLimit>,
-    requests: Arc<AddrLimit>,
+    failures: Arc<StoredLimit<Backoff>>,
+    registrations: Arc<StoredLimit<Window>>,
+    requests: Arc<MemoryLimit<Window>>,
 }
 
 impl AddrLimits {
@@ -316,9 +325,9 @@ impl AddrLimits {
     pub(crate) fn new(db: &Db, client_addrs: ClientAddrSource) -> Self {
         Self {
             client_addrs,
-            failures: Arc::new(AddrLimit::new(Rule::Failures, db.clone())),
-            registrations: Arc::new(AddrLimit::new(Rule::Registrations, db.clone())),
-            requests: Arc::new(AddrLimit::new(Rule::Requests, db.clone())),
+            failures: Arc::new(StoredLimit::new("failures", Backoff, db.clone())),
+            registrations: Arc::new(StoredLimit::new("registrations", REGISTRATIONS, db.clone())),
+            requests: Arc::new(MemoryLimit::new(REQUESTS)),
         }
     }
 
@@ -336,9 +345,7 @@ impl AddrLimits {
     ///
     /// Use this for a credential that the server rejects without a database request.
     pub(crate) fn try_local_credential(&self, addr: IpAddr) -> Option<Duration> {
-        self.failures
-            .count_locally(addr_key(addr), Utc::now())
-            .err()
+        self.failures.memory.try_count(addr, Utc::now()).err()
     }
 
     /// Return the time that the next attempt with a credential from `addr` must wait, as far as the memory of this server knows.
@@ -353,9 +360,7 @@ impl AddrLimits {
 
     /// Count a request from `addr` to an OAuth route that reads the database, only in memory, or return the time until the window of `addr` ends if the window is full.
     pub(crate) fn try_request(&self, addr: IpAddr) -> Option<Duration> {
-        self.requests
-            .count_locally(addr_key(addr), Utc::now())
-            .err()
+        self.requests.try_count(addr, Utc::now()).err()
     }
 
     /// Count a client registration from `addr`, or return the time until the window of `addr` ends if the window is full.
@@ -378,7 +383,12 @@ mod tests {
     const ADDR: IpAddr = IpAddr::V4(std::net::Ipv4Addr::new(203, 0, 113, 7));
 
     /// Count `n` events of `rule` at `now`, starting from `last`, and return the final count.
-    fn count_n(rule: Rule, mut last: Option<Count>, n: u32, now: DateTime<Utc>) -> Option<Count> {
+    fn count_n(
+        rule: impl Rule,
+        mut last: Option<Count>,
+        n: u32,
+        now: DateTime<Utc>,
+    ) -> Option<Count> {
         for _ in 0..n {
             last = Some(rule.next(rule.current(last, now), now).unwrap());
         }
@@ -387,7 +397,7 @@ mod tests {
 
     #[test]
     fn failure_waits_double_after_the_free_failures_up_to_a_limit() {
-        let rule = Rule::Failures;
+        let rule = Backoff;
         let t0 = Utc::now();
         let last = count_n(rule, None, FREE_FAILURES, t0);
         assert_eq!(rule.next(last, t0), Err(FIRST_FAILURE_DELAY));
@@ -400,7 +410,7 @@ mod tests {
 
     #[test]
     fn failures_end_after_the_memory() {
-        let rule = Rule::Failures;
+        let rule = Backoff;
         let t0 = Utc::now();
         let last = count_n(rule, None, FREE_FAILURES, t0);
         let forgotten = t0 + FAILURE_MEMORY;
@@ -413,25 +423,25 @@ mod tests {
 
     #[test]
     fn registrations_from_an_address_are_limited_per_window() {
-        let rule = Rule::Registrations;
+        let rule = REGISTRATIONS;
         let t0 = Utc::now();
-        let last = count_n(rule, None, REGISTRATIONS_PER_WINDOW, t0);
-        let half = REGISTRATION_WINDOW / 2;
+        let last = count_n(rule, None, rule.per_window, t0);
+        let half = rule.window / 2;
         assert_eq!(
             rule.next(rule.current(last, t0 + half), t0 + half),
             Err(half)
         );
-        let next = t0 + REGISTRATION_WINDOW;
+        let next = t0 + rule.window;
         assert!(rule.next(rule.current(last, next), next).is_ok());
     }
 
     #[test]
     fn requests_from_an_address_are_limited_per_minute() {
-        let rule = Rule::Requests;
+        let rule = REQUESTS;
         let t0 = Utc::now();
-        let last = count_n(rule, None, REQUESTS_PER_WINDOW, t0);
-        assert_eq!(rule.next(last, t0), Err(REQUEST_WINDOW));
-        let next = t0 + REQUEST_WINDOW;
+        let last = count_n(rule, None, rule.per_window, t0);
+        assert_eq!(rule.next(last, t0), Err(rule.window));
+        let next = t0 + rule.window;
         assert!(rule.next(rule.current(last, next), next).is_ok());
     }
 
@@ -448,20 +458,13 @@ mod tests {
 
     #[test]
     fn the_memory_table_of_addresses_stays_bounded() {
-        let cfg = crate::db::DbConfig {
-            url: "http://127.0.0.1:9".into(),
-            token: "t".into(),
-            db: "d".into(),
-            cache_dir: None,
-            curriculum: crate::graph::Curriculum::embedded(),
-        };
-        let limit = AddrLimit::new(Rule::Registrations, Db::connect(&cfg).unwrap());
+        let limit = MemoryLimit::new(REGISTRATIONS);
         let t0 = Utc::now();
         for i in 0..=MAX_TRACKED_ADDRS {
             let addr = IpAddr::V4(u32::try_from(i).unwrap().into());
-            limit.count_locally(addr, t0).unwrap();
+            limit.try_count(addr, t0).unwrap();
         }
-        assert_eq!(limit.lock().counts.len(), MAX_TRACKED_ADDRS);
+        assert_eq!(lock(&limit.counts).len(), MAX_TRACKED_ADDRS);
     }
 
     #[test]
