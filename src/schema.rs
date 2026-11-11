@@ -26,10 +26,14 @@ pub enum TableSet {
 
 impl TableSet {
     /// Return the schema version of this table set in this release.
+    #[allow(
+        clippy::match_same_arms,
+        reason = "each set changes its version independently"
+    )]
     pub fn version(self) -> &'static str {
         match self {
             TableSet::Learner => "3",
-            TableSet::Auth => "2",
+            TableSet::Auth => "3",
         }
     }
 
@@ -311,7 +315,6 @@ row_table! {
         pub code_hash: String,
         pub client_id: String,
         pub redirect_uri: String,
-        pub scope: String,
         pub code_challenge: String,
         pub code_challenge_method: String,
         pub resource: Option<String>,
@@ -326,7 +329,6 @@ row_table! {
         /// Hex SHA-256 digest of the access token.
         pub token_hash: String,
         pub client_id: String,
-        pub scope: String,
         #[serde(with = "ts")]
         pub expires_at: DateTime<Utc>,
     }
@@ -338,7 +340,6 @@ row_table! {
         /// Hex SHA-256 digest of the refresh token.
         pub token_hash: String,
         pub client_id: String,
-        pub scope: String,
         #[serde(with = "ts")]
         pub expires_at: DateTime<Utc>,
     }
@@ -523,7 +524,7 @@ mod tests {
         );
         assert_eq!(
             pinned(TableSet::Auth),
-            ("2", "b32ff0d8fad27878".into()),
+            ("3", "09479194933c807a".into()),
             "{hint}"
         );
     }

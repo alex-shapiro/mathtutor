@@ -1024,7 +1024,7 @@ async fn refresh_that_names_mcp_keeps_a_grant_without_a_requested_scope() {
 }
 
 #[tokio::test]
-async fn refresh_rejects_a_scope_broader_than_the_grant() {
+async fn refresh_rejects_a_scope_other_than_mcp() {
     let server = spawn_oauth_server().await;
     let reg = register_client(&server, "Scope").await;
     let pkce = PkcePair::new();
@@ -1060,46 +1060,6 @@ async fn authorize_rejects_an_unknown_scope() {
     assert_eq!(res.status(), 400);
     let body: Value = res.json().await.unwrap();
     assert_eq!(body["error"], "invalid_scope");
-    server.stop().await;
-}
-
-#[tokio::test]
-async fn access_token_without_the_mcp_scope_is_rejected() {
-    use mathtutor::db::Op;
-    use mathtutor::mcp::oauth::secret_hash;
-    use mathtutor::schema::OAuthAccessToken;
-
-    let cfg = common::fresh_config();
-    let server = spawn_server_on(
-        cfg.clone(),
-        AuthConfig {
-            admin_password: Some(ADMIN_PASSWORD.into()),
-            ..AuthConfig::default()
-        },
-    )
-    .await;
-    let raw = baserunna_client::Client::new(cfg.transport().unwrap())
-        .with_token(&cfg.token)
-        .db(&cfg.db);
-    let token = "token-with-another-scope";
-    let row = OAuthAccessToken {
-        token_hash: secret_hash(token),
-        client_id: "c".into(),
-        scope: "read".into(),
-        expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
-    };
-    raw.write(&[Op::insert(&row)]).await.unwrap();
-
-    let res = client()
-        .post(server.url("/mcp"))
-        .header(AUTHORIZATION, format!("Bearer {token}"))
-        .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .body(initialize_body())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 401);
     server.stop().await;
 }
 
