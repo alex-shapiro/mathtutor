@@ -260,7 +260,7 @@ The import reads a consistent snapshot and writes the overlay and the OAuth clie
 
 ### Baserunna keys
 
-A Baserunna API key can be restricted to a single database and to read-only access. Each key acts with the role of the user who created it and never expires. A database-limited key cannot create or delete a database, whereas an unrestricted key can delete every database owned by its user. Only a signed-in user in the web console can create or delete keys.
+A Baserunna API key can be restricted to a single database and to read-only access. Each key acts with the role of the user who created it and never expires. A database-limited key cannot create or delete a database, whereas an unrestricted key can delete every database owned by its user. Only a signed-in user, such as in the web console, can create or delete keys. A key cannot.
 
 Use this setup so that a leaked key cannot delete the learner history:
 
@@ -302,7 +302,7 @@ Each path records learning activity in an append-only `events.<path id>` stream 
 | `lesson_authored`, `lesson_amended`, `lesson_taught` | `atom`                                    |
 | `quiz_authored`, `quiz_presented`                    | `atom`, `quiz`                            |
 | `quiz_amended`, `quiz_removed`                       | `atom`, `quiz`                            |
-| `quiz_answered`                                      | `quiz`, `rating`, optional `atom`, answer |
+| `quiz_answered`                                      | `quiz`, `rating`, optional `atom`, `user_answer` |
 
 A read rejects an event that is missing a required field or contains an unexpected field for its kind.
 

@@ -87,7 +87,7 @@ impl AtomStatus {
 pub enum QuizSlot {
     /// The atom lacks a quiz of this difficulty.
     Missing,
-    /// The atom has a quiz of this difficulty without a passing answer.
+    /// The atom has quizzes of this difficulty, and none of them has a passing answer.
     Authored,
     /// A quiz of this difficulty has an answer rated `hard`, `good`, or `easy`.
     Correct,
