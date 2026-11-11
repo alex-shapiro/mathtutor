@@ -19,7 +19,7 @@ use crate::schema::{
     CardRecord, IMPORT_STATE_KEY, ImportMarker, OAuthClient, activity_key, events_stream,
 };
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
-use crate::view::{OVERLAY_VERSION_KEY, Want};
+use crate::view::{OVERLAY_VERSION_KEY, View, Want};
 use crate::{Error, Result};
 
 const SCHEMA_VERSION: i64 = 4;
@@ -203,21 +203,52 @@ fn decode_rows<T: DeserializeOwned>(table: &str, rows: Vec<Map<String, Json>>) -
         .collect()
 }
 
-const QUERIES: [&str; 10] = [
-    "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations",
-    "SELECT id, goal, created_at, strategy FROM paths",
-    "SELECT path_id, target_id AS id FROM path_targets ORDER BY path_id, position",
-    "SELECT path_id, atom_id AS id FROM path_subpath ORDER BY path_id, position",
-    "SELECT ts, kind, path_id, atom_id, quiz_id, rating, payload FROM events ORDER BY id",
-    "SELECT atom_id, body FROM overlay_lessons ORDER BY atom_id",
-    "SELECT atom_id, quiz_id, difficulty, kind, question, answer, rubric \
-     FROM overlay_quizzes ORDER BY quiz_id",
-    "SELECT r.quiz_id, q.atom_id FROM overlay_removed_quizzes r \
-     LEFT JOIN overlay_quizzes q ON q.quiz_id = r.quiz_id ORDER BY r.quiz_id",
-    "SELECT path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses \
-     FROM cards",
-    "SELECT client_id, client_name, redirect_uris, created_at FROM oauth_clients",
+/// Source tables and the queries that read them, in the order of the results that [`read_legacy`] decodes.
+const QUERIES: [(&str, &str); 10] = [
+    (
+        "schema_migrations",
+        "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations",
+    ),
+    ("paths", "SELECT id, goal, created_at, strategy FROM paths"),
+    (
+        "path_targets",
+        "SELECT path_id, target_id AS id FROM path_targets ORDER BY path_id, position",
+    ),
+    (
+        "path_subpath",
+        "SELECT path_id, atom_id AS id FROM path_subpath ORDER BY path_id, position",
+    ),
+    (
+        "events",
+        "SELECT ts, kind, path_id, atom_id, quiz_id, rating, payload FROM events ORDER BY id",
+    ),
+    (
+        "overlay_lessons",
+        "SELECT atom_id, body FROM overlay_lessons ORDER BY atom_id",
+    ),
+    (
+        "overlay_quizzes",
+        "SELECT atom_id, quiz_id, difficulty, kind, question, answer, rubric \
+         FROM overlay_quizzes ORDER BY quiz_id",
+    ),
+    (
+        "overlay_removed_quizzes",
+        "SELECT r.quiz_id, q.atom_id FROM overlay_removed_quizzes r \
+         LEFT JOIN overlay_quizzes q ON q.quiz_id = r.quiz_id ORDER BY r.quiz_id",
+    ),
+    (
+        "cards",
+        "SELECT path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses \
+         FROM cards",
+    ),
+    (
+        "oauth_clients",
+        "SELECT client_id, client_name, redirect_uris, created_at FROM oauth_clients",
+    ),
 ];
+
+/// Number of rows in each table, keyed by the name of the source table.
+type RowCounts = BTreeMap<&'static str, usize>;
 
 #[derive(Deserialize)]
 struct Version {
@@ -361,6 +392,8 @@ impl TryFrom<OAuthClientRow> for OAuthClient {
 }
 
 struct Legacy {
+    /// Number of rows that each source table returned before decoding.
+    row_counts: RowCounts,
     paths: Vec<PathFile>,
     events: HashMap<String, Vec<Event>>,
     overlay: Vec<Edit>,
@@ -381,10 +414,21 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
         cards,
         oauth_clients,
     ]: [_; 10] = turso
-        .read(&QUERIES)
+        .read(&QUERIES.map(|(_, sql)| sql))
         .await?
         .try_into()
         .map_err(|_| Error::Turso("missing statement results".into()))?;
+    let row_counts = RowCounts::from([
+        ("paths", paths.len()),
+        ("path_targets", targets.len()),
+        ("path_subpath", subpaths.len()),
+        ("events", events.len()),
+        ("overlay_lessons", lessons.len()),
+        ("overlay_quizzes", quizzes.len()),
+        ("overlay_removed_quizzes", removed.len()),
+        ("cards", cards.len()),
+        ("oauth_clients", oauth_clients.len()),
+    ]);
     let version = decode_rows::<Version>("schema_migrations", version)?
         .first()
         .map_or(0, |v| v.version);
@@ -428,6 +472,7 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
         .map(OAuthClient::try_from)
         .collect::<Result<_>>()?;
     Ok(Legacy {
+        row_counts,
         paths,
         events,
         overlay,
@@ -552,33 +597,36 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         }
     }
     let source = read_legacy(turso).await?;
+    let stored = db
+        .without_overlay_cache()
+        .snapshot(&Want::all_paths())
+        .await?;
     report
         .mismatches
-        .extend(verify_overlay(db, &source.overlay).await?);
+        .extend(verify_overlay(&stored.overlay, &source.overlay)?);
+    let mut stored_events = 0;
     for p in &source.paths {
         let events = source.events.get(&p.id).map_or(&[][..], Vec::as_slice);
         let cards = source.cards.get(&p.id).map_or(&[][..], Vec::as_slice);
-        report
-            .mismatches
-            .extend(verify_path(db, p, events, cards).await?);
+        let (mismatches, stored) = verify_path(db, p, events, cards).await?;
+        report.mismatches.extend(mismatches);
+        stored_events += stored;
     }
+    report
+        .mismatches
+        .extend(verify_row_counts(db, &stored, stored_events, &source.row_counts).await?);
     if report.mismatches.is_empty() {
         db.write([ImportMarker::Complete.write_op()]).await?;
     }
     Ok(report)
 }
 
-/// Compare the stored overlay, read without the cache, with the legacy edits.
-async fn verify_overlay(db: &Db, edits: &[Edit]) -> Result<Vec<String>> {
+/// Compare the `stored` overlay with the legacy edits.
+fn verify_overlay(stored: &Overlay, edits: &[Edit]) -> Result<Vec<String>> {
     let mut legacy = Overlay::default();
     for e in edits {
         legacy.apply(e);
     }
-    let stored = db
-        .without_overlay_cache()
-        .snapshot(&Want::overlay())
-        .await?
-        .overlay;
     let atoms: BTreeSet<&String> = legacy.atoms.keys().chain(stored.atoms.keys()).collect();
     let mut out = Vec::new();
     for atom in atoms {
@@ -621,18 +669,19 @@ async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
     Ok(true)
 }
 
+/// Compare the stored state of `path` with its legacy `events` and cards, and return the differences and the number of stored events.
 async fn verify_path(
     db: &Db,
     path: &PathFile,
     events: &[Event],
     legacy: &[CardRow],
-) -> Result<Vec<String>> {
+) -> Result<(Vec<String>, usize)> {
     let path_id = path.id.as_str();
     let mut out = Vec::new();
     let view = db.snapshot(&Want::path(Some(path_id))).await?;
     let Ok(path_state) = view.path() else {
         out.push(format!("{path_id}: path missing from Baserunna"));
-        return Ok(out);
+        return Ok((out, 0));
     };
     let stored = event_log::load(db, path_id).await?;
     if serde_json::to_value(&stored)? != serde_json::to_value(events)? {
@@ -691,7 +740,63 @@ async fn verify_path(
             .into_keys()
             .map(|q| format!("{path_id}/{q}: answered card missing from libSQL")),
     );
-    Ok(out)
+    Ok((out, stored.len()))
+}
+
+/// Compare the number of rows in each source table with the number of rows that `stored` and the event streams hold for it.
+async fn verify_row_counts(
+    db: &Db,
+    stored: &View,
+    stored_events: usize,
+    source: &RowCounts,
+) -> Result<Vec<String>> {
+    let paths = stored.paths();
+    let atoms = stored.overlay.atoms.values();
+    let mut oauth_clients = 0;
+    for page in db.read_pages(Op::query_all::<OAuthClient>()).await? {
+        oauth_clients += page.rows::<OAuthClient>()?.len();
+    }
+    let stored = RowCounts::from([
+        ("paths", paths.len()),
+        (
+            "path_targets",
+            paths.iter().map(|p| p.file.targets.len()).sum(),
+        ),
+        (
+            "path_subpath",
+            paths.iter().map(|p| p.file.subpath.len()).sum(),
+        ),
+        ("events", stored_events),
+        (
+            "overlay_lessons",
+            atoms.clone().filter(|a| a.lesson.is_some()).count(),
+        ),
+        (
+            "overlay_quizzes",
+            atoms.clone().map(|a| a.quizzes.len()).sum(),
+        ),
+        (
+            "overlay_removed_quizzes",
+            atoms.map(|a| a.removed.len()).sum(),
+        ),
+        (
+            "cards",
+            paths
+                .iter()
+                .flat_map(|p| p.cards.values())
+                .filter(|c| c.state.is_some())
+                .count(),
+        ),
+        ("oauth_clients", oauth_clients),
+    ]);
+    Ok(source
+        .iter()
+        .filter(|(table, n)| stored.get(*table) != Some(n))
+        .map(|(table, n)| {
+            let found = stored.get(table).copied().unwrap_or_default();
+            format!("{table}: {n} rows in libSQL, but the import stored {found}")
+        })
+        .collect())
 }
 
 pub async fn cmd_import_turso(db: &Db, url: &str, token: Option<String>) -> Result<()> {
@@ -704,7 +809,9 @@ pub async fn cmd_import_turso(db: &Db, url: &str, token: Option<String>) -> Resu
         eprintln!("mismatch: {m}");
     }
     if r.mismatches.is_empty() {
-        eprintln!("every path, event, card, and overlay entry matches libSQL");
+        eprintln!(
+            "every libSQL row is stored, and every path, event, card, and overlay entry matches libSQL"
+        );
         Ok(())
     } else {
         Err(Error::ImportMismatch(r.mismatches.len()))

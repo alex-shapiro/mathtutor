@@ -694,6 +694,54 @@ async fn malformed_history_fails_before_the_import_claims_the_target() {
 }
 
 #[tokio::test]
+async fn an_unknown_payload_field_fails_before_the_import_claims_the_target() {
+    let db = common::empty_db().await;
+    let mut rows = event_rows();
+    let payload = EVENT_COLUMNS.iter().position(|c| *c == "payload").unwrap();
+    rows[0][payload] = text_val(r#"{"hint":"kept nowhere"}"#);
+    let mut tables = legacy();
+    tables.set("events", EVENT_COLUMNS, rows);
+
+    let e = import(tables, &db).await.unwrap_err();
+
+    assert!(matches!(&e, Error::BadRow(m) if m.contains("hint")), "{e}");
+    db.snapshot(&Want::overlay())
+        .await
+        .expect("the target stays unclaimed");
+}
+
+#[tokio::test]
+async fn import_reports_source_rows_that_it_did_not_store() {
+    let db = common::empty_db().await;
+    let mut orphans = events();
+    orphans.push(taught("p_gone", 1, "fnd.2.1.1"));
+    let mut tables = legacy();
+    tables.set("events", EVENT_COLUMNS, rows_of_events(&orphans));
+    tables.set(
+        "path_targets",
+        &["path_id", "id"],
+        vec![
+            vec![text_val("p_a"), text_val("fnd.2.1.1")],
+            vec![text_val("p_a"), text_val("fnd.2")],
+            vec![text_val("p_b"), text_val("fnd.1")],
+            vec![text_val("p_gone"), text_val("fnd.1")],
+        ],
+    );
+
+    let r = import(tables, &db).await.expect("import");
+
+    assert_eq!(
+        r.mismatches,
+        [
+            "events: 9 rows in libSQL, but the import stored 8",
+            "path_targets: 4 rows in libSQL, but the import stored 3",
+        ]
+    );
+    let blocked = db.snapshot(&Want::overlay()).await.unwrap_err();
+    assert!(matches!(blocked, Error::ImportInProgress), "{blocked}");
+}
+
+#[tokio::test]
 async fn repeated_import_reports_a_late_event_on_a_path_without_a_stream() {
     let db = common::empty_db().await;
     let mut late_events = events();
