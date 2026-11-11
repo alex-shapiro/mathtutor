@@ -12,6 +12,7 @@ use client::api::ErrorCode;
 
 use crate::graph::Curriculum;
 use crate::schema::{self, DbState, ImportMarker, OAuthRow, SchemaState};
+use crate::view::OverlayCache;
 use crate::{Error, Result};
 
 pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
@@ -58,7 +59,7 @@ impl DbConfig {
 pub struct Db {
     client: client::Db,
     url: Arc<str>,
-    pub(crate) overlay_cache: Arc<Mutex<Option<crate::view::CachedOverlay>>>,
+    pub(crate) overlay_cache: Arc<Mutex<OverlayCache>>,
     pub(crate) cache_file: Option<PathBuf>,
     pub(crate) curriculum: Arc<Curriculum>,
     allow_open_import: bool,
@@ -267,14 +268,11 @@ impl Db {
             .cache_dir
             .as_ref()
             .map(|d| d.join(cache_name(cfg.url.trim_end_matches('/'), &cfg.db)));
-        let cached = cache_file
-            .as_deref()
-            .and_then(crate::view::read_cached_overlay);
         let client = client::Client::new(transport).with_token(&cfg.token);
         Self {
             client: client.db(&cfg.db),
             url: Arc::from(cfg.url.as_str()),
-            overlay_cache: Arc::new(Mutex::new(cached)),
+            overlay_cache: Arc::default(),
             cache_file,
             curriculum: cfg.curriculum.clone(),
             allow_open_import: false,

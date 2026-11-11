@@ -1118,6 +1118,42 @@ async fn recreating_database_invalidates_overlay_cache() {
 }
 
 #[tokio::test]
+async fn a_handle_reads_the_cache_file_only_when_a_command_needs_the_overlay() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg = DbConfig {
+        cache_dir: Some(dir.path().to_path_buf()),
+        ..common::fresh_config()
+    };
+    let first = common::create_db(&cfg).await;
+    common::seed_path(&first, PATH_ID, &[], Strategy::BottomUp).await;
+    let body = "w".repeat(20_000);
+    store::cmd_lesson_upsert(&first, "fnd.1.1.1", body.clone(), Some(PATH_ID))
+        .await
+        .unwrap();
+    let (second, traffic) = counting_db(&cfg);
+    second
+        .snapshot(&Want::path(Some(PATH_ID)).without_overlay())
+        .await
+        .unwrap();
+
+    for file in std::fs::read_dir(dir.path()).unwrap() {
+        std::fs::remove_file(file.unwrap().path()).unwrap();
+    }
+    traffic.received.store(0, Ordering::Relaxed);
+    let view = second.snapshot(&Want::overlay()).await.unwrap();
+
+    assert_eq!(
+        view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        Some(body.as_str())
+    );
+    let cold = traffic.received.load(Ordering::Relaxed);
+    assert!(
+        cold > 20_000,
+        "the overlay came from the server ({cold} bytes)"
+    );
+}
+
+#[tokio::test]
 async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes() {
     let dir = tempfile::TempDir::new().unwrap();
     let cfg = DbConfig {

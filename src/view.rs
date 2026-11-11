@@ -60,7 +60,15 @@ struct CacheFile {
     overlay: Overlay,
 }
 
-pub(crate) fn read_cached_overlay(path: &Path) -> Option<CachedOverlay> {
+/// Overlay cache of a database handle.
+#[derive(Debug, Default)]
+pub(crate) struct OverlayCache {
+    memory: Option<CachedOverlay>,
+    /// The handle has read its cache file or does not need to read it.
+    file_read: bool,
+}
+
+fn read_cached_overlay(path: &Path) -> Option<CachedOverlay> {
     let f: CacheFile = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
     Some(CachedOverlay::new(f.version, Arc::new(f.overlay)))
 }
@@ -370,7 +378,7 @@ impl Db {
     /// Load `want` from a strong read snapshot without starting a write transaction.
     pub async fn snapshot(&self, want: &Want) -> Result<View> {
         let path_id = self.selected_path_id(&want.path).await?;
-        let cached = self.cached_overlay().filter(|_| want.overlay);
+        let cached = want.overlay.then(|| self.cached_overlay()).flatten();
         if want.overlay && cached.is_none() {
             let plan = self.plan(want, path_id.as_deref(), None);
             let (overlay, plan) = tokio::try_join!(self.load_overlay(), self.read_plan(plan))?;
@@ -534,23 +542,43 @@ impl Db {
         Ok(latest.map(|(_, id)| id))
     }
 
-    fn cache_overlay(&self, next: Option<CachedOverlay>) {
-        let mut cache = self
-            .overlay_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let changed = cache.as_ref().map(|c| &c.version) != next.as_ref().map(|n| &n.version);
-        if changed && let (Some(file), Some(n)) = (&self.cache_file, &next) {
-            write_cached_overlay(file, &n.version, &n.overlay);
-        }
-        *cache = next;
-    }
-
-    fn cached_overlay(&self) -> Option<CachedOverlay> {
+    fn lock_overlay_cache(&self) -> std::sync::MutexGuard<'_, OverlayCache> {
         self.overlay_cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+    }
+
+    /// Replace the cached overlay with `next`, and write `next` to the cache file if its version is new.
+    fn cache_overlay(&self, next: Option<CachedOverlay>) {
+        let new_version = {
+            let mut cache = self.lock_overlay_cache();
+            let changed =
+                cache.memory.as_ref().map(|c| &c.version) != next.as_ref().map(|n| &n.version);
+            let new_version = next.clone().filter(|_| changed);
+            cache.memory = next;
+            cache.file_read = true;
+            new_version
+        };
+        if let (Some(file), Some(n)) = (&self.cache_file, new_version) {
+            write_cached_overlay(file, &n.version, &n.overlay);
+        }
+    }
+
+    /// Return the cached overlay, and read the cache file on the first call that finds the memory cache empty.
+    fn cached_overlay(&self) -> Option<CachedOverlay> {
+        {
+            let mut cache = self.lock_overlay_cache();
+            if cache.memory.is_some() || cache.file_read {
+                return cache.memory.clone();
+            }
+            cache.file_read = true;
+        }
+        let from_file = self.cache_file.as_deref().and_then(read_cached_overlay);
+        let mut cache = self.lock_overlay_cache();
+        if cache.memory.is_none() {
+            cache.memory = from_file;
+        }
+        cache.memory.clone()
     }
 
     /// Cache the overlay `base` that a transaction checked with its committed `write` applied, or clear the cache if the transaction did not check an overlay.

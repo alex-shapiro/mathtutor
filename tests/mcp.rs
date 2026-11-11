@@ -395,6 +395,31 @@ async fn get_paths_returns_empty_list_on_fresh_db() {
 }
 
 #[tokio::test]
+async fn server_caches_the_overlay_only_in_memory() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg = mathtutor::db::DbConfig {
+        cache_dir: Some(dir.path().to_path_buf()),
+        ..common::fresh_config()
+    };
+    let server = spawn_server_on(
+        cfg,
+        AuthConfig {
+            api_key: Some(API_KEY.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    let session = handshake(&server).await;
+
+    let result = call_tool(&server, &session, "get_paths", json!({})).await;
+
+    assert_eq!(result["structuredContent"], json!({ "paths": [] }));
+    let files: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert!(files.is_empty(), "{files:?}");
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn unknown_atom_id_returns_structured_business_error() {
     let server = spawn_server().await;
     let session = handshake(&server).await;

@@ -486,6 +486,10 @@ pub fn print_tools() -> CrateResult<()> {
 pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()> {
     auth.validate()?;
 
+    let cfg = DbConfig {
+        cache_dir: None,
+        ..cfg
+    };
     let db = Db::connect(&cfg)?;
     db.require_database().await?;
     let shutdown = CancellationToken::new();
