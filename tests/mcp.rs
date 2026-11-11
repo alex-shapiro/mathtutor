@@ -42,6 +42,7 @@ async fn spawn_server_with(auth: AuthConfig) -> ServerHandle {
 }
 
 async fn spawn_server_on(cfg: mathtutor::db::DbConfig, auth: AuthConfig) -> ServerHandle {
+    common::create_db(&cfg).await;
     let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = probe.local_addr().unwrap();
     drop(probe);
@@ -115,6 +116,34 @@ async fn rejects_wrong_api_key_with_401() {
         .unwrap();
     assert_eq!(res.status(), 401);
     server.stop().await;
+}
+
+#[tokio::test]
+async fn server_stops_at_startup_without_creating_a_missing_database() {
+    let cfg = common::fresh_config();
+    let auth = AuthConfig {
+        api_key: Some(API_KEY.into()),
+        ..AuthConfig::default()
+    };
+
+    let e = mcp::run("127.0.0.1:0", auth, cfg.clone())
+        .await
+        .unwrap_err();
+
+    let message = e.to_string();
+    assert!(
+        matches!(e, mathtutor::Error::DatabaseNotFound { .. }),
+        "{e:?}"
+    );
+    assert!(message.contains("BASERUNNA_DB"), "{message}");
+    assert!(message.contains("BASERUNNA_URL"), "{message}");
+    assert!(!message.contains("mt path new"), "{message}");
+    let raw = baserunna_client::Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
+    let info = raw.db(&cfg.db).info().await;
+    assert!(
+        info.is_err(),
+        "the server must not create the database: {info:?}"
+    );
 }
 
 #[tokio::test]

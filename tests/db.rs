@@ -66,6 +66,8 @@ fn assert_database_not_found(e: &Error, cfg: &DbConfig) {
     assert!(message.contains(&format!("'{}'", cfg.db)), "{message}");
     assert!(message.contains(&cfg.url), "{message}");
     assert!(message.contains("BASERUNNA_DB"), "{message}");
+    assert!(message.contains("BASERUNNA_URL"), "{message}");
+    assert!(!message.contains("mt path new"), "{message}");
     assert_eq!(e.exit_code(), 2);
 }
 

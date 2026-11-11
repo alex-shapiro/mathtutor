@@ -60,4 +60,4 @@ flyctl secrets set MT_API_KEY='...'
 flyctl secrets set BASERUNNA_TOKEN='...'
 ```
 
-`BASERUNNA_URL` defaults to `https://baserunna.fly.dev` and `BASERUNNA_DB` defaults to `mathtutor`. Set `BASERUNNA_TOKEN` to a key that is limited to the database, so that a leak of the server secret cannot delete the database. The database must exist before the server starts with such a key, because a limited key cannot create a database. See "Baserunna keys" in `docs/design.md`.
+`BASERUNNA_URL` defaults to `https://baserunna.fly.dev` and `BASERUNNA_DB` defaults to `mathtutor`. Set `BASERUNNA_TOKEN` to a key that is limited to the database, so that a leak of the server secret cannot delete the database. The server does not create the database. It stops at startup if the database does not exist. See "Baserunna keys" in `docs/design.md`.

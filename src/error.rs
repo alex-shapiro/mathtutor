@@ -62,7 +62,7 @@ pub enum Error {
     MissingToken,
 
     #[error(
-        "database '{db}' at {url} does not exist or does not hold Math Tutor data; check BASERUNNA_DB, or run `mt path new` to start a new database"
+        "database '{db}' at {url} does not exist or does not hold Math Tutor data; check BASERUNNA_DB and BASERUNNA_URL"
     )]
     DatabaseNotFound { db: String, url: String },
 

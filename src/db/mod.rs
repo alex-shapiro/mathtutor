@@ -116,6 +116,17 @@ impl Db {
         Ok(created)
     }
 
+    /// Fail with [`Error::DatabaseNotFound`] or [`Error::SchemaMismatch`] unless the database holds the tables of this release.
+    pub async fn require_database(&self) -> Result<()> {
+        match schema::state(&self.client).await? {
+            SchemaState::Current => {
+                self.schema_checked.store(true, Ordering::Relaxed);
+                Ok(())
+            }
+            other => Err(self.schema_error(other)),
+        }
+    }
+
     /// Return the error that reports `state` for a database that is not ready.
     fn schema_error(&self, state: SchemaState) -> Error {
         match state {

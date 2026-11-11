@@ -487,9 +487,7 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
     auth.validate()?;
 
     let db = Db::connect(&cfg)?;
-    if db.create_if_missing().await? {
-        tracing::info!(db = db.name(), url = db.url(), "created database");
-    }
+    db.require_database().await?;
     let shutdown = CancellationToken::new();
 
     let mcp_config = StreamableHttpServerConfig::default()
