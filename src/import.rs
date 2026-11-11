@@ -8,14 +8,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
 use crate::cards::{self, CardState};
-use crate::db::{Db, Op, Txn, run_txn, ts};
+use crate::db::client::api::Selection;
+use crate::db::{Db, Op, Row, Txn, run_txn, ts};
 use crate::event_log::{self, Event};
 use crate::graph::{self, Quiz};
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
 use crate::schema::{DbState, ImportMarker, OAuthClient, STATE_KEY};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
-use crate::view::{OVERLAY_VERSION_KEY, View, Want};
+use crate::view::{OVERLAY_VERSION_KEY, PathState, View, Want};
 use crate::{Error, Result};
 
 const SCHEMA_VERSION: i64 = 4;
@@ -542,12 +543,15 @@ async fn claim_import_target(db: &Db) -> Result<()> {
 }
 
 async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
+    let first_path = Op::QueryRows {
+        table: PathFile::TABLE.into(),
+        selection: Selection::default(),
+        limit: 1,
+        reverse: false,
+        cursor: None,
+    };
     let results = txn
-        .run(&[
-            Op::get(STATE_KEY),
-            Op::get(OVERLAY_VERSION_KEY),
-            Op::query_all::<PathFile>(),
-        ])
+        .run(&[Op::get(STATE_KEY), Op::get(OVERLAY_VERSION_KEY), first_path])
         .await?;
     let [marker, overlay_version, paths]: [_; 3] = results
         .try_into()
@@ -603,13 +607,24 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     report
         .mismatches
         .extend(verify_overlay(stored.overlay()?, &source.overlay)?);
+    let stored_paths: HashMap<&str, &PathState> = stored
+        .paths()
+        .into_iter()
+        .map(|s| (s.file.id.as_str(), s))
+        .collect();
     let mut stored_events = 0;
     for p in &source.paths {
         let events = source.events.get(&p.id).map_or(&[][..], Vec::as_slice);
         let cards = source.cards.get(&p.id).map_or(&[][..], Vec::as_slice);
-        let (mismatches, stored) = verify_path(db, p, events, cards).await?;
-        report.mismatches.extend(mismatches);
-        stored_events += stored;
+        let stored_path = stored_paths.get(p.id.as_str()).copied();
+        let stored_history = match stored_path {
+            Some(_) => event_log::load(db, &p.id).await?,
+            None => Vec::new(),
+        };
+        report
+            .mismatches
+            .extend(verify_path(p, events, cards, stored_path, &stored_history)?);
+        stored_events += stored_history.len();
     }
     report
         .mismatches
@@ -660,25 +675,24 @@ fn latest_activity(p: &PathFile, events: &[Event]) -> DateTime<Utc> {
     events.iter().map(|e| e.ts).max().unwrap_or(p.created_at)
 }
 
-/// Compare the stored state of `path` with its legacy `events` and cards, and return the differences and the number of stored events.
-async fn verify_path(
-    db: &Db,
+/// Compare `stored`, the stored state of `path`, and `stored_events` with the legacy `events` and cards of `path`, and return the differences.
+fn verify_path(
     path: &PathFile,
     events: &[Event],
     legacy: &[CardRow],
-) -> Result<(Vec<String>, usize)> {
+    stored: Option<&PathState>,
+    stored_events: &[Event],
+) -> Result<Vec<String>> {
     let path_id = path.id.as_str();
     let mut out = Vec::new();
-    let view = db.snapshot(&Want::path(Some(path_id))).await?;
-    let Ok(path_state) = view.path() else {
+    let Some(path_state) = stored else {
         out.push(format!("{path_id}: path missing from Baserunna"));
-        return Ok((out, 0));
+        return Ok(out);
     };
-    let stored = event_log::load(db, path_id).await?;
-    if serde_json::to_value(&stored)? != serde_json::to_value(events)? {
+    if serde_json::to_value(stored_events)? != serde_json::to_value(events)? {
         out.push(format!(
             "{path_id}: {} events stored and {} in libSQL, or their contents differ",
-            stored.len(),
+            stored_events.len(),
             events.len()
         ));
     }
@@ -732,7 +746,7 @@ async fn verify_path(
             .into_keys()
             .map(|q| format!("{path_id}/{q}: answered card missing from libSQL")),
     );
-    Ok((out, stored.len()))
+    Ok(out)
 }
 
 /// Compare the number of rows in each source table with the number of rows that `stored` and the event streams hold for it.
@@ -813,6 +827,74 @@ pub async fn cmd_import_turso(db: &Db, url: &str, token: Option<String>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn answered_path() -> (PathFile, Vec<Event>, PathState) {
+        let path = PathFile {
+            id: "p".into(),
+            goal: "g".into(),
+            created_at: Utc::now(),
+            targets: vec!["fnd.1.1.1".into()],
+            strategy: Strategy::BottomUp,
+            subpath: Vec::new(),
+        };
+        let answered = event_log::EventKind::QuizAnswered {
+            atom: None,
+            quiz: "fnd.1.1.1.q1".into(),
+            rating: Rating::Good,
+            user_answer: None,
+        };
+        let events = vec![Event::now("p", answered)];
+        let state = PathState {
+            file: path.clone(),
+            updated_at: Utc::now(),
+            projection: cards::Projection::from_events(&events).unwrap(),
+        };
+        (path, events, state)
+    }
+
+    fn legacy_card(state: &PathState) -> CardRow {
+        let card = &state.projection.cards["fnd.1.1.1.q1"];
+        let s = card.state.unwrap();
+        CardRow {
+            path_id: "p".into(),
+            quiz_id: card.quiz_id.clone(),
+            stability: f64::from(s.stability),
+            difficulty: f64::from(s.difficulty),
+            due_at: s.due,
+            last_reviewed_at: s.last_review,
+            reps: card.reps,
+            lapses: card.lapses,
+        }
+    }
+
+    #[test]
+    fn a_path_verifies_against_its_stored_state_without_a_server() {
+        let (path, events, state) = answered_path();
+        let card = legacy_card(&state);
+        let check = |stored: Option<&PathState>, stored_events: &[Event], legacy: &CardRow| {
+            verify_path(
+                &path,
+                &events,
+                std::slice::from_ref(legacy),
+                stored,
+                stored_events,
+            )
+            .unwrap()
+        };
+        assert_eq!(check(Some(&state), &events, &card), Vec::<String>::new());
+        assert_eq!(check(None, &[], &card), ["p: path missing from Baserunna"]);
+        let lost = check(Some(&state), &[], &card);
+        assert!(
+            lost[0].contains("0 events stored and 1 in libSQL"),
+            "{lost:?}"
+        );
+        let other_reps = CardRow {
+            reps: 2,
+            ..legacy_card(&state)
+        };
+        let differs = check(Some(&state), &events, &other_reps);
+        assert!(differs[0].contains("libSQL has (reps 2"), "{differs:?}");
+    }
 
     #[test]
     fn libsql_urls_are_reached_over_https() {
