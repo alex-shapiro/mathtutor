@@ -72,9 +72,6 @@ impl OverlayRows {
             RowChange::PutRemoved(r) => {
                 self.removed.insert(r.quiz_id.clone(), r);
             }
-            RowChange::DeleteRemoved(quiz_id) => {
-                self.removed.remove(&quiz_id);
-            }
         }
     }
 
@@ -124,34 +121,14 @@ impl QuizRow {
     }
 }
 
-/// Mutation applied to the curriculum overlay.
-#[derive(Debug, Clone)]
-pub enum Edit {
-    Lesson {
-        atom_id: String,
-        body: String,
-    },
-    Quiz {
-        atom_id: String,
-        quiz: Quiz,
-        new: bool,
-    },
-    Remove {
-        atom_id: String,
-        quiz_id: String,
-    },
-}
-
 /// Change of one overlay row.
 #[derive(Debug, Clone)]
-pub(crate) enum RowChange {
+pub enum RowChange {
     PutLesson(LessonRow),
     /// Insert a quiz row, which fails if a row with the same ID exists, so that concurrent transactions cannot claim the same ID.
     InsertQuiz(QuizRow),
     PutQuiz(QuizRow),
     PutRemoved(RemovedQuizRow),
-    /// Delete the removal tombstone of a quiz ID.
-    DeleteRemoved(String),
 }
 
 impl RowChange {
@@ -162,36 +139,6 @@ impl RowChange {
             RowChange::InsertQuiz(r) => Op::insert(r),
             RowChange::PutQuiz(r) => Op::upsert(r),
             RowChange::PutRemoved(r) => Op::upsert(r),
-            RowChange::DeleteRemoved(quiz_id) => Op::delete_row::<RemovedQuizRow>(quiz_id),
-        }
-    }
-}
-
-impl Edit {
-    /// Return the row changes of this edit.
-    pub(crate) fn row_changes(&self) -> Vec<RowChange> {
-        match self {
-            Edit::Lesson { atom_id, body } => vec![RowChange::PutLesson(LessonRow {
-                atom_id: atom_id.clone(),
-                body: body.clone(),
-            })],
-            Edit::Quiz {
-                atom_id,
-                quiz,
-                new: true,
-            } => vec![RowChange::InsertQuiz(QuizRow::new(atom_id, quiz))],
-            Edit::Quiz {
-                atom_id,
-                quiz,
-                new: false,
-            } => vec![
-                RowChange::PutQuiz(QuizRow::new(atom_id, quiz)),
-                RowChange::DeleteRemoved(quiz.id.clone()),
-            ],
-            Edit::Remove { atom_id, quiz_id } => vec![RowChange::PutRemoved(RemovedQuizRow {
-                quiz_id: quiz_id.clone(),
-                atom_id: atom_id.clone(),
-            })],
         }
     }
 }
@@ -271,28 +218,19 @@ impl QuizPatch {
 
 /// Set the lesson body for `atom_id` in the overlay that `view` loaded.
 pub fn upsert_lesson(changes: &mut Changes, view: &View, atom_id: &str, body: &str) -> Result<()> {
-    changes.overlay(
-        view,
-        Edit::Lesson {
-            atom_id: atom_id.into(),
-            body: body.into(),
-        },
-    )
+    let row = LessonRow {
+        atom_id: atom_id.into(),
+        body: body.into(),
+    };
+    changes.overlay(view, RowChange::PutLesson(row))
 }
 
 /// Insert a new quiz into the overlay that `view` loaded.
 pub fn add_quiz(changes: &mut Changes, view: &View, atom_id: &str, q: &Quiz) -> Result<()> {
-    changes.overlay(
-        view,
-        Edit::Quiz {
-            atom_id: atom_id.into(),
-            quiz: q.clone(),
-            new: true,
-        },
-    )
+    changes.overlay(view, RowChange::InsertQuiz(QuizRow::new(atom_id, q)))
 }
 
-/// Replace `base` in the overlay that `view` loaded with `patch` applied, and clear any removal tombstone.
+/// Replace `base` in the overlay that `view` loaded with `patch` applied.
 pub fn amend_quiz(
     changes: &mut Changes,
     view: &View,
@@ -300,25 +238,17 @@ pub fn amend_quiz(
     base: &Quiz,
     patch: &QuizPatch,
 ) -> Result<()> {
-    changes.overlay(
-        view,
-        Edit::Quiz {
-            atom_id: atom_id.into(),
-            quiz: patch.apply(base),
-            new: false,
-        },
-    )
+    let row = QuizRow::new(atom_id, &patch.apply(base));
+    changes.overlay(view, RowChange::PutQuiz(row))
 }
 
 /// Mark `quiz_id` as removed in the overlay that `view` loaded.
 pub fn remove_quiz(changes: &mut Changes, view: &View, atom_id: &str, quiz_id: &str) -> Result<()> {
-    changes.overlay(
-        view,
-        Edit::Remove {
-            atom_id: atom_id.into(),
-            quiz_id: quiz_id.into(),
-        },
-    )
+    let row = RemovedQuizRow {
+        quiz_id: quiz_id.into(),
+        atom_id: atom_id.into(),
+    };
+    changes.overlay(view, RowChange::PutRemoved(row))
 }
 
 /// Print the curriculum overlay as AYML (`mt graph dump`).

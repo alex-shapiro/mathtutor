@@ -120,13 +120,9 @@ async fn add_quiz_writes_row_and_round_trips() {
 }
 
 #[tokio::test]
-async fn amend_quiz_upserts_and_untombstones() {
+async fn amend_quiz_upserts_the_quiz() {
     let db = fresh_db().await;
 
-    edit(&db, |v, c| {
-        overlay::remove_quiz(c, v, WITH_LESSON_ATOM, SHIPPED_QUIZ_ID).unwrap();
-    })
-    .await;
     let base = Quiz {
         id: SHIPPED_QUIZ_ID.into(),
         difficulty: Difficulty::Easy,
@@ -148,11 +144,6 @@ async fn amend_quiz_upserts_and_untombstones() {
 
     let ov = common::overlay(&db).await;
     let entry = ov.atoms.get(WITH_LESSON_ATOM).expect("atom present");
-    assert!(
-        entry.removed.is_empty(),
-        "amend must un-tombstone: {:?}",
-        entry.removed
-    );
     let stored = entry
         .quizzes
         .iter()

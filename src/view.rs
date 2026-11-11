@@ -12,7 +12,7 @@ use crate::db::client::{self, Entry};
 use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
 use crate::event_log::{Event, EventKind};
 use crate::graph::{Curriculum, Graph};
-use crate::overlay::{Edit, Overlay, OverlayRows};
+use crate::overlay::{Overlay, OverlayRows, RowChange};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::schema::{
@@ -46,10 +46,10 @@ impl CachedOverlay {
     }
 }
 
-/// Overlay edits queued by a transaction and the version that they commit under.
+/// Overlay row changes queued by a transaction and the version that they commit under.
 pub(crate) struct OverlayWrite {
     version: String,
-    edits: Vec<Edit>,
+    changes: Vec<RowChange>,
 }
 
 fn new_overlay_version() -> String {
@@ -255,7 +255,7 @@ impl View {
 pub struct Changes {
     /// Writes of `paths` rows.
     ops: Vec<Op>,
-    overlay: Vec<Edit>,
+    overlay: Vec<RowChange>,
     /// Derived rows that the appended events change, keyed by path ID.
     projections: BTreeMap<String, Projection>,
     events: BTreeMap<String, Vec<Event>>,
@@ -308,12 +308,12 @@ impl Changes {
             .or_insert_with(Utc::now);
     }
 
-    /// Record an overlay [`Edit`].
+    /// Record the overlay row change `change`.
     ///
     /// Fails with [`Error::OverlayNotLoaded`] unless `view` loaded the overlay, so that the commit checks the overlay version that the edit is based on.
-    pub fn overlay(&mut self, view: &View, e: Edit) -> Result<()> {
+    pub fn overlay(&mut self, view: &View, change: RowChange) -> Result<()> {
         view.loaded_overlay()?;
-        self.overlay.push(e);
+        self.overlay.push(change);
         Ok(())
     }
 
@@ -341,21 +341,15 @@ impl Changes {
         Ok(())
     }
 
-    /// Return the write operations of this set, and its overlay edits with the new overlay version if it has edits.
+    /// Return the write operations of this set, and its overlay row changes with the new overlay version if it has changes.
     pub(crate) fn into_ops(self) -> (Vec<Op>, Option<OverlayWrite>) {
         let mut ops = self.ops;
         let overlay_write = (!self.overlay.is_empty()).then(|| OverlayWrite {
             version: new_overlay_version(),
-            edits: self.overlay,
+            changes: self.overlay,
         });
         if let Some(write) = &overlay_write {
-            ops.extend(
-                write
-                    .edits
-                    .iter()
-                    .flat_map(Edit::row_changes)
-                    .map(|c| c.op()),
-            );
+            ops.extend(write.changes.iter().map(RowChange::op));
             ops.push(Op::put(OVERLAY_VERSION_KEY, write.version.clone()));
         }
         for (path_id, projection) in self.projections {
@@ -439,7 +433,7 @@ impl Db {
                 .await
         })?;
         if let Some(write) = done.overlay_write {
-            self.remember_edits(done.overlay, write);
+            self.remember_overlay_write(done.overlay, write);
         }
         Ok(done.out)
     }
@@ -572,10 +566,10 @@ impl Db {
     }
 
     /// Cache the overlay `base` that a transaction checked with its committed `write` applied, or clear the cache if the transaction did not check an overlay.
-    fn remember_edits(&self, base: Option<Arc<CachedOverlay>>, write: OverlayWrite) {
+    fn remember_overlay_write(&self, base: Option<Arc<CachedOverlay>>, write: OverlayWrite) {
         let next = base.map(|base| {
             let mut rows = base.rows.clone();
-            for change in write.edits.iter().flat_map(Edit::row_changes) {
+            for change in write.changes {
                 rows.apply(change);
             }
             CachedOverlay::new(write.version, rows)

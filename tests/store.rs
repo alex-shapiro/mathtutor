@@ -182,6 +182,30 @@ async fn same_lesson_body_on_a_second_path_records_only_its_teaching() {
 }
 
 #[tokio::test]
+async fn a_removed_quiz_cannot_be_updated() {
+    let (db, path_id) = fresh_db_with_path().await;
+    let quiz = format!("{WITH_LESSON_ATOM}.q1");
+    store::cmd_quiz_delete(&db, &quiz, Some(&path_id))
+        .await
+        .unwrap();
+
+    let patch = mathtutor::overlay::QuizPatch {
+        question: Some("back?".into()),
+        ..Default::default()
+    };
+    let e = store::cmd_quiz_update(&db, &quiz, &patch, Some(&path_id))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(&e, mathtutor::Error::UnknownId(id) if *id == quiz),
+        "{e:?}"
+    );
+    let overlay = common::overlay(&db).await;
+    assert!(overlay.atoms[WITH_LESSON_ATOM].removed.contains(&quiz));
+}
+
+#[tokio::test]
 async fn quiz_create_after_delete_skips_tombstoned_id() {
     let (db, path_id) = fresh_db_with_path().await;
 

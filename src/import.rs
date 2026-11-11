@@ -11,10 +11,11 @@ use crate::cards::{self, CardState};
 use crate::db::client::api::Selection;
 use crate::db::{Db, Op, Row, Txn, run_txn, ts};
 use crate::event_log::{self, Event};
-use crate::graph::Quiz;
-use crate::overlay::{Edit, Overlay, OverlayRows};
+use crate::overlay::{Overlay, OverlayRows, RowChange};
 use crate::path::PathFile;
-use crate::schema::{DbState, ImportMarker, OAuthClient, STATE_KEY, TableSet};
+use crate::schema::{
+    DbState, ImportMarker, LessonRow, OAuthClient, QuizRow, RemovedQuizRow, STATE_KEY, TableSet,
+};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::{OVERLAY_VERSION_KEY, PathState, View, Want};
 use crate::{Error, Result};
@@ -405,7 +406,7 @@ struct Legacy {
     row_counts: RowCounts,
     paths: Vec<PathFile>,
     events: HashMap<String, Vec<Event>>,
-    overlay: Vec<Edit>,
+    overlay: Vec<RowChange>,
     cards: HashMap<String, Vec<LegacyCardRow>>,
     oauth_clients: Vec<OAuthClient>,
 }
@@ -467,7 +468,7 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
     });
 
     let events = group_events(decode_rows("events", events)?)?;
-    let overlay = overlay_edits(
+    let overlay = overlay_changes(
         decode_rows("overlay_lessons", lessons)?,
         decode_rows("overlay_quizzes", quizzes)?,
         decode_rows("overlay_removed_quizzes", removed)?,
@@ -499,39 +500,42 @@ fn group_events(rows: Vec<LegacyEventRow>) -> Result<HashMap<String, Vec<Event>>
     Ok(by_path)
 }
 
-/// Order quiz edits before tombstones because upserting a quiz deletes its tombstone row.
-fn overlay_edits(
+/// Return the overlay row changes that store the legacy overlay rows.
+fn overlay_changes(
     lessons: Vec<LegacyLessonRow>,
     quizzes: Vec<LegacyQuizRow>,
     removed: Vec<LegacyRemovedRow>,
-) -> Vec<Edit> {
+) -> Vec<RowChange> {
     let quiz_atoms: HashMap<String, String> = quizzes
         .iter()
         .map(|q| (q.quiz_id.clone(), q.atom_id.clone()))
         .collect();
-    let lessons = lessons.into_iter().map(|l| Edit::Lesson {
-        atom_id: l.atom_id,
-        body: l.body,
+    let lessons = lessons.into_iter().map(|l| {
+        RowChange::PutLesson(LessonRow {
+            atom_id: l.atom_id,
+            body: l.body,
+        })
     });
-    let quizzes = quizzes.into_iter().map(|q| Edit::Quiz {
-        atom_id: q.atom_id,
-        quiz: Quiz {
-            id: q.quiz_id,
+    let quizzes = quizzes.into_iter().map(|q| {
+        RowChange::PutQuiz(QuizRow {
+            quiz_id: q.quiz_id,
+            atom_id: q.atom_id,
             difficulty: q.difficulty,
             kind: q.kind,
             question: q.question,
             answer: q.answer,
             rubric: q.rubric,
-        },
-        new: false,
+        })
     });
-    let removed = removed.into_iter().map(|r| Edit::Remove {
-        atom_id: r
-            .atom_id
-            .or_else(|| quiz_atoms.get(&r.quiz_id).cloned())
-            .or_else(|| legacy_quiz_atom(&r.quiz_id).map(str::to_string))
-            .unwrap_or_else(|| r.quiz_id.clone()),
-        quiz_id: r.quiz_id,
+    let removed = removed.into_iter().map(|r| {
+        RowChange::PutRemoved(RemovedQuizRow {
+            atom_id: r
+                .atom_id
+                .or_else(|| quiz_atoms.get(&r.quiz_id).cloned())
+                .or_else(|| legacy_quiz_atom(&r.quiz_id).map(str::to_string))
+                .unwrap_or_else(|| r.quiz_id.clone()),
+            quiz_id: r.quiz_id,
+        })
     });
     lessons.chain(quizzes).chain(removed).collect()
 }
@@ -599,11 +603,11 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         oauth_clients: legacy.oauth_clients.len(),
         ..Report::default()
     };
-    for edits in legacy.overlay.chunks(IMPORT_WRITE_BATCH) {
+    for batch in legacy.overlay.chunks(IMPORT_WRITE_BATCH) {
         db.transact(&Want::overlay(), |view, changes| {
-            edits
+            batch
                 .iter()
-                .try_for_each(|e| changes.overlay(view, e.clone()))
+                .try_for_each(|c| changes.overlay(view, c.clone()))
         })
         .await?;
     }
@@ -659,11 +663,11 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     Ok(report)
 }
 
-/// Compare the `stored` overlay with the legacy edits.
-fn verify_overlay(stored: &Overlay, edits: &[Edit]) -> Result<Vec<String>> {
+/// Compare the `stored` overlay with the overlay that the legacy row `changes` store.
+fn verify_overlay(stored: &Overlay, changes: &[RowChange]) -> Result<Vec<String>> {
     let mut rows = OverlayRows::default();
-    for change in edits.iter().flat_map(Edit::row_changes) {
-        rows.apply(change);
+    for change in changes {
+        rows.apply(change.clone());
     }
     let legacy = rows.overlay();
     let atoms: BTreeSet<&String> = legacy.atoms.keys().chain(stored.atoms.keys()).collect();
