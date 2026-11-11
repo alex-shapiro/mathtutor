@@ -384,9 +384,6 @@ row_table! {
     }
 }
 
-/// Time after its last token grant at which the server deletes an OAuth client registration.
-pub(crate) const OAUTH_CLIENT_TTL: std::time::Duration = std::time::Duration::from_hours(30 * 24);
-
 /// Row of an OAuth table, which no learner command reads or writes.
 #[cfg(feature = "mcp")]
 pub(crate) trait OAuthRow: Row {}

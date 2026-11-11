@@ -13,9 +13,7 @@ use client::api::ErrorCode;
 use crate::graph::Curriculum;
 #[cfg(feature = "mcp")]
 use crate::schema::OAuthRow;
-use crate::schema::{
-    self, DbState, ImportMarker, OAUTH_CLIENT_TTL, OAuthClient, SchemaState, TableSet,
-};
+use crate::schema::{self, DbState, ImportMarker, OAuthClient, SchemaState, TableSet};
 use crate::view::{OverlayCache, OverlayWrite, WriteSet};
 use crate::{Error, Result};
 
@@ -377,16 +375,11 @@ impl Db {
         self.commit(&[Op::delete_row::<R>(pk)]).await
     }
 
-    /// Store `clients` in one transaction, replacing a stored client with the same ID, and keep each for [`OAUTH_CLIENT_TTL`].
+    /// Store `clients` in one transaction without an expiry, replacing a stored client with the same ID.
     pub(crate) async fn replace_oauth_clients(&self, clients: &[OAuthClient]) -> Result<()> {
         let ops: Vec<Op> = clients
             .iter()
-            .flat_map(|c| {
-                [
-                    Op::delete_row::<OAuthClient>(&c.client_id),
-                    Op::insert_expiring(c, OAUTH_CLIENT_TTL),
-                ]
-            })
+            .flat_map(|c| [Op::delete_row::<OAuthClient>(&c.client_id), Op::insert(c)])
             .collect();
         self.commit(&ops).await
     }

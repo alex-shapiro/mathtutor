@@ -24,9 +24,7 @@ use url::Url;
 
 use super::throttle::{self, AddrLimits};
 use crate::db::{Db, Op, Txn, run_txn};
-use crate::schema::{
-    OAUTH_CLIENT_TTL, OAuthAccessToken, OAuthClient, OAuthCode, OAuthKey, OAuthRefreshToken,
-};
+use crate::schema::{OAuthAccessToken, OAuthClient, OAuthCode, OAuthKey, OAuthRefreshToken};
 
 const AUTHORIZATION_CODE_TTL: Duration = Duration::seconds(60);
 const ACCESS_TOKEN_TTL: Duration = Duration::hours(1);
@@ -520,7 +518,7 @@ async fn exchange_code(
     redeem(row, client_id, redirect_uri, verifier)?;
     let tokens = IssuedTokens::new(client_id);
     txn.delete_oauth::<OAuthCode>(&code_hash);
-    renew_client(txn, client_id).await?;
+    keep_client(txn, client_id).await?;
     tokens.insert(txn);
     Ok(tokens)
 }
@@ -537,19 +535,19 @@ async fn rotate_refresh(
     check_scope(req.scope.as_deref())?;
     let tokens = IssuedTokens::new(&stored.client_id);
     txn.delete_oauth::<OAuthRefreshToken>(&token_hash);
-    renew_client(txn, &stored.client_id).await?;
+    keep_client(txn, &stored.client_id).await?;
     tokens.insert(txn);
     Ok(tokens)
 }
 
-/// Keep the registration of `client_id` for [`OAUTH_CLIENT_TTL`] after a token grant, or fail if the client does not exist.
-async fn renew_client(txn: &mut Txn, client_id: &str) -> Result<(), OAuthError> {
+/// Keep the registration of `client_id` without an expiry after a token grant, or fail if the client does not exist.
+async fn keep_client(txn: &mut Txn, client_id: &str) -> Result<(), OAuthError> {
     let Some(client) = txn.get_oauth::<OAuthClient>(client_id).await? else {
         tracing::warn!(%client_id, "token grant for an unknown client");
         return Err(OAuthError::InvalidGrant);
     };
     txn.delete_oauth::<OAuthClient>(client_id);
-    txn.insert_oauth(&client, OAUTH_CLIENT_TTL);
+    txn.insert_lasting_oauth(&client);
     Ok(())
 }
 
@@ -979,12 +977,6 @@ impl IntoResponse for OAuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_client_registration_outlives_the_refresh_token_of_its_last_grant() {
-        assert_eq!(OAUTH_CLIENT_TTL, std_ttl(REFRESH_TOKEN_TTL));
-        assert!(UNUSED_CLIENT_TTL < REFRESH_TOKEN_TTL);
-    }
 
     #[test]
     fn a_request_can_omit_the_scope_or_name_only_mcp() {

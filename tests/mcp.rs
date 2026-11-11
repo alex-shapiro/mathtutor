@@ -1768,7 +1768,7 @@ async fn registrations_from_one_address_are_limited() {
 }
 
 #[tokio::test]
-async fn a_token_grant_keeps_the_client_registration_for_the_refresh_token_lifetime() {
+async fn a_token_grant_keeps_the_client_registration_without_an_expiry() {
     let cfg = common::fresh_config();
     let server = spawn_server_on(
         cfg.clone(),
@@ -1792,20 +1792,22 @@ async fn a_token_grant_keeps_the_client_registration_for_the_refresh_token_lifet
             .json()
             .await
             .unwrap();
-        let expires_at = res["results"][0]["expires_at"].as_i64().expect("ttl");
+        assert_eq!(res["results"][0]["found"], json!(true), "{res}");
         let day = 86_400_000;
-        (expires_at - chrono::Utc::now().timestamp_millis() + day / 2) / day
+        res["results"][0]["expires_at"]
+            .as_i64()
+            .map(|expires_at| (expires_at - chrono::Utc::now().timestamp_millis() + day / 2) / day)
     };
-    assert_eq!(days_left().await, 1, "an unused registration expires");
+    assert_eq!(days_left().await, Some(1), "an unused registration expires");
 
     let pkce = PkcePair::new();
     let code = full_authorize(&server, &reg.client_id, &pkce).await;
     let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
-    assert_eq!(days_left().await, 30, "a code exchange renews the client");
+    assert_eq!(days_left().await, None, "a code exchange keeps the client");
 
     let res = refresh_raw(&server, &reg.client_id, &tokens.refresh_token, None).await;
-    assert_eq!(res.status(), 200, "a refresh renews the client again");
-    assert_eq!(days_left().await, 30);
+    assert_eq!(res.status(), 200);
+    assert_eq!(days_left().await, None, "a refresh keeps the client");
     server.stop().await;
 }
 
