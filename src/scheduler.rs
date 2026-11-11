@@ -165,6 +165,18 @@ pub enum Action {
 }
 
 impl Action {
+    /// Return the name of this action in the `action` field of an envelope.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Action::PresentQuiz { .. } => "present_quiz",
+            Action::CreateLesson { .. } => "create_lesson",
+            Action::PresentLesson { .. } => "present_lesson",
+            Action::CreateQuiz { .. } => "create_quiz",
+            Action::NoReviewsDue => "no_reviews_due",
+            Action::Done => "done",
+        }
+    }
+
     /// Return the atom ID associated with this action, or `None` if the action has no atom.
     pub fn atom_id(&self) -> Option<&str> {
         match self {
@@ -363,14 +375,20 @@ pub fn lesson_history(ps: &PathState, atom_id: &str) -> LessonHistory {
 #[derive(Serialize)]
 pub struct Envelope {
     schema_version: u32,
-    action: String,
+    #[serde(serialize_with = "serialize_action_name")]
+    action: Action,
     path: String,
     /// Command or tool call that performs the action.
     #[serde(skip_serializing_if = "Option::is_none")]
     next_step: Option<String>,
     payload: Payload,
-    #[serde(skip)]
-    next: Action,
+}
+
+fn serialize_action_name<S: serde::Serializer>(
+    action: &Action,
+    s: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    s.serialize_str(action.name())
 }
 
 #[derive(Serialize)]
@@ -457,111 +475,67 @@ struct QuizFull {
 
 #[derive(Serialize)]
 struct MessagePayload {
-    message: String,
+    message: &'static str,
+}
+
+impl AtomBrief {
+    fn of(c: &FlatConcept) -> Self {
+        Self {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            description: c.description.clone(),
+            lesson: c.lesson.clone(),
+        }
+    }
 }
 
 impl Envelope {
     /// Return the scheduled [`Action`] for this envelope.
     pub fn action(&self) -> &Action {
-        &self.next
+        &self.action
     }
 
-    #[allow(clippy::too_many_lines)]
     fn build(ps: &PathState, g: &Graph, action: Action, surface: Surface) -> Self {
-        let p = &ps.file;
-        let next_step = next_step(&action, &p.id).map(|s| s.render(surface));
-        let next = action.clone();
-        match action {
-            Action::PresentLesson { atom_id } => {
-                let c = g.by_id.get(&atom_id).expect("atom exists in graph");
-                let atom = AtomBrief {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    description: c.description.clone(),
-                    lesson: c.lesson.clone(),
-                };
-                let history = lesson_history(ps, &atom_id);
-                Envelope {
-                    next,
-                    next_step,
-                    schema_version: 1,
-                    action: "present_lesson".to_string(),
-                    path: p.id.clone(),
-                    payload: Payload::PresentLesson(PresentLessonPayload {
-                        atom,
-                        reason: "not_taught",
-                        history,
-                    }),
-                }
-            }
+        let concept = |id: &str| g.by_id.get(id).expect("atom exists in graph");
+        let payload = match &action {
+            Action::PresentLesson { atom_id } => Payload::PresentLesson(PresentLessonPayload {
+                atom: AtomBrief::of(concept(atom_id)),
+                reason: "not_taught",
+                history: lesson_history(ps, atom_id),
+            }),
             Action::PresentQuiz { quiz_id, atom_id } => {
-                let c = g.by_id.get(&atom_id).expect("atom exists in graph");
+                let c = concept(atom_id);
                 let q = c
                     .quizzes
                     .iter()
-                    .find(|x| x.id == quiz_id)
+                    .find(|x| x.id == *quiz_id)
                     .expect("quiz exists in graph");
-                let atom = AtomBrief {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    description: c.description.clone(),
-                    lesson: c.lesson.clone(),
-                };
-                let quiz = QuizFull {
-                    id: q.id.clone(),
-                    difficulty: q.difficulty,
-                    kind: q.kind.unwrap_or_default(),
-                    question: q.question.clone(),
-                    answer: q.answer.clone(),
-                    rubric: q.rubric.clone(),
-                };
-                let history = quiz_history(ps, &quiz_id);
-                Envelope {
-                    next,
-                    next_step,
-                    schema_version: 1,
-                    action: "present_quiz".to_string(),
-                    path: p.id.clone(),
-                    payload: Payload::PresentQuiz(PresentQuizPayload {
-                        atom,
-                        quiz,
-                        history,
-                    }),
-                }
+                Payload::PresentQuiz(PresentQuizPayload {
+                    atom: AtomBrief::of(c),
+                    quiz: QuizFull {
+                        id: q.id.clone(),
+                        difficulty: q.difficulty,
+                        kind: q.kind.unwrap_or_default(),
+                        question: q.question.clone(),
+                        answer: q.answer.clone(),
+                        rubric: q.rubric.clone(),
+                    },
+                    history: quiz_history(ps, quiz_id),
+                })
             }
             Action::CreateLesson { atom_id } => {
-                let c = g.by_id.get(&atom_id).expect("atom exists in graph");
-                let atom = AtomBrief {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    description: c.description.clone(),
-                    lesson: None,
-                };
-                let prerequisites = collect_prereqs(g, c);
-                Envelope {
-                    next,
-                    next_step,
-                    schema_version: 1,
-                    action: "create_lesson".to_string(),
-                    path: p.id.clone(),
-                    payload: Payload::CreateLesson(CreateLessonPayload {
-                        atom,
-                        prerequisites,
-                    }),
-                }
+                let c = concept(atom_id);
+                Payload::CreateLesson(CreateLessonPayload {
+                    atom: AtomBrief::of(c),
+                    prerequisites: collect_prereqs(g, c),
+                })
             }
             Action::CreateQuiz {
                 atom_id,
                 difficulty,
             } => {
-                let c = g.by_id.get(&atom_id).expect("atom exists in graph");
-                let atom = AtomBrief {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    description: c.description.clone(),
-                    lesson: c.lesson.clone(),
-                };
-                let existing_quizzes: Vec<ExistingQuizBrief> = c
+                let c = concept(atom_id);
+                let existing_quizzes = c
                     .quizzes
                     .iter()
                     .map(|q| ExistingQuizBrief {
@@ -570,41 +544,26 @@ impl Envelope {
                         question: q.question.clone(),
                     })
                     .collect();
-                let prerequisites = collect_prereqs(g, c);
-                Envelope {
-                    next,
-                    next_step,
-                    schema_version: 1,
-                    action: "create_quiz".to_string(),
-                    path: p.id.clone(),
-                    payload: Payload::CreateQuiz(CreateQuizPayload {
-                        atom,
-                        target_difficulty: difficulty,
-                        existing_quizzes,
-                        prerequisites,
-                    }),
-                }
+                Payload::CreateQuiz(CreateQuizPayload {
+                    atom: AtomBrief::of(c),
+                    target_difficulty: *difficulty,
+                    existing_quizzes,
+                    prerequisites: collect_prereqs(g, c),
+                })
             }
-            Action::NoReviewsDue => Envelope {
-                next,
-                next_step,
-                schema_version: 1,
-                action: "no_reviews_due".to_string(),
-                path: p.id.clone(),
-                payload: Payload::Message(MessagePayload {
-                    message: "Zero reviews are due.".into(),
-                }),
-            },
-            Action::Done => Envelope {
-                next,
-                next_step,
-                schema_version: 1,
-                action: "done".to_string(),
-                path: p.id.clone(),
-                payload: Payload::Message(MessagePayload {
-                    message: "Path complete.".into(),
-                }),
-            },
+            Action::NoReviewsDue => Payload::Message(MessagePayload {
+                message: "Zero reviews are due.",
+            }),
+            Action::Done => Payload::Message(MessagePayload {
+                message: "Path complete.",
+            }),
+        };
+        Envelope {
+            schema_version: 1,
+            next_step: next_step(&action, &ps.file.id).map(|s| s.render(surface)),
+            path: ps.file.id.clone(),
+            action,
+            payload,
         }
     }
 }
