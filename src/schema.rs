@@ -66,7 +66,7 @@ impl TableSet {
 
     /// Return `true` if this release drops and recreates the tables of this set that schema version `found` describes.
     ///
-    /// Only the authorization tables qualify, because they hold only registrations, tokens, and limit counts that a new sign-in recreates. A newer version stays, so that a server of an older release cannot erase the tables of a newer one.
+    /// Only the authorization tables qualify, because they hold only tokens and limit counts that a new sign-in recreates, and client registrations that the replacement keeps. A newer version stays, so that a server of an older release cannot erase the tables of a newer one.
     pub(crate) fn replaces(self, found: &str) -> bool {
         let older = match (found.parse::<u32>(), self.version().parse::<u32>()) {
             (Ok(found), Ok(current)) => found < current,
@@ -489,9 +489,17 @@ pub(crate) async fn create_tables(db: &client::Db, set: TableSet) -> Result<()> 
     }
 }
 
-/// Drop the tables of `set` and create them again with the definitions of this release.
+/// Tables whose rows a replacement of their set keeps if the stored table has the definition of this release.
+///
+/// A connector that keeps its registration needs only a new sign-in after a replacement.
+const KEPT_TABLES: [&str; 1] = [OAuthClient::TABLE];
+
+/// Drop the tables of `set` and create them again with the definitions of this release, but keep each table of [`KEPT_TABLES`] with the current definition.
 pub(crate) async fn recreate_tables(db: &client::Db, set: TableSet) -> Result<()> {
     for t in set.tables() {
+        if KEPT_TABLES.contains(&t.name.as_str()) && stores(db, &t).await? {
+            continue;
+        }
         let drop = DropTable {
             db: db.name().to_string(),
             table: t.name,
@@ -550,6 +558,15 @@ async fn refuse_foreign_tables(db: &client::Db) -> Result<()> {
             Some(cursor) => query.cursor = Some(cursor),
             None => return Ok(()),
         }
+    }
+}
+
+/// Return `true` if `db` holds the table of `def` with its definition.
+async fn stores(db: &client::Db, def: &NewTable) -> Result<bool> {
+    match db.get_table(&def.name).await {
+        Ok(table) => Ok(defines(def, &table)),
+        Err(e) if e.code() == Some(ErrorCode::NotFound) => Ok(false),
+        Err(e) => Err(e.into()),
     }
 }
 

@@ -357,6 +357,52 @@ async fn the_server_handle_replaces_authorization_tables_of_an_older_version() {
 }
 
 #[tokio::test]
+async fn replaced_authorization_tables_keep_the_client_registrations() {
+    use mathtutor::schema::{OAuthClient, OAuthRefreshToken};
+
+    let cfg = common::fresh_config();
+    let db = common::create_db(&cfg).await;
+    let server = db.with_auth_tables();
+    server.snapshot(&ViewRequest::overlay()).await.unwrap();
+    let raw = raw_db(&cfg);
+    let client = OAuthClient {
+        client_id: "kept".into(),
+        client_name: None,
+        redirect_uris: vec!["http://localhost/cb".into()],
+        created_at: Utc::now(),
+    };
+    let refresh = OAuthRefreshToken {
+        token_hash: "h".into(),
+        client_id: "kept".into(),
+        expires_at: Utc::now() + Duration::days(1),
+    };
+    raw.write(&[
+        Op::insert(&client),
+        Op::insert(&refresh),
+        Op::put("mathtutor_auth_state", r#"{"schema":"1"}"#),
+    ])
+    .await
+    .unwrap();
+
+    server.snapshot(&ViewRequest::overlay()).await.unwrap();
+
+    let rows = raw
+        .read(&[
+            Op::query_all::<OAuthClient>(),
+            Op::query_all::<OAuthRefreshToken>(),
+        ])
+        .await
+        .unwrap();
+    let [clients, tokens]: [_; 2] = rows.try_into().unwrap();
+    let clients: Vec<OAuthClient> = clients.rows().unwrap();
+    let tokens: Vec<OAuthRefreshToken> = tokens.rows().unwrap();
+    assert_eq!(clients.len(), 1, "{clients:?}");
+    assert_eq!(clients[0].client_id, "kept");
+    assert!(tokens.is_empty(), "{tokens:?}");
+    server.check_usable().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_handle_checks_the_database_state_in_every_request() {
     let cfg = common::fresh_config();
     let db = common::create_db(&cfg).await;
