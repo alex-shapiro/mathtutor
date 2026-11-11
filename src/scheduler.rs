@@ -12,12 +12,10 @@ use crate::graph::{self, FlatConcept, Graph};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::subpath;
-use crate::surface::{self, Field, Step, Surface, Tool, Value};
+use crate::surface::{Field, Step, Surface, Tool, Value};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::{PathState, View, Want};
 use crate::{Error, Result};
-
-const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
 /// Compute the next action for `path_id` and print its AYML envelope for `mt path next`.
 pub async fn cmd_path_next(db: &Db, path_id: Option<&str>, mode: NextMode) -> Result<()> {
@@ -270,7 +268,7 @@ fn atom_action(g: &Graph, progress: &PathProgress, id: &str) -> Option<Action> {
             atom_id: id.to_string(),
         });
     }
-    for diff in DIFFICULTIES {
+    for &diff in Difficulty::ALL {
         match c.quizzes.iter().find(|q| q.difficulty == diff) {
             None => {
                 return Some(Action::CreateQuiz {
@@ -315,7 +313,7 @@ pub fn is_atom_complete(g: &Graph, progress: &PathProgress, atom_id: &str) -> bo
     if c.lesson.is_none() {
         return false;
     }
-    DIFFICULTIES.iter().all(|diff| {
+    Difficulty::ALL.iter().all(|diff| {
         c.quizzes
             .iter()
             .find(|q| q.difficulty == *diff)
@@ -575,7 +573,7 @@ pub fn next_step(action: &Action, path_id: &str) -> Option<Step> {
         Action::PresentLesson { .. } | Action::NoReviewsDue => Step::new(Tool::GetNext, path),
         Action::PresentQuiz { quiz_id, .. } => Step::new(Tool::AnswerQuiz, path)
             .arg(Field::QuizId, Value::known(quiz_id))
-            .arg(Field::Rating, Value::Choice(surface::RATINGS))
+            .arg(Field::Rating, Value::Choice(Rating::SPELLINGS))
             .arg(Field::UserAnswer, Value::Text("verbatim reply")),
         Action::CreateLesson { atom_id } => Step::new(Tool::UpsertLesson, path)
             .arg(Field::Atom, Value::known(atom_id))

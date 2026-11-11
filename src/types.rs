@@ -1,19 +1,95 @@
 //! Shared domain enums for quiz ratings, difficulties, strategies, and formats.
 
-use serde::{Deserialize, Serialize};
-
 use crate::Error;
 
-/// FSRS recall rating for a quiz answer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
-#[serde(rename_all = "lowercase")]
-#[repr(i64)]
-pub enum Rating {
-    Again = 1,
-    Hard = 2,
-    Good = 3,
-    Easy = 4,
+/// Declare an enum of unit variants with one spelling each, and derive every string form of the enum from that table.
+///
+/// The enum gets `ALL`, `SPELLINGS`, `as_str`, `Display`, `FromStr`, serde, and, with the `mcp` feature, a JSON schema that lists the spellings. `argh` parses the enum through `FromStr`.
+macro_rules! spelled_enum {
+    (
+        $(#[$attr:meta])*
+        pub enum $name:ident, invalid: $invalid:path {
+            $(
+                $(#[$variant_attr:meta])*
+                $variant:ident = $spelling:literal,
+            )+
+        }
+    ) => {
+        $(#[$attr])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum $name {
+            $($(#[$variant_attr])* $variant,)+
+        }
+
+        impl $name {
+            /// Every variant, in declaration order.
+            pub const ALL: &'static [Self] = &[$(Self::$variant,)+];
+
+            /// Spelling of each variant, in declaration order.
+            pub const SPELLINGS: &'static [&'static str] = &[$($spelling,)+];
+
+            /// Return the spelling of this variant.
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $spelling,)+
+                }
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = Error;
+            fn from_str(s: &str) -> Result<Self, Error> {
+                match s {
+                    $($spelling => Ok(Self::$variant),)+
+                    other => Err($invalid(other.to_string())),
+                }
+            }
+        }
+
+        impl serde::Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+                s.serialize_str(self.as_str())
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+                let s = <std::borrow::Cow<'de, str>>::deserialize(d)?;
+                s.parse().map_err(serde::de::Error::custom)
+            }
+        }
+
+        #[cfg(feature = "mcp")]
+        impl schemars::JsonSchema for $name {
+            fn inline_schema() -> bool {
+                true
+            }
+
+            fn schema_name() -> std::borrow::Cow<'static, str> {
+                stringify!($name).into()
+            }
+
+            fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                schemars::json_schema!({ "type": "string", "enum": Self::SPELLINGS })
+            }
+        }
+    };
+}
+
+spelled_enum! {
+    /// FSRS recall rating for a quiz answer.
+    pub enum Rating, invalid: Error::InvalidRating {
+        Again = "again",
+        Hard = "hard",
+        Good = "good",
+        Easy = "easy",
+    }
 }
 
 impl Rating {
@@ -24,150 +100,54 @@ impl Rating {
 }
 
 impl From<Rating> for i64 {
+    /// Return the FSRS grade of `r`, from 1 for `Again` to 4 for `Easy`.
     fn from(r: Rating) -> i64 {
-        r as i64
+        match r {
+            Rating::Again => 1,
+            Rating::Hard => 2,
+            Rating::Good => 3,
+            Rating::Easy => 4,
+        }
     }
 }
 
 impl TryFrom<i64> for Rating {
     type Error = Error;
     fn try_from(v: i64) -> Result<Self, Error> {
-        match v {
-            1 => Ok(Rating::Again),
-            2 => Ok(Rating::Hard),
-            3 => Ok(Rating::Good),
-            4 => Ok(Rating::Easy),
-            other => Err(Error::InvalidRating(other)),
-        }
+        Rating::ALL
+            .iter()
+            .copied()
+            .find(|r| i64::from(*r) == v)
+            .ok_or_else(|| Error::InvalidRating(v.to_string()))
     }
 }
 
-impl std::fmt::Display for Rating {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Rating::Again => "again",
-            Rating::Hard => "hard",
-            Rating::Good => "good",
-            Rating::Easy => "easy",
-        })
+spelled_enum! {
+    /// Quiz difficulty level.
+    pub enum Difficulty, invalid: Error::InvalidDifficulty {
+        Easy = "easy",
+        Medium = "medium",
+        Hard = "hard",
     }
 }
 
-impl argh::FromArgValue for Rating {
-    fn from_arg_value(value: &str) -> Result<Self, String> {
-        match value {
-            "again" => Ok(Rating::Again),
-            "hard" => Ok(Rating::Hard),
-            "good" => Ok(Rating::Good),
-            "easy" => Ok(Rating::Easy),
-            other => Err(format!(
-                "invalid rating '{other}' (expected again | hard | good | easy)"
-            )),
-        }
+spelled_enum! {
+    /// Learning path traversal strategy.
+    #[derive(Default)]
+    pub enum Strategy, invalid: Error::InvalidStrategy {
+        #[default]
+        BottomUp = "bottom_up",
+        TopDown = "top_down",
     }
 }
 
-/// Quiz difficulty level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
-#[serde(rename_all = "lowercase")]
-pub enum Difficulty {
-    Easy,
-    Medium,
-    Hard,
-}
-
-impl Difficulty {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Difficulty::Easy => "easy",
-            Difficulty::Medium => "medium",
-            Difficulty::Hard => "hard",
-        }
-    }
-}
-
-impl std::fmt::Display for Difficulty {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for Difficulty {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self, Error> {
-        match s {
-            "easy" => Ok(Difficulty::Easy),
-            "medium" => Ok(Difficulty::Medium),
-            "hard" => Ok(Difficulty::Hard),
-            other => Err(Error::InvalidDifficulty(other.to_string())),
-        }
-    }
-}
-
-/// Learning path traversal strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
-#[serde(rename_all = "snake_case")]
-pub enum Strategy {
-    #[default]
-    BottomUp,
-    TopDown,
-}
-
-impl Strategy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Strategy::BottomUp => "bottom_up",
-            Strategy::TopDown => "top_down",
-        }
-    }
-}
-
-impl std::fmt::Display for Strategy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl std::str::FromStr for Strategy {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self, Error> {
-        match s {
-            "bottom_up" => Ok(Strategy::BottomUp),
-            "top_down" => Ok(Strategy::TopDown),
-            other => Err(Error::InvalidStrategy(other.to_string())),
-        }
-    }
-}
-
-/// Quiz response format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema), schemars(inline))]
-#[serde(rename_all = "snake_case")]
-pub enum QuizType {
-    #[default]
-    FreeText,
-    MultipleChoice,
-}
-
-impl QuizType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            QuizType::FreeText => "free_text",
-            QuizType::MultipleChoice => "multiple_choice",
-        }
-    }
-}
-
-impl std::str::FromStr for QuizType {
-    type Err = Error;
-    fn from_str(s: &str) -> Result<Self, Error> {
-        match s {
-            "free_text" => Ok(QuizType::FreeText),
-            "multiple_choice" => Ok(QuizType::MultipleChoice),
-            other => Err(Error::InvalidQuizType(other.to_string())),
-        }
+spelled_enum! {
+    /// Quiz response format.
+    #[derive(Default)]
+    pub enum QuizType, invalid: Error::InvalidQuizType {
+        #[default]
+        FreeText = "free_text",
+        MultipleChoice = "multiple_choice",
     }
 }
 
@@ -175,15 +155,52 @@ impl std::str::FromStr for QuizType {
 mod tests {
     use super::*;
 
-    #[test]
-    fn each_strategy_has_one_spelling_for_input_and_output() {
-        for strategy in [Strategy::BottomUp, Strategy::TopDown] {
-            let name = strategy.as_str();
-            assert_eq!(name.parse::<Strategy>().unwrap(), strategy);
-            assert_eq!(strategy.to_string(), name);
-            assert_eq!(serde_json::to_value(strategy).unwrap(), name);
+    /// Check that every variant of `T` reads and writes its spelling in every form.
+    fn check_spellings<T>(all: &[T], spellings: &[&str])
+    where
+        T: Copy
+            + PartialEq
+            + std::fmt::Debug
+            + std::fmt::Display
+            + std::str::FromStr<Err = Error>
+            + serde::Serialize
+            + serde::de::DeserializeOwned,
+    {
+        assert_eq!(all.len(), spellings.len());
+        for (value, spelling) in all.iter().zip(spellings) {
+            assert_eq!(&value.to_string(), spelling);
+            assert_eq!(spelling.parse::<T>().unwrap(), *value);
+            assert_eq!(serde_json::to_value(value).unwrap(), *spelling);
+            let read: T = serde_json::from_value((*spelling).into()).unwrap();
+            assert_eq!(read, *value);
+            let parsed: T = argh::FromArgValue::from_arg_value(spelling).unwrap();
+            assert_eq!(parsed, *value);
         }
+        assert!("unknown".parse::<T>().is_err());
+        assert!(serde_json::from_value::<T>("unknown".into()).is_err());
+    }
+
+    #[test]
+    fn each_enum_has_one_spelling_for_input_and_output() {
+        check_spellings(Rating::ALL, Rating::SPELLINGS);
+        check_spellings(Difficulty::ALL, Difficulty::SPELLINGS);
+        check_spellings(Strategy::ALL, Strategy::SPELLINGS);
+        check_spellings(QuizType::ALL, QuizType::SPELLINGS);
         assert!("bottom-up".parse::<Strategy>().is_err());
-        assert!("top-down".parse::<Strategy>().is_err());
+    }
+
+    #[test]
+    fn invalid_value_errors_list_the_spellings() {
+        let e = "great".parse::<Rating>().unwrap_err().to_string();
+        assert!(e.contains("again | hard | good | easy"), "{e}");
+    }
+
+    #[test]
+    fn ratings_map_to_fsrs_grades() {
+        for (grade, rating) in (1..).zip(Rating::ALL) {
+            assert_eq!(i64::from(*rating), grade);
+            assert_eq!(Rating::try_from(grade).unwrap(), *rating);
+        }
+        assert!(Rating::try_from(0).is_err());
     }
 }

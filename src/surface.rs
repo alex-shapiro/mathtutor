@@ -121,10 +121,6 @@ pub enum Value {
     Choice(&'static [&'static str]),
 }
 
-pub const RATINGS: &[&str] = &["again", "hard", "good", "easy"];
-pub const DIFFICULTIES: &[&str] = &["easy", "medium", "hard"];
-pub const QUIZ_TYPES: &[&str] = &["free_text", "multiple_choice"];
-
 impl Step {
     /// Return a step that invokes `tool` on path `path`.
     pub fn new(tool: Tool, path: Value) -> Self {

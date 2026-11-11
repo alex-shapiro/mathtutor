@@ -1,7 +1,8 @@
 //! Agent playbook for each surface, rendered from one template.
 
 use crate::Result;
-use crate::surface::{DIFFICULTIES, Field, QUIZ_TYPES, RATINGS, Step, Surface, Tool, Value};
+use crate::surface::{Field, Step, Surface, Tool, Value};
+use crate::types::{Difficulty, QuizType, Rating};
 
 /// Playbook template.
 ///
@@ -93,17 +94,17 @@ pub fn playbook_steps() -> Vec<(&'static str, Step)> {
             "create_quiz",
             Step::new(Tool::CreateQuiz, path())
                 .arg(Field::Atom, atom())
-                .arg(Field::Difficulty, Value::Choice(DIFFICULTIES))
+                .arg(Field::Difficulty, Value::Choice(Difficulty::SPELLINGS))
                 .arg(Field::Question, Value::Text("question"))
                 .arg(Field::Answer, Value::Text("answer"))
                 .optional(Field::Rubric, Value::Text("rubric"))
-                .optional(Field::QuizType, Value::Choice(QUIZ_TYPES)),
+                .optional(Field::QuizType, Value::Choice(QuizType::SPELLINGS)),
         ),
         (
             "answer_quiz",
             Step::new(Tool::AnswerQuiz, path())
                 .arg(Field::QuizId, quiz())
-                .arg(Field::Rating, Value::Choice(RATINGS))
+                .arg(Field::Rating, Value::Choice(Rating::SPELLINGS))
                 .arg(Field::UserAnswer, Value::Text("verbatim reply")),
         ),
         (
@@ -113,8 +114,8 @@ pub fn playbook_steps() -> Vec<(&'static str, Step)> {
                 .optional(Field::Question, Value::Text("question"))
                 .optional(Field::Answer, Value::Text("answer"))
                 .optional(Field::Rubric, Value::Text("rubric"))
-                .optional(Field::Difficulty, Value::Choice(DIFFICULTIES))
-                .optional(Field::QuizType, Value::Choice(QUIZ_TYPES)),
+                .optional(Field::Difficulty, Value::Choice(Difficulty::SPELLINGS))
+                .optional(Field::QuizType, Value::Choice(QuizType::SPELLINGS)),
         ),
     ]
 }
@@ -174,16 +175,18 @@ pub(crate) fn filled_steps() -> Vec<Step> {
         .map(|(_, step)| step)
         .chain(actions.iter().filter_map(|a| next_step(a, "p_test")))
         .collect();
-    (0..RATINGS.len())
+    (0..Rating::SPELLINGS.len())
         .flat_map(|i| {
             steps.iter().map(move |step| {
                 step.fill(|field| match field {
                     Field::Atom => atom_id(),
                     Field::QuizId => "fnd.1.1.1.q1".into(),
                     Field::PathId => "p_test".into(),
-                    Field::Difficulty => DIFFICULTIES[i % DIFFICULTIES.len()].into(),
-                    Field::QuizType => QUIZ_TYPES[i % QUIZ_TYPES.len()].into(),
-                    Field::Rating => RATINGS[i].into(),
+                    Field::Difficulty => {
+                        Difficulty::SPELLINGS[i % Difficulty::SPELLINGS.len()].into()
+                    }
+                    Field::QuizType => QuizType::SPELLINGS[i % QuizType::SPELLINGS.len()].into(),
+                    Field::Rating => Rating::SPELLINGS[i].into(),
                     Field::Body
                     | Field::Question
                     | Field::Answer

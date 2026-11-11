@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::types::{Difficulty, QuizType, Rating, Strategy};
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
@@ -91,16 +93,16 @@ pub enum Error {
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
 
-    #[error("invalid rating value: {0}")]
-    InvalidRating(i64),
+    #[error("invalid rating '{0}' (expected {expected})", expected = Rating::SPELLINGS.join(" | "))]
+    InvalidRating(String),
 
-    #[error("invalid difficulty: {0}")]
+    #[error("invalid difficulty '{0}' (expected {expected})", expected = Difficulty::SPELLINGS.join(" | "))]
     InvalidDifficulty(String),
 
-    #[error("invalid quiz type: {0}")]
+    #[error("invalid quiz type '{0}' (expected {expected})", expected = QuizType::SPELLINGS.join(" | "))]
     InvalidQuizType(String),
 
-    #[error("invalid strategy: {0}")]
+    #[error("invalid strategy '{0}' (expected {expected})", expected = Strategy::SPELLINGS.join(" | "))]
     InvalidStrategy(String),
 
     #[error("subpaths apply only to paths with the top_down strategy")]
