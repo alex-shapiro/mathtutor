@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use baserunna_client::api::{ColumnType, ListTablesQuery, NewColumn, NewTable};
 use baserunna_client::bytes::Bytes;
-use baserunna_client::{BoxFuture, Client, HttpTransport, Transport, TransportError, http};
+use baserunna_client::{BoxFuture, Client, HttpTransport, Op, Transport, TransportError, http};
 use chrono::{Duration, Utc};
 use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, Event, EventKind};
@@ -673,6 +673,69 @@ async fn transaction_restarts_with_an_overlay_that_another_client_writes() {
 
     assert_eq!(seen.first().map(String::as_str), Some("cached"));
     assert_eq!(seen.last().map(String::as_str), Some("new"), "{seen:?}");
+}
+
+/// Transport that replaces the stored overlay version before each read and each transaction begin.
+struct OverlayChurnTransport {
+    inner: HttpTransport,
+    raw: baserunna_client::Db,
+    begins: Arc<AtomicUsize>,
+}
+
+impl Transport for OverlayChurnTransport {
+    fn send(
+        &self,
+        req: http::Request<Bytes>,
+    ) -> BoxFuture<'_, Result<http::Response<Bytes>, TransportError>> {
+        Box::pin(async move {
+            let path = req.uri().path();
+            let begins = path.ends_with("/transactions");
+            if begins || path.ends_with("/txn") {
+                let version = format!("{:032x}", rand::random::<u128>());
+                self.raw
+                    .write(&[Op::put("overlay_version", version)])
+                    .await
+                    .unwrap();
+            }
+            if begins {
+                self.begins.fetch_add(1, Ordering::Relaxed);
+            }
+            self.inner.send(req).await
+        })
+    }
+}
+
+#[tokio::test]
+async fn overlay_changes_restart_a_transaction_within_the_retry_limit() {
+    let cfg = common::fresh_config();
+    common::seed_path(
+        &common::create_db(&cfg).await,
+        PATH_ID,
+        &[],
+        Strategy::BottomUp,
+    )
+    .await;
+    let begins = Arc::<AtomicUsize>::default();
+    let db = Db::with_transport(
+        &cfg,
+        OverlayChurnTransport {
+            inner: cfg.transport().unwrap(),
+            raw: raw_db(&cfg),
+            begins: begins.clone(),
+        },
+    );
+
+    let want = Want::path(Some(PATH_ID));
+    let attempt = db.transact(&want, |_, _| Ok(()));
+    let e = tokio::time::timeout(std::time::Duration::from_mins(1), attempt)
+        .await
+        .expect("the retry loop stops")
+        .unwrap_err();
+
+    assert!(e.to_string().contains("overlay_version"), "{e}");
+    let begins = begins.load(Ordering::Relaxed);
+    let limit = baserunna_client::RetryPolicy::default().txn_attempts;
+    assert_eq!(begins, usize::try_from(limit).unwrap(), "{begins} attempts");
 }
 
 #[tokio::test]

@@ -7,8 +7,8 @@ use std::sync::{Arc, OnceLock};
 use chrono::{DateTime, Utc};
 
 use crate::cards::{CardRow, Projection, Taught};
-use crate::db::client::Entry;
-use crate::db::client::api::PAGE_MAX;
+use crate::db::client::api::{ApiError, ErrorCode, PAGE_MAX};
+use crate::db::client::{self, Entry};
 use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
 use crate::event_log::{Event, EventKind};
 use crate::graph::{Curriculum, Graph};
@@ -408,43 +408,39 @@ impl Db {
         mut f: impl FnMut(&View, &mut Changes) -> Result<T>,
     ) -> Result<T> {
         let path_id = self.selected_path_id(&want.path).await?;
-        let mut overlay = if want.overlay {
-            Some(self.overlay_or_load().await?)
-        } else {
-            None
-        };
-        let (out, overlay_write) = loop {
-            let attempt = run_txn!(self, |txn| {
-                self.attempt(&mut txn, want, path_id.as_deref(), overlay.clone(), &mut f)
-                    .await
-            })?;
-            match attempt {
-                Attempt::Ready(ready) => break ready,
-                Attempt::OverlayChanged => overlay = Some(self.load_overlay().await?),
-            }
-        };
-        if let Some(write) = overlay_write {
-            self.remember_edits(overlay, write);
+        let done = run_txn!(self, |txn| {
+            self.attempt(&mut txn, want, path_id.as_deref(), &mut f)
+                .await
+        })?;
+        if let Some(write) = done.overlay_write {
+            self.remember_edits(done.overlay, write);
         }
-        Ok(out)
+        Ok(done.out)
     }
 
-    /// Read `want` in `txn` and queue the writes of `f`, or report that `overlay` is out of date.
+    /// Read `want` in `txn` and queue the writes of `f`.
+    ///
+    /// Fails with a conflict that restarts the transaction if the stored overlay differs from the cached overlay, and refreshes the cache for the next attempt.
     async fn attempt<T>(
         &self,
         txn: &mut Txn,
         want: &Want,
         path_id: Option<&str>,
-        overlay: Option<CachedOverlay>,
         f: &mut impl FnMut(&View, &mut Changes) -> Result<T>,
-    ) -> Result<Attempt<T>> {
-        let mut plan = self.plan(want, path_id, overlay);
+    ) -> Result<Attempted<T>> {
+        let overlay = if want.overlay {
+            Some(self.overlay_or_load().await?)
+        } else {
+            None
+        };
+        let mut plan = self.plan(want, path_id, overlay.clone());
         let mut results = txn.run(&plan.ops()).await?;
         while let Some(more) = plan.absorb(results)? {
             results = txn.run(&more).await?;
         }
         if plan.overlay_stale {
-            return Ok(Attempt::OverlayChanged);
+            self.load_overlay().await?;
+            return Err(overlay_conflict());
         }
         let mut changes = Changes::default();
         let out = f(&plan.view, &mut changes)?;
@@ -453,7 +449,11 @@ impl Db {
         }
         let (ops, overlay_write) = changes.into_ops();
         txn.write(ops);
-        Ok(Attempt::Ready((out, overlay_write)))
+        Ok(Attempted {
+            out,
+            overlay,
+            overlay_write,
+        })
     }
 
     fn plan(&self, want: &Want, path_id: Option<&str>, overlay: Option<CachedOverlay>) -> Plan {
@@ -561,11 +561,27 @@ impl Db {
     }
 }
 
-/// Result of a transaction attempt.
-enum Attempt<T> {
-    Ready((T, Option<OverlayWrite>)),
-    /// The stored overlay version differs from the overlay that the attempt used.
-    OverlayChanged,
+/// Transaction attempt whose writes are queued for the commit.
+struct Attempted<T> {
+    out: T,
+    /// Overlay that the attempt read.
+    overlay: Option<CachedOverlay>,
+    overlay_write: Option<OverlayWrite>,
+}
+
+/// Return the conflict that restarts a transaction whose stored overlay differs from the cached overlay.
+fn overlay_conflict() -> Error {
+    let error = ApiError {
+        code: ErrorCode::Conflict,
+        message: format!("{OVERLAY_VERSION_KEY} changed after the overlay was cached"),
+        retryable: true,
+        details: None,
+    };
+    Error::Baserunna(client::Error::Api {
+        status: 409,
+        error,
+        retry_after_ms: None,
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
