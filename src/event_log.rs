@@ -3,11 +3,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::db::client::api::ErrorCode;
-use crate::db::{Db, Op, ts};
+use crate::Result;
+use crate::db::{Db, ts};
 use crate::schema;
 use crate::types::Rating;
-use crate::{Error, Result};
 
 /// Learning event in the stream of its path.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,17 +73,11 @@ impl Event {
 
 /// Return the events of `path_id` in order, or an empty list if the event stream does not exist.
 pub async fn load(db: &Db, path_id: &str) -> Result<Vec<Event>> {
-    let op = Op::read_stream(schema::events_stream(path_id), 0);
-    match db.read_pages(op).await {
-        Err(Error::Baserunna(e)) if e.code() == Some(ErrorCode::NotFound) => {
-            db.read(&[]).await?;
-            Ok(Vec::new())
-        }
-        pages => pages?.into_iter().try_fold(Vec::new(), |mut events, page| {
-            events.extend(page.records::<Event>()?);
-            Ok(events)
-        }),
-    }
+    let pages = db.read_stream(schema::events_stream(path_id)).await?;
+    pages.into_iter().try_fold(Vec::new(), |mut events, page| {
+        events.extend(page.records::<Event>()?);
+        Ok(events)
+    })
 }
 
 #[cfg(test)]

@@ -342,6 +342,13 @@ async fn events_round_trip_in_order_with_every_field() {
 }
 
 #[tokio::test]
+async fn event_log_of_a_path_without_a_stream_is_empty() {
+    let db = common::empty_db().await;
+
+    assert_eq!(event_log::load(&db, "p_none").await.unwrap(), []);
+}
+
+#[tokio::test]
 async fn event_log_pages_across_multiple_reads() {
     let db = common::fresh_db(PATH_ID).await;
     let ts = mathtutor::db::ts::parse("2026-05-26T10:00:00.123Z").unwrap();

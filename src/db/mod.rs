@@ -209,6 +209,14 @@ impl Db {
         }
     }
 
+    /// Read every page of stream `stream` after the database and import checks, or no pages if the stream does not exist.
+    pub(crate) async fn read_stream(&self, stream: String) -> Result<Vec<OpResult>> {
+        match self.read_pages(Op::read_stream(stream, 0)).await {
+            Err(Error::Baserunna(e)) if e.code() == Some(ErrorCode::NotFound) => Ok(Vec::new()),
+            pages => pages,
+        }
+    }
+
     /// Insert OAuth row `row`, which the server deletes after `ttl` if `ttl` is set.
     #[cfg(feature = "mcp")]
     pub(crate) async fn insert_oauth<R: OAuthRow>(
