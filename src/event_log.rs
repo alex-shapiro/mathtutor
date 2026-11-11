@@ -74,22 +74,16 @@ impl Event {
 
 /// Return the events of `path_id` in order, or an empty list if the event stream does not exist.
 pub async fn load(db: &Db, path_id: &str) -> Result<Vec<Event>> {
-    let mut op = Op::read_stream(schema::events_stream(path_id), 0);
-    let mut out = Vec::new();
-    loop {
-        let page = match db.read_one(op.clone()).await {
-            Err(Error::Baserunna(e)) if e.code() == Some(ErrorCode::NotFound) => {
-                db.read(&[]).await?;
-                return Ok(out);
-            }
-            other => other?,
-        };
-        let next = op.next_page(&page);
-        out.extend(page.records::<Event>()?);
-        match next {
-            Some(n) => op = n,
-            None => return Ok(out),
+    let op = Op::read_stream(schema::events_stream(path_id), 0);
+    match db.read_pages(op).await {
+        Err(Error::Baserunna(e)) if e.code() == Some(ErrorCode::NotFound) => {
+            db.read(&[]).await?;
+            Ok(Vec::new())
         }
+        pages => pages?.into_iter().try_fold(Vec::new(), |mut events, page| {
+            events.extend(page.records::<Event>()?);
+            Ok(events)
+        }),
     }
 }
 

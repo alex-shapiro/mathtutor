@@ -548,11 +548,8 @@ impl Db {
     }
 
     async fn most_recent_path_id(&self) -> Result<Option<String>> {
-        let mut op = Op::scan(ACTIVITY_PREFIX);
         let mut latest: Option<(DateTime<Utc>, String)> = None;
-        loop {
-            let page = self.read_one(op.clone()).await?;
-            let next = op.next_page(&page);
+        for page in self.read_pages(Op::scan(ACTIVITY_PREFIX)).await? {
             for e in page.scan_page()?.entries {
                 let (id, at) = parse_activity(&e)?;
                 if latest
@@ -562,8 +559,6 @@ impl Db {
                     latest = Some((at, id.to_string()));
                 }
             }
-            let Some(next) = next else { break };
-            op = next;
         }
         Ok(latest.map(|(_, id)| id))
     }

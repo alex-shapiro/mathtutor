@@ -226,6 +226,20 @@ impl Db {
             .ok_or_else(|| Error::BadRow("read returned no result".into()))
     }
 
+    /// Read `op` and every next page of its result at the latest version, without a transaction.
+    pub(crate) async fn read_pages(&self, mut op: Op) -> Result<Vec<OpResult>> {
+        let mut pages = Vec::new();
+        loop {
+            let page = self.read_one(op.clone()).await?;
+            let next = op.next_page(&page);
+            pages.push(page);
+            match next {
+                Some(n) => op = n,
+                None => return Ok(pages),
+            }
+        }
+    }
+
     /// Commit `ops` after the database and import checks.
     pub(crate) async fn write(&self, ops: impl IntoIterator<Item = Op>) -> Result<()> {
         let ops: Vec<Op> = ops.into_iter().collect();
