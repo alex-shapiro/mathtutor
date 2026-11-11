@@ -647,7 +647,7 @@ struct TokenQuery {
     token: Option<String>,
 }
 
-/// Admit a request with `MT_API_KEY` or a valid access token, and count each failed token against the limit of its client address.
+/// Admit a request with `MT_API_KEY` or a valid access token, and delay the bearer tokens of a client address after too many rejected tokens.
 async fn auth_middleware(
     State(state): State<AuthState>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
@@ -664,19 +664,19 @@ async fn auth_middleware(
     let Some(token) = from_header.or(q.token) else {
         return state.challenge();
     };
+    if let Some(expected) = state.api_key.as_deref()
+        && oauth::constant_time_eq(token.as_bytes(), expected.as_bytes())
+    {
+        return next.run(req).await;
+    }
     if let Some(access_tokens) = &state.access_tokens
         && access_tokens.is_cached(&token)
     {
         return next.run(req).await;
     }
     let addr = state.limits.client_addr(peer, req.headers());
-    if let Some(wait) = state.limits.credential_wait(addr) {
+    if let Some(wait) = state.limits.bearer_wait(addr) {
         return too_many_requests(wait);
-    }
-    if let Some(expected) = state.api_key.as_deref()
-        && oauth::constant_time_eq(token.as_bytes(), expected.as_bytes())
-    {
-        return next.run(req).await;
     }
     let Some(access_tokens) = state
         .access_tokens
@@ -684,28 +684,14 @@ async fn auth_middleware(
         .filter(|_| oauth::has_issued_form(&token))
     else {
         tracing::warn!(%addr, "bearer token rejected");
-        return match state.limits.try_local_credential(addr) {
-            Some(wait) => too_many_requests(wait),
-            None => state.challenge(),
-        };
+        state.limits.record_bearer_failure(addr);
+        return state.challenge();
     };
-    match state.limits.try_credential(addr).await {
-        Ok(None) => {}
-        Ok(Some(wait)) => return too_many_requests(wait),
-        Err(e) => {
-            tracing::warn!(error = %e, "cannot count a bearer token attempt");
-            return token_check_unavailable();
-        }
-    }
     match access_tokens.is_valid(&token).await {
-        Ok(true) => {
-            if let Err(e) = state.limits.record_success(addr).await {
-                tracing::warn!(error = %e, %addr, "cannot reset the failures of an address");
-            }
-            next.run(req).await
-        }
+        Ok(true) => next.run(req).await,
         Ok(false) => {
             tracing::warn!(%addr, "access token rejected");
+            state.limits.record_bearer_failure(addr);
             state.challenge()
         }
         Err(e) => {

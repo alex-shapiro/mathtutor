@@ -261,7 +261,7 @@ async fn database_failure_during_token_check_returns_503_without_a_login_challen
 const ISSUED_FORM_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 #[tokio::test]
-async fn failed_bearer_tokens_delay_the_next_request_from_the_address() {
+async fn rejected_bearer_tokens_delay_only_bearer_tokens_other_than_the_api_key() {
     let server = spawn_oauth_server().await;
     let post = async |token: &str| {
         client()
@@ -274,16 +274,24 @@ async fn failed_bearer_tokens_delay_the_next_request_from_the_address() {
             .await
             .unwrap()
     };
-    for token in [ISSUED_FORM_TOKEN, "wrong"].repeat(3).into_iter().take(5) {
+    for token in [ISSUED_FORM_TOKEN, "wrong"].repeat(10) {
         assert_eq!(post(token).await.status(), 401);
     }
 
-    let res = post(API_KEY).await;
-    assert_eq!(res.status(), 429, "the correct key must wait too");
-    assert_eq!(res.headers()["retry-after"], "1");
+    let res = post(ISSUED_FORM_TOKEN).await;
+    assert_eq!(res.status(), 429, "a further token must wait");
+    let wait: u64 = res.headers()["retry-after"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((1..=60).contains(&wait), "{wait}");
+    assert_eq!(post(API_KEY).await.status(), 200, "the API key never waits");
 
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert_eq!(post(API_KEY).await.status(), 200, "the wait ends");
+    let reg = register_client(&server, "Shared address").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    assert!(!code.is_empty(), "rejected tokens do not delay a sign-in");
     server.stop().await;
 }
 
@@ -1541,6 +1549,17 @@ async fn repeated_incorrect_passwords_delay_the_next_sign_in() {
     assert_eq!(res.status(), 429, "the correct password must wait too");
     assert_eq!(res.headers()["retry-after"], "1");
     assert!(res.text().await.unwrap().contains("Try again in 1 second."));
+    let bearer = client()
+        .post(server.url("/mcp"))
+        .bearer_auth(ISSUED_FORM_TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bearer.status(),
+        401,
+        "incorrect passwords do not delay bearer tokens"
+    );
 
     tokio::time::sleep(Duration::from_secs(1)).await;
     let res = submit_login(&server, &form_html, ADMIN_PASSWORD).await;

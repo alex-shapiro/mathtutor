@@ -1,4 +1,4 @@
-//! Limits on failed credentials, client registrations, and OAuth requests from each client address.
+//! Limits on incorrect passwords, rejected bearer tokens, client registrations, and OAuth requests from each client address.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
@@ -11,22 +11,28 @@ use crate::Result;
 use crate::db::{Db, Txn, run_txn};
 use crate::schema::OAuthAddrCount;
 
-/// Number of failed credentials from an address before each next attempt must wait.
+/// Number of incorrect passwords from an address before each next sign-in must wait.
 const FREE_FAILURES: u32 = 5;
 
 /// Wait after the first failure past [`FREE_FAILURES`], which doubles with each further failure.
 const FIRST_FAILURE_DELAY: Duration = Duration::seconds(1);
 
-/// Longest wait between two attempts with a credential from an address.
+/// Longest wait between two sign-in attempts from an address.
 const MAX_FAILURE_DELAY: Duration = Duration::minutes(15);
 
-/// Time after the last failure at which the server forgets the failures of an address.
+/// Time after the last incorrect password at which the server forgets the failures of an address.
 const FAILURE_MEMORY: Duration = Duration::hours(1);
 
 /// Limit on client registrations from each address.
 const REGISTRATIONS: Window = Window {
     per_window: 10,
     window: Duration::hours(1),
+};
+
+/// Limit on rejected bearer tokens from each address, which bounds the database reads of token checks.
+const BEARER_FAILURES: Window = Window {
+    per_window: 20,
+    window: Duration::minutes(1),
 };
 
 /// Limit on requests from each address to the OAuth routes that read the database.
@@ -98,7 +104,7 @@ trait Rule: Copy {
     }
 }
 
-/// Rule that delays each attempt after [`FREE_FAILURES`] failed credentials, with a wait that doubles after each further failure.
+/// Rule that delays each attempt after [`FREE_FAILURES`] failures, with a wait that doubles after each further failure.
 #[derive(Clone, Copy, Debug)]
 struct Backoff;
 
@@ -247,15 +253,6 @@ impl<R: Rule> StoredLimit<R> {
         Ok(wait)
     }
 
-    /// Return the time that an event from `addr` at `now` must wait, as far as the memory of this server knows.
-    fn local_wait(&self, addr: IpAddr, now: DateTime<Utc>) -> Option<Duration> {
-        let stored = lock(&self.stored_waits)
-            .get(&addr_key(addr))
-            .filter(|end| **end > now)
-            .map(|end| *end - now);
-        stored.max(self.memory.wait(addr, now))
-    }
-
     /// Forget the count of `addr`.
     async fn reset(&self, addr: IpAddr) -> Result<()> {
         let key = addr_key(addr);
@@ -311,11 +308,12 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Limits on failed credentials, client registrations, and OAuth requests from each client address.
+/// Limits on incorrect passwords, rejected bearer tokens, client registrations, and OAuth requests from each client address.
 #[derive(Clone)]
 pub(crate) struct AddrLimits {
     client_addrs: ClientAddrSource,
-    failures: Arc<StoredLimit<Backoff>>,
+    password_failures: Arc<StoredLimit<Backoff>>,
+    bearer_failures: Arc<MemoryLimit<Window>>,
     registrations: Arc<StoredLimit<Window>>,
     requests: Arc<MemoryLimit<Window>>,
 }
@@ -325,7 +323,8 @@ impl AddrLimits {
     pub(crate) fn new(db: &Db, client_addrs: ClientAddrSource) -> Self {
         Self {
             client_addrs,
-            failures: Arc::new(StoredLimit::new("failures", Backoff, db.clone())),
+            password_failures: Arc::new(StoredLimit::new("password_failures", Backoff, db.clone())),
+            bearer_failures: Arc::new(MemoryLimit::new(BEARER_FAILURES)),
             registrations: Arc::new(StoredLimit::new("registrations", REGISTRATIONS, db.clone())),
             requests: Arc::new(MemoryLimit::new(REQUESTS)),
         }
@@ -336,26 +335,24 @@ impl AddrLimits {
         self.client_addrs.client_addr(peer, headers)
     }
 
-    /// Count an attempt with a credential from `addr` as a failure until [`Self::record_success`], or return the time that `addr` must wait first.
-    pub(crate) async fn try_credential(&self, addr: IpAddr) -> Result<Option<Duration>> {
-        self.failures.try_count(addr, Utc::now()).await
+    /// Count a sign-in from `addr` as an incorrect password until [`Self::record_password_success`], or return the time that `addr` must wait first.
+    pub(crate) async fn try_password(&self, addr: IpAddr) -> Result<Option<Duration>> {
+        self.password_failures.try_count(addr, Utc::now()).await
     }
 
-    /// Count a failed credential from `addr` only in memory, or return the time that `addr` must wait first.
-    ///
-    /// Use this for a credential that the server rejects without a database request.
-    pub(crate) fn try_local_credential(&self, addr: IpAddr) -> Option<Duration> {
-        self.failures.memory.try_count(addr, Utc::now()).err()
+    /// Forget the incorrect passwords of `addr` after a correct one.
+    pub(crate) async fn record_password_success(&self, addr: IpAddr) -> Result<()> {
+        self.password_failures.reset(addr).await
     }
 
-    /// Return the time that the next attempt with a credential from `addr` must wait, as far as the memory of this server knows.
-    pub(crate) fn credential_wait(&self, addr: IpAddr) -> Option<Duration> {
-        self.failures.local_wait(addr, Utc::now())
+    /// Return the time that the next bearer token from `addr` must wait after too many rejected tokens.
+    pub(crate) fn bearer_wait(&self, addr: IpAddr) -> Option<Duration> {
+        self.bearer_failures.wait(addr, Utc::now())
     }
 
-    /// Forget the failures of `addr` after a correct credential.
-    pub(crate) async fn record_success(&self, addr: IpAddr) -> Result<()> {
-        self.failures.reset(addr).await
+    /// Count a rejected bearer token from `addr`.
+    pub(crate) fn record_bearer_failure(&self, addr: IpAddr) {
+        let _full = self.bearer_failures.try_count(addr, Utc::now());
     }
 
     /// Count a request from `addr` to an OAuth route that reads the database, only in memory, or return the time until the window of `addr` ends if the window is full.

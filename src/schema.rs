@@ -365,7 +365,7 @@ row_table! {
 row_table! {
     /// Row in the `oauth_addr_counts` table: the events of one client address that one limit counts.
     pub struct OAuthAddrCount in "oauth_addr_counts", primary key (key) {
-        /// Name of the limit and the client address, such as `failures/203.0.113.7`.
+        /// Name of the limit and the client address, such as `password_failures/203.0.113.7`.
         pub key: String,
         pub n: u32,
         /// Time that the count started or last changed.

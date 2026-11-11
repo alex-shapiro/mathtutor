@@ -294,7 +294,7 @@ async fn authorize_post(
         return Ok((StatusCode::BAD_REQUEST, Html(html)).into_response());
     }
     let addr = s.limits.client_addr(peer, &headers);
-    if let Some(wait) = s.limits.try_credential(addr).await? {
+    if let Some(wait) = s.limits.try_password(addr).await? {
         tracing::warn!(%addr, client_id = %client.client_id, "sign-in attempt delayed");
         let secs = throttle::retry_after_secs(wait);
         let unit = if secs == 1 { "second" } else { "seconds" };
@@ -313,7 +313,7 @@ async fn authorize_post(
         let html = render_login_form(&client, &q, &csrf, Some("Incorrect password."));
         return Ok((StatusCode::UNAUTHORIZED, Html(html)).into_response());
     }
-    s.limits.record_success(addr).await?;
+    s.limits.record_password_success(addr).await?;
 
     let secret = random_token();
     let code = OAuthCode {
