@@ -227,7 +227,7 @@ The import reads a consistent snapshot and writes the overlay and the OAuth clie
 
 ### Baserunna keys
 
-A Baserunna API key can have two limits: a single database and read-only access. Keys have no role of their own. A key acts with the role of the user who created it. A key limited to a database cannot create or delete a database. A key without that limit can delete every database that its user owns. Keys do not expire, and only a console session can create or delete them.
+A Baserunna API key can have two limits: a single database and read-only access. Keys have no role of their own. A key acts with the role of the user who created it. A key limited to a database cannot create or delete a database. A key without that limit can delete every database that its user owns. Keys do not expire. A signed-in user, as in the web console, can create and delete keys, but a key cannot.
 
 Use this setup so that a leaked key cannot delete the learner history:
 
