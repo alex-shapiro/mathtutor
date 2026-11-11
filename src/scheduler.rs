@@ -10,7 +10,7 @@ use crate::db::Db;
 use crate::event_log::{Event, EventKind};
 use crate::graph::{self, FlatConcept, Graph};
 use crate::path::PathFile;
-use crate::progress::PathProgress;
+use crate::progress::{PathProgress, QuizSlot};
 use crate::subpath;
 use crate::surface::{Field, Step, Surface, Tool, Value};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
@@ -207,7 +207,7 @@ pub fn next_action(
     }
     teaching_order(g, p.strategy, targets, subpath)
         .iter()
-        .find_map(|atom| atom_action(g, progress, atom))
+        .find_map(|atom| atom_action(g.by_id.get(atom)?, progress))
         .unwrap_or(Action::Done)
 }
 
@@ -256,37 +256,33 @@ fn visit_bottom_up(g: &Graph, id: &str, visited: &mut HashSet<String>, out: &mut
     }
 }
 
-fn atom_action(g: &Graph, progress: &PathProgress, id: &str) -> Option<Action> {
-    let c = g.by_id.get(id)?;
+/// Return the next action that atom `c` needs on a path with `progress`, or `None` if the atom is complete.
+pub fn atom_action(c: &FlatConcept, progress: &PathProgress) -> Option<Action> {
+    let atom_id = c.id.clone();
     if c.lesson.is_none() {
-        return Some(Action::CreateLesson {
-            atom_id: id.to_string(),
-        });
+        return Some(Action::CreateLesson { atom_id });
     }
-    if !progress.lesson_taught(id) {
-        return Some(Action::PresentLesson {
-            atom_id: id.to_string(),
-        });
+    if !progress.lesson_taught(&c.id) {
+        return Some(Action::PresentLesson { atom_id });
     }
-    for &diff in Difficulty::ALL {
-        match c.quizzes.iter().find(|q| q.difficulty == diff) {
-            None => {
-                return Some(Action::CreateQuiz {
-                    atom_id: id.to_string(),
-                    difficulty: diff,
-                });
-            }
-            Some(quiz) => {
-                if !progress.quiz_answered_correctly(&quiz.id) {
-                    return Some(Action::PresentQuiz {
+    Difficulty::ALL
+        .iter()
+        .find_map(|&difficulty| match progress.quiz_slot(c, difficulty) {
+            QuizSlot::Missing => Some(Action::CreateQuiz {
+                atom_id: atom_id.clone(),
+                difficulty,
+            }),
+            QuizSlot::Authored => {
+                c.quizzes
+                    .iter()
+                    .find(|q| q.difficulty == difficulty)
+                    .map(|quiz| Action::PresentQuiz {
                         quiz_id: quiz.id.clone(),
-                        atom_id: id.to_string(),
-                    });
-                }
+                        atom_id: atom_id.clone(),
+                    })
             }
-        }
-    }
-    None
+            QuizSlot::Correct => None,
+        })
 }
 
 fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<(String, String)> {
@@ -305,20 +301,11 @@ pub fn atom_of_live_quiz(g: &Graph, quiz_id: &str) -> Option<String> {
         .then(|| atom_id.to_string())
 }
 
-/// Return `true` if `atom_id` has a stored lesson and passed quizzes for all 3 difficulties.
+/// Return `true` if `atom_id` is in `g` and needs no further action on a path with `progress`.
 pub fn is_atom_complete(g: &Graph, progress: &PathProgress, atom_id: &str) -> bool {
-    let Some(c) = g.by_id.get(atom_id) else {
-        return false;
-    };
-    if c.lesson.is_none() {
-        return false;
-    }
-    Difficulty::ALL.iter().all(|diff| {
-        c.quizzes
-            .iter()
-            .find(|q| q.difficulty == *diff)
-            .is_some_and(|q| progress.quiz_answered_correctly(&q.id))
-    })
+    g.by_id
+        .get(atom_id)
+        .is_some_and(|c| atom_action(c, progress).is_none())
 }
 
 /// Presentation and answer history for a quiz card.

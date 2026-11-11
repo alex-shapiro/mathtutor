@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::Result;
 use crate::db::Db;
 use crate::graph::{FlatConcept, Graph, natural_id_cmp};
-use crate::progress::{PathCompletion, PathProgress, ReachProgress, TargetProgress};
+use crate::progress::{PathCompletion, PathProgress, QuizSlot, ReachProgress, TargetProgress};
 use crate::scheduler::{self, PathPlan};
 use crate::types::{Difficulty, Strategy};
 use crate::view::Want;
@@ -63,23 +63,10 @@ pub struct TreeAtomStatus {
     pub hard: QuizSlot,
 }
 
-/// Status of the quiz in a difficulty slot of an atom.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum QuizSlot {
-    Missing,
-    Authored,
-    Correct,
-}
-
 impl TreeAtomStatus {
     /// Return the status of atom `c` of `g` in `progress`.
     pub fn of(g: &Graph, progress: &PathProgress, c: &FlatConcept) -> Self {
-        let slot = |difficulty| match c.quizzes.iter().find(|q| q.difficulty == difficulty) {
-            None => QuizSlot::Missing,
-            Some(q) if progress.quiz_answered_correctly(&q.id) => QuizSlot::Correct,
-            Some(_) => QuizSlot::Authored,
-        };
+        let slot = |difficulty| progress.quiz_slot(c, difficulty);
         Self {
             lesson_taught: progress.lesson_taught(&c.id),
             complete: scheduler::is_atom_complete(g, progress, &c.id),

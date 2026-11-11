@@ -4,8 +4,9 @@ use std::collections::HashSet;
 
 use serde::Serialize;
 
-use crate::graph::Graph;
+use crate::graph::{FlatConcept, Graph};
 use crate::scheduler;
+use crate::types::Difficulty;
 
 /// Taught atoms and passed quizzes for a learning path.
 #[derive(Debug, Default, Clone)]
@@ -22,6 +23,34 @@ impl PathProgress {
     pub fn quiz_answered_correctly(&self, quiz_id: &str) -> bool {
         self.correct_quizzes.contains(quiz_id)
     }
+
+    /// Return the status of the `difficulty` slot of atom `c`.
+    pub fn quiz_slot(&self, c: &FlatConcept, difficulty: Difficulty) -> QuizSlot {
+        let mut quizzes = c
+            .quizzes
+            .iter()
+            .filter(|q| q.difficulty == difficulty)
+            .peekable();
+        if quizzes.peek().is_none() {
+            QuizSlot::Missing
+        } else if quizzes.any(|q| self.quiz_answered_correctly(&q.id)) {
+            QuizSlot::Correct
+        } else {
+            QuizSlot::Authored
+        }
+    }
+}
+
+/// Status of a difficulty slot of an atom on a path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuizSlot {
+    /// The atom has no quiz of the difficulty.
+    Missing,
+    /// The atom has a quiz of the difficulty, but no quiz of the difficulty has a passing answer.
+    Authored,
+    /// A quiz of the difficulty has an answer rated `hard`, `good`, or `easy`.
+    Correct,
 }
 
 /// Completion counts for the target atoms of a path.

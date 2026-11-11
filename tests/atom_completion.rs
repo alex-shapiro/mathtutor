@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 
-use mathtutor::progress::PathProgress;
+use mathtutor::progress::{PathProgress, QuizSlot};
 use mathtutor::scheduler::{self, Action};
 use mathtutor::types::{Difficulty, Rating};
 
@@ -510,10 +510,74 @@ fn is_atom_complete_true_with_all_three_correct() {
         ],
     )]);
     let events = vec![
+        taught("a"),
         common::answered("a.q1", Rating::Good),
         common::answered("a.q2", Rating::Easy),
         common::answered("a.q3", Rating::Good),
     ];
+    assert!(scheduler::is_atom_complete(
+        &g,
+        &common::progress_of(&events),
+        "a"
+    ));
+}
+
+#[test]
+fn passed_quizzes_do_not_complete_an_atom_whose_lesson_is_untaught() {
+    let g = graph_of(vec![common::complete_atom("a", &[])]);
+    let p = path_with(&["a"]);
+    let events = vec![
+        common::answered("a.q1", Rating::Good),
+        common::answered("a.q2", Rating::Good),
+        common::answered("a.q3", Rating::Good),
+    ];
+    let progress = common::progress_of(&events);
+
+    assert!(!scheduler::is_atom_complete(&g, &progress, "a"));
+    assert_present_lesson(
+        &scheduler::next_action(
+            &g,
+            &p,
+            &p.targets,
+            &progress,
+            NO_DUE,
+            &[],
+            scheduler::NextMode::Default,
+        ),
+        "a",
+    );
+}
+
+#[test]
+fn a_passed_second_quiz_of_a_difficulty_completes_the_slot() {
+    let mut a = common::complete_atom("a", &[]);
+    a.quizzes.insert(1, quiz("a.q4", Difficulty::Easy));
+    let g = graph_of(vec![a]);
+    let p = path_with(&["a"]);
+    let events = vec![taught("a"), common::answered("a.q4", Rating::Good)];
+    let progress = common::progress_of(&events);
+
+    assert_eq!(
+        progress.quiz_slot(&g.by_id["a"], Difficulty::Easy),
+        QuizSlot::Correct
+    );
+    assert_present_quiz(
+        &scheduler::next_action(
+            &g,
+            &p,
+            &p.targets,
+            &progress,
+            NO_DUE,
+            &[],
+            scheduler::NextMode::Default,
+        ),
+        "a",
+        "a.q2",
+    );
+
+    let mut events = events;
+    events.push(common::answered("a.q2", Rating::Good));
+    events.push(common::answered("a.q3", Rating::Good));
     assert!(scheduler::is_atom_complete(
         &g,
         &common::progress_of(&events),
