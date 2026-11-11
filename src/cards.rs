@@ -5,8 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
 
-use crate::db::client::Txn;
-use crate::db::{Db, Op};
+use crate::db::{Db, Op, Txn};
 use crate::event_log::{Event, EventKind};
 use crate::schema::{self, CardRecord, TaughtRow};
 use crate::types::Rating;
@@ -208,9 +207,9 @@ impl TryFrom<CardRecord> for CardRow {
 pub async fn recompute(db: &Db, path_id: &str) -> Result<()> {
     let mut retry = db.client.retry();
     loop {
-        let mut txn = db.client.begin();
+        let mut txn = db.begin();
         let r = recompute_in(&mut txn, path_id).await;
-        if retry.finish(txn, r).await?.is_some() {
+        if retry.finish(txn.inner, r).await?.is_some() {
             return Ok(());
         }
     }

@@ -3,12 +3,15 @@
 pub mod ts;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub use baserunna_client::{self as client, Op, OpResult, Row, Transport};
 
-use crate::schema::{self, SchemaState};
+use client::api::ErrorCode;
+
+use crate::schema::{self, IMPORT_STATE_KEY, ImportMarker, SchemaState};
 use crate::{Error, Result};
 
 pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
@@ -54,7 +57,8 @@ pub struct Db {
     url: Arc<str>,
     pub(crate) overlay_cache: Arc<Mutex<Option<crate::view::CachedOverlay>>>,
     pub(crate) cache_file: Option<PathBuf>,
-    pub(crate) allow_open_import: bool,
+    allow_open_import: bool,
+    schema_checked: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for Db {
@@ -65,27 +69,45 @@ impl std::fmt::Debug for Db {
     }
 }
 
-impl Db {
-    /// Connect to an existing database, or fail with [`Error::DatabaseNotFound`] if it does not exist.
-    pub async fn open(cfg: &DbConfig) -> Result<Self> {
-        let db = Self::connect(cfg)?;
-        match schema::state(&db.client).await? {
-            SchemaState::Current => Ok(db),
-            other => Err(db.schema_error(other)),
-        }
+/// Checks that a request runs before its own operations.
+struct Gate {
+    /// Fail if an import into the database is open.
+    import: bool,
+    /// Fail if the database does not exist or has a different schema version.
+    schema: bool,
+}
+
+impl Gate {
+    fn ops(&self, ops: &[Op]) -> Vec<Op> {
+        let schema = self.schema.then(schema::version_op);
+        let import = self.import.then(|| Op::get(IMPORT_STATE_KEY));
+        schema
+            .into_iter()
+            .chain(import)
+            .chain(ops.iter().cloned())
+            .collect()
     }
 
+    fn len(&self) -> usize {
+        usize::from(self.schema) + usize::from(self.import)
+    }
+}
+
+impl Db {
     /// Create the database and its tables if they do not exist, and return `true` if this call created the database.
     pub async fn create_if_missing(&self) -> Result<bool> {
         let state = schema::state(&self.client).await?;
         let created = state == SchemaState::NoDatabase;
         match state {
-            SchemaState::Current => return Ok(false),
+            SchemaState::Current => {}
             SchemaState::Other(_) => return Err(self.schema_error(state)),
-            SchemaState::NoDatabase => self.client.ensure().await?,
-            SchemaState::NoTables => {}
+            SchemaState::NoDatabase => {
+                self.client.ensure().await?;
+                schema::create_tables(&self.client).await?;
+            }
+            SchemaState::NoTables => schema::create_tables(&self.client).await?,
         }
-        schema::create_tables(&self.client).await?;
+        self.schema_checked.store(true, Ordering::Relaxed);
         Ok(created)
     }
 
@@ -131,23 +153,79 @@ impl Db {
         }
     }
 
-    /// Read `ops` at the latest version.
+    fn gate(&self) -> Gate {
+        Gate {
+            import: !self.allow_open_import,
+            schema: !self.schema_checked.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Check the results of `gate` at the front of `results` and return the remaining results.
+    fn pass_gate(&self, gate: &Gate, mut results: Vec<OpResult>) -> Result<Vec<OpResult>> {
+        let rest = results.split_off(gate.len().min(results.len()));
+        let mut checks = results.into_iter();
+        if gate.schema {
+            let entry = checks.next().map(OpResult::entry).transpose()?.flatten();
+            match SchemaState::from_entry(entry.as_ref()) {
+                SchemaState::Current => self.schema_checked.store(true, Ordering::Relaxed),
+                other => return Err(self.schema_error(other)),
+            }
+        }
+        if gate.import {
+            let entry = checks.next().map(OpResult::entry).transpose()?.flatten();
+            if ImportMarker::from_entry(entry)? == Some(ImportMarker::Open) {
+                return Err(Error::ImportInProgress);
+            }
+        }
+        Ok(rest)
+    }
+
+    /// Return the error for a failed request, and report a missing database instead of a missing table or stream.
+    async fn gate_failure(&self, gate: &Gate, e: client::Error) -> Error {
+        if !gate.schema || e.code() != Some(ErrorCode::NotFound) {
+            return e.into();
+        }
+        match schema::state(&self.client).await {
+            Ok(SchemaState::Current) => {
+                self.schema_checked.store(true, Ordering::Relaxed);
+                e.into()
+            }
+            Ok(other) => self.schema_error(other),
+            Err(check) => check,
+        }
+    }
+
+    /// Read `ops` at the latest version after the database and import checks.
     pub(crate) async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
-        self.client
-            .read(ops)
-            .await
-            .map_err(|e| Error::from(e).into_not_applied())
+        let gate = self.gate();
+        let all = gate.ops(ops);
+        if all.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self.client.read(&all).await {
+            Ok(results) => self.pass_gate(&gate, results),
+            Err(e) => Err(self.gate_failure(&gate, e).await.into_not_applied()),
+        }
     }
 
-    /// Read `op` at the latest version.
+    /// Read `op` at the latest version after the database and import checks.
     pub(crate) async fn read_one(&self, op: Op) -> Result<OpResult> {
-        self.client
-            .read_one(op)
-            .await
-            .map_err(|e| Error::from(e).into_not_applied())
+        let mut results = self.read(std::slice::from_ref(&op)).await?;
+        results
+            .pop()
+            .ok_or_else(|| Error::BadRow("read returned no result".into()))
     }
 
-    /// Create a client handle without performing network I/O; the database and tables must already exist.
+    /// Begin a transaction whose first request runs the database and import checks.
+    pub(crate) fn begin(&self) -> Txn {
+        Txn {
+            inner: self.client.begin(),
+            gate: Some(self.gate()),
+            db: self.clone(),
+        }
+    }
+
+    /// Create a handle without network I/O. The first request fails with [`Error::DatabaseNotFound`] if the database does not exist.
     pub fn connect(cfg: &DbConfig) -> Result<Self> {
         Ok(Self::with_transport(cfg, cfg.transport()?))
     }
@@ -168,12 +246,46 @@ impl Db {
             overlay_cache: Arc::new(Mutex::new(cached)),
             cache_file,
             allow_open_import: false,
+            schema_checked: Arc::default(),
         }
     }
 
     /// Return the Baserunna client of this database.
     pub fn client(&self) -> &client::Client {
         self.client.client()
+    }
+}
+
+/// Serializable transaction whose first request runs the database and import checks.
+pub(crate) struct Txn {
+    pub(crate) inner: client::Txn,
+    gate: Option<Gate>,
+    db: Db,
+}
+
+impl Txn {
+    /// Execute `ops` in the transaction.
+    pub(crate) async fn run(&mut self, ops: &[Op]) -> Result<Vec<OpResult>> {
+        let Some(gate) = self.gate.take() else {
+            return Ok(self.inner.run(ops).await?);
+        };
+        match self.inner.run(&gate.ops(ops)).await {
+            Ok(results) => self.db.pass_gate(&gate, results),
+            Err(e) => Err(self.db.gate_failure(&gate, e).await),
+        }
+    }
+
+    /// Execute `op` in the transaction.
+    pub(crate) async fn run_one(&mut self, op: Op) -> Result<OpResult> {
+        let mut results = self.run(std::slice::from_ref(&op)).await?;
+        results
+            .pop()
+            .ok_or_else(|| Error::BadRow("transaction returned no result".into()))
+    }
+
+    /// Queue write operations to send with the next request or the commit.
+    pub(crate) fn write(&mut self, ops: impl IntoIterator<Item = Op>) {
+        self.inner.write(ops);
     }
 }
 

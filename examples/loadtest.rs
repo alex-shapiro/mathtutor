@@ -629,7 +629,11 @@ async fn main() {
             ..base.clone()
         };
         let db_name = db;
-        Db::open(&cfg).await.expect("open");
+        Db::connect(&cfg)
+            .expect("connect")
+            .create_if_missing()
+            .await
+            .expect("create database");
         let transport = Observed {
             inner: cfg.transport().expect("transport"),
             observe: observer.clone(),

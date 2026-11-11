@@ -490,6 +490,18 @@ async fn open_import_blocks_a_handle_opened_before_it_until_it_verifies() {
         .await
         .unwrap_err();
     assert!(matches!(write, Error::ImportInProgress), "{write}");
+    let recent = db.snapshot(&Want::path(None)).await.unwrap_err();
+    let events = event_log::load(&db, "p_a").await.unwrap_err();
+    let missing_stream = event_log::load(&db, "p_none").await.unwrap_err();
+    let recompute = cards::recompute(&db, "p_a").await.unwrap_err();
+    for e in [recent, events, missing_stream, recompute] {
+        assert!(matches!(e, Error::ImportInProgress), "{e}");
+    }
+    #[cfg(feature = "mcp")]
+    {
+        let token = mathtutor::mcp::oauth::validate_access_token(&db, "token").await;
+        assert!(matches!(token, Err(Error::ImportInProgress)), "{token:?}");
+    }
 
     let r = import(legacy(), &db).await.expect("resume");
     assert!(r.mismatches.is_empty(), "{:?}", r.mismatches);

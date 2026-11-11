@@ -168,7 +168,10 @@ pub async fn load(db: &Db, path_id: &str) -> Result<Vec<Event>> {
     let mut out = Vec::new();
     loop {
         let page = match db.read_one(op.clone()).await {
-            Err(Error::Baserunna(e)) if e.code() == Some(ErrorCode::NotFound) => return Ok(out),
+            Err(Error::Baserunna(e)) if e.code() == Some(ErrorCode::NotFound) => {
+                db.read(&[]).await?;
+                return Ok(out);
+            }
             other => other?,
         };
         let next = op.next_page(&page);

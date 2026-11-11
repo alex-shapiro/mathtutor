@@ -93,7 +93,7 @@ async fn real_main() -> ExitCode {
 
     let db = match db::DbConfig::from_env() {
         Ok(cfg) if creates_database(&cli.cmd) => create_db(&cfg).await,
-        Ok(cfg) => db::Db::open(&cfg).await,
+        Ok(cfg) => db::Db::connect(&cfg),
         Err(e) => Err(e),
     };
     let db = match db {

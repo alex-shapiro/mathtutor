@@ -19,8 +19,7 @@ use subtle::ConstantTimeEq;
 use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 
-use crate::db::client::Txn;
-use crate::db::{Db, Op};
+use crate::db::{Db, Op, Txn};
 use crate::schema::{OAuthAccessToken, OAuthClient, OAuthCode, OAuthCodeUse, OAuthRefreshToken};
 
 const AUTHORIZATION_CODE_TTL: Duration = Duration::seconds(60);
@@ -364,9 +363,9 @@ async fn token_authorization_code(
     // Consume the authorization code and issue tokens atomically to prevent replay.
     let mut retry = s.db.client.retry();
     let (access, refresh, stored_scope) = loop {
-        let mut txn = s.db.client.begin();
+        let mut txn = s.db.begin();
         let r = exchange_code(&mut txn, code, client_id, redirect_uri, verifier).await;
-        if let Some(r) = retry.finish(txn, r).await? {
+        if let Some(r) = retry.finish(txn.inner, r).await? {
             break r?;
         }
     };
@@ -393,9 +392,9 @@ async fn token_refresh(
     // Delete the presented refresh token and insert a new pair in the same transaction.
     let mut retry = s.db.client.retry();
     let (access, refresh, client_id, scope) = loop {
-        let mut txn = s.db.client.begin();
+        let mut txn = s.db.begin();
         let r = rotate_refresh(&mut txn, provided, &req).await;
-        if let Some(r) = retry.finish(txn, r).await? {
+        if let Some(r) = retry.finish(txn.inner, r).await? {
             break r?;
         }
     };
@@ -540,7 +539,6 @@ fn token_ops(access: &str, refresh: &str, client_id: &str, scope: Option<&str>) 
 /// Return the `client_id` for a non-expired access token, or `None` if unknown or expired.
 pub async fn validate_access_token(db: &Db, token: &str) -> Result<Option<String>, crate::Error> {
     let stored: Option<OAuthAccessToken> = db
-        .client
         .read_one(Op::get_row::<OAuthAccessToken>(token))
         .await?
         .row()?;
@@ -550,8 +548,7 @@ pub async fn validate_access_token(db: &Db, token: &str) -> Result<Option<String
 }
 
 async fn load_client(db: &Db, client_id: &str) -> Result<OAuthClient, OAuthError> {
-    db.client
-        .read_one(Op::get_row::<OAuthClient>(client_id))
+    db.read_one(Op::get_row::<OAuthClient>(client_id))
         .await?
         .row()?
         .ok_or_else(|| OAuthError::invalid_request("unknown client_id"))

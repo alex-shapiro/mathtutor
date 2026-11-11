@@ -9,9 +9,8 @@ use serde_json::{Map, Value as Json};
 
 use crate::answer::atom_from_quiz_id;
 use crate::cards::{self, CardState};
-use crate::db::client::Txn;
 use crate::db::client::api::PAGE_MAX;
-use crate::db::{Db, Op, ts};
+use crate::db::{Db, Op, Txn, ts};
 use crate::event_log::{self, Event, EventKind, EventPayload};
 use crate::graph::Quiz;
 use crate::overlay::{Edit, Overlay};
@@ -472,9 +471,9 @@ pub struct Report {
 async fn claim_import_target(db: &Db) -> Result<()> {
     let mut retry = db.client.retry();
     loop {
-        let mut txn = db.client.begin();
+        let mut txn = db.begin();
         let r = claim_import_target_in(&mut txn).await;
-        if retry.finish(txn, r).await?.is_some() {
+        if retry.finish(txn.inner, r).await?.is_some() {
             return Ok(());
         }
     }

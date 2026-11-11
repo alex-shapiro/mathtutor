@@ -10,7 +10,8 @@ use chrono::{Duration, Utc};
 use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, Event, EventKind, EventPayload};
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
-use mathtutor::{Error, answer, cards, overlay, store};
+use mathtutor::view::Want;
+use mathtutor::{Error, answer, cards, overlay, path, store};
 
 mod common;
 
@@ -52,35 +53,87 @@ async fn create_if_missing_creates_the_database_and_every_table_once() {
         !db.create_if_missing().await.unwrap(),
         "second call finds it"
     );
-    Db::open(&cfg).await.expect("open after creation");
+    let fresh = Db::connect(&cfg).unwrap();
+    fresh.snapshot(&Want::path(None)).await.expect("read");
 }
 
-#[tokio::test]
-async fn open_rejects_a_missing_database_without_creating_it() {
-    let cfg = common::fresh_config();
-
-    let e = Db::open(&cfg).await.unwrap_err();
-
+/// Assert that `e` reports the missing database of `cfg`.
+fn assert_database_not_found(e: &Error, cfg: &DbConfig) {
     let message = e.to_string();
     assert!(matches!(e, Error::DatabaseNotFound { .. }), "{e:?}");
     assert!(message.contains(&format!("'{}'", cfg.db)), "{message}");
     assert!(message.contains(&cfg.url), "{message}");
     assert!(message.contains("BASERUNNA_DB"), "{message}");
     assert_eq!(e.exit_code(), 2);
-    let client = Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
-    let info = client.db(&cfg.db).info().await;
-    assert!(info.is_err(), "open must not create the database: {info:?}");
 }
 
 #[tokio::test]
-async fn open_rejects_a_database_without_math_tutor_tables() {
+async fn commands_reject_a_missing_database_without_creating_it() {
+    let cfg = common::fresh_config();
+    let db = Db::connect(&cfg).unwrap();
+
+    let recent = db.snapshot(&Want::path(None)).await.unwrap_err();
+    let explicit = path::cmd_path_strategy(&db, Some(PATH_ID), Strategy::TopDown)
+        .await
+        .unwrap_err();
+    let events = event_log::load(&db, PATH_ID).await.unwrap_err();
+
+    for e in [recent, explicit, events] {
+        assert_database_not_found(&e, &cfg);
+    }
+    let client = Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
+    let info = client.db(&cfg.db).info().await;
+    assert!(
+        info.is_err(),
+        "a command must not create the database: {info:?}"
+    );
+}
+
+#[tokio::test]
+async fn commands_reject_a_database_without_math_tutor_tables() {
     let cfg = common::fresh_config();
     let client = Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
     client.db(&cfg.db).ensure().await.unwrap();
+    let db = Db::connect(&cfg).unwrap();
 
-    let e = Db::open(&cfg).await.unwrap_err();
+    let e = db.snapshot(&Want::path(Some(PATH_ID))).await.unwrap_err();
 
-    assert!(matches!(e, Error::DatabaseNotFound { .. }), "{e:?}");
+    assert_database_not_found(&e, &cfg);
+}
+
+#[tokio::test]
+async fn commands_check_the_database_in_their_first_request() {
+    let cfg = common::fresh_config();
+    let seeded = common::create_db(&cfg).await;
+    common::seed_path(&seeded, PATH_ID, &[], Strategy::BottomUp).await;
+
+    let (db, traffic) = counting_db(&cfg);
+    path::cmd_path_strategy(&db, Some(PATH_ID), Strategy::TopDown)
+        .await
+        .unwrap();
+    assert_eq!(
+        traffic.requests.load(Ordering::Relaxed),
+        2,
+        "a write to a named path reads and commits"
+    );
+
+    let (db, traffic) = counting_db(&cfg);
+    path::cmd_path_strategy(&db, None, Strategy::BottomUp)
+        .await
+        .unwrap();
+    assert_eq!(
+        traffic.requests.load(Ordering::Relaxed),
+        3,
+        "a write to the most recent path scans activity, reads, and commits"
+    );
+
+    let (db, traffic) = counting_db(&cfg);
+    db.snapshot(&Want::path(Some(PATH_ID))).await.unwrap();
+    assert_eq!(
+        traffic.requests.load(Ordering::Relaxed),
+        1,
+        "a read sends 1 request"
+    );
 }
 
 #[tokio::test]
@@ -129,7 +182,7 @@ async fn opening_an_existing_database_preserves_data() {
     })
     .await;
 
-    let db = Db::open(&cfg).await.expect("open");
+    let db = Db::connect(&cfg).unwrap();
     assert_eq!(table_names(&cfg).await, TABLES);
     let ps = common::path_state(&db, PATH_ID).await;
     assert_eq!(ps.file.goal, "test goal");
@@ -313,10 +366,17 @@ async fn recompute_reproduces_incremental_rows_exactly() {
     assert_eq!(q1.recent, [Rating::Good, Rating::Again]);
 }
 
-/// Transport that counts response bytes.
+/// Requests and response bytes that a [`CountingTransport`] observes.
+#[derive(Default)]
+struct Traffic {
+    requests: AtomicUsize,
+    received: AtomicUsize,
+}
+
+/// Transport that counts requests and response bytes.
 struct CountingTransport {
     inner: HttpTransport,
-    received: Arc<AtomicUsize>,
+    traffic: Arc<Traffic>,
 }
 
 impl Transport for CountingTransport {
@@ -325,22 +385,23 @@ impl Transport for CountingTransport {
         req: http::Request<Bytes>,
     ) -> BoxFuture<'_, Result<http::Response<Bytes>, TransportError>> {
         Box::pin(async move {
+            self.traffic.requests.fetch_add(1, Ordering::Relaxed);
             let resp = self.inner.send(req).await?;
-            self.received
+            self.traffic
+                .received
                 .fetch_add(resp.body().len(), Ordering::Relaxed);
             Ok(resp)
         })
     }
 }
 
-fn counting_db(cfg: &DbConfig) -> (Db, Arc<AtomicUsize>) {
-    let received = Arc::new(AtomicUsize::new(0));
-    let inner = cfg.transport().unwrap();
+fn counting_db(cfg: &DbConfig) -> (Db, Arc<Traffic>) {
+    let traffic = Arc::<Traffic>::default();
     let t = CountingTransport {
-        inner,
-        received: received.clone(),
+        inner: cfg.transport().unwrap(),
+        traffic: traffic.clone(),
     };
-    (Db::with_transport(cfg, t), received)
+    (Db::with_transport(cfg, t), traffic)
 }
 
 #[tokio::test]
@@ -354,7 +415,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
     })
     .await;
 
-    let (reader, received) = counting_db(&cfg);
+    let (reader, traffic) = counting_db(&cfg);
     let read = |db: &Db| {
         let db = db.clone();
         async move {
@@ -368,7 +429,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
         first.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
         Some(body.as_str())
     );
-    let cold = received.swap(0, Ordering::Relaxed);
+    let cold = traffic.received.swap(0, Ordering::Relaxed);
     assert!(
         cold > 20_000,
         "first read downloads the overlay ({cold} bytes)"
@@ -379,7 +440,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
         second.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
         Some(body.as_str())
     );
-    let warm = received.swap(0, Ordering::Relaxed);
+    let warm = traffic.received.swap(0, Ordering::Relaxed);
     assert!(
         warm < 2_000,
         "a valid cache skips the overlay ({warm} bytes)"
@@ -441,7 +502,7 @@ async fn quiz_ids_stay_unique_under_concurrent_authoring() {
 async fn own_overlay_writes_keep_the_cache_valid() {
     let cfg = common::fresh_config();
     common::create_db(&cfg).await;
-    let (db, received) = counting_db(&cfg);
+    let (db, traffic) = counting_db(&cfg);
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
     let body = "y".repeat(20_000);
     store::cmd_lesson_upsert(&db, "fnd.1.1.1", body.clone(), Some(PATH_ID), None)
@@ -463,13 +524,13 @@ async fn own_overlay_writes_keep_the_cache_valid() {
     store::cmd_quiz_delete(&db, &quiz, Some(PATH_ID), None)
         .await
         .unwrap();
-    received.store(0, Ordering::Relaxed);
+    traffic.received.store(0, Ordering::Relaxed);
 
     let view = db
         .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
         .await
         .unwrap();
-    let warm = received.load(Ordering::Relaxed);
+    let warm = traffic.received.load(Ordering::Relaxed);
     assert!(
         warm < 2_000,
         "the writer's cache stays valid ({warm} bytes)"
@@ -673,7 +734,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         .unwrap();
     drop(first);
 
-    let (second, received) = counting_db(&cfg);
+    let (second, traffic) = counting_db(&cfg);
     let view = second
         .snapshot(&mathtutor::view::Want::path(Some(PATH_ID)))
         .await
@@ -682,7 +743,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
         Some(body.as_str())
     );
-    let warm = received.swap(0, Ordering::Relaxed);
+    let warm = traffic.received.swap(0, Ordering::Relaxed);
     assert!(warm < 2_000, "the disk copy was used ({warm} bytes)");
 
     let other = Db::connect(&DbConfig {
