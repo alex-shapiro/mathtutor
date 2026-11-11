@@ -349,9 +349,8 @@ async fn initialize_returns_server_info_and_capabilities() {
         "prompts capability advertised"
     );
     assert_eq!(
-        result["serverInfo"]["name"].as_str().unwrap(),
-        "rmcp",
-        "name comes from rmcp's build env helper"
+        result["serverInfo"],
+        json!({ "name": "mathtutor", "version": env!("CARGO_PKG_VERSION") })
     );
 
     server.stop().await;

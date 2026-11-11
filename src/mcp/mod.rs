@@ -416,7 +416,10 @@ impl ServerHandler for MathTutorServer {
             .build();
         ServerInfo::new(caps)
             .with_protocol_version(ProtocolVersion::V_2025_06_18)
-            .with_server_info(Implementation::from_build_env())
+            .with_server_info(Implementation::new(
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION"),
+            ))
             .with_instructions(
                 "Math Tutor MCP server. Call the `mathtutor-playbook` prompt for the \
                  full operator playbook before invoking tools.",
