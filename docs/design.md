@@ -221,7 +221,7 @@ atoms:
 
 The curriculum graph is embedded into the binary at build time from `curriculum/graph/`. To load an external curriculum directory instead, pass `--graph DIR` before the command, as in `mt --graph DIR path next`, or set `MT_GRAPH`. Every command of the process, including `mt mcp`, uses this curriculum. `mt graph check -p DIR` validates the files in `DIR`.
 
-User state is stored in a Baserunna database configured via `BASERUNNA_DB`, `BASERUNNA_URL`, and `BASERUNNA_TOKEN`. `BASERUNNA_DB` defaults to `mathtutor`, and `BASERUNNA_URL` defaults to `https://baserunna.fly.dev`. If the server rejects `BASERUNNA_TOKEN`, the command names the server URL and exits with code `2`. If the key is limited to another database, or is read-only and the command writes, the command names the database, the server, and the key limits to check, and exits with code `2`. Only `mt path new` and `mt import-turso` create a missing database, and each reports the creation. If the creation stops before it completes, the next run completes it. Other commands fail with exit code `2` if the database does not exist, so a wrong `BASERUNNA_DB` cannot start a second learner history. `mt mcp` checks the database at startup and stops if it does not exist. It creates the authorization tables if they are missing.
+User state is stored in a Baserunna database configured via `BASERUNNA_DB`, `BASERUNNA_URL`, and `BASERUNNA_TOKEN`. `BASERUNNA_DB` defaults to `mathtutor`, and `BASERUNNA_URL` defaults to `https://baserunna.fly.dev`. If the server rejects `BASERUNNA_TOKEN`, the command names the server URL and exits with code `2`. If the key is limited to another database, or is read-only and the command writes, the command names the database, the server, and the key limits to check, and exits with code `2`. Only `mt path new` and `mt import-turso` create a missing database, and each reports the creation. Other commands fail with exit code `2` if the database does not exist, so a wrong `BASERUNNA_DB` cannot start a second learner history. Every command that reads or writes learner state creates the tables in an existing database that has none, such as a database that the Baserunna console created. If the creation stops before it completes, the next command completes it. `mt mcp` checks the database at startup and stops if it does not exist. It creates the authorization tables if they are missing.
 
 | Data                   | Storage type             | Purpose                                                            |
 | ---------------------- | ------------------------ | ------------------------------------------------------------------ |
@@ -251,10 +251,10 @@ A Baserunna API key can have two limits: a single database and read-only access.
 
 Use this setup so that a leaked key cannot delete the learner history:
 
-1. Create a temporary key without a database limit. Use it for the first `mt path new` or `mt import-turso`, which creates the database.
+1. Create the database. Either click "Create database" in the web console, or create a temporary key without a database limit and use it for the first `mt path new` or `mt import-turso`, which creates the database.
 2. Create a key limited to the database for the MCP server, and set it as `BASERUNNA_TOKEN` of the server.
 3. Create a separate key limited to the database for each device. To retire a device, or after a leak, delete only its key.
-4. Delete the temporary key.
+4. Delete the temporary key, if you created one.
 
 Do not make these keys read-only, because every command that teaches writes events. A key limited to the database can still drop tables and delete or trim the event streams, because Baserunna gives these actions to every writer. Baserunna also has no backup. `TODO.md` tracks both problems.
 

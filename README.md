@@ -22,7 +22,12 @@ Set these environment variables before you run a command that reads or writes le
 - `BASERUNNA_DB`: database name (default: `mathtutor`).
 - `BASERUNNA_URL`: server URL (default: `https://baserunna.fly.dev`).
 
-The first `mt path new` creates the database. Only a key without a database limit can create a database, and that key can also delete it. After the first run, give each device and server its own key that is limited to the database. See "Baserunna keys" in `docs/design.md`.
+Create the database in one of two ways:
+
+- **In the console:** Click "Create database" in the console, and use the name that `BASERUNNA_DB` gives. Then create a key that is limited to this database for each device and server. The first command creates the tables.
+- **With `mt`:** The first `mt path new` or `mt import-turso` creates the database. Only a key without a database limit can create a database, and that key can also delete it. After the first run, give each device and server its own key that is limited to the database.
+
+See "Baserunna keys" in `docs/design.md`.
 
 `mt instruct`, `mt graph check`, and `mt mcp tools` run without these variables. `mt graph list` and `mt graph show` also run without them if `--path` is omitted.
 

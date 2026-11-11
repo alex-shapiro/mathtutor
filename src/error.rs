@@ -76,9 +76,7 @@ pub enum Error {
     )]
     TokenRejected { url: String },
 
-    #[error(
-        "database '{db}' at {url} does not exist or does not hold Math Tutor data; check BASERUNNA_DB and BASERUNNA_URL"
-    )]
+    #[error("database '{db}' at {url} does not exist; check BASERUNNA_DB and BASERUNNA_URL")]
     DatabaseNotFound { db: String, url: String },
 
     #[error(
@@ -114,8 +112,11 @@ pub enum Error {
         expected: &'static str,
     },
 
-    #[error("database '{db}' has no authorization tables; restart mt mcp to create them")]
-    AuthTablesMissing { db: String },
+    #[error("database '{db}' has no {tables} tables")]
+    TablesMissing {
+        db: String,
+        tables: crate::schema::TableSet,
+    },
 
     #[error("malformed row: {0}")]
     BadRow(String),
@@ -287,9 +288,9 @@ impl Error {
             Error::Baserunna(baserunna_client::Error::Decode { .. })
             | Error::BadRow(_)
             | Error::CardsCorrupt(_) => ErrorKind::Corrupt,
-            Error::Baserunna(_)
-            | Error::SchemaMismatch { .. }
-            | Error::AuthTablesMissing { .. } => ErrorKind::Database,
+            Error::Baserunna(_) | Error::SchemaMismatch { .. } | Error::TablesMissing { .. } => {
+                ErrorKind::Database
+            }
             Error::Json(_) => ErrorKind::Json,
             Error::Fsrs(_) => ErrorKind::Fsrs,
             Error::Turso(_)

@@ -124,6 +124,17 @@ impl Db {
         Ok(created)
     }
 
+    /// Create the tables of each table set that this handle checks and that the existing database does not hold.
+    async fn create_missing_tables(&self) -> Result<()> {
+        for &set in self.checked_sets() {
+            let state = schema::state(&self.client, set).await?;
+            if state.schema == SchemaState::NoTables {
+                schema::create_tables(&self.client, set).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Fail with [`Error::DatabaseNotFound`] or [`Error::SchemaMismatch`] unless the database holds the learner tables of this release.
     pub async fn require_database(&self) -> Result<()> {
         let state = schema::state(&self.client, TableSet::Learner)
@@ -166,7 +177,7 @@ impl Db {
                 found,
                 expected: set.version(),
             },
-            (TableSet::Auth, SchemaState::NoTables) => Error::AuthTablesMissing { db },
+            (_, SchemaState::NoTables) => Error::TablesMissing { db, tables: set },
             _ => Error::DatabaseNotFound {
                 db,
                 url: self.url.to_string(),
@@ -301,8 +312,20 @@ impl Db {
         e.into()
     }
 
-    /// Read `ops` at the latest version after the database and import checks.
+    /// Read `ops` at the latest version after the database and import checks, and create the missing tables first.
     pub(crate) async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
+        match self.read_once(ops).await {
+            Err(Error::TablesMissing { .. }) => {
+                self.create_missing_tables()
+                    .await
+                    .map_err(|e| self.explain_key_error(e).into_not_applied())?;
+                self.read_once(ops).await
+            }
+            result => result,
+        }
+    }
+
+    async fn read_once(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
         match self.client.read(&self.gated(ops)).await {
             Ok(results) => self.pass_gate(results),
             Err(e) => Err(self.gate_failure(e).await.into_not_applied()),
@@ -388,6 +411,7 @@ impl Db {
         Txn {
             inner: self.client.begin(),
             checked: false,
+            created_tables: false,
             db: self.clone(),
         }
     }
@@ -396,6 +420,7 @@ impl Db {
     pub(crate) fn retry(&self) -> Retry {
         Retry {
             inner: self.client.retry(),
+            created_tables: false,
         }
     }
 
@@ -446,10 +471,14 @@ pub(crate) use run_txn;
 /// Retry state of a [`run_txn`] loop.
 pub(crate) struct Retry {
     inner: client::Retry,
+    /// An attempt of this loop created missing tables.
+    created_tables: bool,
 }
 
 impl Retry {
     /// Commit `txn` if `result` is `Ok`, or abort it, and return `None` if the attempt must restart.
+    ///
+    /// An attempt restarts once after its transaction created missing tables.
     pub(crate) async fn finish<T, E>(
         &mut self,
         mut txn: Txn,
@@ -462,13 +491,16 @@ impl Retry {
             Ok(out) => txn.check_gate().await.map(|()| out).map_err(E::from),
             Err(e) => Err(e),
         };
+        let restart = txn.created_tables && !self.created_tables;
+        self.created_tables |= txn.created_tables;
         let db = txn.db.clone();
-        self.inner.finish(txn.inner, result).await.map_err(|e| {
-            match e.client_error().and_then(|c| db.key_error(c)) {
+        match self.inner.finish(txn.inner, result).await {
+            Err(_) if restart => Ok(None),
+            done => done.map_err(|e| match e.client_error().and_then(|c| db.key_error(c)) {
                 Some(key_error) => E::from(key_error),
                 None => e,
-            }
-        })
+            }),
+        }
     }
 }
 
@@ -477,6 +509,8 @@ pub(crate) struct Txn {
     inner: client::Txn,
     /// A request of this transaction ran the database and import checks.
     checked: bool,
+    /// The checks of this transaction found missing tables and created them.
+    created_tables: bool,
     db: Db,
 }
 
@@ -491,10 +525,18 @@ impl Txn {
                 .map_err(|e| self.db.explain_key_error(e.into()));
         }
         self.checked = true;
-        match self.inner.run(&self.db.gated(ops)).await {
+        let result = match self.inner.run(&self.db.gated(ops)).await {
             Ok(results) => self.db.pass_gate(results),
             Err(e) => Err(self.db.gate_failure(e).await),
+        };
+        if let Err(Error::TablesMissing { .. }) = &result {
+            self.db
+                .create_missing_tables()
+                .await
+                .map_err(|e| self.db.explain_key_error(e))?;
+            self.created_tables = true;
         }
+        result
     }
 
     /// Run the database and import checks if no request of this transaction has run them.

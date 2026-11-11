@@ -15,7 +15,7 @@ use mathtutor::path::PathFile;
 use mathtutor::schema::TableSet;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
 use mathtutor::view::Want;
-use mathtutor::{Error, answer, cards, overlay, path, store};
+use mathtutor::{Error, answer, cards, overlay, path, state, store};
 
 mod common;
 
@@ -153,15 +153,27 @@ async fn commands_reject_a_missing_database_without_creating_it() {
 }
 
 #[tokio::test]
-async fn commands_reject_a_database_without_math_tutor_tables() {
-    let cfg = common::fresh_config();
-    let client = Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
-    client.db(&cfg.db).ensure().await.unwrap();
-    let db = Db::connect(&cfg).unwrap();
+async fn a_limited_key_creates_the_tables_in_a_database_that_the_console_created() {
+    let read_first = common::fresh_config();
+    let write_first = common::fresh_config();
+    for cfg in [&read_first, &write_first] {
+        raw_db(cfg).ensure().await.unwrap();
+    }
 
-    let e = db.snapshot(&Want::path(Some(PATH_ID))).await.unwrap_err();
+    let read_first = with_key(&read_first, Some(&read_first.db), false).await;
+    let e = state::compute_state(&Db::connect(&read_first).unwrap(), None)
+        .await
+        .unwrap_err();
+    assert!(matches!(e, Error::NoPath(None)), "{e:?}");
+    assert_eq!(table_names(&read_first).await, TABLES);
 
-    assert_database_not_found(&e, &cfg);
+    let write_first = with_key(&write_first, Some(&write_first.db), false).await;
+    let db = Db::connect(&write_first).unwrap();
+    path::cmd_path_new(&db, "g", &["fnd.1.1.1".into()], Strategy::BottomUp)
+        .await
+        .unwrap();
+    assert_eq!(table_names(&write_first).await, TABLES);
+    state::compute_state(&db, None).await.unwrap();
 }
 
 #[tokio::test]
@@ -255,7 +267,6 @@ async fn a_handle_checks_the_database_state_in_every_request() {
     assert!(matches!(e, Error::ImportInProgress), "{e:?}");
 
     raw.delete().await.unwrap();
-    raw.ensure().await.unwrap();
     let e = db.snapshot(&want).await.unwrap_err();
     assert_database_not_found(&e, &cfg);
 }
