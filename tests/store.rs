@@ -143,10 +143,7 @@ async fn repeated_lesson_upsert_after_a_lost_response_counts_one_teaching() {
         &["lesson", "upsert", NO_LESSON_ATOM, "--body", "body"],
     )
     .expect("valid args");
-    assert_eq!(
-        cli.cmd.operation().unknown_outcome_step(Surface::Cli),
-        "repeat the command"
-    );
+    assert_eq!(cli.cmd.recovery().step(Surface::Cli), "repeat the command");
     offline.store(false, Ordering::SeqCst);
     store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "body".into(), Some(common::PATH_ID))
         .await

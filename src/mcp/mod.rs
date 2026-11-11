@@ -435,7 +435,7 @@ fn encode<T: Serialize>(
         Err(e) => {
             let mut body = json!({ "error": e.message(Surface::Mcp), "kind": e.kind().name() });
             if e.outcome_is_unknown() {
-                body["next_step"] = json!(tool.operation().unknown_outcome_step(Surface::Mcp));
+                body["next_step"] = json!(tool.recovery().step(Surface::Mcp));
             }
             Ok(CallToolResult::structured_error(body))
         }
@@ -911,7 +911,7 @@ mod tests {
         assert_eq!(body["kind"], json!("outcome_unknown"));
         assert_eq!(
             body["next_step"],
-            json!(crate::surface::Operation::AnswerQuiz.unknown_outcome_step(Surface::Mcp))
+            json!(crate::surface::Recovery::GetNext.step(Surface::Mcp))
         );
     }
 

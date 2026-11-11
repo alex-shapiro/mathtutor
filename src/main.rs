@@ -44,7 +44,7 @@ async fn real_main() -> ExitCode {
                 .or_else(|| nonempty(std::env::var("MT_GRAPH").ok()).map(PathBuf::from)),
         ),
     };
-    let recovery = cli.cmd.operation().unknown_outcome_step(Surface::Cli);
+    let recovery = cli.cmd.recovery().step(Surface::Cli);
     match dispatch(&ctx, cli.cmd).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) if e.is_closed_stdout() => ExitCode::SUCCESS,

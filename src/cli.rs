@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use argh::FromArgs;
 
-use crate::surface::{Operation, Tool};
+use crate::surface::{Recovery, Tool};
 use crate::types;
 
 /// Manage math lessons and spaced-repetition quizzes over a curriculum graph.
@@ -69,11 +69,11 @@ impl Cmd {
         Some(tool)
     }
 
-    /// Return the operation of this command.
-    pub fn operation(&self) -> Operation {
+    /// Return the safe next step after this command fails with an unknown outcome.
+    pub fn recovery(&self) -> Recovery {
         match self {
-            Cmd::ImportTurso(_) => Operation::ImportTurso,
-            _ => self.tool().map_or(Operation::Repeatable, Tool::operation),
+            Cmd::ImportTurso(_) => Recovery::RunImportAgain,
+            _ => self.tool().map_or(Recovery::Repeat, Tool::recovery),
         }
     }
 }
@@ -543,7 +543,7 @@ mod tests {
                 let cmd = Mt::from_args(&["mt"], args).expect("valid args").cmd;
                 let tool = cmd.tool().expect("an agent command");
                 assert!(args.join(" ").starts_with(tool.cli()), "{tool:?}: {args:?}");
-                assert_eq!(cmd.operation(), tool.operation());
+                assert_eq!(cmd.recovery(), tool.recovery());
                 tool
             })
             .collect();
@@ -557,6 +557,6 @@ mod tests {
             assert_eq!(cmd.tool(), None);
         }
         let import = Mt::from_args(&["mt"], &["import-turso"]).unwrap().cmd;
-        assert_eq!(import.operation(), Operation::ImportTurso);
+        assert_eq!(import.recovery(), Recovery::RunImportAgain);
     }
 }

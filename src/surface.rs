@@ -109,12 +109,11 @@ impl Tool {
         }
     }
 
-    /// Return the operation of this command, which sets the safe step after an unknown outcome.
-    pub fn operation(self) -> Operation {
+    /// Return the safe next step after this command fails with an unknown outcome.
+    pub fn recovery(self) -> Recovery {
         match self {
-            Tool::NewPath => Operation::NewPath,
-            Tool::CreateQuiz => Operation::CreateQuiz,
-            Tool::AnswerQuiz => Operation::AnswerQuiz,
+            Tool::NewPath => Recovery::ListPathsFirst,
+            Tool::CreateQuiz | Tool::AnswerQuiz => Recovery::GetNext,
             Tool::GetPaths
             | Tool::SetStrategy
             | Tool::SubpathSet
@@ -127,7 +126,7 @@ impl Tool {
             | Tool::GetChildren
             | Tool::UpsertLesson
             | Tool::UpdateQuiz
-            | Tool::DeleteQuiz => Operation::Repeatable,
+            | Tool::DeleteQuiz => Recovery::Repeat,
         }
     }
 }
@@ -358,38 +357,36 @@ pub fn shell_word(s: &str) -> String {
     }
 }
 
-/// Command kind that sets the safe step after the command fails with an unknown outcome.
+/// Safe next step after a command fails with an unknown outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Operation {
-    ImportTurso,
-    NewPath,
-    CreateQuiz,
-    AnswerQuiz,
-    /// A command that has the same effect if it runs again.
-    Repeatable,
+pub enum Recovery {
+    /// Run the import again, which reports a completed import.
+    RunImportAgain,
+    /// List the paths, and create the path only if it is absent.
+    ListPathsFirst,
+    /// Ask for the next action, which shows whether the write applied, instead of a repeat that could apply it twice.
+    GetNext,
+    /// Repeat the command, which has the same effect if it runs again.
+    Repeat,
 }
 
-impl Operation {
-    /// Return the safe next step on `surface` after this operation fails with an unknown outcome.
-    pub fn unknown_outcome_step(self, surface: Surface) -> &'static str {
+impl Recovery {
+    /// Return the text of this step on `surface`.
+    pub fn step(self, surface: Surface) -> &'static str {
         match (self, surface) {
-            (Self::ImportTurso, _) => {
+            (Self::RunImportAgain, _) => {
                 "run `mt import-turso` again; a report that the import already completed means that it succeeded"
             }
-            (Self::NewPath, Surface::Cli) => {
+            (Self::ListPathsFirst, Surface::Cli) => {
                 "run `mt path list` and create the path only if it is absent"
             }
-            (Self::NewPath, Surface::Mcp) => {
+            (Self::ListPathsFirst, Surface::Mcp) => {
                 "call `get_paths` and call `new_path` only if the path is absent"
             }
-            (Self::CreateQuiz | Self::AnswerQuiz, Surface::Cli) => {
-                "run `mt path next` instead of repeating the command"
-            }
-            (Self::CreateQuiz | Self::AnswerQuiz, Surface::Mcp) => {
-                "call `get_next` instead of repeating the call"
-            }
-            (Self::Repeatable, Surface::Cli) => "repeat the command",
-            (Self::Repeatable, Surface::Mcp) => "repeat the call",
+            (Self::GetNext, Surface::Cli) => "run `mt path next` instead of repeating the command",
+            (Self::GetNext, Surface::Mcp) => "call `get_next` instead of repeating the call",
+            (Self::Repeat, Surface::Cli) => "repeat the command",
+            (Self::Repeat, Surface::Mcp) => "repeat the call",
         }
     }
 }
@@ -399,34 +396,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn writes_that_must_not_repeat_have_their_own_operation() {
-        assert_eq!(Tool::NewPath.operation(), Operation::NewPath);
-        assert_eq!(Tool::CreateQuiz.operation(), Operation::CreateQuiz);
-        assert_eq!(Tool::AnswerQuiz.operation(), Operation::AnswerQuiz);
-        assert_eq!(Tool::DeleteQuiz.operation(), Operation::Repeatable);
-        assert_eq!(Tool::GetNext.operation(), Operation::Repeatable);
+    fn writes_that_must_not_repeat_have_their_own_recovery() {
+        assert_eq!(Tool::NewPath.recovery(), Recovery::ListPathsFirst);
+        assert_eq!(Tool::CreateQuiz.recovery(), Recovery::GetNext);
+        assert_eq!(Tool::AnswerQuiz.recovery(), Recovery::GetNext);
+        assert_eq!(Tool::DeleteQuiz.recovery(), Recovery::Repeat);
+        assert_eq!(Tool::GetNext.recovery(), Recovery::Repeat);
     }
 
     #[test]
     fn steps_after_a_write_that_must_not_repeat_advance_instead() {
-        for op in [Operation::CreateQuiz, Operation::AnswerQuiz] {
-            assert!(
-                op.unknown_outcome_step(Surface::Cli)
-                    .contains("`mt path next`")
-            );
-            assert!(op.unknown_outcome_step(Surface::Mcp).contains("`get_next`"));
-        }
+        assert!(
+            Recovery::GetNext
+                .step(Surface::Cli)
+                .contains("`mt path next`")
+        );
+        assert!(Recovery::GetNext.step(Surface::Mcp).contains("`get_next`"));
     }
 
     #[test]
     fn mcp_steps_name_only_mcp_tools() {
-        for op in [
-            Operation::NewPath,
-            Operation::CreateQuiz,
-            Operation::AnswerQuiz,
-            Operation::Repeatable,
+        for recovery in [
+            Recovery::ListPathsFirst,
+            Recovery::GetNext,
+            Recovery::Repeat,
         ] {
-            assert!(!op.unknown_outcome_step(Surface::Mcp).contains("mt "));
+            assert!(!recovery.step(Surface::Mcp).contains("mt "));
         }
     }
 }
