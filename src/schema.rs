@@ -29,7 +29,7 @@ impl TableSet {
     pub fn version(self) -> &'static str {
         match self {
             TableSet::Learner => "3",
-            TableSet::Auth => "1",
+            TableSet::Auth => "2",
         }
     }
 
@@ -49,6 +49,7 @@ impl TableSet {
                 OAuthCode::new_table(),
                 OAuthAccessToken::new_table(),
                 OAuthRefreshToken::new_table(),
+                OAuthAddrCount::new_table(),
             ],
         }
     }
@@ -343,6 +344,18 @@ row_table! {
     }
 }
 
+row_table! {
+    /// Row in the `oauth_addr_counts` table: the events of one client address that one limit counts.
+    pub struct OAuthAddrCount in "oauth_addr_counts", primary key (key) {
+        /// Name of the limit and the client address, such as `failures/203.0.113.7`.
+        pub key: String,
+        pub n: u32,
+        /// Time that the count started or last changed.
+        #[serde(with = "ts")]
+        pub since: DateTime<Utc>,
+    }
+}
+
 /// Time after its last token grant at which the server deletes an OAuth client registration.
 pub(crate) const OAUTH_CLIENT_TTL: std::time::Duration = std::time::Duration::from_hours(30 * 24);
 
@@ -358,6 +371,8 @@ impl OAuthRow for OAuthCode {}
 impl OAuthRow for OAuthAccessToken {}
 #[cfg(feature = "mcp")]
 impl OAuthRow for OAuthRefreshToken {}
+#[cfg(feature = "mcp")]
+impl OAuthRow for OAuthAddrCount {}
 
 /// Schema state of a table set in a database.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -508,7 +523,7 @@ mod tests {
         );
         assert_eq!(
             pinned(TableSet::Auth),
-            ("1", "eaca2f10d9758fc0".into()),
+            ("2", "b32ff0d8fad27878".into()),
             "{hint}"
         );
     }

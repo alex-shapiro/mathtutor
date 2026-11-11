@@ -1483,6 +1483,80 @@ async fn repeated_incorrect_passwords_delay_the_next_sign_in() {
 }
 
 #[tokio::test]
+async fn the_sign_in_delay_and_an_open_form_survive_a_server_restart() {
+    let cfg = common::fresh_config();
+    let auth = AuthConfig {
+        admin_password: Some(ADMIN_PASSWORD.into()),
+        ..AuthConfig::default()
+    };
+    let first = spawn_server_on(cfg.clone(), auth.clone()).await;
+    let reg = register_client(&first, "Restarted").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&first, &reg.client_id, &pkce.challenge, None, None);
+    let form_html = oauth_client()
+        .get(&auth_url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    for _ in 0..5 {
+        assert_eq!(
+            submit_login(&first, &form_html, "wrong").await.status(),
+            401
+        );
+    }
+    first.stop().await;
+
+    let second = spawn_server_on(cfg, auth).await;
+    let res = submit_login(&second, &form_html, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 429, "the restart keeps the delay");
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let res = submit_login(&second, &form_html, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 303, "the restart keeps the form valid");
+    second.stop().await;
+}
+
+#[tokio::test]
+async fn an_expired_sign_in_form_shows_a_new_form() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Stale").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&server, &reg.client_id, &pkce.challenge, None, None);
+    let form_html = oauth_client()
+        .get(&auth_url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let stale_csrf = hidden_fields(&form_html)
+        .into_iter()
+        .find(|(name, _)| name == "csrf")
+        .unwrap()
+        .1;
+    let stale_html = form_html.replace(&stale_csrf, "1.AAAA");
+
+    let res = submit_login(&server, &stale_html, ADMIN_PASSWORD).await;
+
+    assert_eq!(res.status(), 400);
+    assert!(
+        res.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    let page = res.text().await.unwrap();
+    assert!(page.contains("This sign-in form expired."), "{page}");
+    let res = submit_login(&server, &page, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 303, "the new form signs in");
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn registrations_from_one_address_are_limited() {
     let server = spawn_oauth_server().await;
     for i in 0..10 {

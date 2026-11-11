@@ -31,7 +31,7 @@ The CLI on each device and the MCP server are full clients of the database. Each
 `/oauth/authorize` delays the next attempt from an address after 5 incorrect passwords. The wait doubles from 1 second up to a limit of 15 minutes, so an attacker at the limit can try about 4 passwords per hour from each address. The limit also applies to the administrator on the same address, and to every user behind the same NAT or `/64` IPv6 network. The server uses 15 minutes now.
 
 - **Shorter limit, such as 1 minute:** A user who mistypes many times waits less. An attacker can try about 60 passwords per hour from each address.
-- **Longer limit, such as 1 hour:** An attacker can try 1 password per hour from each address. A user who mistypes many times can wait up to 1 hour, or must restart the server.
+- **Longer limit, such as 1 hour:** An attacker can try 1 password per hour from each address. A user who mistypes many times can wait up to 1 hour.
 - **Add a global limit on failures from all addresses:** An attacker with many addresses gets few attempts. An attacker can lock out the administrator from every address.
 
 ## Default Baserunna server

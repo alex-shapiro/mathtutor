@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
 
 use axum::{
     Form, Json, Router,
@@ -22,7 +21,7 @@ use subtle::ConstantTimeEq;
 use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 
-use super::throttle::{self, ClientAddrSource, RegistrationLimit, SignInThrottle};
+use super::throttle::{self, AddrLimits};
 use crate::db::{Db, Op, Txn, run_txn};
 use crate::schema::{
     OAUTH_CLIENT_TTL, OAuthAccessToken, OAuthClient, OAuthCode, OAuthRefreshToken,
@@ -39,6 +38,11 @@ const UNUSED_CLIENT_TTL: Duration = Duration::days(1);
 /// Scope that gives access to the MCP tools, and the only scope that this server grants.
 const MCP_SCOPE: &str = "mcp";
 
+/// Label that separates the CSRF key from other keys that could derive from the same secret.
+const CSRF_KEY_LABEL: &[u8] = b"mt mcp sign-in form";
+
+type HmacSha256 = Hmac<Sha256>;
+
 /// Shared OAuth state for the Axum router.
 #[derive(Clone)]
 pub struct OAuthState {
@@ -46,28 +50,26 @@ pub struct OAuthState {
     admin_password: Arc<[u8]>,
     public_url: Arc<Url>,
     csrf_key: Arc<[u8; 32]>,
-    client_addrs: ClientAddrSource,
-    sign_in: Arc<SignInThrottle>,
-    registrations: Arc<RegistrationLimit>,
+    limits: AddrLimits,
 }
 
 impl OAuthState {
-    pub fn new(
+    /// Create the state of a server whose sign-in form signs its CSRF tokens with a key that derives from `server_secret`.
+    ///
+    /// Every server with the same `server_secret` accepts the forms of the others.
+    pub(crate) fn new(
         db: Db,
         admin_password: &str,
         public_url: Url,
-        client_addrs: ClientAddrSource,
+        limits: AddrLimits,
+        server_secret: &str,
     ) -> Self {
-        let mut csrf_key = [0u8; 32];
-        rand::rng().fill_bytes(&mut csrf_key);
         Self {
             db,
             admin_password: Arc::from(admin_password.as_bytes().to_vec().into_boxed_slice()),
             public_url: Arc::new(public_url),
-            csrf_key: Arc::new(csrf_key),
-            client_addrs,
-            sign_in: Arc::default(),
-            registrations: Arc::default(),
+            csrf_key: Arc::new(csrf_key(server_secret)),
+            limits,
         }
     }
 
@@ -148,8 +150,8 @@ async fn register(
     headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, OAuthError> {
-    let addr = s.client_addrs.client_addr(peer, &headers);
-    if let Err(wait) = s.registrations.try_register(addr, Instant::now()) {
+    let addr = s.limits.client_addr(peer, &headers);
+    if let Some(wait) = s.limits.try_register(addr).await? {
         tracing::warn!(%addr, "client registration limit reached");
         return Err(OAuthError::TooManyRequests(wait));
     }
@@ -255,10 +257,12 @@ async fn authorize_post(
     let scope = granted_scope(q.scope.as_deref())?;
     if !csrf_verify(&s.csrf_key, &q, &f.csrf) {
         tracing::warn!(client_id = %client.client_id, "csrf token rejected on authorize POST");
-        return Err(OAuthError::invalid_request("invalid or expired csrf token"));
+        let message = "This sign-in form expired. Enter the password again.";
+        let html = render_login_form(&q, &csrf_mint(&s.csrf_key, &q), Some(message));
+        return Ok((StatusCode::BAD_REQUEST, Html(html)).into_response());
     }
-    let addr = s.client_addrs.client_addr(peer, &headers);
-    if let Err(wait) = s.sign_in.try_attempt(addr, Instant::now()) {
+    let addr = s.limits.client_addr(peer, &headers);
+    if let Some(wait) = s.limits.try_credential(addr).await? {
         tracing::warn!(%addr, client_id = %client.client_id, "sign-in attempt delayed");
         let secs = throttle::retry_after_secs(wait);
         let unit = if secs == 1 { "second" } else { "seconds" };
@@ -277,7 +281,7 @@ async fn authorize_post(
         let html = render_login_form(&q, &csrf, Some("Incorrect password."));
         return Ok((StatusCode::UNAUTHORIZED, Html(html)).into_response());
     }
-    s.sign_in.record_success(addr);
+    s.limits.record_success(addr).await?;
 
     let secret = random_token();
     let code = OAuthCode {
@@ -770,6 +774,14 @@ pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 
+/// Return the key that signs the CSRF tokens of the sign-in form, derived from `server_secret`.
+fn csrf_key(server_secret: &str) -> [u8; 32] {
+    let mut mac =
+        HmacSha256::new_from_slice(server_secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(CSRF_KEY_LABEL);
+    mac.finalize().into_bytes().into()
+}
+
 fn csrf_mint(key: &[u8; 32], q: &AuthorizeQuery) -> String {
     let ts = Utc::now().timestamp();
     let mac_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(csrf_mac(key, ts, q));
@@ -795,7 +807,6 @@ fn csrf_verify(key: &[u8; 32], q: &AuthorizeQuery, token: &str) -> bool {
 
 // Length-prefix each field before hashing to prevent canonicalization ambiguity.
 fn csrf_mac(key: &[u8; 32], ts: i64, q: &AuthorizeQuery) -> Vec<u8> {
-    type HmacSha256 = Hmac<Sha256>;
     let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(&ts.to_be_bytes());
     for field in [
@@ -825,7 +836,7 @@ pub enum OAuthError {
     #[error("unsupported_grant_type: {0}")]
     UnsupportedGrantType(String),
     #[error("too_many_requests")]
-    TooManyRequests(std::time::Duration),
+    TooManyRequests(Duration),
     #[error(transparent)]
     Internal(#[from] crate::Error),
 }

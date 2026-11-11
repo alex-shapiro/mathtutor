@@ -520,6 +520,7 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
 
     let public_url = resolve_public_url(auth.public_url.as_deref(), socket_addr)?;
 
+    let limits = throttle::AddrLimits::new(&db, auth.client_addrs.clone());
     let auth_state = AuthState::new(&auth, &public_url, db.clone());
     // Run body logging after auth so unauthenticated requests are not buffered.
     let mut app = Router::new()
@@ -533,7 +534,8 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
             db.clone(),
             password,
             public_url.clone(),
-            auth.client_addrs.clone(),
+            limits.clone(),
+            &cfg.token,
         );
         app = app.merge(oauth::router(oauth_state));
     }

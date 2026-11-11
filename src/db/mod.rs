@@ -311,6 +311,12 @@ impl Db {
         self.commit(&[Op::insert_expiring(row, ttl)]).await
     }
 
+    /// Delete the OAuth row of type `R` with primary key `pk`.
+    #[cfg(feature = "mcp")]
+    pub(crate) async fn delete_oauth<R: OAuthRow>(&self, pk: &str) -> Result<()> {
+        self.commit(&[Op::delete_row::<R>(pk)]).await
+    }
+
     /// Store `clients` in one transaction, replacing a stored client with the same ID, and keep each for [`OAUTH_CLIENT_TTL`].
     pub(crate) async fn replace_oauth_clients(&self, clients: &[OAuthClient]) -> Result<()> {
         let ops: Vec<Op> = clients
