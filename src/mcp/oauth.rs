@@ -137,7 +137,7 @@ async fn register(
         redirect_uris: req.redirect_uris,
         created_at: Utc::now(),
     };
-    s.db.write([Op::insert(&client)]).await?;
+    s.db.insert_oauth(&client, None).await?;
 
     tracing::info!(
         client_id = %client.client_id,
@@ -241,7 +241,7 @@ async fn authorize_post(
         resource: q.resource.clone(),
         expires_at: Utc::now() + AUTHORIZATION_CODE_TTL,
     };
-    s.db.write([Op::insert_expiring(&code, std_ttl(AUTHORIZATION_CODE_TTL))])
+    s.db.insert_oauth(&code, Some(std_ttl(AUTHORIZATION_CODE_TTL)))
         .await?;
 
     tracing::info!(client_id = %client.client_id, "authorization code issued");

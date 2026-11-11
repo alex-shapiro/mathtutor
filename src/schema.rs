@@ -287,6 +287,14 @@ row_table! {
     }
 }
 
+/// Row of an OAuth table, which no learner command reads or writes.
+pub(crate) trait OAuthRow: Row {}
+
+impl OAuthRow for OAuthClient {}
+impl OAuthRow for OAuthCode {}
+impl OAuthRow for OAuthAccessToken {}
+impl OAuthRow for OAuthRefreshToken {}
+
 /// Return the schema definition for all tables.
 pub fn tables() -> Vec<NewTable> {
     vec![

@@ -12,7 +12,7 @@ pub use baserunna_client::{self as client, Op, OpResult, Row, Transport};
 use client::api::ErrorCode;
 
 use crate::graph::Curriculum;
-use crate::schema::{self, IMPORT_STATE_KEY, ImportMarker, SchemaState};
+use crate::schema::{self, IMPORT_STATE_KEY, ImportMarker, OAuthRow, SchemaState};
 use crate::{Error, Result};
 
 pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
@@ -251,9 +251,33 @@ impl Db {
         }
     }
 
+    /// Insert OAuth row `row`, which the server deletes after `ttl` if `ttl` is set.
+    #[cfg(feature = "mcp")]
+    pub(crate) async fn insert_oauth<R: OAuthRow>(
+        &self,
+        row: &R,
+        ttl: Option<Duration>,
+    ) -> Result<()> {
+        let op = match ttl {
+            Some(ttl) => Op::insert_expiring(row, ttl),
+            None => Op::insert(row),
+        };
+        self.commit(&[op]).await
+    }
+
+    /// Insert or replace OAuth rows `rows` in one transaction.
+    pub(crate) async fn upsert_oauth<R: OAuthRow>(&self, rows: &[R]) -> Result<()> {
+        let ops: Vec<Op> = rows.iter().map(Op::upsert).collect();
+        self.commit(&ops).await
+    }
+
+    /// Record `marker` as the progress of an import into this database.
+    pub(crate) async fn write_import_marker(&self, marker: ImportMarker) -> Result<()> {
+        self.commit(&[marker.write_op()]).await
+    }
+
     /// Commit `ops` after the database and import checks.
-    pub(crate) async fn write(&self, ops: impl IntoIterator<Item = Op>) -> Result<()> {
-        let ops: Vec<Op> = ops.into_iter().collect();
+    async fn commit(&self, ops: &[Op]) -> Result<()> {
         run_txn!(self, |txn| {
             txn.write(ops.iter().cloned());
             Ok::<_, Error>(())
@@ -300,11 +324,6 @@ impl Db {
             allow_open_import: false,
             schema_checked: Arc::default(),
         }
-    }
-
-    /// Return the Baserunna client of this database.
-    pub fn client(&self) -> &client::Client {
-        self.client.client()
     }
 }
 

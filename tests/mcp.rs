@@ -158,9 +158,8 @@ async fn database_failure_during_token_check_returns_503_without_a_login_challen
         },
     )
     .await;
-    mathtutor::db::Db::connect(&cfg)
-        .unwrap()
-        .client()
+    baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
         .db(&cfg.db)
         .delete()
         .await

@@ -827,8 +827,8 @@ async fn import_copies_oauth_clients_so_connectors_stay_registered() {
     let r = import(tables, &db).await.expect("import");
 
     assert_eq!(r.oauth_clients, 1);
-    let stored = db
-        .client()
+    let stored = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
         .db(&cfg.db)
         .read_one(Op::get_row::<OAuthClient>("client-1"))
         .await

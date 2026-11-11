@@ -662,7 +662,8 @@ async fn main() {
     }
 
     let metrics: bool = env_or("LT_METRICS", 1u8) == 1;
-    let admin = Db::connect(&base).expect("connect").client().clone();
+    let admin =
+        baserunna_client::Client::new(base.transport().expect("transport")).with_token(&base.token);
     let server_metrics = |reset: bool| {
         let admin = admin.clone();
         async move {

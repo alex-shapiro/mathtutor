@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 
 use crate::cards::{CardRow, Projection, Taught};
 use crate::db::client::Entry;
+use crate::db::client::api::PAGE_MAX;
 use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
 use crate::event_log::{Event, EventKind};
 use crate::graph::{Curriculum, Graph};
@@ -249,19 +250,38 @@ pub struct Changes {
     /// Derived rows that the appended events change, keyed by path ID.
     projections: BTreeMap<String, Projection>,
     events: BTreeMap<String, Vec<Event>>,
-    active_paths: BTreeSet<String>,
+    /// IDs of the paths that this write set creates.
+    created: BTreeSet<String>,
+    /// Activity time of each path that this write set touches, keyed by path ID.
+    activity: BTreeMap<String, DateTime<Utc>>,
 }
 
 impl Changes {
     /// Insert path `p` and append its `path_created` event.
     pub fn create_path(&mut self, view: &View, p: &PathFile) -> Result<()> {
-        self.ops.push(Op::insert(p));
         let created = Event {
             ts: p.created_at,
             path: p.id.clone(),
             kind: EventKind::PathCreated {},
         };
-        self.append(view, &created)
+        self.create_path_with_history(view, p, std::slice::from_ref(&created), Utc::now())
+    }
+
+    /// Insert path `p` with the events of its `history`, and record `active_at` as the time of its latest activity.
+    pub fn create_path_with_history(
+        &mut self,
+        view: &View,
+        p: &PathFile,
+        history: &[Event],
+        active_at: DateTime<Utc>,
+    ) -> Result<()> {
+        self.ops.push(Op::insert(p));
+        self.created.insert(p.id.clone());
+        for e in history {
+            self.append(view, e)?;
+        }
+        self.activity.insert(p.id.clone(), active_at);
+        Ok(())
     }
 
     /// Replace the stored row of path `p.id` with `p`.
@@ -271,7 +291,9 @@ impl Changes {
 
     /// Make `path_id` the most recent path.
     pub fn touch_path(&mut self, path_id: &str) {
-        self.active_paths.insert(path_id.to_string());
+        self.activity
+            .entry(path_id.to_string())
+            .or_insert_with(Utc::now);
     }
 
     /// Record an overlay [`Edit`].
@@ -284,8 +306,10 @@ impl Changes {
     /// Fails with [`Error::PathNotLoaded`] unless `view` holds the path of `e` or this write set creates the path.
     pub fn append(&mut self, view: &View, e: &Event) -> Result<()> {
         let base = view.paths.get(&e.path);
-        let creates = matches!(e.kind, EventKind::PathCreated {});
-        if base.is_none() && !creates && !self.creates_path(&e.path) {
+        if matches!(e.kind, EventKind::PathCreated {}) {
+            self.created.insert(e.path.clone());
+        }
+        if base.is_none() && !self.created.contains(&e.path) {
             return Err(Error::PathNotLoaded(e.path.clone()));
         }
         self.projections
@@ -298,15 +322,6 @@ impl Changes {
             .or_default()
             .push(e.clone());
         Ok(())
-    }
-
-    /// Return `true` if this write set appends the `path_created` event of `path_id`.
-    fn creates_path(&self, path_id: &str) -> bool {
-        self.events.get(path_id).is_some_and(|events| {
-            events
-                .iter()
-                .any(|e| matches!(e.kind, EventKind::PathCreated {}))
-        })
     }
 
     fn into_ops(self, overlay_version: Option<&str>) -> Vec<Op> {
@@ -329,11 +344,16 @@ impl Changes {
                     .map(|(atom_id, t)| Op::upsert(&t.into_row(&path_id, atom_id))),
             );
         }
-        for path_id in &self.active_paths {
-            ops.push(Op::put(activity_key(path_id), ts::format(Utc::now())));
+        for (path_id, at) in &self.activity {
+            ops.push(Op::put(activity_key(path_id), ts::format(*at)));
         }
         for (path_id, events) in self.events {
-            ops.push(Op::append(events_stream(&path_id), &events));
+            let stream = events_stream(&path_id);
+            ops.extend(
+                events
+                    .chunks(PAGE_MAX)
+                    .map(|chunk| Op::append(stream.clone(), chunk)),
+            );
         }
         ops
     }

@@ -11,6 +11,7 @@ use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::graph::Curriculum;
 use mathtutor::overlay::QuizDraft;
+use mathtutor::path::PathFile;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
 use mathtutor::view::Want;
 use mathtutor::{Error, answer, cards, overlay, path, store};
@@ -378,6 +379,58 @@ async fn append_accepts_events_after_the_path_created_event_in_one_write() {
 
     let events = event_log::load(&db, "p_new").await.unwrap();
     assert_eq!(events.len(), 2);
+}
+
+#[tokio::test]
+async fn a_new_path_is_written_with_its_full_history_and_activity_time() {
+    let db = common::empty_db().await;
+    let t0 = mathtutor::db::ts::parse("2026-05-26T10:00:00.123Z").unwrap();
+    let p = PathFile {
+        id: "p_history".into(),
+        ..common::path_with(&[])
+    };
+    let history: Vec<Event> = (0..1205)
+        .map(|i| Event {
+            path: p.id.clone(),
+            ..common::at(t0, common::presented(&format!("a.q{i}")))
+        })
+        .collect();
+    let active_at = t0 + Duration::days(1);
+
+    db.transact(&Want::nothing(), |view, changes| {
+        changes.create_path_with_history(view, &p, &history, active_at)
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(event_log::load(&db, &p.id).await.unwrap(), history);
+    let state = common::path_state(&db, &p.id).await;
+    assert_eq!(state.updated_at, active_at);
+    assert_eq!(state.projection.cards.len(), history.len());
+}
+
+#[tokio::test]
+async fn a_new_path_rejects_history_of_another_path() {
+    let db = common::empty_db().await;
+    let p = PathFile {
+        id: "p_history".into(),
+        ..common::path_with(&[])
+    };
+    let other = common::presented("a.q1");
+
+    let e = db
+        .transact(&Want::nothing(), |view, changes| {
+            changes.create_path_with_history(view, &p, std::slice::from_ref(&other), Utc::now())
+        })
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(&e, Error::PathNotLoaded(id) if id == PATH_ID),
+        "{e:?}"
+    );
+    let e = db.snapshot(&Want::path(Some(&p.id))).await.unwrap();
+    assert!(e.path().is_err(), "the failed write set stores nothing");
 }
 
 #[tokio::test]
@@ -919,8 +972,8 @@ async fn recreating_database_invalidates_overlay_cache() {
             .unwrap();
         db
     };
-    let first = upsert_lesson(&cfg, "old").await;
-    first.client().db(&cfg.db).delete().await.unwrap();
+    upsert_lesson(&cfg, "old").await;
+    raw_db(&cfg).delete().await.unwrap();
 
     let uncached = DbConfig {
         cache_dir: None,

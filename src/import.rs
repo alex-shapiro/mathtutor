@@ -8,15 +8,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
 use crate::cards::{self, CardState};
-use crate::db::client::api::PAGE_MAX;
 use crate::db::{Db, Op, Txn, run_txn, ts};
 use crate::event_log::{self, Event};
 use crate::graph::{self, Quiz};
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
-use crate::schema::{
-    CardRecord, IMPORT_STATE_KEY, ImportMarker, OAuthClient, activity_key, events_stream,
-};
+use crate::schema::{IMPORT_STATE_KEY, ImportMarker, OAuthClient};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::{OVERLAY_VERSION_KEY, View, Want};
 use crate::{Error, Result};
@@ -584,7 +581,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         .await?;
     }
     for clients in legacy.oauth_clients.chunks(IMPORT_WRITE_BATCH) {
-        db.write(clients.iter().map(Op::upsert)).await?;
+        db.upsert_oauth(clients).await?;
     }
     for p in &legacy.paths {
         let events = legacy.events.get(&p.id).map_or(&[][..], Vec::as_slice);
@@ -615,7 +612,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         .mismatches
         .extend(verify_row_counts(db, &stored, stored_events, &source.row_counts).await?);
     if report.mismatches.is_empty() {
-        db.write([ImportMarker::Complete.write_op()]).await?;
+        db.write_import_marker(ImportMarker::Complete).await?;
     }
     Ok(report)
 }
@@ -642,33 +639,17 @@ fn verify_overlay(stored: &Overlay, edits: &[Edit]) -> Result<Vec<String>> {
 
 /// Write path `p`, its `events`, and the `cards` and `taught` rows that the events produce in one transaction, or return `false` if the path exists.
 async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
-    let existing = db.read_one(Op::get_row::<PathFile>(&p.id)).await?;
-    if existing.row::<PathFile>()?.is_some() {
+    let existing = db
+        .snapshot(&Want::path(Some(&p.id)).without_overlay())
+        .await?;
+    if existing.path().is_ok() {
         return Ok(false);
     }
-    let rows = cards::Projection::from_events(events)?;
     let latest = events.iter().map(|e| e.ts).max().unwrap_or(p.created_at);
-    let stream = events_stream(&p.id);
-    let mut ops = vec![
-        Op::insert(p),
-        Op::put(activity_key(&p.id), ts::format(latest)),
-    ];
-    ops.extend(
-        events
-            .chunks(PAGE_MAX)
-            .map(|c| Op::append(stream.clone(), c)),
-    );
-    ops.extend(
-        rows.cards
-            .values()
-            .map(|c| Op::upsert(&CardRecord::from(c))),
-    );
-    ops.extend(
-        rows.taught
-            .into_iter()
-            .map(|(atom_id, t)| Op::upsert(&t.into_row(&p.id, atom_id))),
-    );
-    db.write(ops).await?;
+    db.transact(&Want::nothing(), |view, changes| {
+        changes.create_path_with_history(view, p, events, latest)
+    })
+    .await?;
     Ok(true)
 }
 
