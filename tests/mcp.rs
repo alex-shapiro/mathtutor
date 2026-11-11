@@ -1812,6 +1812,42 @@ async fn a_token_grant_keeps_the_client_registration_without_an_expiry() {
 }
 
 #[tokio::test]
+async fn a_token_request_from_an_unknown_client_asks_it_to_register_again() {
+    use mathtutor::db::Op;
+    use mathtutor::schema::OAuthClient;
+
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    let assert_invalid_client = async |res: reqwest::Response| {
+        assert_eq!(res.status(), 401);
+        let body: Value = res.json().await.unwrap();
+        assert_eq!(body["error"], "invalid_client", "{body}");
+    };
+    let expired = refresh_raw(&server, "gone", ISSUED_FORM_TOKEN, None).await;
+    assert_invalid_client(expired).await;
+
+    let reg = register_client(&server, "Removed").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db)
+        .write(&[Op::delete_row::<OAuthClient>(&reg.client_id)])
+        .await
+        .unwrap();
+    let exchange = exchange_code_raw(&server, &reg.client_id, &code, &pkce.verifier).await;
+    assert_invalid_client(exchange).await;
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn a_validated_access_token_needs_no_further_database_read() {
     use mathtutor::db::Op;
     use mathtutor::mcp::oauth::secret_hash;

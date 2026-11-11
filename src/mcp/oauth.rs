@@ -524,6 +524,8 @@ async fn exchange_code(
 }
 
 /// Replace refresh token `provided` with new tokens.
+///
+/// A request from an unknown client fails with `invalid_client` also if its refresh token expired, so that the client registers again.
 async fn rotate_refresh(
     txn: &mut Txn,
     provided: &str,
@@ -531,20 +533,26 @@ async fn rotate_refresh(
 ) -> Result<IssuedTokens, OAuthError> {
     let token_hash = secret_hash(provided);
     let row = txn.get_oauth::<OAuthRefreshToken>(&token_hash).await?;
+    let client_id = req
+        .client_id
+        .as_deref()
+        .or(row.as_ref().map(|r| r.client_id.as_str()));
+    if let Some(client_id) = client_id {
+        keep_client(txn, client_id).await?;
+    }
     let stored = check_refresh(row, req.client_id.as_deref())?;
     check_scope(req.scope.as_deref())?;
     let tokens = IssuedTokens::new(&stored.client_id);
     txn.delete_oauth::<OAuthRefreshToken>(&token_hash);
-    keep_client(txn, &stored.client_id).await?;
     tokens.insert(txn);
     Ok(tokens)
 }
 
-/// Keep the registration of `client_id` without an expiry after a token grant, or fail if the client does not exist.
+/// Keep the registration of `client_id` without an expiry after a token grant, or fail with `invalid_client` if the client does not exist.
 async fn keep_client(txn: &mut Txn, client_id: &str) -> Result<(), OAuthError> {
     let Some(client) = txn.get_oauth::<OAuthClient>(client_id).await? else {
         tracing::warn!(%client_id, "token grant for an unknown client");
-        return Err(OAuthError::InvalidGrant);
+        return Err(OAuthError::InvalidClient);
     };
     txn.delete_oauth::<OAuthClient>(client_id);
     txn.insert_lasting_oauth(&client);
@@ -887,6 +895,8 @@ pub enum OAuthError {
     InvalidRequest(String),
     #[error("invalid_grant")]
     InvalidGrant,
+    #[error("invalid_client")]
+    InvalidClient,
     #[error("invalid_scope")]
     InvalidScope,
     #[error("unsupported_response_type")]
@@ -932,6 +942,11 @@ impl IntoResponse for OAuthError {
                 StatusCode::BAD_REQUEST,
                 "invalid_grant",
                 "authorization grant is invalid, expired, revoked, or does not match".to_string(),
+            ),
+            OAuthError::InvalidClient => (
+                StatusCode::UNAUTHORIZED,
+                "invalid_client",
+                "the client is not registered; register again".to_string(),
             ),
             OAuthError::InvalidScope => (
                 StatusCode::BAD_REQUEST,
