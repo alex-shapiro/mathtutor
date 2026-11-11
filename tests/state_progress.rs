@@ -123,7 +123,7 @@ async fn seed_card(
 async fn compute_state_past_due_is_zero_on_fresh_path() {
     let db = common::fresh_db(PATH_ID).await;
 
-    let s = state::compute_state(&db, Some(PATH_ID), None)
+    let s = state::compute_state(&db, Some(PATH_ID))
         .await
         .expect("compute_state");
     assert_eq!(s.past_due, 0);
@@ -138,7 +138,7 @@ async fn compute_state_past_due_excludes_future_cards() {
         seed_card(&db, quiz_id, now + Duration::seconds(offset_secs), now).await;
     }
 
-    let s = state::compute_state(&db, Some(PATH_ID), None)
+    let s = state::compute_state(&db, Some(PATH_ID))
         .await
         .expect("compute_state");
     assert_eq!(s.past_due, 0);
@@ -149,7 +149,7 @@ async fn compute_state_past_due_counts_overdue_cards() {
     let db = common::fresh_db(PATH_ID).await;
     let now = Utc::now();
 
-    mathtutor::store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some(PATH_ID), None)
+    mathtutor::store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some(PATH_ID))
         .await
         .unwrap();
     for offset_secs in [-3600_i64, -60, 3600] {
@@ -162,7 +162,6 @@ async fn compute_state_past_due_counts_overdue_cards() {
             None,
             mathtutor::types::QuizType::FreeText,
             Some(PATH_ID),
-            None,
         )
         .await
         .unwrap();
@@ -170,7 +169,7 @@ async fn compute_state_past_due_counts_overdue_cards() {
         seed_card(&db, &quiz_id, due, due - Duration::seconds(1)).await;
     }
 
-    let s = state::compute_state(&db, Some(PATH_ID), None)
+    let s = state::compute_state(&db, Some(PATH_ID))
         .await
         .expect("compute_state");
     assert_eq!(s.past_due, 2);
@@ -219,15 +218,9 @@ async fn past_due_ignores_a_deleted_quiz() {
         mathtutor::types::Strategy::BottomUp,
     )
     .await;
-    mathtutor::store::cmd_lesson_upsert(
-        &db,
-        "fnd.1.1.1",
-        "body".into(),
-        Some(common::PATH_ID),
-        None,
-    )
-    .await
-    .unwrap();
+    mathtutor::store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some(common::PATH_ID))
+        .await
+        .unwrap();
     let quiz_id = mathtutor::store::cmd_quiz_create(
         &db,
         "fnd.1.1.1",
@@ -237,7 +230,6 @@ async fn past_due_ignores_a_deleted_quiz() {
         None,
         mathtutor::types::QuizType::FreeText,
         Some(common::PATH_ID),
-        None,
     )
     .await
     .unwrap();
@@ -252,14 +244,14 @@ async fn past_due_ignores_a_deleted_quiz() {
     )
     .await;
     let past_due = async || {
-        state::compute_state(&db, Some(common::PATH_ID), None)
+        state::compute_state(&db, Some(common::PATH_ID))
             .await
             .unwrap()
             .past_due
     };
     assert_eq!(past_due().await, 1);
 
-    mathtutor::store::cmd_quiz_delete(&db, &quiz_id, Some(common::PATH_ID), None)
+    mathtutor::store::cmd_quiz_delete(&db, &quiz_id, Some(common::PATH_ID))
         .await
         .unwrap();
 

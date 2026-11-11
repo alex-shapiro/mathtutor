@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Utc};
 
@@ -10,7 +10,7 @@ use crate::cards::{self, CardRow, ProjectionTarget};
 use crate::db::client::Entry;
 use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
 use crate::event_log::{self, Event, EventKind};
-use crate::graph::Graph;
+use crate::graph::{Curriculum, Graph};
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
@@ -26,7 +26,23 @@ pub(crate) const OVERLAY_VERSION_KEY: &str = "overlay_version";
 /// Version string of a database before any overlay writes.
 const UNWRITTEN_OVERLAY_VERSION: &str = "";
 
-pub(crate) type CachedOverlay = (String, Arc<Overlay>);
+/// Overlay at a stored version, with the curriculum graph that it amends merged on first use.
+#[derive(Debug, Clone)]
+pub(crate) struct CachedOverlay {
+    version: String,
+    overlay: Arc<Overlay>,
+    merged: Arc<OnceLock<Arc<Graph>>>,
+}
+
+impl CachedOverlay {
+    fn new(version: String, overlay: Arc<Overlay>) -> Self {
+        Self {
+            version,
+            overlay,
+            merged: Arc::default(),
+        }
+    }
+}
 
 /// Overlay edits queued by a transaction and the version that they commit under.
 struct OverlayWrite {
@@ -46,7 +62,7 @@ struct CacheFile {
 
 pub(crate) fn read_cached_overlay(path: &Path) -> Option<CachedOverlay> {
     let f: CacheFile = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    Some((f.version, Arc::new(f.overlay)))
+    Some(CachedOverlay::new(f.version, Arc::new(f.overlay)))
 }
 
 /// Return a temporary sibling of `path` that no other write of the cache uses.
@@ -195,9 +211,12 @@ impl PathState {
 }
 
 /// Database snapshot read by a transaction or [`Db::snapshot`].
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct View {
     pub overlay: Arc<Overlay>,
+    /// Curriculum graph merged with `overlay`, or `None` if the view did not load the overlay.
+    merged: Option<Arc<OnceLock<Arc<Graph>>>>,
+    curriculum: Arc<Curriculum>,
     /// State of each loaded path, keyed by path ID.
     paths: HashMap<String, PathState>,
     /// ID of the path that [`Want::path`] selected.
@@ -205,34 +224,31 @@ pub struct View {
 }
 
 impl View {
-    /// Return the curriculum graph merged with this view's overlay.
-    pub fn graph(&self, graph_dir: Option<&Path>) -> Result<Arc<Graph>> {
-        static MERGED: Mutex<Vec<(Weak<Overlay>, Arc<Graph>)>> = Mutex::new(Vec::new());
-        const KEEP: usize = 64;
-        if graph_dir.is_some() || std::env::var_os("MT_GRAPH").is_some() {
-            return Ok(Arc::new(Graph::merged(&self.overlay, graph_dir)?));
+    fn new(curriculum: Arc<Curriculum>, selected: Option<String>) -> Self {
+        Self {
+            overlay: Arc::default(),
+            merged: None,
+            curriculum,
+            paths: HashMap::new(),
+            selected,
         }
-        let hit = |m: &[(Weak<Overlay>, Arc<Graph>)]| {
-            m.iter()
-                .find(|(o, _)| o.upgrade().is_some_and(|o| Arc::ptr_eq(&o, &self.overlay)))
-                .map(|(_, g)| g.clone())
+    }
+
+    fn set_overlay(&mut self, cached: CachedOverlay) {
+        self.overlay = cached.overlay;
+        self.merged = Some(cached.merged);
+    }
+
+    /// Return the curriculum graph merged with this view's overlay, or the curriculum graph alone if the view did not load the overlay.
+    pub fn graph(&self) -> Result<Arc<Graph>> {
+        let Some(merged) = &self.merged else {
+            return self.curriculum.graph();
         };
-        if let Some(g) = hit(&MERGED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner))
-        {
-            return Ok(g);
+        if let Some(g) = merged.get() {
+            return Ok(g.clone());
         }
-        let g = Arc::new(Graph::merged(&self.overlay, None)?);
-        let mut m = MERGED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        m.retain(|(o, _)| o.strong_count() > 0);
-        if m.len() >= KEEP {
-            m.remove(0);
-        }
-        m.push((Arc::downgrade(&self.overlay), g.clone()));
-        Ok(g)
+        let g = self.curriculum.merged(&self.overlay)?;
+        Ok(merged.get_or_init(|| g).clone())
     }
 
     /// Return the selected [`PathState`], or [`Error::NoPath`] if not found.
@@ -379,19 +395,19 @@ impl Db {
         let path_id = self.selected_path_id(&want.path).await?;
         let cached = self.cached_overlay().filter(|_| want.overlay);
         if want.overlay && cached.is_none() {
-            let plan = Plan::new(want, path_id.as_deref(), None);
+            let plan = self.plan(want, path_id.as_deref(), None);
             let (overlay, plan) = tokio::try_join!(self.load_overlay(), self.read_plan(plan))?;
             let mut view = plan.view;
-            view.overlay = overlay.1;
+            view.set_overlay(overlay);
             return Ok(view);
         }
         let plan = self
-            .read_plan(Plan::new(want, path_id.as_deref(), cached))
+            .read_plan(self.plan(want, path_id.as_deref(), cached))
             .await?;
         let stale = plan.overlay_stale;
         let mut view = plan.view;
         if stale {
-            view.overlay = self.load_overlay().await?.1;
+            view.set_overlay(self.load_overlay().await?);
         }
         Ok(view)
     }
@@ -447,7 +463,7 @@ impl Db {
         overlay: Option<CachedOverlay>,
         f: &mut impl FnMut(&View, &mut Changes) -> Result<T>,
     ) -> Result<Attempt<T>> {
-        let mut plan = Plan::new(want, path_id, overlay);
+        let mut plan = self.plan(want, path_id, overlay);
         let mut results = txn.run(&plan.ops()).await?;
         while let Some(more) = plan.absorb(results)? {
             results = txn.run(&more).await?;
@@ -466,6 +482,10 @@ impl Db {
         });
         txn.write(changes.into_ops(overlay_write.as_ref().map(|w| w.version.as_str())));
         Ok(Attempt::Ready((out, overlay_write)))
+    }
+
+    fn plan(&self, want: &Want, path_id: Option<&str>, overlay: Option<CachedOverlay>) -> Plan {
+        Plan::new(self.curriculum.clone(), want, path_id, overlay)
     }
 
     /// Return the cached overlay, or load it if the cache is empty.
@@ -505,7 +525,8 @@ impl Db {
                     rows.absorb(table, r)?;
                 }
             }
-            let loaded = (version.unwrap_or_default(), Arc::new(rows.into_overlay()));
+            let loaded =
+                CachedOverlay::new(version.unwrap_or_default(), Arc::new(rows.into_overlay()));
             self.cache_overlay(Some(loaded.clone()));
             return Ok(loaded);
         }
@@ -546,9 +567,9 @@ impl Db {
             .overlay_cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let changed = cache.as_ref().map(|c| &c.0) != next.as_ref().map(|n| &n.0);
-        if changed && let (Some(file), Some((v, o))) = (&self.cache_file, &next) {
-            write_cached_overlay(file, v, o);
+        let changed = cache.as_ref().map(|c| &c.version) != next.as_ref().map(|n| &n.version);
+        if changed && let (Some(file), Some(n)) = (&self.cache_file, &next) {
+            write_cached_overlay(file, &n.version, &n.overlay);
         }
         *cache = next;
     }
@@ -562,12 +583,12 @@ impl Db {
 
     /// Cache the overlay `base` that a transaction checked with its committed `write` applied, or clear the cache if the transaction did not check an overlay.
     fn remember_edits(&self, base: Option<CachedOverlay>, write: OverlayWrite) {
-        let next = base.map(|(_, overlay)| {
-            let mut o = (*overlay).clone();
+        let next = base.map(|base| {
+            let mut o = (*base.overlay).clone();
             for e in &write.edits {
                 o.apply(e);
             }
-            (write.version, Arc::new(o))
+            CachedOverlay::new(write.version, Arc::new(o))
         });
         self.cache_overlay(next);
     }
@@ -668,7 +689,12 @@ fn parse_activity(e: &Entry) -> Result<(&str, DateTime<Utc>)> {
 
 impl Plan {
     /// Plan the reads of `want`, and check that `overlay` is current instead of reading overlay rows.
-    fn new(want: &Want, path_id: Option<&str>, overlay: Option<CachedOverlay>) -> Self {
+    fn new(
+        curriculum: Arc<Curriculum>,
+        want: &Want,
+        path_id: Option<&str>,
+        overlay: Option<CachedOverlay>,
+    ) -> Self {
         let mut pending = Vec::new();
         if overlay.is_some() {
             pending.push((Slot::OverlayVersion, Op::get(OVERLAY_VERSION_KEY)));
@@ -689,10 +715,7 @@ impl Plan {
             ]);
         }
         Self {
-            view: View {
-                selected: path_id.map(str::to_string),
-                ..View::default()
-            },
+            view: View::new(curriculum, path_id.map(str::to_string)),
             overlay,
             overlay_stale: false,
             pending,
@@ -718,9 +741,7 @@ impl Plan {
                 Slot::OverlayVersion => {
                     let stored = overlay_version(Some(r))?;
                     match self.overlay.take() {
-                        Some((version, overlay)) if version == stored => {
-                            self.view.overlay = overlay;
-                        }
+                        Some(cached) if cached.version == stored => self.view.set_overlay(cached),
                         _ => self.overlay_stale = true,
                     }
                 }

@@ -11,6 +11,7 @@ pub use baserunna_client::{self as client, Op, OpResult, Row, Transport};
 
 use client::api::ErrorCode;
 
+use crate::graph::Curriculum;
 use crate::schema::{self, IMPORT_STATE_KEY, ImportMarker, SchemaState};
 use crate::{Error, Result};
 
@@ -24,10 +25,12 @@ pub struct DbConfig {
     pub db: String,
     /// Directory used to persist the cached overlay across processes, or `None` for in-memory caching only.
     pub cache_dir: Option<PathBuf>,
+    /// Curriculum that the user overlay amends.
+    pub curriculum: Arc<Curriculum>,
 }
 
 impl DbConfig {
-    /// Read `BASERUNNA_URL`, `BASERUNNA_TOKEN`, and `BASERUNNA_DB` from the environment.
+    /// Read `BASERUNNA_URL`, `BASERUNNA_TOKEN`, and `BASERUNNA_DB` from the environment, and use the embedded curriculum.
     pub fn from_env() -> Result<Self> {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         Ok(Self {
@@ -35,6 +38,7 @@ impl DbConfig {
             token: var("BASERUNNA_TOKEN").ok_or(Error::MissingToken)?,
             db: var("BASERUNNA_DB").unwrap_or_else(|| DEFAULT_DB.into()),
             cache_dir: crate::path::mt_home().ok(),
+            curriculum: Curriculum::embedded(),
         })
     }
 
@@ -57,6 +61,7 @@ pub struct Db {
     url: Arc<str>,
     pub(crate) overlay_cache: Arc<Mutex<Option<crate::view::CachedOverlay>>>,
     pub(crate) cache_file: Option<PathBuf>,
+    pub(crate) curriculum: Arc<Curriculum>,
     allow_open_import: bool,
     schema_checked: Arc<AtomicBool>,
 }
@@ -129,6 +134,11 @@ impl Db {
     /// Return the name of this database.
     pub fn name(&self) -> &str {
         self.client.name()
+    }
+
+    /// Return the curriculum that the user overlay of this database amends.
+    pub fn curriculum(&self) -> &Arc<Curriculum> {
+        &self.curriculum
     }
 
     /// Return the URL of the Baserunna server.
@@ -261,6 +271,7 @@ impl Db {
             url: Arc::from(cfg.url.as_str()),
             overlay_cache: Arc::new(Mutex::new(cached)),
             cache_file,
+            curriculum: cfg.curriculum.clone(),
             allow_open_import: false,
             schema_checked: Arc::default(),
         }

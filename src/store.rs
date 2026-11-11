@@ -1,7 +1,6 @@
 //! Commands that store user-authored lessons and quizzes in the curriculum overlay.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use crate::db::Db;
 use crate::event_log;
@@ -17,11 +16,10 @@ pub async fn cmd_lesson_upsert(
     atom_id: &str,
     body: String,
     path_id: Option<&str>,
-    graph_dir: Option<&Path>,
 ) -> Result<()> {
     db.transact(&Want::path(path_id), |view, changes| {
         let id = view.path()?.file.id.clone();
-        let g = view.graph(graph_dir)?;
+        let g = view.graph()?;
         let amended = g.atom(atom_id)?.lesson.is_some();
 
         overlay::upsert_lesson(changes, atom_id, &body);
@@ -47,11 +45,10 @@ pub async fn cmd_quiz_create(
     rubric: Option<String>,
     quiz_type: QuizType,
     path_id: Option<&str>,
-    graph_dir: Option<&Path>,
 ) -> Result<String> {
     db.transact(&Want::path(path_id), |view, changes| {
         let id = view.path()?.file.id.clone();
-        let g = view.graph(graph_dir)?;
+        let g = view.graph()?;
         let c = g.atom(atom_id)?;
         if c.lesson.is_none() {
             return Err(Error::NoLesson(atom_id.to_string()));
@@ -86,11 +83,10 @@ pub async fn cmd_quiz_update(
     difficulty: Option<Difficulty>,
     quiz_type: Option<QuizType>,
     path_id: Option<&str>,
-    graph_dir: Option<&Path>,
 ) -> Result<()> {
     db.transact(&Want::path(path_id), |view, changes| {
         let id = view.path()?.file.id.clone();
-        let g = view.graph(graph_dir)?;
+        let g = view.graph()?;
         let (atom, quiz) = g.quiz(quiz_id)?;
         overlay::amend_quiz(
             changes,
@@ -111,12 +107,7 @@ pub async fn cmd_quiz_update(
 }
 
 /// Mark `quiz_id` as removed in the overlay and log a `quiz_removed` event.
-pub async fn cmd_quiz_delete(
-    db: &Db,
-    quiz_id: &str,
-    path_id: Option<&str>,
-    graph_dir: Option<&Path>,
-) -> Result<()> {
+pub async fn cmd_quiz_delete(db: &Db, quiz_id: &str, path_id: Option<&str>) -> Result<()> {
     db.transact(&Want::path(path_id), |view, changes| {
         let id = view.path()?.file.id.clone();
         if view
@@ -127,7 +118,7 @@ pub async fn cmd_quiz_delete(
         {
             return Ok(());
         }
-        let g = view.graph(graph_dir)?;
+        let g = view.graph()?;
         let (atom, _) = g.quiz(quiz_id)?;
         overlay::remove_quiz(changes, &atom.id, quiz_id);
         changes.append(

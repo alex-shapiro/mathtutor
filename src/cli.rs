@@ -9,6 +9,10 @@ use crate::types;
 /// Manage math lessons and spaced-repetition quizzes over a curriculum graph.
 #[derive(FromArgs, Debug)]
 pub struct Mt {
+    /// curriculum directory to use instead of the embedded curriculum (default: `$MT_GRAPH`)
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
+
     #[argh(subcommand)]
     pub cmd: Cmd,
 }
@@ -50,11 +54,7 @@ pub enum PathOp {
 /// List all learning paths with goal, creation time, and progress.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "list")]
-pub struct PathListCmd {
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
-}
+pub struct PathListCmd {}
 
 /// Create a learning path.
 #[derive(FromArgs, Debug)]
@@ -71,10 +71,6 @@ pub struct PathNewCmd {
     /// initial traversal strategy: `bottom-up` (default) or `top-down`
     #[argh(option, default = "types::Strategy::BottomUp")]
     pub strategy: types::Strategy,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Show the status summary for a learning path.
@@ -84,10 +80,6 @@ pub struct PathStateCmd {
     /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Get the next scheduled action for a learning path.
@@ -105,10 +97,6 @@ pub struct PathNextCmd {
     /// return only the earliest due review card, or `done` if zero cards are due
     #[argh(switch)]
     pub due: bool,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// List upcoming untaught lesson topics for a path.
@@ -122,10 +110,6 @@ pub struct PathSyllabusCmd {
     /// maximum number of upcoming atoms to return (default: 10)
     #[argh(option, short = 'n', default = "10")]
     pub n: usize,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Show the prerequisite tree and completion status for a path.
@@ -135,10 +119,6 @@ pub struct PathTreeCmd {
     /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Change the traversal strategy for a learning path.
@@ -180,10 +160,6 @@ pub struct PathSubpathSetCmd {
     /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Clear the active subpath for a learning path.
@@ -223,10 +199,6 @@ pub struct GraphShowCmd {
     /// path ID used to include per-atom completion status
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// List areas or child nodes in the curriculum.
@@ -240,17 +212,13 @@ pub struct GraphListCmd {
     /// path ID used to include per-atom completion status
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Validate the curriculum graph.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "check")]
 pub struct GraphCheckCmd {
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
+    /// curriculum directory to validate (default: the curriculum of `--graph`)
     #[argh(option, short = 'p')]
     pub path: Option<PathBuf>,
 }
@@ -289,10 +257,6 @@ pub struct LessonUpsertCmd {
     /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Manage quizzes in the user overlay.
@@ -343,10 +307,6 @@ pub struct QuizCreateCmd {
     /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Update fields on an existing quiz while preserving its ID and FSRS state.
@@ -380,10 +340,6 @@ pub struct QuizUpdateCmd {
     /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Tombstone a quiz so that it is excluded from the merged curriculum.
@@ -397,10 +353,6 @@ pub struct QuizDeleteCmd {
     /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Record a graded quiz response.
@@ -422,10 +374,6 @@ pub struct QuizAnswerCmd {
     /// path ID (default: most recent path)
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Print the embedded agent playbook.
@@ -462,10 +410,6 @@ pub struct McpCmd {
     /// public base URL advertised in OAuth metadata (overrides `$MT_PUBLIC_URL`)
     #[argh(option)]
     pub public_url: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 
     #[argh(subcommand)]
     pub op: Option<McpOp>,

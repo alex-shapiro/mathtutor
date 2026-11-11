@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
@@ -246,46 +247,100 @@ fn embedded_file_str(name: &str) -> Result<&'static str> {
     })
 }
 
-fn load_manifest_embedded() -> Result<Manifest> {
-    let s = embedded_file_str("manifest.ayml")?;
-    ayml::from_str(s).map_err(|e| Error::AymlParse {
-        path: embedded_path("manifest.ayml"),
+fn parse_embedded<T: serde::de::DeserializeOwned>(name: &str) -> Result<T> {
+    ayml::from_str(embedded_file_str(name)?).map_err(|e| Error::AymlParse {
+        path: embedded_path(name),
         message: e.to_string(),
     })
 }
 
-fn load_area_embedded(filename: &str) -> Result<AreaFileRaw> {
-    let s = embedded_file_str(filename)?;
-    ayml::from_str(s).map_err(|e| Error::AymlParse {
-        path: embedded_path(filename),
-        message: e.to_string(),
-    })
+/// Location of the curriculum files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CurriculumSource {
+    /// The curriculum compiled into the binary.
+    Embedded,
+    /// A directory that holds `manifest.ayml` and the area files.
+    Dir(PathBuf),
 }
 
-/// Load `manifest.ayml` from `explicit`, `$MT_GRAPH`, or the embedded curriculum directory.
-pub fn load_manifest_default(explicit: Option<&Path>) -> Result<Manifest> {
-    if let Some(p) = explicit {
-        return load_manifest(&p.join("manifest.ayml"));
+impl CurriculumSource {
+    fn manifest(&self) -> Result<Manifest> {
+        match self {
+            Self::Embedded => parse_embedded("manifest.ayml"),
+            Self::Dir(dir) => load_manifest(&dir.join("manifest.ayml")),
+        }
     }
-    if let Some(env_path) = std::env::var_os("MT_GRAPH") {
-        return load_manifest(&Path::new(&env_path).join("manifest.ayml"));
+
+    fn area(&self, file: &str) -> Result<AreaFileRaw> {
+        match self {
+            Self::Embedded => parse_embedded(file),
+            Self::Dir(dir) => load_area(&dir.join(file)),
+        }
     }
-    load_manifest_embedded()
 }
 
-fn load_area_default(explicit: Option<&Path>, filename: &str) -> Result<AreaFileRaw> {
-    if let Some(p) = explicit {
-        return load_area(&p.join(filename));
-    }
-    if let Some(env_path) = std::env::var_os("MT_GRAPH") {
-        return load_area(&Path::new(&env_path).join(filename));
-    }
-    load_area_embedded(filename)
+/// Curriculum graph of a process, parsed from its source on first use.
+#[derive(Debug)]
+pub struct Curriculum {
+    source: CurriculumSource,
+    graph: OnceLock<Arc<Graph>>,
 }
 
-#[derive(Debug, Clone)]
+impl Curriculum {
+    pub fn new(source: CurriculumSource) -> Self {
+        Self {
+            source,
+            graph: OnceLock::new(),
+        }
+    }
+
+    /// Return the embedded curriculum, which every caller in the process shares.
+    pub fn embedded() -> Arc<Self> {
+        static EMBEDDED: OnceLock<Arc<Curriculum>> = OnceLock::new();
+        EMBEDDED
+            .get_or_init(|| Arc::new(Self::new(CurriculumSource::Embedded)))
+            .clone()
+    }
+
+    /// Return the curriculum in `dir`, or the embedded curriculum if `dir` is `None`.
+    pub fn open(dir: Option<PathBuf>) -> Arc<Self> {
+        match dir {
+            None => Self::embedded(),
+            Some(dir) => Arc::new(Self::new(CurriculumSource::Dir(dir))),
+        }
+    }
+
+    pub fn source(&self) -> &CurriculumSource {
+        &self.source
+    }
+
+    /// Return the curriculum graph without user overlay content.
+    pub fn graph(&self) -> Result<Arc<Graph>> {
+        if let Some(g) = self.graph.get() {
+            return Ok(g.clone());
+        }
+        let g = Arc::new(Graph::load(&self.source)?);
+        Ok(self.graph.get_or_init(|| g).clone())
+    }
+
+    /// Return the curriculum graph with `overlay` overrides and tombstones applied.
+    pub fn merged(&self, overlay: &crate::overlay::Overlay) -> Result<Arc<Graph>> {
+        let base = self.graph()?;
+        if overlay.atoms.is_empty() {
+            return Ok(base);
+        }
+        let mut g = (*base).clone();
+        g.apply_overlay(overlay);
+        Ok(Arc::new(g))
+    }
+}
+
+/// Flattened curriculum graph, keyed by concept ID.
+#[derive(Debug, Clone, Default)]
 pub struct Graph {
     pub by_id: HashMap<String, FlatConcept>,
+    /// Curriculum areas in manifest order.
+    pub areas: Vec<ManifestArea>,
 }
 
 #[derive(Debug, Clone)]
@@ -300,51 +355,26 @@ pub struct FlatConcept {
 }
 
 impl Graph {
-    pub fn load(graph_dir: &Path) -> Result<Self> {
-        let manifest = load_manifest(&graph_dir.join("manifest.ayml"))?;
+    /// Parse the curriculum graph from `source`.
+    pub fn load(source: &CurriculumSource) -> Result<Self> {
+        let manifest = source.manifest()?;
         let mut by_id = HashMap::new();
         for entry in &manifest.areas {
-            let raw = load_area(&graph_dir.join(&entry.file))?;
+            let raw = source.area(&entry.file)?;
             flatten(area_root_concept(entry, raw.into_concepts()), &mut by_id);
         }
-        Ok(Self { by_id })
+        Ok(Self {
+            by_id,
+            areas: manifest.areas,
+        })
     }
 
-    pub fn load_embedded() -> Result<Self> {
-        static PARSED: std::sync::OnceLock<Graph> = std::sync::OnceLock::new();
-        if let Some(g) = PARSED.get() {
-            return Ok(g.clone());
+    /// Build a graph of `concepts` without areas.
+    pub fn of_concepts(concepts: impl IntoIterator<Item = FlatConcept>) -> Self {
+        Self {
+            by_id: concepts.into_iter().map(|c| (c.id.clone(), c)).collect(),
+            areas: Vec::new(),
         }
-        let g = Self::parse_embedded()?;
-        Ok(PARSED.get_or_init(|| g).clone())
-    }
-
-    fn parse_embedded() -> Result<Self> {
-        let manifest = load_manifest_embedded()?;
-        let mut by_id = HashMap::new();
-        for entry in &manifest.areas {
-            let raw = load_area_embedded(&entry.file)?;
-            flatten(area_root_concept(entry, raw.into_concepts()), &mut by_id);
-        }
-        Ok(Self { by_id })
-    }
-
-    /// Load the curriculum graph from `explicit`, `$MT_GRAPH`, or the embedded curriculum directory.
-    pub fn load_default(explicit: Option<&Path>) -> Result<Self> {
-        if let Some(p) = explicit {
-            return Self::load(p);
-        }
-        if let Some(env_path) = std::env::var_os("MT_GRAPH") {
-            return Self::load(Path::new(&env_path));
-        }
-        Self::load_embedded()
-    }
-
-    /// Load the curriculum graph and apply `overlay` overrides and tombstones.
-    pub fn merged(overlay: &crate::overlay::Overlay, graph_dir: Option<&Path>) -> Result<Self> {
-        let mut g = Self::load_default(graph_dir)?;
-        g.apply_overlay(overlay);
-        Ok(g)
     }
 
     /// Return all atomic descendants of `targets` and their transitive prerequisites.
@@ -520,8 +550,8 @@ pub struct CheckReport {
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport> {
-    let manifest = load_manifest_default(graph_dir)?;
+pub fn run_check(source: &CurriculumSource) -> Result<CheckReport> {
+    let manifest = source.manifest()?;
 
     let mut report = CheckReport {
         areas: manifest.areas.len(),
@@ -538,7 +568,7 @@ pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport> {
     eprintln!("loaded manifest: {} areas", manifest.areas.len());
 
     for entry in &manifest.areas {
-        let raw = match load_area_default(graph_dir, &entry.file) {
+        let raw = match source.area(&entry.file) {
             Ok(a) => a,
             Err(e) => {
                 report.issues.push(CheckIssue {

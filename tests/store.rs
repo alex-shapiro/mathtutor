@@ -30,7 +30,7 @@ async fn event_kinds(db: &Db, path_id: &str) -> Vec<EventKind> {
 async fn first_store_on_lesson_less_atom_emits_authored_then_taught() {
     let (db, path_id) = fresh_db_with_path().await;
 
-    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "body".into(), Some(&path_id), None)
+    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "body".into(), Some(&path_id))
         .await
         .expect("store");
 
@@ -44,10 +44,10 @@ async fn first_store_on_lesson_less_atom_emits_authored_then_taught() {
 async fn second_store_on_same_atom_emits_amended_then_taught() {
     let (db, path_id) = fresh_db_with_path().await;
 
-    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "first".into(), Some(&path_id), None)
+    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "first".into(), Some(&path_id))
         .await
         .unwrap();
-    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "second".into(), Some(&path_id), None)
+    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "second".into(), Some(&path_id))
         .await
         .expect("second store succeeds (upsert)");
 
@@ -66,7 +66,7 @@ async fn second_store_on_same_atom_emits_amended_then_taught() {
 async fn quiz_create_after_delete_skips_tombstoned_id() {
     let (db, path_id) = fresh_db_with_path().await;
 
-    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "body".into(), Some(&path_id), None)
+    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "body".into(), Some(&path_id))
         .await
         .unwrap();
     let first = store::cmd_quiz_create(
@@ -78,13 +78,12 @@ async fn quiz_create_after_delete_skips_tombstoned_id() {
         None,
         QuizType::FreeText,
         Some(&path_id),
-        None,
     )
     .await
     .unwrap();
     assert_eq!(first, format!("{NO_LESSON_ATOM}.q1"));
 
-    store::cmd_quiz_delete(&db, &first, Some(&path_id), None)
+    store::cmd_quiz_delete(&db, &first, Some(&path_id))
         .await
         .unwrap();
 
@@ -97,7 +96,6 @@ async fn quiz_create_after_delete_skips_tombstoned_id() {
         None,
         QuizType::FreeText,
         Some(&path_id),
-        None,
     )
     .await
     .expect("create after delete must not recycle the tombstoned id");
@@ -108,15 +106,9 @@ async fn quiz_create_after_delete_skips_tombstoned_id() {
 async fn store_on_shipped_lesson_atom_emits_amended() {
     let (db, path_id) = fresh_db_with_path().await;
 
-    store::cmd_lesson_upsert(
-        &db,
-        WITH_LESSON_ATOM,
-        "override".into(),
-        Some(&path_id),
-        None,
-    )
-    .await
-    .expect("store");
+    store::cmd_lesson_upsert(&db, WITH_LESSON_ATOM, "override".into(), Some(&path_id))
+        .await
+        .expect("store");
 
     assert_eq!(
         event_kinds(&db, &path_id).await,

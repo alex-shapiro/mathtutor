@@ -1,4 +1,6 @@
+use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use argh::FromArgs;
 
@@ -6,6 +8,7 @@ use mathtutor::cli;
 #[cfg(feature = "mcp")]
 use mathtutor::cli::McpOp;
 use mathtutor::cli::{Cmd, GraphOp, LessonOp, Mt, PathOp, QuizOp, SubpathOp};
+use mathtutor::graph::{Curriculum, CurriculumSource};
 #[cfg(feature = "mcp")]
 use mathtutor::mcp;
 use mathtutor::{
@@ -32,11 +35,19 @@ async fn real_main() -> ExitCode {
     };
 
     init_tracing(is_mcp(&cli.cmd));
+    let curriculum = Curriculum::open(
+        cli.graph
+            .or_else(|| nonempty(std::env::var("MT_GRAPH").ok()).map(PathBuf::from)),
+    );
 
     if let Cmd::Graph(g) = &cli.cmd
         && let GraphOp::Check(c) = &g.op
     {
-        return match graph::run_check(c.path.as_deref()) {
+        let source = c
+            .path
+            .clone()
+            .map_or_else(|| curriculum.source().clone(), CurriculumSource::Dir);
+        return match graph::run_check(&source) {
             Ok(report) => {
                 report.print();
                 if report.issues.is_empty() {
@@ -72,18 +83,18 @@ async fn real_main() -> ExitCode {
             ),
             public_url: nonempty(c.public_url.or_else(|| std::env::var("MT_PUBLIC_URL").ok())),
         };
-        let cfg = match db::DbConfig::from_env() {
+        let cfg = match db_config(curriculum) {
             Ok(c) => c,
             Err(e) => return report_failure(&e),
         };
-        return match mcp::run(&c.addr, auth, cfg, c.graph).await {
+        return match mcp::run(&c.addr, auth, cfg).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => report_failure(&e),
         };
     }
 
     if let Cmd::Graph(g) = &cli.cmd
-        && let Some(result) = run_curriculum_lookup(&g.op).await
+        && let Some(result) = run_curriculum_lookup(&curriculum, &g.op).await
     {
         return match result {
             Ok(()) => ExitCode::SUCCESS,
@@ -91,7 +102,7 @@ async fn real_main() -> ExitCode {
         };
     }
 
-    let db = match db::DbConfig::from_env() {
+    let db = match db_config(curriculum) {
         Ok(cfg) if creates_database(&cli.cmd) => create_db(&cfg).await,
         Ok(cfg) => db::Db::connect(&cfg),
         Err(e) => Err(e),
@@ -110,6 +121,14 @@ async fn real_main() -> ExitCode {
             report_failure(&e)
         }
     }
+}
+
+/// Read the database configuration from the environment, with `curriculum` as the curriculum.
+fn db_config(curriculum: Arc<Curriculum>) -> Result<db::DbConfig> {
+    Ok(db::DbConfig {
+        curriculum,
+        ..db::DbConfig::from_env()?
+    })
 }
 
 /// Return `true` if `cmd` starts a learner database and can create it.
@@ -131,13 +150,13 @@ async fn create_db(cfg: &db::DbConfig) -> Result<db::Db> {
 }
 
 /// Run a graph lookup without `--path` so it does not open a database connection.
-async fn run_curriculum_lookup(op: &GraphOp) -> Option<Result<()>> {
+async fn run_curriculum_lookup(curriculum: &Curriculum, op: &GraphOp) -> Option<Result<()>> {
     match op {
         GraphOp::Show(c) if c.path.is_none() => {
-            Some(discover::cmd_graph_show(None, &c.id, None, c.graph.as_deref()).await)
+            Some(discover::cmd_graph_show(curriculum, &c.id, None).await)
         }
         GraphOp::List(c) if c.path.is_none() => {
-            Some(discover::cmd_graph_list(None, c.id.as_deref(), None, c.graph.as_deref()).await)
+            Some(discover::cmd_graph_list(curriculum, c.id.as_deref(), None).await)
         }
         _ => None,
     }
@@ -232,28 +251,26 @@ async fn dispatch(db: &db::Db, cmd: Cmd) -> Result<()> {
 
 async fn dispatch_path(db: &db::Db, op: PathOp) -> Result<()> {
     match op {
-        PathOp::List(c) => path::cmd_path_list(db, c.graph.as_deref()).await,
+        PathOp::List(_) => path::cmd_path_list(db).await,
         PathOp::New(c) => {
             let targets = cli::flatten_ids(&c.targets);
-            path::cmd_path_new(db, &c.goal, &targets, c.strategy, c.graph.as_deref())
+            path::cmd_path_new(db, &c.goal, &targets, c.strategy)
                 .await
                 .map(|id| {
                     eprintln!("created path: {id}");
                 })
         }
-        PathOp::State(c) => state::cmd_path_state(db, c.path.as_deref(), c.graph.as_deref()).await,
+        PathOp::State(c) => state::cmd_path_state(db, c.path.as_deref()).await,
         PathOp::Next(c) => {
             let mode = scheduler::NextMode::from_flags(c.new, c.due)?;
-            scheduler::cmd_path_next(db, c.path.as_deref(), c.graph.as_deref(), mode).await
+            scheduler::cmd_path_next(db, c.path.as_deref(), mode).await
         }
         PathOp::Strategy(c) => path::cmd_path_strategy(db, c.path.as_deref(), c.strategy)
             .await
             .map(|id| eprintln!("path {id}: strategy → {}", c.strategy)),
         PathOp::Subpath(c) => dispatch_subpath(db, c.op).await,
-        PathOp::Syllabus(c) => {
-            syllabus::cmd_path_syllabus(db, c.path.as_deref(), c.n, c.graph.as_deref()).await
-        }
-        PathOp::Tree(c) => tree::cmd_path_tree(db, c.path.as_deref(), c.graph.as_deref()).await,
+        PathOp::Syllabus(c) => syllabus::cmd_path_syllabus(db, c.path.as_deref(), c.n).await,
+        PathOp::Tree(c) => tree::cmd_path_tree(db, c.path.as_deref()).await,
     }
 }
 
@@ -261,7 +278,7 @@ async fn dispatch_subpath(db: &db::Db, op: SubpathOp) -> Result<()> {
     match op {
         SubpathOp::Set(c) => {
             let atoms = cli::flatten_ids(&c.atoms);
-            subpath::cmd_subpath_set(db, c.path.as_deref(), &atoms, c.graph.as_deref())
+            subpath::cmd_subpath_set(db, c.path.as_deref(), &atoms)
                 .await
                 .map(|id| eprintln!("path {id}: subpath set ({} atoms)", atoms.len()))
         }
@@ -275,16 +292,12 @@ async fn dispatch_graph(db: &db::Db, op: GraphOp) -> Result<()> {
     match op {
         GraphOp::Check(_) => unreachable!("handled before dispatch"),
         GraphOp::Show(c) => {
-            discover::cmd_graph_show(Some(db), &c.id, c.path.as_deref(), c.graph.as_deref()).await
+            let path = c.path.as_deref().map(|p| (db, p));
+            discover::cmd_graph_show(db.curriculum(), &c.id, path).await
         }
         GraphOp::List(c) => {
-            discover::cmd_graph_list(
-                Some(db),
-                c.id.as_deref(),
-                c.path.as_deref(),
-                c.graph.as_deref(),
-            )
-            .await
+            let path = c.path.as_deref().map(|p| (db, p));
+            discover::cmd_graph_list(db.curriculum(), c.id.as_deref(), path).await
         }
         GraphOp::Dump(_) => overlay::cmd_graph_dump(db).await,
     }
@@ -294,7 +307,7 @@ async fn dispatch_lesson(db: &db::Db, op: LessonOp) -> Result<()> {
     match op {
         LessonOp::Upsert(c) => {
             let atom = c.atom.clone();
-            store::cmd_lesson_upsert(db, &c.atom, c.body, c.path.as_deref(), c.graph.as_deref())
+            store::cmd_lesson_upsert(db, &c.atom, c.body, c.path.as_deref())
                 .await
                 .map(|()| {
                     eprintln!("upserted lesson: {atom}");
@@ -314,7 +327,6 @@ async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> Result<()> {
             c.rubric,
             c.quiz_type,
             c.path.as_deref(),
-            c.graph.as_deref(),
         )
         .await
         .map(|qid| {
@@ -331,7 +343,6 @@ async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> Result<()> {
                 c.difficulty,
                 c.quiz_type,
                 c.path.as_deref(),
-                c.graph.as_deref(),
             )
             .await
             .map(|()| {
@@ -340,7 +351,7 @@ async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> Result<()> {
         }
         QuizOp::Delete(c) => {
             let quiz = c.quiz.clone();
-            store::cmd_quiz_delete(db, &c.quiz, c.path.as_deref(), c.graph.as_deref())
+            store::cmd_quiz_delete(db, &c.quiz, c.path.as_deref())
                 .await
                 .map(|()| {
                     eprintln!("deleted quiz: {quiz}");
@@ -349,18 +360,11 @@ async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> Result<()> {
         QuizOp::Answer(c) => {
             let quiz = c.quiz.clone();
             let rating = c.rating;
-            answer::cmd_quiz_answer(
-                db,
-                &c.quiz,
-                c.rating,
-                c.user_answer,
-                c.path.as_deref(),
-                c.graph.as_deref(),
-            )
-            .await
-            .map(|()| {
-                eprintln!("recorded {rating} for {quiz}");
-            })
+            answer::cmd_quiz_answer(db, &c.quiz, c.rating, c.user_answer, c.path.as_deref())
+                .await
+                .map(|()| {
+                    eprintln!("recorded {rating} for {quiz}");
+                })
         }
     }
 }

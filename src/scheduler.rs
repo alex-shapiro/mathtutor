@@ -1,7 +1,6 @@
 //! Action scheduler and AYML output envelope for `mt path next`.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -20,13 +19,8 @@ use crate::{Error, Result};
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
 /// Compute the next action for `path_id` and print its AYML envelope for `mt path next`.
-pub async fn cmd_path_next(
-    db: &Db,
-    path_id: Option<&str>,
-    graph_dir: Option<&Path>,
-    mode: NextMode,
-) -> Result<()> {
-    let envelope = compute_next(db, path_id, graph_dir, mode).await?;
+pub async fn cmd_path_next(db: &Db, path_id: Option<&str>, mode: NextMode) -> Result<()> {
+    let envelope = compute_next(db, path_id, mode).await?;
     let text = ayml::to_string(&envelope).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
@@ -56,16 +50,11 @@ impl NextMode {
 }
 
 /// Select the next action for `path_id` and append its presentation event.
-pub async fn compute_next(
-    db: &Db,
-    path_id: Option<&str>,
-    graph_dir: Option<&Path>,
-    mode: NextMode,
-) -> Result<Envelope> {
+pub async fn compute_next(db: &Db, path_id: Option<&str>, mode: NextMode) -> Result<Envelope> {
     db.transact(&Want::path(path_id), |view, changes| {
         let ps = view.path()?;
         let p = &ps.file;
-        let g = view.graph(graph_dir)?;
+        let g = view.graph()?;
         let progress = ps.progress();
         let due = ps.due(Utc::now());
         let subpath = subpath::resolved(p, &g)?;

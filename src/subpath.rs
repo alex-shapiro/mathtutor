@@ -1,7 +1,6 @@
 //! Prerequisite subpath management for top-down learning paths.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use crate::db::Db;
 use crate::graph::Graph;
@@ -20,7 +19,6 @@ pub async fn cmd_subpath_set(
     db: &Db,
     explicit_id: Option<&str>,
     atoms: &[String],
-    graph_dir: Option<&Path>,
 ) -> Result<String> {
     let Some((tail, _)) = atoms.split_last() else {
         return Err(Error::SubpathEmpty);
@@ -30,7 +28,7 @@ pub async fn cmd_subpath_set(
         if p.strategy != Strategy::TopDown {
             return Err(Error::SubpathNotTopDown);
         }
-        let g = view.graph(graph_dir)?;
+        let g = view.graph()?;
         if !p.resolve_targets(&g)?.iter().any(|t| t == tail) {
             return Err(Error::SubpathTailNotTarget(tail.clone()));
         }

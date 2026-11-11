@@ -48,7 +48,7 @@ async fn spawn_server_on(cfg: mathtutor::db::DbConfig, auth: AuthConfig) -> Serv
 
     let addr_str = addr.to_string();
     let join = tokio::spawn(async move {
-        let _ = mcp::run(&addr_str, auth, cfg, None).await;
+        let _ = mcp::run(&addr_str, auth, cfg).await;
     });
 
     for _ in 0..250 {

@@ -2,7 +2,6 @@
 
 use std::collections::HashSet;
 use std::io::{self, Write};
-use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -64,12 +63,8 @@ pub struct AtomRef {
 ///
 /// # Panics
 /// Panics if writing to stdout fails.
-pub async fn cmd_path_state(
-    db: &Db,
-    explicit_id: Option<&str>,
-    graph_dir: Option<&Path>,
-) -> Result<()> {
-    let s = compute_state(db, explicit_id, graph_dir).await?;
+pub async fn cmd_path_state(db: &Db, explicit_id: Option<&str>) -> Result<()> {
+    let s = compute_state(db, explicit_id).await?;
     write_state(&mut io::stdout(), &s).expect("write to stdout");
     Ok(())
 }
@@ -119,15 +114,11 @@ pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
 }
 
 /// Compute the progress summary for `explicit_id` or the latest path.
-pub async fn compute_state(
-    db: &Db,
-    explicit_id: Option<&str>,
-    graph_dir: Option<&Path>,
-) -> Result<StateSummary> {
+pub async fn compute_state(db: &Db, explicit_id: Option<&str>) -> Result<StateSummary> {
     let view = db.snapshot(&Want::path(explicit_id)).await?;
     let ps = view.path()?;
     let p = ps.file.clone();
-    let g = view.graph(graph_dir)?;
+    let g = view.graph()?;
     let progress = ps.progress();
     let due = ps.due(Utc::now());
 

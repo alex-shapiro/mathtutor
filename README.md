@@ -18,6 +18,8 @@ The LLM generates lessons and quizzes on demand and grades user answers. Generat
 
 `mt graph list` and `mt graph show` run without these variables if `--path` is omitted.
 
+`mt` uses the curriculum that is embedded in the binary. To use a curriculum directory instead, pass `--graph DIR` before the command, as in `mt --graph DIR path next`, or set `MT_GRAPH`.
+
 To migrate an existing libSQL database, run `mt import-turso` before creating a path. See `docs/design.md` for details.
 
 ## CLI
@@ -31,7 +33,7 @@ mt path tree  [--path P]              # show the reachable prerequisite tree
 
 mt graph list [<ID>] [--path P]       # list areas or cluster children
 mt graph show  <ID>  [--path P]       # show an atom, cluster, or area
-mt graph check                        # validate the curriculum graph
+mt graph check [-p DIR]               # validate the curriculum graph
 mt graph dump                         # print the user overlay as AYML
 
 mt lesson upsert <ATOM>  --body TEXT

@@ -30,7 +30,7 @@ mt path tree  [--path P]
 # Curriculum lookup (read-only)
 mt graph list  [<ID>] [--path P]
 mt graph show  <ID>   [--path P]
-mt graph check
+mt graph check [-p DIR]
 mt graph dump
 
 # Authoring (writes to the user overlay)
@@ -200,7 +200,7 @@ atoms:
 
 ## Storage
 
-The curriculum graph is embedded into the binary at build time from `curriculum/graph/`. Use `--graph DIR` or `MT_GRAPH` to load an external curriculum directory instead.
+The curriculum graph is embedded into the binary at build time from `curriculum/graph/`. To load an external curriculum directory instead, pass `--graph DIR` before the command, as in `mt --graph DIR path next`, or set `MT_GRAPH`. Every command of the process, including `mt mcp`, uses this curriculum. `mt graph check -p DIR` validates the files in `DIR`.
 
 User state is stored in a Baserunna database configured via `BASERUNNA_DB`, `BASERUNNA_URL`, and `BASERUNNA_TOKEN`. `BASERUNNA_DB` defaults to `mathtutor`, and `BASERUNNA_URL` defaults to `https://baserunna.fly.dev`. Only `mt path new`, `mt import-turso`, and `mt mcp` create a missing database, and each reports the creation. Other commands fail with exit code `2` if the database does not exist, so a wrong `BASERUNNA_DB` cannot start a second learner history.
 

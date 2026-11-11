@@ -1,29 +1,23 @@
 //! Hierarchical tree view of a learning path for `mt path tree`.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use chrono::Utc;
 
 use crate::Result;
 use crate::db::Db;
-use crate::graph::{self, FlatConcept, Graph, natural_id_cmp};
+use crate::graph::{FlatConcept, Graph, natural_id_cmp};
 use crate::progress::PathProgress;
 use crate::scheduler;
 use crate::types::Difficulty;
 use crate::view::Want;
 
 /// Render the prerequisite tree for `explicit_id` or the latest path to stdout for `mt path tree`.
-pub async fn cmd_path_tree(
-    db: &Db,
-    explicit_id: Option<&str>,
-    graph_dir: Option<&Path>,
-) -> Result<()> {
+pub async fn cmd_path_tree(db: &Db, explicit_id: Option<&str>) -> Result<()> {
     let view = db.snapshot(&Want::path(explicit_id)).await?;
     let ps = view.path()?;
     let p = &ps.file;
-    let g = view.graph(graph_dir)?;
-    let manifest = graph::load_manifest_default(graph_dir)?;
+    let g = view.graph()?;
     let progress = ps.progress();
     let due = ps.due(Utc::now());
     let subpath = crate::subpath::resolved(p, &g)?;
@@ -81,7 +75,7 @@ pub async fn cmd_path_tree(
     println!("        *=path target{sub_legend}  ← NEXT=scheduler's next action");
     println!();
 
-    for area in &manifest.areas {
+    for area in &g.areas {
         let roots: Vec<&FlatConcept> = top_level_in_area(&g, &area.prefix)
             .into_iter()
             .filter(|c| spine.contains(&c.id))

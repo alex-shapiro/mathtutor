@@ -17,7 +17,7 @@ curriculum/
         └── 16-gpu-programming.ayml
 ```
 
-The curriculum files use [AYML](https://crates.io/crates/ayml). The build embeds them into the binary via `include_dir!`. Use `--graph DIR` or `MT_GRAPH` to load an external directory at runtime.
+The curriculum files use [AYML](https://crates.io/crates/ayml). The build embeds them into the binary via `include_dir!`. To load an external directory at runtime, pass `--graph DIR` before the command, as in `mt --graph DIR path next`, or set `MT_GRAPH`.
 
 ## Hierarchy and prerequisites
 

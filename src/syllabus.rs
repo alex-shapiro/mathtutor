@@ -1,7 +1,6 @@
 //! Upcoming untaught lesson preview for `mt path syllabus`.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use serde::Serialize;
 
@@ -34,13 +33,8 @@ pub struct SyllabusAtom {
 }
 
 /// Print the upcoming syllabus as AYML for `mt path syllabus`.
-pub async fn cmd_path_syllabus(
-    db: &Db,
-    explicit_id: Option<&str>,
-    n: usize,
-    graph_dir: Option<&Path>,
-) -> Result<()> {
-    let view = compute_syllabus(db, explicit_id, n, graph_dir).await?;
+pub async fn cmd_path_syllabus(db: &Db, explicit_id: Option<&str>, n: usize) -> Result<()> {
+    let view = compute_syllabus(db, explicit_id, n).await?;
     let text = ayml::to_string(&view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
@@ -51,12 +45,11 @@ pub async fn compute_syllabus(
     db: &Db,
     explicit_id: Option<&str>,
     n: usize,
-    graph_dir: Option<&Path>,
 ) -> Result<SyllabusView> {
     let view = db.snapshot(&Want::path(explicit_id)).await?;
     let ps = view.path()?;
     let p = ps.file.clone();
-    let g = view.graph(graph_dir)?;
+    let g = view.graph()?;
     let progress = ps.progress();
     let targets = p.resolve_targets(&g)?;
 

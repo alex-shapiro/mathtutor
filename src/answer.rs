@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use crate::Result;
 use crate::db::Db;
 use crate::event_log;
@@ -19,12 +17,11 @@ pub async fn cmd_quiz_answer(
     rating: Rating,
     user_answer: Option<String>,
     path_id: Option<&str>,
-    graph_dir: Option<&Path>,
 ) -> Result<()> {
     db.transact(&Want::path(path_id), |view, changes| {
         let id = view.path()?.file.id.clone();
         // Verify that the quiz exists in the merged graph before recording an event.
-        let g = view.graph(graph_dir)?;
+        let g = view.graph()?;
         let (atom, _) = g.quiz(quiz_id)?;
         let e = event_log::quiz_answered(
             id,

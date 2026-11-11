@@ -1,7 +1,5 @@
 //! Unit tests for `syllabus::upcoming_atoms` and `syllabus::upcoming_top_down`.
 
-use std::collections::HashMap;
-
 use chrono::Utc;
 
 use mathtutor::event_log::{Event, EventKind, EventPayload};
@@ -37,11 +35,7 @@ fn cluster(id: &str, children: &[&str]) -> FlatConcept {
 }
 
 fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
-    let mut by_id = HashMap::new();
-    for c in concepts {
-        by_id.insert(c.id.clone(), c);
-    }
-    Graph { by_id }
+    Graph::of_concepts(concepts)
 }
 
 fn path_with(targets: &[&str]) -> PathFile {

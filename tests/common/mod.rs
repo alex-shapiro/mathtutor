@@ -2,7 +2,6 @@
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -19,6 +18,7 @@ use mathtutor::path::PathFile;
 use mathtutor::progress::PathProgress;
 use mathtutor::types::{Difficulty, Rating, Strategy};
 use mathtutor::view::{Changes, PathState, View, Want};
+use tempfile::TempDir;
 
 pub const PATH_ID: &str = "p_test";
 
@@ -83,6 +83,34 @@ async fn sign_up(url: &str) -> String {
         .token
 }
 
+/// Write a curriculum directory with a single area whose `children` list is `area_body`.
+pub fn write_graph(area_body: &str) -> TempDir {
+    let dir = TempDir::new().expect("tempdir");
+    let areas = dir.path().join("areas");
+    std::fs::create_dir(&areas).expect("areas/");
+    let manifest = "
+schema_version: 1
+areas:
+  - prefix: ta
+    slug: test-area
+    file: areas/test.ayml
+    summary: \"t\"
+";
+    std::fs::write(dir.path().join("manifest.ayml"), manifest).expect("manifest");
+    let area = format!(
+        "
+schema_version: 2
+area: test-area
+prefix: ta
+summary: \"t\"
+motivation: \"t\"
+children:
+{area_body}"
+    );
+    std::fs::write(areas.join("test.ayml"), area).expect("area");
+    dir
+}
+
 /// Return a configuration for an isolated test database.
 pub fn fresh_config() -> DbConfig {
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -96,6 +124,7 @@ pub fn fresh_config() -> DbConfig {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ),
         cache_dir: None,
+        curriculum: mathtutor::graph::Curriculum::embedded(),
     }
 }
 
@@ -236,11 +265,7 @@ pub fn complete_atom(id: &str, prereqs: &[&str]) -> FlatConcept {
 }
 
 pub fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
-    let mut by_id = HashMap::new();
-    for c in concepts {
-        by_id.insert(c.id.clone(), c);
-    }
-    Graph { by_id }
+    Graph::of_concepts(concepts)
 }
 
 pub fn path_with(targets: &[&str]) -> PathFile {

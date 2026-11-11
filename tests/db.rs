@@ -9,6 +9,7 @@ use baserunna_client::{BoxFuture, Client, HttpTransport, Transport, TransportErr
 use chrono::{Duration, Utc};
 use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, Event, EventKind, EventPayload};
+use mathtutor::graph::Curriculum;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
 use mathtutor::view::Want;
 use mathtutor::{Error, answer, cards, overlay, path, store};
@@ -154,7 +155,7 @@ async fn most_recent_path_follows_logged_events() {
         }
     };
     assert_eq!(recent(&db).await.0, "p_b", "the last created path");
-    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some("p_a"), None)
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some("p_a"))
         .await
         .unwrap();
     let (id, at) = recent(&db).await;
@@ -162,7 +163,7 @@ async fn most_recent_path_follows_logged_events() {
     assert!(at > Utc::now() - Duration::minutes(1), "activity time {at}");
     let fresh = Db::connect(&cfg).unwrap();
     assert_eq!(recent(&fresh).await.0, "p_a");
-    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "again".into(), Some("p_b"), None)
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "again".into(), Some("p_b"))
         .await
         .unwrap();
     assert_eq!(
@@ -273,7 +274,6 @@ async fn concurrent_answers_are_recorded_once_each() {
         None,
         QuizType::FreeText,
         Some(PATH_ID),
-        None,
     )
     .await
     .unwrap();
@@ -288,7 +288,7 @@ async fn concurrent_answers_are_recorded_once_each() {
                 } else {
                     Rating::Again
                 };
-                answer::cmd_quiz_answer(&db, &quiz, rating, None, Some(PATH_ID), None).await
+                answer::cmd_quiz_answer(&db, &quiz, rating, None, Some(PATH_ID)).await
             })
         })
         .collect();
@@ -523,12 +523,12 @@ async fn write_with_a_cold_cache_reads_overlay_rows_outside_the_transaction() {
     let cfg = common::fresh_config();
     let writer = common::create_db(&cfg).await;
     common::seed_path(&writer, PATH_ID, &[], Strategy::BottomUp).await;
-    store::cmd_lesson_upsert(&writer, "fnd.1.1.1", "first".into(), Some(PATH_ID), None)
+    store::cmd_lesson_upsert(&writer, "fnd.1.1.1", "first".into(), Some(PATH_ID))
         .await
         .unwrap();
 
     let (db, traffic) = counting_db(&cfg);
-    store::cmd_lesson_upsert(&db, "fnd.1.1.2", "second".into(), Some(PATH_ID), None)
+    store::cmd_lesson_upsert(&db, "fnd.1.1.2", "second".into(), Some(PATH_ID))
         .await
         .unwrap();
 
@@ -556,7 +556,7 @@ async fn transaction_restarts_with_an_overlay_that_another_client_writes() {
     let cfg = common::fresh_config();
     let db = common::create_db(&cfg).await;
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
-    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "cached".into(), Some(PATH_ID), None)
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "cached".into(), Some(PATH_ID))
         .await
         .unwrap();
     let other = Db::connect(&cfg).unwrap();
@@ -567,7 +567,7 @@ async fn transaction_restarts_with_an_overlay_that_another_client_writes() {
         if seen.len() == 1 {
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
-                    store::cmd_lesson_upsert(&other, "fnd.1.1.1", "new".into(), None, None)
+                    store::cmd_lesson_upsert(&other, "fnd.1.1.1", "new".into(), None)
                         .await
                         .unwrap();
                 });
@@ -587,7 +587,7 @@ async fn quiz_ids_stay_unique_under_concurrent_authoring() {
     let cfg = common::fresh_config();
     let db = common::create_db(&cfg).await;
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
-    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some(PATH_ID), None)
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some(PATH_ID))
         .await
         .unwrap();
     let tasks: Vec<_> = (0..6)
@@ -603,7 +603,6 @@ async fn quiz_ids_stay_unique_under_concurrent_authoring() {
                     None,
                     QuizType::FreeText,
                     Some(PATH_ID),
-                    None,
                 )
                 .await
                 .unwrap()
@@ -630,7 +629,7 @@ async fn own_overlay_writes_keep_the_cache_valid() {
     let (db, traffic) = counting_db(&cfg);
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
     let body = "y".repeat(20_000);
-    store::cmd_lesson_upsert(&db, "fnd.1.1.1", body.clone(), Some(PATH_ID), None)
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", body.clone(), Some(PATH_ID))
         .await
         .unwrap();
     let quiz = store::cmd_quiz_create(
@@ -642,11 +641,10 @@ async fn own_overlay_writes_keep_the_cache_valid() {
         None,
         QuizType::FreeText,
         Some(PATH_ID),
-        None,
     )
     .await
     .unwrap();
-    store::cmd_quiz_delete(&db, &quiz, Some(PATH_ID), None)
+    store::cmd_quiz_delete(&db, &quiz, Some(PATH_ID))
         .await
         .unwrap();
     traffic.received.store(0, Ordering::Relaxed);
@@ -674,7 +672,7 @@ async fn own_overlay_writes_keep_the_cache_valid() {
 #[tokio::test]
 async fn path_next_makes_its_path_the_most_recent_even_without_an_event() {
     let db = common::empty_db().await;
-    let graph = mathtutor::graph::Graph::load_default(None).unwrap();
+    let graph = mathtutor::graph::Curriculum::embedded().graph().unwrap();
     let mut lessonless: Vec<&String> = graph
         .by_id
         .iter()
@@ -693,7 +691,6 @@ async fn path_next_makes_its_path_the_most_recent_even_without_an_event() {
     let envelope = mathtutor::scheduler::compute_next(
         &db,
         Some("p_a_older"),
-        None,
         mathtutor::scheduler::NextMode::Default,
     )
     .await
@@ -730,9 +727,66 @@ async fn write_for_a_path_makes_it_the_most_recent() {
 }
 
 #[tokio::test]
+async fn merged_graph_is_shared_until_the_overlay_version_changes() {
+    let db = common::fresh_db(PATH_ID).await;
+    let merged = async || {
+        db.snapshot(&Want::overlay())
+            .await
+            .unwrap()
+            .graph()
+            .unwrap()
+    };
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "first".into(), Some(PATH_ID))
+        .await
+        .unwrap();
+    let first = merged().await;
+    assert!(Arc::ptr_eq(&first, &merged().await));
+
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "second".into(), Some(PATH_ID))
+        .await
+        .unwrap();
+    let second = merged().await;
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert_eq!(
+        second.atom("fnd.1.1.1").unwrap().lesson.as_deref(),
+        Some("second")
+    );
+}
+
+#[tokio::test]
+async fn commands_use_the_curriculum_of_the_database_config() {
+    let dir = common::write_graph(
+        "
+  - id: ta.1
+    name: cluster
+    children:
+      - id: ta.1.1
+        name: local atom
+        description: d
+        terminal: true
+",
+    );
+    let cfg = DbConfig {
+        curriculum: Curriculum::open(Some(dir.path().into())),
+        ..common::fresh_config()
+    };
+    let db = common::create_db(&cfg).await;
+    let id = path::cmd_path_new(&db, "local", &["ta.1.1".into()], Strategy::BottomUp)
+        .await
+        .unwrap();
+    store::cmd_lesson_upsert(&db, "ta.1.1", "body".into(), Some(&id))
+        .await
+        .unwrap();
+    let state = mathtutor::state::compute_state(&db, Some(&id))
+        .await
+        .unwrap();
+    assert_eq!(state.next.map(|a| a.name).as_deref(), Some("local atom"));
+}
+
+#[tokio::test]
 async fn graph_lookup_rejects_an_unknown_path() {
     let db = common::empty_db().await;
-    let result = mathtutor::discover::graph_for(Some(&db), Some("typo"), None).await;
+    let result = mathtutor::discover::graph_for(db.curriculum(), Some((&db, "typo"))).await;
     assert!(matches!(result, Err(Error::NoPath)));
 }
 
@@ -819,7 +873,7 @@ async fn recreating_database_invalidates_overlay_cache() {
     let upsert_lesson = async |cfg: &DbConfig, body: &str| {
         let db = common::create_db(cfg).await;
         common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
-        store::cmd_lesson_upsert(&db, "fnd.1.1.1", body.into(), Some(PATH_ID), None)
+        store::cmd_lesson_upsert(&db, "fnd.1.1.1", body.into(), Some(PATH_ID))
             .await
             .unwrap();
         db
@@ -854,7 +908,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
     let first = common::create_db(&cfg).await;
     common::seed_path(&first, PATH_ID, &[], Strategy::BottomUp).await;
     let body = "z".repeat(20_000);
-    store::cmd_lesson_upsert(&first, "fnd.1.1.1", body.clone(), Some(PATH_ID), None)
+    store::cmd_lesson_upsert(&first, "fnd.1.1.1", body.clone(), Some(PATH_ID))
         .await
         .unwrap();
     drop(first);
@@ -876,7 +930,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         ..cfg.clone()
     })
     .unwrap();
-    store::cmd_lesson_upsert(&other, "fnd.1.1.1", "new".into(), Some(PATH_ID), None)
+    store::cmd_lesson_upsert(&other, "fnd.1.1.1", "new".into(), Some(PATH_ID))
         .await
         .unwrap();
     let third = Db::connect(&cfg).unwrap();

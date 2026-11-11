@@ -183,15 +183,9 @@ fn top_down_cluster_target_expands_to_atomic_children() {
 #[tokio::test]
 async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
     let conn = common::empty_db().await;
-    let id = path::cmd_path_new(
-        &conn,
-        "transformers",
-        &["tx".into()],
-        Strategy::TopDown,
-        None,
-    )
-    .await
-    .expect("new path");
+    let id = path::cmd_path_new(&conn, "transformers", &["tx".into()], Strategy::TopDown)
+        .await
+        .expect("new path");
 
     assert_eq!(
         load_path(&conn, &id).await.targets,
@@ -199,7 +193,7 @@ async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
         "the area root is stored as given, not pre-expanded",
     );
 
-    let view = mathtutor::syllabus::compute_syllabus(&conn, Some(&id), 10, None)
+    let view = mathtutor::syllabus::compute_syllabus(&conn, Some(&id), 10)
         .await
         .expect("syllabus");
     assert!(
@@ -215,7 +209,9 @@ async fn subpath_cluster_atom_expands_on_load() {
     let id = save(&conn, &["tx.1.1.1"], Strategy::TopDown).await;
     replace_subpath(&conn, &id, &["tx.1".into()]).await;
 
-    let g = mathtutor::graph::Graph::merged(&common::overlay(&conn).await, None).unwrap();
+    let g = mathtutor::graph::Curriculum::embedded()
+        .merged(&common::overlay(&conn).await)
+        .unwrap();
     let resolved = subpath::resolved(&load_path(&conn, &id).await, &g).unwrap();
 
     assert!(
@@ -282,14 +278,9 @@ async fn subpath_set_happy_path() {
     let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
-    subpath::cmd_subpath_set(
-        &conn,
-        Some(&id),
-        &["fnd.1.1.1".into(), "fnd.1.1.2".into()],
-        None,
-    )
-    .await
-    .expect("valid subpath ending in a target");
+    subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.1".into(), "fnd.1.1.2".into()])
+        .await
+        .expect("valid subpath ending in a target");
     assert_eq!(
         load_path(&conn, &id).await.subpath,
         vec!["fnd.1.1.1", "fnd.1.1.2"],
@@ -301,7 +292,7 @@ async fn subpath_set_rejected_on_bottom_up_path() {
     let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::BottomUp).await;
 
-    let err = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.2".into()], None)
+    let err = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.2".into()])
         .await
         .unwrap_err();
     assert!(matches!(err, Error::SubpathNotTopDown), "got {err:?}");
@@ -312,7 +303,7 @@ async fn subpath_set_requires_target_tail() {
     let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
-    let err = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.1".into()], None)
+    let err = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.1".into()])
         .await
         .unwrap_err();
     assert!(matches!(err, Error::SubpathTailNotTarget(_)), "got {err:?}");
@@ -323,28 +314,19 @@ async fn subpath_set_rejects_empty_and_duplicates_and_unknown() {
     let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
-    let empty = subpath::cmd_subpath_set(&conn, Some(&id), &[], None)
+    let empty = subpath::cmd_subpath_set(&conn, Some(&id), &[])
         .await
         .unwrap_err();
     assert!(matches!(empty, Error::SubpathEmpty), "got {empty:?}");
 
-    let dup = subpath::cmd_subpath_set(
-        &conn,
-        Some(&id),
-        &["fnd.1.1.2".into(), "fnd.1.1.2".into()],
-        None,
-    )
-    .await
-    .unwrap_err();
+    let dup = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.2".into(), "fnd.1.1.2".into()])
+        .await
+        .unwrap_err();
     assert!(matches!(dup, Error::SubpathDuplicateAtom(_)), "got {dup:?}");
 
-    let unknown = subpath::cmd_subpath_set(
-        &conn,
-        Some(&id),
-        &["nope.0.0.0".into(), "fnd.1.1.2".into()],
-        None,
-    )
-    .await
-    .unwrap_err();
+    let unknown =
+        subpath::cmd_subpath_set(&conn, Some(&id), &["nope.0.0.0".into(), "fnd.1.1.2".into()])
+            .await
+            .unwrap_err();
     assert!(matches!(unknown, Error::AtomNotFound(_)), "got {unknown:?}");
 }

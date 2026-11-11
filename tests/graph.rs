@@ -1,15 +1,12 @@
 //! Unit tests for `Graph` lookup helpers and `graph::run_check`.
 
-use std::fs;
-
 use mathtutor::Error;
 use mathtutor::graph;
 use mathtutor::types::Difficulty;
-use tempfile::TempDir;
 
 mod common;
 
-use common::{atom, cluster, graph_of, quiz};
+use common::{atom, cluster, graph_of, quiz, write_graph};
 
 fn graph_with_quiz(atom_id: &str, quiz_id: &str) -> mathtutor::graph::Graph {
     graph_of(vec![atom(
@@ -107,33 +104,6 @@ fn reachable_handles_diamond_without_looping() {
     assert_eq!(reach.len(), 4);
 }
 
-fn write_graph(area_body: &str) -> TempDir {
-    let dir = TempDir::new().expect("tempdir");
-    let areas = dir.path().join("areas");
-    fs::create_dir(&areas).expect("areas/");
-    let manifest = "
-schema_version: 1
-areas:
-  - prefix: ta
-    slug: test-area
-    file: areas/test.ayml
-    summary: \"t\"
-";
-    fs::write(dir.path().join("manifest.ayml"), manifest).expect("manifest");
-    let area = format!(
-        "
-schema_version: 2
-area: test-area
-prefix: ta
-summary: \"t\"
-motivation: \"t\"
-children:
-{area_body}"
-    );
-    fs::write(areas.join("test.ayml"), area).expect("area");
-    dir
-}
-
 #[test]
 fn area_root_is_a_cluster_node_that_expands_to_atoms() {
     let dir = write_graph(
@@ -151,7 +121,7 @@ fn area_root_is_a_cluster_node_that_expands_to_atoms() {
         terminal: true
 ",
     );
-    let g = graph::Graph::load(dir.path()).expect("load");
+    let g = graph::Graph::load(&graph::CurriculumSource::Dir(dir.path().into())).expect("load");
 
     let area = g.by_id.get("ta").expect("area root is a node");
     assert_eq!(area.children_ids, vec!["ta.1".to_string()]);
@@ -182,7 +152,8 @@ fn orphan_check_flags_unreferenced_atom() {
         description: nobody cites me
 ",
     );
-    let report = graph::run_check(Some(dir.path())).expect("run_check");
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
     assert_eq!(orphan_ids(&report), vec!["ta.1.1".to_string()]);
     let msg = &report
         .issues
@@ -206,7 +177,8 @@ fn orphan_check_skips_terminal_atoms() {
         terminal: true
 ",
     );
-    let report = graph::run_check(Some(dir.path())).expect("run_check");
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
     assert!(
         orphan_ids(&report).is_empty(),
         "terminal:true must suppress: {:?}",
@@ -231,7 +203,8 @@ fn orphan_check_clears_if_referenced_as_prereq() {
           - ta.1.1
 ",
     );
-    let report = graph::run_check(Some(dir.path())).expect("run_check");
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
     assert_eq!(orphan_ids(&report), vec!["ta.1.2".to_string()]);
 }
 
@@ -248,7 +221,8 @@ fn orphan_check_does_not_flag_clusters() {
         terminal: true
 ",
     );
-    let report = graph::run_check(Some(dir.path())).expect("run_check");
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
     assert!(orphan_ids(&report).is_empty(), "{:?}", report.issues);
 }
 
@@ -276,7 +250,8 @@ fn orphan_check_cluster_prereq_covers_descendant_atoms() {
           - ta.1
 ",
     );
-    let report = graph::run_check(Some(dir.path())).expect("run_check");
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
     assert!(orphan_ids(&report).is_empty(), "{:?}", report.issues);
 }
 

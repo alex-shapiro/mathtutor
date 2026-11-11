@@ -1,7 +1,7 @@
 //! Learning path records and path management commands.
 
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 
@@ -51,9 +51,8 @@ pub async fn cmd_path_new(
     goal: &str,
     ids: &[String],
     strategy: Strategy,
-    graph_dir: Option<&Path>,
 ) -> Result<String> {
-    let g = Graph::load_default(graph_dir)?;
+    let g = db.curriculum().graph()?;
     // Validate that each target expands to at least 1 atom while storing cluster IDs unexpanded.
     g.expand_to_atoms(ids)?;
     let targets = dedup_preserving_order(ids);
@@ -107,8 +106,8 @@ struct PathListView {
 }
 
 /// Print all learning path summaries as AYML (`mt path list`).
-pub async fn cmd_path_list(db: &Db, graph_dir: Option<&Path>) -> Result<()> {
-    let summaries = list_summaries(db, graph_dir).await?;
+pub async fn cmd_path_list(db: &Db) -> Result<()> {
+    let summaries = list_summaries(db).await?;
     let view = PathListView { paths: summaries };
     let text = ayml::to_string(&view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
@@ -116,9 +115,9 @@ pub async fn cmd_path_list(db: &Db, graph_dir: Option<&Path>) -> Result<()> {
 }
 
 /// Compute progress summaries for all learning paths ordered by creation time.
-pub async fn list_summaries(db: &Db, graph_dir: Option<&Path>) -> Result<Vec<PathSummary>> {
+pub async fn list_summaries(db: &Db) -> Result<Vec<PathSummary>> {
     let view = db.snapshot(&Want::all_paths()).await?;
-    let g = view.graph(graph_dir)?;
+    let g = view.graph()?;
     view.paths()
         .into_iter()
         .map(|p| {
@@ -234,7 +233,7 @@ mod tests {
                 ((*id).to_string(), c)
             })
             .collect::<HashMap<_, _>>();
-        Graph { by_id }
+        Graph::of_concepts(by_id.into_values())
     }
 
     #[test]

@@ -22,8 +22,10 @@ async fn edit(db: &Db, f: impl Fn(&mut Changes)) {
     common::write(db, PATH_ID, |_, changes| f(changes)).await;
 }
 
-async fn merged(db: &Db) -> Graph {
-    Graph::merged(&common::overlay(db).await, None).unwrap()
+async fn merged(db: &Db) -> std::sync::Arc<Graph> {
+    mathtutor::graph::Curriculum::embedded()
+        .merged(&common::overlay(db).await)
+        .unwrap()
 }
 
 fn quiz(
@@ -331,7 +333,9 @@ async fn overlay_is_global_across_paths() {
             .await
             .unwrap();
         assert_eq!(view.path().unwrap().file.id, id);
-        let g = Graph::merged(&view.overlay, None).unwrap();
+        let g = mathtutor::graph::Curriculum::embedded()
+            .merged(&view.overlay)
+            .unwrap();
         assert_eq!(
             g.by_id.get(NO_LESSON_ATOM).unwrap().lesson.as_deref(),
             Some("shared lesson"),
@@ -381,7 +385,7 @@ async fn graph_quiz_helper_finds_overlay_authored_ids() {
 async fn deleting_a_deleted_quiz_succeeds() {
     let db = common::fresh_db(common::PATH_ID).await;
     let path = Some(common::PATH_ID);
-    mathtutor::store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), path, None)
+    mathtutor::store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), path)
         .await
         .unwrap();
     let quiz_id = mathtutor::store::cmd_quiz_create(
@@ -393,15 +397,14 @@ async fn deleting_a_deleted_quiz_succeeds() {
         None,
         mathtutor::types::QuizType::FreeText,
         path,
-        None,
     )
     .await
     .unwrap();
-    mathtutor::store::cmd_quiz_delete(&db, &quiz_id, path, None)
+    mathtutor::store::cmd_quiz_delete(&db, &quiz_id, path)
         .await
         .unwrap();
 
-    mathtutor::store::cmd_quiz_delete(&db, &quiz_id, path, None)
+    mathtutor::store::cmd_quiz_delete(&db, &quiz_id, path)
         .await
         .expect("a repeated delete is safe after an unknown outcome");
 }

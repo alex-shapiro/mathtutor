@@ -16,7 +16,7 @@ use mathtutor::db::client::bytes::Bytes;
 use mathtutor::db::client::{BoxFuture, Route, Transport, TransportError, http};
 use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, EventKind};
-use mathtutor::graph::{Graph, Quiz};
+use mathtutor::graph::Quiz;
 use mathtutor::overlay;
 use mathtutor::scheduler::Action;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
@@ -358,7 +358,7 @@ impl Learner {
         } else {
             Strategy::BottomUp
         };
-        let id = path::cmd_path_new(&self.db, "load test", &[target], strategy, None)
+        let id = path::cmd_path_new(&self.db, "load test", &[target], strategy)
             .await
             .map_err(|e| e.to_string())?;
         if let Some(shared) = &self.shared {
@@ -382,28 +382,24 @@ impl Learner {
         let roll = self.rng.below(100);
         let t = Instant::now();
         if roll < 4 {
-            let r = state::compute_state(&self.db, Some(&p), None)
-                .await
-                .map(drop);
+            let r = state::compute_state(&self.db, Some(&p)).await.map(drop);
             out.push(("path state", t.elapsed(), r.map_err(|e| e.to_string())));
             return;
         }
         if roll < 6 {
-            let r = syllabus::compute_syllabus(&self.db, Some(&p), 10, None)
+            let r = syllabus::compute_syllabus(&self.db, Some(&p), 10)
                 .await
                 .map(drop);
             out.push(("path syllabus", t.elapsed(), r.map_err(|e| e.to_string())));
             return;
         }
         if roll < 7 {
-            let r = path::list_summaries(&self.db, None).await.map(drop);
+            let r = path::list_summaries(&self.db).await.map(drop);
             out.push(("path list", t.elapsed(), r.map_err(|e| e.to_string())));
             return;
         }
         let envelope =
-            match scheduler::compute_next(&self.db, Some(&p), None, scheduler::NextMode::Default)
-                .await
-            {
+            match scheduler::compute_next(&self.db, Some(&p), scheduler::NextMode::Default).await {
                 Ok(e) => e,
                 Err(e) => {
                     out.push(("path next", t.elapsed(), Err(e.to_string())));
@@ -415,7 +411,7 @@ impl Learner {
         match envelope.action() {
             Action::CreateLesson { atom_id } => {
                 let body = sample_text(&mut self.rng, self.lesson_bytes);
-                let r = store::cmd_lesson_upsert(&self.db, atom_id, body, Some(&p), None).await;
+                let r = store::cmd_lesson_upsert(&self.db, atom_id, body, Some(&p)).await;
                 out.push(("lesson upsert", t.elapsed(), r.map_err(|e| e.to_string())));
             }
             Action::CreateQuiz {
@@ -431,7 +427,6 @@ impl Learner {
                     Some(sample_text(&mut self.rng, 200)),
                     QuizType::FreeText,
                     Some(&p),
-                    None,
                 )
                 .await
                 .map(drop);
@@ -445,8 +440,7 @@ impl Learner {
                     _ => Rating::Easy,
                 };
                 let answer = Some(sample_text(&mut self.rng, 200));
-                let r = answer::cmd_quiz_answer(&self.db, quiz_id, rating, answer, Some(&p), None)
-                    .await;
+                let r = answer::cmd_quiz_answer(&self.db, quiz_id, rating, answer, Some(&p)).await;
                 let mut ledger = self.ledger.lock().unwrap();
                 let entry = ledger.entry((self.db_name.clone(), p.clone())).or_default();
                 if r.is_ok() {
@@ -472,7 +466,9 @@ impl Learner {
 }
 
 fn targets() -> Vec<String> {
-    let g = Graph::load_embedded().expect("graph");
+    let g = mathtutor::graph::Curriculum::embedded()
+        .graph()
+        .expect("graph");
     let mut out: Vec<String> = g
         .by_id
         .values()
@@ -495,7 +491,9 @@ async fn seed(db: &Db, atoms: usize, lesson_bytes: usize) {
     if have >= atoms {
         return;
     }
-    let g = Graph::load_embedded().expect("graph");
+    let g = mathtutor::graph::Curriculum::embedded()
+        .graph()
+        .expect("graph");
     let mut ids: Vec<&String> = g
         .by_id
         .iter()

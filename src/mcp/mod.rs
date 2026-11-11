@@ -1,6 +1,5 @@
 //! Streamable HTTP MCP server for `mt mcp`.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -54,23 +53,17 @@ const PLAYBOOK: &str = include_str!("playbook.md");
 #[derive(Clone)]
 pub struct MathTutorServer {
     db: Db,
-    graph_dir: Option<Arc<PathBuf>>,
     tool_router: ToolRouter<Self>,
     prompt_router: PromptRouter<Self>,
 }
 
 impl MathTutorServer {
-    pub fn new(db: Db, graph_dir: Option<PathBuf>) -> Self {
+    pub fn new(db: Db) -> Self {
         Self {
             db,
-            graph_dir: graph_dir.map(Arc::new),
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
-    }
-
-    fn graph_path(&self) -> Option<&std::path::Path> {
-        self.graph_dir.as_deref().map(AsRef::as_ref)
     }
 }
 
@@ -217,14 +210,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<NewPathArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = path::cmd_path_new(
-            &self.db,
-            &args.goal,
-            &args.targets,
-            args.strategy,
-            self.graph_path(),
-        )
-        .await;
+        let result = path::cmd_path_new(&self.db, &args.goal, &args.targets, args.strategy).await;
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
@@ -242,13 +228,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<SubpathSetArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = subpath::cmd_subpath_set(
-            &self.db,
-            Some(&args.path_id),
-            &args.atoms,
-            self.graph_path(),
-        )
-        .await;
+        let result = subpath::cmd_subpath_set(&self.db, Some(&args.path_id), &args.atoms).await;
         encode(result.map(|id| json!({ "path_id": id })))
     }
 
@@ -266,9 +246,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetNextArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result =
-            scheduler::compute_next(&self.db, Some(&args.path_id), self.graph_path(), args.mode)
-                .await;
+        let result = scheduler::compute_next(&self.db, Some(&args.path_id), args.mode).await;
         encode(result)
     }
 
@@ -277,7 +255,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<PathOnlyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        encode(state::compute_state(&self.db, Some(&args.path_id), self.graph_path()).await)
+        encode(state::compute_state(&self.db, Some(&args.path_id)).await)
     }
 
     #[tool(description = "Return the prerequisite tree and atom status for a path.")]
@@ -285,7 +263,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetTreeArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        encode(compute_tree(&self.db, &args.path_id, args.depth, self.graph_path()).await)
+        encode(compute_tree(&self.db, &args.path_id, args.depth).await)
     }
 
     #[tool(description = "Preview upcoming lesson topics.")]
@@ -293,10 +271,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetSyllabusArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        encode(
-            syllabus::compute_syllabus(&self.db, Some(&args.path_id), args.n, self.graph_path())
-                .await,
-        )
+        encode(syllabus::compute_syllabus(&self.db, Some(&args.path_id), args.n).await)
     }
 
     #[tool(description = "Return details for a curriculum node (atom or cluster).")]
@@ -304,15 +279,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetItemArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        encode(
-            compute_item(
-                &self.db,
-                &args.id,
-                args.path_id.as_deref(),
-                self.graph_path(),
-            )
-            .await,
-        )
+        encode(compute_item(&self.db, &args.id, args.path_id.as_deref()).await)
     }
 
     #[tool(description = "List children of a curriculum node. Omit `id` for root areas.")]
@@ -326,7 +293,6 @@ impl MathTutorServer {
                 args.id.as_deref(),
                 args.path_id.as_deref(),
                 args.recursive.unwrap_or(false),
-                self.graph_path(),
             )
             .await,
         )
@@ -337,14 +303,8 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<UpsertLessonArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = store::cmd_lesson_upsert(
-            &self.db,
-            &args.atom,
-            args.body,
-            Some(&args.path_id),
-            self.graph_path(),
-        )
-        .await;
+        let result =
+            store::cmd_lesson_upsert(&self.db, &args.atom, args.body, Some(&args.path_id)).await;
         encode(result.map(|()| json!({ "atom_id": args.atom })))
     }
 
@@ -362,7 +322,6 @@ impl MathTutorServer {
             args.rubric,
             args.kind.unwrap_or_default(),
             Some(&args.path_id),
-            self.graph_path(),
         )
         .await;
         encode(result.map(|quiz_id| json!({ "quiz_id": quiz_id })))
@@ -382,7 +341,6 @@ impl MathTutorServer {
             args.difficulty,
             args.kind,
             Some(&args.path_id),
-            self.graph_path(),
         )
         .await;
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
@@ -393,13 +351,7 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<DeleteQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = store::cmd_quiz_delete(
-            &self.db,
-            &args.quiz_id,
-            Some(&args.path_id),
-            self.graph_path(),
-        )
-        .await;
+        let result = store::cmd_quiz_delete(&self.db, &args.quiz_id, Some(&args.path_id)).await;
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
     }
 
@@ -414,7 +366,6 @@ impl MathTutorServer {
             args.rating,
             args.answer,
             Some(&args.path_id),
-            self.graph_path(),
         )
         .await;
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id, "rating": args.rating })))
@@ -493,13 +444,9 @@ struct AtomStatus {
     complete: bool,
 }
 
-async fn compute_item(
-    db: &Db,
-    id: &str,
-    path_id: Option<&str>,
-    graph_dir: Option<&std::path::Path>,
-) -> CrateResult<ItemView> {
-    let (g, progress) = discover::graph_for(Some(db), path_id, graph_dir).await?;
+async fn compute_item(db: &Db, id: &str, path_id: Option<&str>) -> CrateResult<ItemView> {
+    let path = path_id.map(|p| (db, p));
+    let (g, progress) = discover::graph_for(db.curriculum(), path).await?;
     let item = discover::show_view(&g, id)?;
     let status = progress.and_then(|p| status_for(&g, id, &p));
     Ok(ItemView { item, status })
@@ -526,15 +473,14 @@ async fn compute_children(
     id: Option<&str>,
     path_id: Option<&str>,
     recursive: bool,
-    graph_dir: Option<&std::path::Path>,
 ) -> CrateResult<ChildrenView> {
-    let (g, progress) = discover::graph_for(Some(db), path_id, graph_dir).await?;
-    let manifest = graph::load_manifest_default(graph_dir)?;
-    let view = discover::list_view(&g, &manifest, id)?;
+    let path = path_id.map(|p| (db, p));
+    let (g, progress) = discover::graph_for(db.curriculum(), path).await?;
+    let view = discover::list_view(&g, id)?;
     let descendants = if recursive {
         let roots = match id {
             Some(s) => vec![s.to_string()],
-            None => manifest.areas.iter().map(|a| a.prefix.clone()).collect(),
+            None => g.areas.iter().map(|a| a.prefix.clone()).collect(),
         };
         gather_descendants(&g, &roots, progress.as_ref())
     } else {
@@ -612,17 +558,11 @@ struct TreeNode {
     children: Vec<TreeNode>,
 }
 
-async fn compute_tree(
-    db: &Db,
-    path_id: &str,
-    depth: Option<u32>,
-    graph_dir: Option<&std::path::Path>,
-) -> CrateResult<TreeView> {
+async fn compute_tree(db: &Db, path_id: &str, depth: Option<u32>) -> CrateResult<TreeView> {
     let view = db.snapshot(&Want::path(Some(path_id))).await?;
     let ps = view.path()?;
     let p = ps.file.clone();
-    let g = view.graph(graph_dir)?;
-    let manifest = graph::load_manifest_default(graph_dir)?;
+    let g = view.graph()?;
     let progress = ps.progress();
     let target_atoms = p.resolve_targets(&g)?;
 
@@ -651,7 +591,7 @@ async fn compute_tree(
         target_atoms.iter().map(String::as_str).collect();
 
     let mut nodes = Vec::new();
-    for area in &manifest.areas {
+    for area in &g.areas {
         let mut top: Vec<TreeNode> = g
             .by_id
             .values()
@@ -817,12 +757,7 @@ pub fn print_tools() -> CrateResult<()> {
 }
 
 /// Run the MCP server on `addr` until SIGINT or SIGTERM.
-pub async fn run(
-    addr: &str,
-    auth: AuthConfig,
-    cfg: DbConfig,
-    graph_dir: Option<PathBuf>,
-) -> CrateResult<()> {
+pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()> {
     auth.validate()?;
 
     let db = Db::connect(&cfg)?;
@@ -838,8 +773,7 @@ pub async fn run(
 
     let factory = {
         let db = db.clone();
-        let graph_dir = graph_dir.clone();
-        move || Ok(MathTutorServer::new(db.clone(), graph_dir.clone()))
+        move || Ok(MathTutorServer::new(db.clone()))
     };
 
     let mcp_service = StreamableHttpService::new(

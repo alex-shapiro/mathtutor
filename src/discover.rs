@@ -1,24 +1,21 @@
 //! Read-only curriculum lookup for `mt graph show` and `mt graph list`.
 
-use std::path::Path;
-
 use serde::Serialize;
 
 use crate::db::Db;
-use crate::graph::{self, FlatConcept, Graph, Manifest};
+use crate::graph::{Curriculum, FlatConcept, Graph};
 use crate::progress::PathProgress;
 use crate::scheduler;
 use crate::view::Want;
 use crate::{Error, Result};
 
-/// Print curriculum item `id`, with the progress of `path_id` if `db` and `path_id` are provided.
+/// Print curriculum item `id`, with the progress of path `path` if it is provided.
 pub async fn cmd_graph_show(
-    db: Option<&Db>,
+    curriculum: &Curriculum,
     id: &str,
-    path_id: Option<&str>,
-    graph_dir: Option<&Path>,
+    path: Option<(&Db, &str)>,
 ) -> Result<()> {
-    let (g, progress) = graph_for(db, path_id, graph_dir).await?;
+    let (g, progress) = graph_for(curriculum, path).await?;
     let mut view = show_view(&g, id)?;
     if let Some(progress) = progress {
         enrich_show_view(&mut view, &g, &progress, id);
@@ -26,30 +23,27 @@ pub async fn cmd_graph_show(
     emit(&view)
 }
 
-/// Load the merged graph and path progress if `path_id` is provided, or the base curriculum graph otherwise.
+/// Load the merged graph and the progress of path `path` if it is provided, or the graph of `curriculum` otherwise.
 pub async fn graph_for(
-    db: Option<&Db>,
-    path_id: Option<&str>,
-    graph_dir: Option<&Path>,
+    curriculum: &Curriculum,
+    path: Option<(&Db, &str)>,
 ) -> Result<(std::sync::Arc<Graph>, Option<PathProgress>)> {
-    let (Some(db), Some(pid)) = (db, path_id) else {
-        return Ok((std::sync::Arc::new(Graph::load_default(graph_dir)?), None));
+    let Some((db, path_id)) = path else {
+        return Ok((curriculum.graph()?, None));
     };
-    let view = db.snapshot(&Want::path(Some(pid))).await?;
+    let view = db.snapshot(&Want::path(Some(path_id))).await?;
     let progress = view.path()?.progress();
-    Ok((view.graph(graph_dir)?, Some(progress)))
+    Ok((view.graph()?, Some(progress)))
 }
 
-/// Print curriculum items under `id`, with the progress of `path_id` if `db` and `path_id` are provided.
+/// Print curriculum items under `id`, with the progress of path `path` if it is provided.
 pub async fn cmd_graph_list(
-    db: Option<&Db>,
+    curriculum: &Curriculum,
     id: Option<&str>,
-    path_id: Option<&str>,
-    graph_dir: Option<&Path>,
+    path: Option<(&Db, &str)>,
 ) -> Result<()> {
-    let manifest = graph::load_manifest_default(graph_dir)?;
-    let (g, progress) = graph_for(db, path_id, graph_dir).await?;
-    let mut view = list_view(&g, &manifest, id)?;
+    let (g, progress) = graph_for(curriculum, path).await?;
+    let mut view = list_view(&g, id)?;
     if let Some(progress) = progress {
         enrich_list_view(&mut view, &g, &progress);
     }
@@ -64,9 +58,9 @@ pub fn show_view(g: &Graph, id: &str) -> Result<ShowView> {
     Ok(ShowView::Concept(concept_view(g, c)))
 }
 
-pub fn list_view(g: &Graph, manifest: &Manifest, id: Option<&str>) -> Result<ListView> {
+pub fn list_view(g: &Graph, id: Option<&str>) -> Result<ListView> {
     let Some(id) = id else {
-        return Ok(ListView::Areas(areas_view(manifest)));
+        return Ok(ListView::Areas(areas_view(g)));
     };
     let c = g
         .by_id
@@ -155,9 +149,9 @@ pub struct ClusterView {
     pub atomic_descendants: usize,
 }
 
-fn areas_view(manifest: &Manifest) -> AreasView {
+fn areas_view(g: &Graph) -> AreasView {
     AreasView {
-        areas: manifest
+        areas: g
             .areas
             .iter()
             .map(|a| AreaSummary {
