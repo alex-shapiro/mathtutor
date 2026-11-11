@@ -295,9 +295,10 @@ impl Changes {
         Ok(())
     }
 
-    /// Replace the stored row of path `p.id` with `p`.
+    /// Replace the stored row of path `p.id` with `p`, and make `p` the most recent path.
     pub fn replace_path(&mut self, p: &PathFile) {
         self.ops.push(Op::upsert(p));
+        self.touch_path(&p.id);
     }
 
     /// Make `path_id` the most recent path.

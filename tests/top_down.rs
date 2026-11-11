@@ -305,3 +305,26 @@ async fn subpath_set_rejects_empty_and_duplicates_and_unknown() {
             .unwrap_err();
     assert!(matches!(unknown, Error::UnknownId(_)), "got {unknown:?}");
 }
+
+#[tokio::test]
+async fn each_path_row_write_marks_the_activity_of_its_path() {
+    let conn = common::empty_db().await;
+    let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
+    let pause = || tokio::time::sleep(std::time::Duration::from_millis(5));
+
+    let created = path_state(&conn, &id).await.updated_at;
+    pause().await;
+    path::cmd_path_strategy(&conn, None, Strategy::TopDown)
+        .await
+        .unwrap();
+    let after_strategy = path_state(&conn, &id).await.updated_at;
+    assert!(after_strategy > created, "a strategy write without --path");
+
+    pause().await;
+    subpath::cmd_subpath_clear(&conn, None).await.unwrap();
+    let after_clear = path_state(&conn, &id).await.updated_at;
+    assert!(
+        after_clear > after_strategy,
+        "a subpath write without --path"
+    );
+}
