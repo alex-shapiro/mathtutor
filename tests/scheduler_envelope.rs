@@ -241,6 +241,6 @@ async fn next_step_names_the_path_and_the_verbatim_answer_on_each_surface() {
         )),
         "{step}"
     );
-    assert!(step.contains("answer: "), "{step}");
+    assert!(step.contains("user_answer: "), "{step}");
     assert!(!step.contains("mt "), "{step}");
 }

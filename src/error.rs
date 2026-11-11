@@ -93,7 +93,7 @@ pub enum Error {
     #[error("invalid strategy: {0}")]
     InvalidStrategy(String),
 
-    #[error("subpaths apply only to top-down paths; switch with `mt path strategy top-down`")]
+    #[error("subpaths apply only to paths with the top_down strategy")]
     SubpathNotTopDown,
 
     #[error("subpath must not be empty")]

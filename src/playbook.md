@@ -41,10 +41,10 @@ If paths exist, show them to the user and ask which path to resume. Then call `g
 
 ### Selecting a strategy
 
-A path uses either the `{{bottom_up}}` or `{{top_down}}` strategy, and defaults to `{{bottom_up}}`. {{set_strategy}}:
+A path uses either the `bottom_up` or `top_down` strategy, and defaults to `bottom_up`. {{set_strategy}}:
 
-- **{{bottom_up}}**: Teaches all prerequisites of a target before the target itself.
-- **{{top_down}}**: Presents the target atom directly and descends into prerequisites only if you set a subpath.
+- **`bottom_up`**: Teaches all prerequisites of a target before the target itself.
+- **`top_down`**: Presents the target atom directly and descends into prerequisites only if you set a subpath.
 
 Ask the user which strategy they prefer if they have not specified it.
 
@@ -75,7 +75,7 @@ Stop if `action: done` is returned or if the user pauses the session.
 
 ## Subpaths
 
-If the user is blocked on a target atom in `{{top_down}}` mode, create a subpath of prerequisite atoms leading to that target:
+If the user is blocked on a target atom in `top_down` mode, create a subpath of prerequisite atoms leading to that target:
 
 1. {{inspect_target}} to inspect the target's prerequisites and select the missing concepts, deepest first.
 2. {{subpath_set}}. The final atom in the list must be a path target.

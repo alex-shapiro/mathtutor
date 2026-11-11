@@ -170,11 +170,13 @@ pub struct DeleteQuizArgs {
     pub path_id: String,
 }
 
+/// Arguments of the `answer_quiz` tool.
 #[derive(Deserialize, JsonSchema)]
 pub struct AnswerQuizArgs {
     pub quiz_id: String,
+    /// Verbatim reply of the user.
     #[serde(default)]
-    pub answer: Option<String>,
+    pub user_answer: Option<String>,
     pub rating: Rating,
     pub path_id: String,
 }
@@ -183,7 +185,10 @@ pub struct AnswerQuizArgs {
 impl MathTutorServer {
     #[tool(description = "List all learning paths for this user.")]
     async fn get_paths(&self) -> std::result::Result<CallToolResult, McpError> {
-        encode(path::compute_path_list(&self.db).await)
+        encode(
+            Operation::Repeatable,
+            path::compute_path_list(&self.db).await,
+        )
     }
 
     #[tool(description = "Start a new learning path with a goal and targets.")]
@@ -192,7 +197,7 @@ impl MathTutorServer {
         Parameters(args): Parameters<NewPathArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let result = path::cmd_path_new(&self.db, &args.goal, &args.targets, args.strategy).await;
-        encode_as(
+        encode(
             Operation::NewPath,
             result.map(|id| json!({ "path_id": id })),
         )
@@ -204,7 +209,10 @@ impl MathTutorServer {
         Parameters(args): Parameters<SetStrategyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let result = path::cmd_path_strategy(&self.db, Some(&args.path_id), args.strategy).await;
-        encode(result.map(|id| json!({ "path_id": id, "strategy": args.strategy })))
+        encode(
+            Operation::Repeatable,
+            result.map(|id| json!({ "path_id": id, "strategy": args.strategy })),
+        )
     }
 
     #[tool(description = "Set the ordered atom subpath for a top-down path ending in a target.")]
@@ -213,7 +221,10 @@ impl MathTutorServer {
         Parameters(args): Parameters<SubpathSetArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let result = subpath::cmd_subpath_set(&self.db, Some(&args.path_id), &args.atoms).await;
-        encode(result.map(|id| json!({ "path_id": id })))
+        encode(
+            Operation::Repeatable,
+            result.map(|id| json!({ "path_id": id })),
+        )
     }
 
     #[tool(description = "Clear the subpath for a path.")]
@@ -222,7 +233,10 @@ impl MathTutorServer {
         Parameters(args): Parameters<PathOnlyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let result = subpath::cmd_subpath_clear(&self.db, Some(&args.path_id)).await;
-        encode(result.map(|id| json!({ "path_id": id })))
+        encode(
+            Operation::Repeatable,
+            result.map(|id| json!({ "path_id": id })),
+        )
     }
 
     #[tool(description = "Get the next lesson or quiz in the path.")]
@@ -232,7 +246,7 @@ impl MathTutorServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         let result =
             scheduler::compute_next(&self.db, Some(&args.path_id), args.mode, Surface::Mcp).await;
-        encode(result)
+        encode(Operation::Repeatable, result)
     }
 
     #[tool(description = "Return progress summary for a path.")]
@@ -240,7 +254,10 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<PathOnlyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        encode(state::compute_state(&self.db, Some(&args.path_id)).await)
+        encode(
+            Operation::Repeatable,
+            state::compute_state(&self.db, Some(&args.path_id)).await,
+        )
     }
 
     #[tool(description = "Return the prerequisite tree and atom status for a path.")]
@@ -248,7 +265,10 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetTreeArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        encode(tree::compute_tree(&self.db, Some(&args.path_id), args.depth).await)
+        encode(
+            Operation::Repeatable,
+            tree::compute_tree(&self.db, Some(&args.path_id), args.depth).await,
+        )
     }
 
     #[tool(description = "Preview upcoming lesson topics.")]
@@ -256,7 +276,10 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetSyllabusArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        encode(syllabus::compute_syllabus(&self.db, Some(&args.path_id), args.n).await)
+        encode(
+            Operation::Repeatable,
+            syllabus::compute_syllabus(&self.db, Some(&args.path_id), args.n).await,
+        )
     }
 
     #[tool(description = "Return details for a curriculum node (atom or cluster).")]
@@ -265,7 +288,10 @@ impl MathTutorServer {
         Parameters(args): Parameters<GetItemArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let path = args.path_id.as_deref().map(|p| (&self.db, p));
-        encode(discover::compute_item(self.db.curriculum(), &args.id, path).await)
+        encode(
+            Operation::Repeatable,
+            discover::compute_item(self.db.curriculum(), &args.id, path).await,
+        )
     }
 
     #[tool(description = "List children of a curriculum node. Omit `id` for root areas.")]
@@ -275,6 +301,7 @@ impl MathTutorServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         let path = args.path_id.as_deref().map(|p| (&self.db, p));
         encode(
+            Operation::Repeatable,
             discover::compute_children(
                 self.db.curriculum(),
                 args.id.as_deref(),
@@ -292,7 +319,10 @@ impl MathTutorServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         let result =
             store::cmd_lesson_upsert(&self.db, &args.atom, args.body, Some(&args.path_id)).await;
-        encode(result.map(|()| json!({ "atom_id": args.atom })))
+        encode(
+            Operation::Repeatable,
+            result.map(|()| json!({ "atom_id": args.atom })),
+        )
     }
 
     #[tool(description = "Create a quiz.")]
@@ -302,7 +332,7 @@ impl MathTutorServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         let result =
             store::cmd_quiz_create(&self.db, &args.atom, args.quiz, Some(&args.path_id)).await;
-        encode_as(
+        encode(
             Operation::CreateQuiz,
             result.map(|quiz_id| json!({ "quiz_id": quiz_id })),
         )
@@ -315,7 +345,10 @@ impl MathTutorServer {
     ) -> std::result::Result<CallToolResult, McpError> {
         let result =
             store::cmd_quiz_update(&self.db, &args.quiz_id, &args.patch, Some(&args.path_id)).await;
-        encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
+        encode(
+            Operation::Repeatable,
+            result.map(|()| json!({ "quiz_id": args.quiz_id })),
+        )
     }
 
     #[tool(description = "Delete a quiz from the curriculum overlay.")]
@@ -324,7 +357,10 @@ impl MathTutorServer {
         Parameters(args): Parameters<DeleteQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let result = store::cmd_quiz_delete(&self.db, &args.quiz_id, Some(&args.path_id)).await;
-        encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
+        encode(
+            Operation::Repeatable,
+            result.map(|()| json!({ "quiz_id": args.quiz_id })),
+        )
     }
 
     #[tool(description = "Record a quiz answer and FSRS rating.")]
@@ -336,11 +372,11 @@ impl MathTutorServer {
             &self.db,
             &args.quiz_id,
             args.rating,
-            args.answer,
+            args.user_answer,
             Some(&args.path_id),
         )
         .await;
-        encode_as(
+        encode(
             Operation::AnswerQuiz,
             result.map(|()| json!({ "quiz_id": args.quiz_id, "rating": args.rating })),
         )
@@ -382,14 +418,9 @@ impl ServerHandler for MathTutorServer {
     }
 }
 
-/// Encode `result` of a repeatable tool call as a tool result.
-fn encode<T: Serialize>(result: CrateResult<T>) -> std::result::Result<CallToolResult, McpError> {
-    encode_as(Operation::Repeatable, result)
-}
-
 /// Encode `result` of `op` as a tool result, and add the safe next step to an error with an unknown outcome.
 // Wrap non-object JSON payloads because MCP requires `structuredContent` to be a JSON object.
-fn encode_as<T: Serialize>(
+fn encode<T: Serialize>(
     op: Operation,
     result: CrateResult<T>,
 ) -> std::result::Result<CallToolResult, McpError> {
@@ -740,7 +771,7 @@ mod tests {
 
     #[test]
     fn unknown_outcome_error_names_the_safe_next_call() {
-        let result = encode_as::<()>(Operation::AnswerQuiz, Err(lost_commit())).unwrap();
+        let result = encode::<()>(Operation::AnswerQuiz, Err(lost_commit())).unwrap();
         let body = result.structured_content.expect("structured error");
         assert_eq!(body["kind"], json!("outcome_unknown"));
         assert_eq!(
@@ -750,8 +781,35 @@ mod tests {
     }
 
     #[test]
+    fn every_mcp_step_matches_the_input_schema_of_its_tool() {
+        let tools = MathTutorServer::tool_router().list_all();
+        for step in crate::instruct::filled_steps() {
+            let shown = step.render(Surface::Mcp);
+            let tool = tools
+                .iter()
+                .find(|t| t.name == step.tool().mcp())
+                .unwrap_or_else(|| panic!("{shown}: unknown tool"));
+            let properties = tool.input_schema["properties"].as_object().unwrap();
+            let args = step.mcp_args();
+            for (name, value) in &args {
+                let property = properties
+                    .get(name)
+                    .unwrap_or_else(|| panic!("{shown}: unknown field {name}"));
+                if let Some(options) = property.get("enum") {
+                    let options = options.as_array().unwrap();
+                    assert!(options.contains(value), "{shown}: {name} = {value}");
+                }
+            }
+            for name in tool.input_schema["required"].as_array().unwrap() {
+                let name = name.as_str().unwrap();
+                assert!(args.contains_key(name), "{shown}: missing {name}");
+            }
+        }
+    }
+
+    #[test]
     fn known_outcome_error_omits_next_step() {
-        let result = encode_as::<()>(Operation::AnswerQuiz, Err(Error::NoPath)).unwrap();
+        let result = encode::<()>(Operation::AnswerQuiz, Err(Error::NoPath)).unwrap();
         let body = result.structured_content.expect("structured error");
         assert!(body.get("next_step").is_none());
     }

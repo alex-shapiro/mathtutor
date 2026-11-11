@@ -34,17 +34,17 @@ To migrate an existing libSQL database, run `mt import-turso` before creating a 
 
 ```
 mt path list                          # list paths with goal and progress
-mt path new <GOAL> --targets <ID>... [--strategy {bottom-up,top-down}]
+mt path new <GOAL> --targets <ID>... [--strategy {bottom_up,top_down}]
                                       # create a learning path
 mt path state [--path P]              # show path status summary
 mt path next  [--path P] [--new | --due]
                                       # get the next scheduled action (AYML)
 mt path syllabus [--path P] [-n N]    # list upcoming untaught lesson topics
 mt path tree  [--path P] [--depth N]  # show the reachable prerequisite tree
-mt path strategy {bottom-up,top-down} [--path P]
+mt path strategy {bottom_up,top_down} [--path P]
                                       # change the traversal strategy
 mt path subpath set --atoms <ID>... [--path P]
-                                      # teach these atoms first in top-down mode
+                                      # teach these atoms first in top_down mode
 mt path subpath clear [--path P]      # remove the subpath
 
 mt graph list [<ID>] [--path P] [--recursive]  # list areas or cluster children

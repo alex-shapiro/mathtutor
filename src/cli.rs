@@ -36,13 +36,32 @@ impl Cmd {
     pub fn operation(&self) -> Operation {
         match self {
             Cmd::ImportTurso(_) => Operation::ImportTurso,
-            Cmd::Path(p) if matches!(p.op, PathOp::New(_)) => Operation::NewPath,
+            Cmd::Path(p) => match p.op {
+                PathOp::New(_) => Operation::NewPath,
+                PathOp::List(_)
+                | PathOp::State(_)
+                | PathOp::Next(_)
+                | PathOp::Strategy(_)
+                | PathOp::Subpath(_)
+                | PathOp::Syllabus(_)
+                | PathOp::Tree(_) => Operation::Repeatable,
+            },
             Cmd::Quiz(q) => match q.op {
                 QuizOp::Create(_) => Operation::CreateQuiz,
                 QuizOp::Answer(_) => Operation::AnswerQuiz,
                 QuizOp::Update(_) | QuizOp::Delete(_) => Operation::Repeatable,
             },
-            _ => Operation::Repeatable,
+            Cmd::Lesson(l) => match l.op {
+                LessonOp::Upsert(_) => Operation::Repeatable,
+            },
+            Cmd::Graph(g) => match g.op {
+                GraphOp::Show(_) | GraphOp::List(_) | GraphOp::Check(_) | GraphOp::Dump(_) => {
+                    Operation::Repeatable
+                }
+            },
+            Cmd::Instruct(_) => Operation::Repeatable,
+            #[cfg(feature = "mcp")]
+            Cmd::Mcp(_) => Operation::Repeatable,
         }
     }
 }
@@ -85,7 +104,7 @@ pub struct PathNewCmd {
     #[argh(option)]
     pub targets: Vec<String>,
 
-    /// initial traversal strategy: `bottom-up` (default) or `top-down`
+    /// initial traversal strategy: `bottom_up` (default) or `top_down`
     #[argh(option, default = "types::Strategy::BottomUp")]
     pub strategy: types::Strategy,
 }
@@ -146,7 +165,7 @@ pub struct PathTreeCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "strategy")]
 pub struct PathStrategyCmd {
-    /// traversal strategy: `bottom-up` or `top-down`
+    /// traversal strategy: `bottom_up` or `top_down`
     #[argh(positional)]
     pub strategy: types::Strategy,
 

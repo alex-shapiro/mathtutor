@@ -13,11 +13,9 @@ const TERMS: &[(&str, &str, &str)] = &[
     ("surface", "the `mt` CLI", "the Math Tutor MCP server"),
     ("server", "`mt`", "The MCP server"),
     ("step", "command", "tool call"),
-    ("bottom_up", "bottom-up", "bottom_up"),
-    ("top_down", "top-down", "top_down"),
     (
         "set_strategy",
-        "Pass `--strategy top-down` to `mt path new`, or change the strategy at any time with `mt path strategy <bottom-up|top-down>`",
+        "Pass `--strategy top_down` to `mt path new`, or change the strategy at any time with `mt path strategy <bottom_up|top_down>`",
         "Pass `strategy` to `new_path`, or change the strategy at any time with `set_strategy { path_id, strategy }`",
     ),
     (
@@ -53,7 +51,7 @@ const TERMS: &[(&str, &str, &str)] = &[
     ),
     ("quiz_type", "`--type`", "`kind`"),
     ("answer_name", "`mt quiz answer`", "`answer_quiz`"),
-    ("verbatim_field", "`--user-answer`", "`answer`"),
+    ("verbatim_field", "`--user-answer`", "`user_answer`"),
     ("run", "Run", "Call"),
     (
         "delete_quiz",
@@ -145,6 +143,52 @@ pub fn playbook(surface: Surface) -> String {
     out
 }
 
+/// Return every playbook step and every scheduled step with valid values, once for each option of each choice.
+#[cfg(test)]
+pub(crate) fn filled_steps() -> Vec<Step> {
+    use crate::scheduler::{Action, next_step};
+    use crate::types::Difficulty;
+
+    let atom_id = || "fnd.1.1.1".to_string();
+    let actions = [
+        Action::CreateLesson { atom_id: atom_id() },
+        Action::PresentLesson { atom_id: atom_id() },
+        Action::CreateQuiz {
+            atom_id: atom_id(),
+            difficulty: Difficulty::Hard,
+        },
+        Action::PresentQuiz {
+            quiz_id: "fnd.1.1.1.q1".into(),
+            atom_id: atom_id(),
+        },
+        Action::Done,
+    ];
+    let steps: Vec<Step> = playbook_steps()
+        .into_iter()
+        .map(|(_, step)| step)
+        .chain(actions.iter().filter_map(|a| next_step(a, "p_test")))
+        .collect();
+    (0..RATINGS.len())
+        .flat_map(|i| {
+            steps.iter().map(move |step| {
+                step.fill(|field| match field {
+                    Field::Atom => atom_id(),
+                    Field::QuizId => "fnd.1.1.1.q1".into(),
+                    Field::PathId => "p_test".into(),
+                    Field::Difficulty => DIFFICULTIES[i % DIFFICULTIES.len()].into(),
+                    Field::QuizType => QUIZ_TYPES[i % QUIZ_TYPES.len()].into(),
+                    Field::Rating => RATINGS[i].into(),
+                    Field::Body
+                    | Field::Question
+                    | Field::Answer
+                    | Field::Rubric
+                    | Field::UserAnswer => "text".into(),
+                })
+            })
+        })
+        .collect()
+}
+
 /// Print the CLI agent playbook (`mt instruct`).
 pub fn cmd_instruct() -> Result<()> {
     print!("{}", playbook(Surface::Cli));
@@ -212,6 +256,17 @@ mod tests {
             );
         }
         assert!(!text.contains(" { "), "MCP tool syntax in the CLI playbook");
+    }
+
+    #[test]
+    fn every_cli_step_parses_as_its_command() {
+        for step in filled_steps() {
+            let args = step.cli_args();
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            if let Err(early) = Mt::from_args(&["mt"], &args) {
+                panic!("{}: {}", step.render(Surface::Cli), early.output);
+            }
+        }
     }
 
     #[cfg(feature = "mcp")]

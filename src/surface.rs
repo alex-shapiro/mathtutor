@@ -82,7 +82,8 @@ impl Field {
             Field::PathId => "path_id",
             Field::Body => "body",
             Field::Question => "question",
-            Field::Answer | Field::UserAnswer => "answer",
+            Field::Answer => "answer",
+            Field::UserAnswer => "user_answer",
             Field::Rubric => "rubric",
             Field::Difficulty => "difficulty",
             Field::QuizType => "kind",
@@ -187,6 +188,24 @@ impl Step {
             Surface::Cli => self.render_cli(),
             Surface::Mcp => self.render_mcp(),
         }
+    }
+
+    /// Return the arguments after `mt` that a shell passes for this step.
+    pub fn cli_args(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.tool.cli().split(' ').map(String::from).collect();
+        for a in self.ordered_args() {
+            out.extend(a.field.cli_flag().map(String::from));
+            out.push(a.value.raw());
+        }
+        out
+    }
+
+    /// Return the MCP arguments of this step as a JSON object.
+    pub fn mcp_args(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.args
+            .iter()
+            .map(|a| (a.field.mcp().to_string(), a.value.raw().into()))
+            .collect()
     }
 
     /// Return the arguments with the positional argument first.

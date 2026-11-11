@@ -134,8 +134,8 @@ impl std::str::FromStr for Strategy {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Error> {
         match s {
-            "bottom_up" | "bottom-up" => Ok(Strategy::BottomUp),
-            "top_down" | "top-down" => Ok(Strategy::TopDown),
+            "bottom_up" => Ok(Strategy::BottomUp),
+            "top_down" => Ok(Strategy::TopDown),
             other => Err(Error::InvalidStrategy(other.to_string())),
         }
     }
@@ -168,5 +168,22 @@ impl std::str::FromStr for QuizType {
             "multiple_choice" => Ok(QuizType::MultipleChoice),
             other => Err(Error::InvalidQuizType(other.to_string())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_strategy_has_one_spelling_for_input_and_output() {
+        for strategy in [Strategy::BottomUp, Strategy::TopDown] {
+            let name = strategy.as_str();
+            assert_eq!(name.parse::<Strategy>().unwrap(), strategy);
+            assert_eq!(strategy.to_string(), name);
+            assert_eq!(serde_json::to_value(strategy).unwrap(), name);
+        }
+        assert!("bottom-up".parse::<Strategy>().is_err());
+        assert!("top-down".parse::<Strategy>().is_err());
     }
 }

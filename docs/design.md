@@ -18,10 +18,10 @@ Each atom represents a single concept. A lesson is 1–2 paragraphs and introduc
 ```bash
 # Path lifecycle
 mt path list
-mt path new <GOAL> --targets <ID>[,<ID>...] [--strategy {bottom-up,top-down}]
+mt path new <GOAL> --targets <ID>[,<ID>...] [--strategy {bottom_up,top_down}]
 mt path state [--path P]
 mt path next  [--path P]
-mt path strategy {bottom-up,top-down} [--path P]
+mt path strategy {bottom_up,top_down} [--path P]
 mt path subpath set --atoms <ID>[,<ID>...] [--path P]
 mt path subpath clear [--path P]
 mt path syllabus [--path P] [-n N]
@@ -71,8 +71,8 @@ Each `--targets` entry is either an atom ID, such as `tx.1.1`, or a cluster ID, 
 ## `mt path next` output
 
 `mt path next` writes a single AYML record to stdout:
-- Under the `bottom-up` strategy, `mt path next` only selects an atom after all of its prerequisites are complete.
-- Under the `top-down` strategy, targets are presented before their prerequisites.
+- Under the `bottom_up` strategy, `mt path next` only selects an atom after all of its prerequisites are complete.
+- Under the `top_down` strategy, targets are presented before their prerequisites.
 
 ```yaml
 schema_version: 1
@@ -82,7 +82,7 @@ next_step: <command that performs the action>
 payload: ...
 ```
 
-`next_step` names the path explicitly, so that the agent acts on the same path. `mt mcp` returns `next_step` as an MCP tool call, such as `answer_quiz { quiz_id: "...", path_id: "...", rating: "again|hard|good|easy", answer: "<verbatim reply>" }`. The `done` action omits `next_step`.
+`next_step` names the path explicitly, so that the agent acts on the same path. `mt mcp` returns `next_step` as an MCP tool call, such as `answer_quiz { quiz_id: "...", path_id: "...", rating: "again|hard|good|easy", user_answer: "<verbatim reply>" }`. The `done` action omits `next_step`.
 
 ### `create_lesson`
 
@@ -291,14 +291,14 @@ An atom is complete if its lesson is taught and each difficulty slot has at leas
 
 ## Teaching strategies
 
-A path uses either the `bottom-up` or `top-down` traversal strategy. `mt path strategy` changes the active strategy at any time.
+A path uses either the `bottom_up` or `top_down` traversal strategy. `mt path strategy` changes the active strategy at any time.
 
 - **Bottom-up**: Default strategy. Traverses the prerequisite DAG in post-order DFS so that every prerequisite is completed before its dependents.
 - **Top-down**: Presents target atoms directly in target order without requiring prerequisites first.
 
 ### Subpaths
 
-If a user is blocked on a target atom in `top-down` mode, the agent can set a subpath with `mt path subpath set` that lists prerequisite atoms leading to that target. While a subpath is active in `top-down` mode, `mt path next` teaches the incomplete atoms in the subpath in order. Once the final atom in the subpath is completed, the subpath is cleared automatically.
+If a user is blocked on a target atom in `top_down` mode, the agent can set a subpath with `mt path subpath set` that lists prerequisite atoms leading to that target. While a subpath is active in `top_down` mode, `mt path next` teaches the incomplete atoms in the subpath in order. Once the final atom in the subpath is completed, the subpath is cleared automatically.
 
 ## Tool I/O and exit codes
 
