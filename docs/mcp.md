@@ -76,7 +76,7 @@ flyctl secrets set MT_API_KEY='...'
 flyctl secrets set BASERUNNA_TOKEN='...'
 ```
 
-`BASERUNNA_URL` defaults to `https://baserunna.fly.dev` and `BASERUNNA_DB` defaults to `mathtutor`. Set `BASERUNNA_TOKEN` to a key that is limited to the database, so that a leak of the server secret cannot delete the database.
+`fly.toml` sets `BASERUNNA_URL` in its `[env]` section, so the server does not depend on the default URL of `mt`. `BASERUNNA_DB` defaults to `mathtutor`. Set `BASERUNNA_TOKEN` to a key that is limited to the database, so that a leak of the server secret cannot delete the database.
 
 Give the server key its own rate limit below the limit of the Baserunna user. Baserunna lets each user send 500 requests per second on each node, through all of their keys together. Without a lower limit on the server key, a flood of requests to the server can use the full budget and slow or block the CLI on every device. The web console cannot set the limit of a key, so create the server key through the API with a session token:
 

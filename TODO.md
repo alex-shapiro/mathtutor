@@ -7,14 +7,14 @@ Follow-up tasks for the Baserunna migration.
 - [x] **Configure Baserunna in CI.** Tests run an in-process node built from the same Baserunna revision as the client.
 - [x] **Import existing Turso data.** Implemented in `mt import-turso`.
 - [ ] **Migrate the Fly.io app.** Follow these steps to cut over without losing local replica writes:
-  1. Create a temporary Baserunna key without a database limit and set it as `BASERUNNA_TOKEN` for the imports. Only such a key can create the target database, and it can also delete every database of its user, so keep it off the server and the devices. Set `BASERUNNA_DB` if the database name is not `mathtutor`.
+  1. Create a temporary Baserunna key without a database limit and set it as `BASERUNNA_TOKEN` for the imports. Only such a key can create the target database, and it can also delete every database of its user, so keep it off the server and the devices. Set `BASERUNNA_URL` to the production Baserunna server, which the `[env]` section of `fly.toml` also names. Set `BASERUNNA_DB` if the database name is not `mathtutor`.
   2. Run `mt import-turso` with `TURSO_URL` and `TURSO_AUTH_TOKEN` against a scratch database to verify zero mismatches on real libSQL data.
   3. Stop every old Fly machine with a graceful signal and confirm that its log has zero sync failures.
   4. On each client device, run an old `mt` command to flush the local replica, confirm that it syncs, and retire the old binary.
   5. Revoke all existing libSQL tokens so that restarted Fly machines cannot write to Turso, then create a fresh token for the import.
   6. Run `mt import-turso` against the production database and confirm zero mismatches. If mismatches remain, delete the target database with an unscoped Baserunna key, fix the cause, and repeat the import.
   7. Create a key limited to the production database for the server, with its own rate limit as "Deployment" in `docs/mcp.md` shows, and a separate limited key for each device. Set the server key as the `BASERUNNA_TOKEN` secret of the Fly app, and delete the temporary key of step 1. See "Baserunna keys" in `docs/design.md`.
-  8. Dispatch `.github/workflows/deploy-mcp.yml`, unset `TURSO_URL` and `TURSO_AUTH_TOKEN`, and restore the `push` trigger in the workflow. Keep the Turso database until the new deployment is verified.
+  8. Check that `BASERUNNA_URL` in the `[env]` section of `fly.toml` names the production Baserunna server. Dispatch `.github/workflows/deploy-mcp.yml`, unset `TURSO_URL` and `TURSO_AUTH_TOKEN`, and restore the `push` trigger in the workflow. Keep the Turso database until the new deployment is verified.
 - [x] **Point the Baserunna dependencies at `main`** after the `mathtutor-client` branch of Baserunna is merged.
 
 ## Open product decisions

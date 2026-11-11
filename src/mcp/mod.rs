@@ -901,6 +901,23 @@ mod tests {
     }
 
     #[test]
+    fn the_fly_app_names_its_baserunna_server() {
+        let fly = include_str!("../../fly.toml");
+        let env = fly
+            .split("[env]")
+            .nth(1)
+            .unwrap()
+            .split("\n[")
+            .next()
+            .unwrap();
+        assert!(
+            env.lines()
+                .any(|l| l.starts_with("BASERUNNA_URL = 'https://")),
+            "{env}"
+        );
+    }
+
+    #[test]
     fn a_short_api_key_stops_the_server() {
         let auth = |key: &str| AuthConfig {
             api_key: Some(key.into()),
