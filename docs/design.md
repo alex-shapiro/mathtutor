@@ -58,7 +58,7 @@ If `--path P` is provided to `mt graph show` or `mt graph list`, the output incl
 
 Each `--targets` entry is either an atom ID, such as `tx.1.1`, or a cluster ID, such as `tx.1`. A cluster ID expands to all of its atomic descendants.
 
-`mt path new` validates that each entry expands to at least a single atom and stores the raw IDs in the `paths` table. Target IDs and subpath IDs are expanded to a deduplicated, topologically sorted list of atoms each time the path is loaded. If an atom is later split into a cluster in the curriculum, the stored ID expands to the new descendant atoms.
+`mt path new` validates that each entry expands to at least a single atom and stores the raw IDs in the `paths` table. Target IDs and subpath IDs are expanded to a deduplicated, topologically sorted list of atoms each time the path is loaded. If an atom is later split into a cluster in the curriculum, the stored ID expands to the new descendant atoms. If the curriculum of a release cannot expand a stored target, such as an atom that a later release renamed, `mt path list` shows that ID in `unresolved_targets` and counts progress over the other targets. Other commands for that path fail with `unknown id`.
 
 ## Atom lifecycle
 

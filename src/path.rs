@@ -20,6 +20,31 @@ impl PathFile {
         let atoms = g.expand_to_atoms(&self.targets)?;
         topo_sort(g, &atoms)
     }
+
+    /// Expand each stored target that `g` can expand, and keep the IDs of the other targets.
+    pub fn resolve_each_target(&self, g: &Graph) -> Result<ResolvedTargets> {
+        let mut atoms: Vec<String> = Vec::new();
+        let mut unresolved = Vec::new();
+        for target in &self.targets {
+            match g.expand_to_atoms(std::slice::from_ref(target)) {
+                Ok(expanded) => atoms.extend(expanded),
+                Err(_) => unresolved.push(target.clone()),
+            }
+        }
+        let atoms = dedup_preserving_order(&atoms);
+        Ok(ResolvedTargets {
+            atoms: topo_sort(g, &atoms)?,
+            unresolved,
+        })
+    }
+}
+
+/// Target atoms of a path, with the stored target IDs that the curriculum cannot expand.
+pub struct ResolvedTargets {
+    /// Topologically sorted atoms of the targets that the curriculum can expand.
+    pub atoms: Vec<String>,
+    /// Stored target IDs that the curriculum does not contain or that have zero atoms.
+    pub unresolved: Vec<String>,
 }
 
 /// Resolve the local Math Tutor home directory from `MATHTUTOR_HOME` or `$HOME/.mathtutor`.
@@ -93,7 +118,11 @@ pub struct PathSummary {
     pub goal: String,
     pub strategy: Strategy,
     pub created_at: chrono::DateTime<Utc>,
+    /// Progress over the targets that the curriculum of this release can expand.
     pub targets: TargetProgress,
+    /// Stored target IDs that the curriculum of this release cannot expand, such as a renamed atom.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unresolved_targets: Vec<String>,
 }
 
 /// Learning paths of the user, ordered by creation time.
@@ -111,6 +140,8 @@ pub async fn cmd_path_list(db: &Db) -> Result<()> {
 }
 
 /// Compute the progress summary of every learning path.
+///
+/// A path with targets that the curriculum cannot expand reports those target IDs instead of failing the list.
 pub async fn compute_path_list(db: &Db) -> Result<PathListView> {
     let view = db.snapshot(&Want::all_paths()).await?;
     let g = view.graph()?;
@@ -118,13 +149,14 @@ pub async fn compute_path_list(db: &Db) -> Result<PathListView> {
         .paths()
         .into_iter()
         .map(|p| {
-            let atoms = p.file.resolve_targets(&g)?;
+            let resolved = p.file.resolve_each_target(&g)?;
             Ok(PathSummary {
                 id: p.file.id.clone(),
                 goal: p.file.goal.clone(),
                 strategy: p.file.strategy,
                 created_at: p.file.created_at,
-                targets: TargetProgress::of(&g, &atoms, &p.progress()),
+                targets: TargetProgress::of(&g, &resolved.atoms, &p.progress()),
+                unresolved_targets: resolved.unresolved,
             })
         })
         .collect::<Result<_>>()?;

@@ -143,3 +143,19 @@ async fn path_list_reports_target_progress_of_each_path() {
         (1, 0, 0)
     );
 }
+
+#[tokio::test]
+async fn path_list_reports_targets_that_the_curriculum_cannot_expand() {
+    let db = common::empty_db().await;
+    common::seed_path(&db, "p_known", &["fnd.1.1.2"], Strategy::BottomUp).await;
+    common::seed_path(&db, "p_mixed", &["fnd.1.1.1", "zz.9.9"], Strategy::BottomUp).await;
+    let list = mathtutor::path::compute_path_list(&db).await.unwrap();
+    let summary = |id: &str| list.paths.iter().find(|p| p.id == id).expect("listed path");
+
+    let known = summary("p_known");
+    assert_eq!(known.targets.total, 1);
+    assert_eq!(known.unresolved_targets, Vec::<String>::new());
+    let mixed = summary("p_mixed");
+    assert_eq!(mixed.targets.total, 1);
+    assert_eq!(mixed.unresolved_targets, vec!["zz.9.9".to_string()]);
+}
