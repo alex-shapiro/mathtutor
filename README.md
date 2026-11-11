@@ -57,13 +57,13 @@ mt graph show  <ID>  [--path P]       # show an atom, cluster, or area
 mt graph check [-p DIR]               # validate the curriculum graph
 mt graph dump                         # print the user overlay as AYML
 
-mt lesson upsert <ATOM>  --body TEXT
+mt lesson upsert <ATOM>  --body TEXT [--path P]
 mt quiz create <ATOM>    --difficulty D --question TEXT --answer TEXT \
-                         [--rubric TEXT] [--type {free_text,multiple_choice}]
+                         [--rubric TEXT] [--type {free_text,multiple_choice}] [--path P]
 mt quiz update <QUIZ_ID> [--question TEXT] [--answer TEXT] [--rubric TEXT] \
-                         [--difficulty D] [--type T]
-mt quiz delete <QUIZ_ID>
-mt quiz answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT]
+                         [--difficulty D] [--type T] [--path P]
+mt quiz delete <QUIZ_ID> [--path P]
+mt quiz answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT] [--path P]
 
 mt instruct                           # print the agent playbook
 mt mcp                                # start the MCP HTTP server (see docs/mcp.md)
