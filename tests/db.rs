@@ -10,6 +10,7 @@ use chrono::{Duration, Utc};
 use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, Event, EventKind, EventPayload};
 use mathtutor::graph::Curriculum;
+use mathtutor::overlay::QuizDraft;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
 use mathtutor::view::Want;
 use mathtutor::{Error, answer, cards, overlay, path, store};
@@ -268,11 +269,13 @@ async fn concurrent_answers_are_recorded_once_each() {
     let quiz = store::cmd_quiz_create(
         &db,
         ATOM,
-        Difficulty::Easy,
-        "q?".into(),
-        "a".into(),
-        None,
-        QuizType::FreeText,
+        QuizDraft {
+            difficulty: Difficulty::Easy,
+            question: "q?".into(),
+            answer: "a".into(),
+            rubric: None,
+            kind: QuizType::FreeText,
+        },
         Some(PATH_ID),
     )
     .await
@@ -597,11 +600,13 @@ async fn quiz_ids_stay_unique_under_concurrent_authoring() {
                 store::cmd_quiz_create(
                     &db,
                     "fnd.1.1.1",
-                    Difficulty::Easy,
-                    format!("q{i}"),
-                    "a".into(),
-                    None,
-                    QuizType::FreeText,
+                    QuizDraft {
+                        difficulty: Difficulty::Easy,
+                        question: format!("q{i}"),
+                        answer: "a".into(),
+                        rubric: None,
+                        kind: QuizType::FreeText,
+                    },
                     Some(PATH_ID),
                 )
                 .await
@@ -635,11 +640,13 @@ async fn own_overlay_writes_keep_the_cache_valid() {
     let quiz = store::cmd_quiz_create(
         &db,
         "fnd.1.1.1",
-        Difficulty::Easy,
-        "q".into(),
-        "a".into(),
-        None,
-        QuizType::FreeText,
+        QuizDraft {
+            difficulty: Difficulty::Easy,
+            question: "q".into(),
+            answer: "a".into(),
+            rubric: None,
+            kind: QuizType::FreeText,
+        },
         Some(PATH_ID),
     )
     .await

@@ -3,6 +3,7 @@
 use chrono::{Duration, Utc};
 use mathtutor::cards::{CardRow, CardState};
 use mathtutor::graph::Graph;
+use mathtutor::overlay::QuizDraft;
 use mathtutor::path::PathFile;
 use mathtutor::progress::{PathCompletion, PathProgress, ReachProgress, TargetProgress};
 use mathtutor::state;
@@ -163,11 +164,13 @@ async fn compute_state_past_due_counts_overdue_cards() {
         let quiz_id = mathtutor::store::cmd_quiz_create(
             &db,
             "fnd.1.1.1",
-            mathtutor::types::Difficulty::Easy,
-            "q".into(),
-            "a".into(),
-            None,
-            mathtutor::types::QuizType::FreeText,
+            QuizDraft {
+                difficulty: mathtutor::types::Difficulty::Easy,
+                question: "q".into(),
+                answer: "a".into(),
+                rubric: None,
+                kind: mathtutor::types::QuizType::FreeText,
+            },
             Some(PATH_ID),
         )
         .await
@@ -231,11 +234,13 @@ async fn past_due_ignores_a_deleted_quiz() {
     let quiz_id = mathtutor::store::cmd_quiz_create(
         &db,
         "fnd.1.1.1",
-        mathtutor::types::Difficulty::Easy,
-        "q".into(),
-        "a".into(),
-        None,
-        mathtutor::types::QuizType::FreeText,
+        QuizDraft {
+            difficulty: mathtutor::types::Difficulty::Easy,
+            question: "q".into(),
+            answer: "a".into(),
+            rubric: None,
+            kind: mathtutor::types::QuizType::FreeText,
+        },
         Some(common::PATH_ID),
     )
     .await

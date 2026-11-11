@@ -2,6 +2,7 @@
 
 use mathtutor::db::Db;
 use mathtutor::event_log::{self, EventKind};
+use mathtutor::overlay::QuizDraft;
 use mathtutor::store;
 use mathtutor::types::{Difficulty, QuizType, Strategy};
 
@@ -72,11 +73,13 @@ async fn quiz_create_after_delete_skips_tombstoned_id() {
     let first = store::cmd_quiz_create(
         &db,
         NO_LESSON_ATOM,
-        Difficulty::Easy,
-        "q1?".into(),
-        "a1".into(),
-        None,
-        QuizType::FreeText,
+        QuizDraft {
+            difficulty: Difficulty::Easy,
+            question: "q1?".into(),
+            answer: "a1".into(),
+            rubric: None,
+            kind: QuizType::FreeText,
+        },
         Some(&path_id),
     )
     .await
@@ -90,11 +93,13 @@ async fn quiz_create_after_delete_skips_tombstoned_id() {
     let second = store::cmd_quiz_create(
         &db,
         NO_LESSON_ATOM,
-        Difficulty::Easy,
-        "q2?".into(),
-        "a2".into(),
-        None,
-        QuizType::FreeText,
+        QuizDraft {
+            difficulty: Difficulty::Easy,
+            question: "q2?".into(),
+            answer: "a2".into(),
+            rubric: None,
+            kind: QuizType::FreeText,
+        },
         Some(&path_id),
     )
     .await

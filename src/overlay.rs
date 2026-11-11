@@ -152,6 +152,79 @@ impl Overlay {
     }
 }
 
+/// Fields of a quiz that an agent authors.
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct QuizDraft {
+    /// Difficulty slot (`easy`, `medium`, or `hard`).
+    pub difficulty: Difficulty,
+    /// Question text.
+    pub question: String,
+    /// Reference answer text.
+    pub answer: String,
+    /// Optional grading rubric.
+    #[serde(default)]
+    pub rubric: Option<String>,
+    /// Quiz format (`free_text` or `multiple_choice`, default `free_text`).
+    #[serde(default)]
+    pub kind: QuizType,
+}
+
+impl QuizDraft {
+    /// Return the quiz with these fields and ID `id`.
+    pub fn into_quiz(self, id: String) -> Quiz {
+        Quiz {
+            id,
+            difficulty: self.difficulty,
+            kind: (self.kind != QuizType::FreeText).then_some(self.kind),
+            question: self.question,
+            answer: self.answer,
+            rubric: self.rubric,
+        }
+    }
+}
+
+/// Fields of an existing quiz to replace. An omitted field keeps its current value.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct QuizPatch {
+    /// Updated difficulty slot (`easy`, `medium`, or `hard`).
+    #[serde(default)]
+    pub difficulty: Option<Difficulty>,
+    /// Updated question text.
+    #[serde(default)]
+    pub question: Option<String>,
+    /// Updated reference answer text.
+    #[serde(default)]
+    pub answer: Option<String>,
+    /// Updated grading rubric.
+    #[serde(default)]
+    pub rubric: Option<String>,
+    /// Updated quiz format (`free_text` or `multiple_choice`).
+    #[serde(default)]
+    pub kind: Option<QuizType>,
+}
+
+impl QuizPatch {
+    /// Return `base` with the fields of this patch replaced.
+    pub fn apply(&self, base: &Quiz) -> Quiz {
+        Quiz {
+            id: base.id.clone(),
+            difficulty: self.difficulty.unwrap_or(base.difficulty),
+            kind: match self.kind {
+                Some(t) => (t != QuizType::FreeText).then_some(t),
+                None => base.kind,
+            },
+            question: self
+                .question
+                .clone()
+                .unwrap_or_else(|| base.question.clone()),
+            answer: self.answer.clone().unwrap_or_else(|| base.answer.clone()),
+            rubric: self.rubric.clone().or_else(|| base.rubric.clone()),
+        }
+    }
+}
+
 /// Set the lesson body for `atom_id` in the overlay.
 pub fn upsert_lesson(changes: &mut Changes, atom_id: &str, body: &str) {
     changes.overlay(Edit::Lesson {
@@ -169,32 +242,11 @@ pub fn add_quiz(changes: &mut Changes, atom_id: &str, q: &Quiz) {
     });
 }
 
-/// Update fields of `base` in the overlay and clear any removal tombstone.
-#[allow(clippy::too_many_arguments)]
-pub fn amend_quiz(
-    changes: &mut Changes,
-    atom_id: &str,
-    base: &Quiz,
-    new_difficulty: Option<Difficulty>,
-    new_question: Option<&str>,
-    new_answer: Option<&str>,
-    new_rubric: Option<&str>,
-    new_type: Option<QuizType>,
-) {
-    let quiz = Quiz {
-        id: base.id.clone(),
-        difficulty: new_difficulty.unwrap_or(base.difficulty),
-        kind: match new_type {
-            Some(t) => (t != QuizType::FreeText).then_some(t),
-            None => base.kind,
-        },
-        question: new_question.unwrap_or(&base.question).to_string(),
-        answer: new_answer.unwrap_or(&base.answer).to_string(),
-        rubric: new_rubric.or(base.rubric.as_deref()).map(str::to_string),
-    };
+/// Replace `base` in the overlay with `patch` applied, and clear any removal tombstone.
+pub fn amend_quiz(changes: &mut Changes, atom_id: &str, base: &Quiz, patch: &QuizPatch) {
     changes.overlay(Edit::Quiz {
         atom_id: atom_id.into(),
-        quiz,
+        quiz: patch.apply(base),
         new: false,
     });
 }
@@ -213,4 +265,49 @@ pub async fn cmd_graph_dump(db: &Db) -> Result<()> {
     let text = ayml::to_string(&*overlay).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> Quiz {
+        Quiz {
+            id: "a.q1".into(),
+            difficulty: Difficulty::Easy,
+            kind: Some(QuizType::MultipleChoice),
+            question: "q".into(),
+            answer: "a".into(),
+            rubric: Some("r".into()),
+        }
+    }
+
+    #[test]
+    fn patch_replaces_only_the_fields_that_it_sets() {
+        let patch = QuizPatch {
+            question: Some("new".into()),
+            ..QuizPatch::default()
+        };
+        let q = patch.apply(&base());
+        assert_eq!(q.question, "new");
+        assert_eq!(
+            (q.id.as_str(), q.answer.as_str(), q.difficulty),
+            ("a.q1", "a", Difficulty::Easy)
+        );
+        assert_eq!(q.kind, Some(QuizType::MultipleChoice));
+        assert_eq!(q.rubric.as_deref(), Some("r"));
+    }
+
+    #[test]
+    fn free_text_is_the_unstored_default_kind() {
+        let patch = QuizPatch {
+            kind: Some(QuizType::FreeText),
+            ..QuizPatch::default()
+        };
+        assert_eq!(patch.apply(&base()).kind, None);
+        let draft: QuizDraft =
+            serde_json::from_str(r#"{"difficulty":"hard","question":"q","answer":"a"}"#).unwrap();
+        let q = draft.into_quiz("b.q1".into());
+        assert_eq!((q.kind, q.difficulty), (None, Difficulty::Hard));
+    }
 }

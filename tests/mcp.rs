@@ -511,6 +511,45 @@ async fn path_tools_return_the_cli_views_with_mcp_next_steps() {
 }
 
 #[tokio::test]
+async fn quiz_tools_accept_the_shared_quiz_fields() {
+    let server = spawn_server().await;
+    let session = handshake(&server).await;
+    let created = call_tool(
+        &server,
+        &session,
+        "new_path",
+        json!({ "goal": "Test", "targets": ["fnd.1.1.2"], "strategy": "top_down" }),
+    )
+    .await;
+    let path_id = created["structuredContent"]["path_id"].clone();
+    let lesson = json!({ "atom": "fnd.1.1.2", "body": "b", "path_id": path_id });
+    call_tool(&server, &session, "upsert_lesson", lesson).await;
+
+    let quiz = json!({
+        "atom": "fnd.1.1.2",
+        "difficulty": "easy",
+        "question": "q",
+        "answer": "a",
+        "path_id": path_id,
+    });
+    let created = call_tool(&server, &session, "create_quiz", quiz).await;
+    assert_ne!(created["isError"], json!(true), "{created}");
+    let quiz_id = created["structuredContent"]["quiz_id"].clone();
+    assert_eq!(quiz_id, json!("fnd.1.1.2.q1"));
+
+    let patch = json!({ "quiz_id": quiz_id, "question": "q2", "path_id": path_id });
+    let updated = call_tool(&server, &session, "update_quiz", patch).await;
+    assert_ne!(updated["isError"], json!(true), "{updated}");
+    let next = call_tool(&server, &session, "get_next", json!({ "path_id": path_id })).await;
+    let quiz = &next["structuredContent"]["payload"]["quiz"];
+    assert_eq!(
+        (&quiz["question"], &quiz["answer"]),
+        (&json!("q2"), &json!("a"))
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn health_returns_200_ok_without_auth() {
     for server in [spawn_server().await, spawn_oauth_server().await] {
         let res = client().get(server.url("/health")).send().await.unwrap();

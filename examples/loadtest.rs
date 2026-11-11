@@ -18,6 +18,7 @@ use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, EventKind};
 use mathtutor::graph::Quiz;
 use mathtutor::overlay;
+use mathtutor::overlay::QuizDraft;
 use mathtutor::scheduler::Action;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
 use mathtutor::view::Want;
@@ -427,11 +428,13 @@ impl Learner {
                 let r = store::cmd_quiz_create(
                     &self.db,
                     atom_id,
-                    *difficulty,
-                    sample_text(&mut self.rng, 250),
-                    sample_text(&mut self.rng, 300),
-                    Some(sample_text(&mut self.rng, 200)),
-                    QuizType::FreeText,
+                    QuizDraft {
+                        difficulty: *difficulty,
+                        question: sample_text(&mut self.rng, 250),
+                        answer: sample_text(&mut self.rng, 300),
+                        rubric: Some(sample_text(&mut self.rng, 200)),
+                        kind: QuizType::FreeText,
+                    },
                     Some(&p),
                 )
                 .await

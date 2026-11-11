@@ -2,7 +2,7 @@
 
 use mathtutor::db::Db;
 use mathtutor::graph::{Graph, Quiz};
-use mathtutor::overlay;
+use mathtutor::overlay::{self, QuizDraft, QuizPatch};
 use mathtutor::types::{Difficulty, QuizType};
 use mathtutor::view::Changes;
 
@@ -128,16 +128,13 @@ async fn amend_quiz_upserts_and_untombstones() {
         rubric: None,
     };
     edit(&db, |c| {
-        overlay::amend_quiz(
-            c,
-            WITH_LESSON_ATOM,
-            &base,
-            Some(Difficulty::Hard),
-            Some("new question"),
-            Some("new answer"),
-            None,
-            None,
-        );
+        let patch = QuizPatch {
+            difficulty: Some(Difficulty::Hard),
+            question: Some("new question".into()),
+            answer: Some("new answer".into()),
+            ..QuizPatch::default()
+        };
+        overlay::amend_quiz(c, WITH_LESSON_ATOM, &base, &patch);
     })
     .await;
 
@@ -269,16 +266,12 @@ async fn merged_graph_amendment_replaces_shipped_quiz() {
         rubric: None,
     };
     edit(&db, |c| {
-        overlay::amend_quiz(
-            c,
-            WITH_LESSON_ATOM,
-            &base,
-            None,
-            Some("Define proposition."),
-            Some("Truth-valued declarative."),
-            None,
-            None,
-        );
+        let patch = QuizPatch {
+            question: Some("Define proposition.".into()),
+            answer: Some("Truth-valued declarative.".into()),
+            ..QuizPatch::default()
+        };
+        overlay::amend_quiz(c, WITH_LESSON_ATOM, &base, &patch);
     })
     .await;
 
@@ -391,11 +384,13 @@ async fn deleting_a_deleted_quiz_succeeds() {
     let quiz_id = mathtutor::store::cmd_quiz_create(
         &db,
         "fnd.1.1.1",
-        mathtutor::types::Difficulty::Easy,
-        "q".into(),
-        "a".into(),
-        None,
-        mathtutor::types::QuizType::FreeText,
+        QuizDraft {
+            difficulty: mathtutor::types::Difficulty::Easy,
+            question: "q".into(),
+            answer: "a".into(),
+            rubric: None,
+            kind: mathtutor::types::QuizType::FreeText,
+        },
         path,
     )
     .await

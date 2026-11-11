@@ -5,8 +5,7 @@ use std::collections::BTreeSet;
 use crate::db::Db;
 use crate::event_log;
 use crate::graph;
-use crate::overlay;
-use crate::types::{Difficulty, QuizType};
+use crate::overlay::{self, QuizDraft, QuizPatch};
 use crate::view::Want;
 use crate::{Error, Result};
 
@@ -34,16 +33,11 @@ pub async fn cmd_lesson_upsert(
     .await
 }
 
-/// Create a quiz for `atom_id` in the overlay and return its generated quiz ID.
-#[allow(clippy::too_many_arguments)]
+/// Create quiz `draft` for `atom_id` in the overlay and return its generated quiz ID.
 pub async fn cmd_quiz_create(
     db: &Db,
     atom_id: &str,
-    difficulty: Difficulty,
-    question: String,
-    answer: String,
-    rubric: Option<String>,
-    quiz_type: QuizType,
+    draft: QuizDraft,
     path_id: Option<&str>,
 ) -> Result<String> {
     db.transact(&Want::path(path_id), |view, changes| {
@@ -54,14 +48,9 @@ pub async fn cmd_quiz_create(
             return Err(Error::NoLesson(atom_id.to_string()));
         }
         let tombstones = view.overlay.atoms.get(atom_id).map(|e| &e.removed);
-        let quiz = graph::Quiz {
-            id: next_quiz_id(atom_id, &c.quizzes, tombstones),
-            difficulty,
-            kind: (quiz_type != QuizType::FreeText).then_some(quiz_type),
-            question: question.clone(),
-            answer: answer.clone(),
-            rubric: rubric.clone(),
-        };
+        let quiz = draft
+            .clone()
+            .into_quiz(next_quiz_id(atom_id, &c.quizzes, tombstones));
         overlay::add_quiz(changes, atom_id, &quiz);
         changes.append(
             view,
@@ -72,32 +61,18 @@ pub async fn cmd_quiz_create(
     .await
 }
 
-/// Update fields of `quiz_id` in the overlay while preserving its ID and FSRS history.
-#[allow(clippy::too_many_arguments)]
+/// Apply `patch` to `quiz_id` in the overlay while preserving its ID and FSRS history.
 pub async fn cmd_quiz_update(
     db: &Db,
     quiz_id: &str,
-    question: Option<String>,
-    answer: Option<String>,
-    rubric: Option<String>,
-    difficulty: Option<Difficulty>,
-    quiz_type: Option<QuizType>,
+    patch: &QuizPatch,
     path_id: Option<&str>,
 ) -> Result<()> {
     db.transact(&Want::path(path_id), |view, changes| {
         let id = view.path()?.file.id.clone();
         let g = view.graph()?;
         let (atom, quiz) = g.quiz(quiz_id)?;
-        overlay::amend_quiz(
-            changes,
-            &atom.id,
-            quiz,
-            difficulty,
-            question.as_deref(),
-            answer.as_deref(),
-            rubric.as_deref(),
-            quiz_type,
-        );
+        overlay::amend_quiz(changes, &atom.id, quiz, patch);
         changes.append(
             view,
             &event_log::quiz_amended(id, atom.id.clone(), quiz_id.to_string()),

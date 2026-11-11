@@ -3,6 +3,7 @@
 use chrono::{Duration, TimeZone, Utc};
 use mathtutor::db::Db;
 use mathtutor::event_log::{Event, EventKind, EventPayload};
+use mathtutor::overlay::QuizDraft;
 use mathtutor::scheduler::{self, LessonHistory, QuizHistory};
 use mathtutor::surface::Surface;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
@@ -223,11 +224,13 @@ async fn next_step_names_the_path_and_the_verbatim_answer_on_each_surface() {
     let quiz = store::cmd_quiz_create(
         &db,
         "fnd.1.1.2",
-        Difficulty::Easy,
-        "q".into(),
-        "a".into(),
-        None,
-        QuizType::FreeText,
+        QuizDraft {
+            difficulty: Difficulty::Easy,
+            question: "q".into(),
+            answer: "a".into(),
+            rubric: None,
+            kind: QuizType::FreeText,
+        },
         Some(&id),
     )
     .await

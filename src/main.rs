@@ -11,6 +11,7 @@ use mathtutor::cli::{Cmd, GraphOp, LessonOp, Mt, PathOp, QuizOp, SubpathOp};
 use mathtutor::graph::{Curriculum, CurriculumSource};
 #[cfg(feature = "mcp")]
 use mathtutor::mcp;
+use mathtutor::overlay::{QuizDraft, QuizPatch};
 use mathtutor::surface::Surface;
 use mathtutor::{
     Error, Result, answer, db, discover, graph, import, instruct, overlay, path, scheduler, state,
@@ -247,36 +248,29 @@ async fn dispatch_lesson(db: &db::Db, op: LessonOp) -> Result<()> {
 
 async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> Result<()> {
     match op {
-        QuizOp::Create(c) => store::cmd_quiz_create(
-            db,
-            &c.atom,
-            c.difficulty,
-            c.question,
-            c.answer,
-            c.rubric,
-            c.quiz_type,
-            c.path.as_deref(),
-        )
-        .await
-        .map(|qid| {
-            eprintln!("created quiz: {qid}");
-        }),
+        QuizOp::Create(c) => {
+            let draft = QuizDraft {
+                difficulty: c.difficulty,
+                question: c.question,
+                answer: c.answer,
+                rubric: c.rubric,
+                kind: c.quiz_type,
+            };
+            let quiz = store::cmd_quiz_create(db, &c.atom, draft, c.path.as_deref()).await?;
+            eprintln!("created quiz: {quiz}");
+            Ok(())
+        }
         QuizOp::Update(c) => {
-            let quiz = c.quiz.clone();
-            store::cmd_quiz_update(
-                db,
-                &c.quiz,
-                c.question,
-                c.answer,
-                c.rubric,
-                c.difficulty,
-                c.quiz_type,
-                c.path.as_deref(),
-            )
-            .await
-            .map(|()| {
-                eprintln!("updated quiz: {quiz}");
-            })
+            let patch = QuizPatch {
+                difficulty: c.difficulty,
+                question: c.question,
+                answer: c.answer,
+                rubric: c.rubric,
+                kind: c.quiz_type,
+            };
+            store::cmd_quiz_update(db, &c.quiz, &patch, c.path.as_deref()).await?;
+            eprintln!("updated quiz: {}", c.quiz);
+            Ok(())
         }
         QuizOp::Delete(c) => {
             let quiz = c.quiz.clone();

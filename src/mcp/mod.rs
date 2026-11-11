@@ -36,8 +36,9 @@ use url::Url;
 
 use crate::Error;
 use crate::db::{Db, DbConfig};
+use crate::overlay::{QuizDraft, QuizPatch};
 use crate::surface::{Operation, Surface};
-use crate::types::{Difficulty, QuizType, Rating, Strategy};
+use crate::types::{Rating, Strategy};
 use crate::{answer, discover, path, scheduler, state, store, subpath, syllabus, tree};
 
 // Keep distinct from `Result` because rmcp macros expand to bare `Result<_, ErrorData>`.
@@ -145,32 +146,21 @@ pub struct UpsertLessonArgs {
     pub path_id: String,
 }
 
+/// Arguments of the `create_quiz` tool.
 #[derive(Deserialize, JsonSchema)]
 pub struct CreateQuizArgs {
     pub atom: String,
-    pub question: String,
-    pub answer: String,
-    #[serde(default)]
-    pub rubric: Option<String>,
-    pub difficulty: Difficulty,
-    #[serde(default)]
-    pub kind: Option<QuizType>,
+    #[serde(flatten)]
+    pub quiz: QuizDraft,
     pub path_id: String,
 }
 
+/// Arguments of the `update_quiz` tool.
 #[derive(Deserialize, JsonSchema)]
 pub struct UpdateQuizArgs {
     pub quiz_id: String,
-    #[serde(default)]
-    pub question: Option<String>,
-    #[serde(default)]
-    pub answer: Option<String>,
-    #[serde(default)]
-    pub rubric: Option<String>,
-    #[serde(default)]
-    pub difficulty: Option<Difficulty>,
-    #[serde(default)]
-    pub kind: Option<QuizType>,
+    #[serde(flatten)]
+    pub patch: QuizPatch,
     pub path_id: String,
 }
 
@@ -310,17 +300,8 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<CreateQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = store::cmd_quiz_create(
-            &self.db,
-            &args.atom,
-            args.difficulty,
-            args.question,
-            args.answer,
-            args.rubric,
-            args.kind.unwrap_or_default(),
-            Some(&args.path_id),
-        )
-        .await;
+        let result =
+            store::cmd_quiz_create(&self.db, &args.atom, args.quiz, Some(&args.path_id)).await;
         encode_as(
             Operation::CreateQuiz,
             result.map(|quiz_id| json!({ "quiz_id": quiz_id })),
@@ -332,17 +313,8 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<UpdateQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = store::cmd_quiz_update(
-            &self.db,
-            &args.quiz_id,
-            args.question,
-            args.answer,
-            args.rubric,
-            args.difficulty,
-            args.kind,
-            Some(&args.path_id),
-        )
-        .await;
+        let result =
+            store::cmd_quiz_update(&self.db, &args.quiz_id, &args.patch, Some(&args.path_id)).await;
         encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
     }
 
