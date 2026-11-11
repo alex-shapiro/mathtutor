@@ -14,6 +14,22 @@ use crate::{Error, Result};
 pub use crate::schema::PathFile;
 
 impl PathFile {
+    /// Return a new path toward `targets`, or fail if `g` cannot expand a target.
+    ///
+    /// The path stores each cluster target as given, without its atoms.
+    pub fn create(g: &Graph, goal: &str, targets: &[String], strategy: Strategy) -> Result<Self> {
+        g.expand_to_atoms(targets)?;
+        let now = Utc::now();
+        Ok(Self {
+            id: generate_path_id(now),
+            goal: goal.to_string(),
+            created_at: now,
+            targets: dedup_preserving_order(targets),
+            strategy,
+            subpath: Vec::new(),
+        })
+    }
+
     /// Expand stored targets into a topologically sorted list of atom IDs.
     pub fn resolve_targets(&self, g: &Graph) -> Result<Vec<String>> {
         let atoms = g.expand_to_atoms(&self.targets)?;
@@ -55,32 +71,24 @@ pub fn generate_path_id(now: DateTime<Utc>) -> String {
     format!("p_{}_{suffix}", now.format("%Y_%m_%d_%H%M%S"))
 }
 
-/// Create a new learning path and return its ID.
+/// Create a new learning path toward `targets` and return its ID.
 pub async fn cmd_path_new(
     db: &Db,
     goal: &str,
-    ids: &[String],
+    targets: &[String],
     strategy: Strategy,
 ) -> Result<String> {
-    let g = db.curriculum().graph()?;
-    // Validate that each target expands to at least 1 atom while storing cluster IDs unexpanded.
-    g.expand_to_atoms(ids)?;
-    let targets = dedup_preserving_order(ids);
-
-    let now = Utc::now();
-    let p = PathFile {
-        id: generate_path_id(now),
-        goal: goal.to_string(),
-        created_at: now,
-        targets,
-        strategy,
-        subpath: Vec::new(),
-    };
-    db.transact(&Want::nothing(), |view, changes| {
-        changes.create_path(view, &p)
-    })
-    .await?;
+    let p = PathFile::create(&*db.curriculum().graph()?, goal, targets, strategy)?;
+    store_new_path(db, &p).await?;
     Ok(p.id)
+}
+
+/// Store the new path `p` and its creation event.
+pub async fn store_new_path(db: &Db, p: &PathFile) -> Result<()> {
+    db.transact(&Want::nothing(), |view, changes| {
+        changes.create_path(view, p)
+    })
+    .await
 }
 
 /// Update the traversal strategy for a learning path and return its ID.

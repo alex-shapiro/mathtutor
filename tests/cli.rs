@@ -78,6 +78,40 @@ fn top_level_graph_option_selects_the_curriculum_of_every_command() {
     assert!(stderr.contains("curriculum check failed"), "{stderr}");
 }
 
+/// Run `mt` with `args` against the database of `cfg`.
+fn mt_on(cfg: &DbConfig, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_mt"))
+        .args(args)
+        .env("BASERUNNA_URL", &cfg.url)
+        .env("BASERUNNA_TOKEN", &cfg.token)
+        .env("BASERUNNA_DB", &cfg.db)
+        .env("MATHTUTOR_HOME", tempfile::TempDir::new().unwrap().path())
+        .env_remove("MT_GRAPH")
+        .output()
+        .expect("run mt")
+}
+
+#[tokio::test]
+async fn a_rejected_new_path_creates_no_database() {
+    let cfg = common::fresh_config();
+    let out = mt_on(&cfg, &["path", "new", "g", "--targets", "nope.1"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{stderr}");
+    assert!(!stderr.contains("created database"), "{stderr}");
+    let raw = baserunna_client::Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
+    let info = raw.db(&cfg.db).info().await;
+    assert!(
+        info.is_err(),
+        "a rejected path created the database: {info:?}"
+    );
+    let list = mt_on(&cfg, &["path", "list"]);
+    assert_eq!(
+        list.status.code(),
+        Some(2),
+        "the database must still be missing"
+    );
+}
+
 /// Run the CLI form of `step` through `sh -c` against the database of `cfg`.
 fn run_in_shell(cfg: &DbConfig, step: &Step) {
     let bin = std::path::Path::new(env!("CARGO_BIN_EXE_mt"));

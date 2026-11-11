@@ -188,29 +188,29 @@ async fn run_mcp(ctx: &Context, c: cli::McpCmd) -> Result<()> {
 }
 
 async fn dispatch_path(ctx: &Context, op: PathOp) -> Result<()> {
-    let db = &match op {
-        PathOp::New(_) => ctx.create_db().await?,
-        _ => ctx.db()?,
-    };
     match op {
-        PathOp::List(_) => path::cmd_path_list(db).await,
+        PathOp::List(_) => path::cmd_path_list(&ctx.db()?).await,
         PathOp::New(c) => {
             let targets = cli::flatten_ids(&c.targets);
-            let id = path::cmd_path_new(db, &c.goal, &targets, c.strategy).await?;
-            eprintln!("created path: {id}");
+            let p =
+                path::PathFile::create(&*ctx.curriculum.graph()?, &c.goal, &targets, c.strategy)?;
+            path::store_new_path(&ctx.create_db().await?, &p).await?;
+            eprintln!("created path: {}", p.id);
             Ok(())
         }
-        PathOp::State(c) => state::cmd_path_state(db, c.path.as_deref()).await,
+        PathOp::State(c) => state::cmd_path_state(&ctx.db()?, c.path.as_deref()).await,
         PathOp::Next(c) => {
             let mode = scheduler::NextMode::from_flags(c.new, c.due)?;
-            scheduler::cmd_path_next(db, c.path.as_deref(), mode).await
+            scheduler::cmd_path_next(&ctx.db()?, c.path.as_deref(), mode).await
         }
-        PathOp::Strategy(c) => path::cmd_path_strategy(db, c.path.as_deref(), c.strategy)
+        PathOp::Strategy(c) => path::cmd_path_strategy(&ctx.db()?, c.path.as_deref(), c.strategy)
             .await
             .map(|id| eprintln!("path {id}: strategy → {}", c.strategy)),
-        PathOp::Subpath(c) => dispatch_subpath(db, c.op).await,
-        PathOp::Syllabus(c) => syllabus::cmd_path_syllabus(db, c.path.as_deref(), c.n).await,
-        PathOp::Tree(c) => tree::cmd_path_tree(db, c.path.as_deref(), c.depth).await,
+        PathOp::Subpath(c) => dispatch_subpath(&ctx.db()?, c.op).await,
+        PathOp::Syllabus(c) => {
+            syllabus::cmd_path_syllabus(&ctx.db()?, c.path.as_deref(), c.n).await
+        }
+        PathOp::Tree(c) => tree::cmd_path_tree(&ctx.db()?, c.path.as_deref(), c.depth).await,
     }
 }
 
