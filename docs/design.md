@@ -296,12 +296,12 @@ Each path records learning activity in an append-only `events.<path id>` stream 
 }
 ```
 
-| Kind                                                 | Fields                                    |
-| ---------------------------------------------------- | ----------------------------------------- |
-| `path_created`                                       | None                                      |
-| `lesson_authored`, `lesson_amended`, `lesson_taught` | `atom`                                    |
-| `quiz_authored`, `quiz_presented`                    | `atom`, `quiz`                            |
-| `quiz_amended`, `quiz_removed`                       | `atom`, `quiz`                            |
+| Kind                                                 | Fields                                           |
+| ---------------------------------------------------- | ------------------------------------------------ |
+| `path_created`                                       | None                                             |
+| `lesson_authored`, `lesson_amended`, `lesson_taught` | `atom`                                           |
+| `quiz_authored`, `quiz_presented`                    | `atom`, `quiz`                                   |
+| `quiz_amended`, `quiz_removed`                       | `atom`, `quiz`                                   |
 | `quiz_answered`                                      | `quiz`, `rating`, optional `atom`, `user_answer` |
 
 A read rejects an event that is missing a required field or contains an unexpected field for its kind.
