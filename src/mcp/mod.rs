@@ -552,13 +552,8 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
         .route("/ready", get(ready).with_state(Readiness::new(db.clone())));
 
     if let Some(password) = auth.admin_password.as_deref() {
-        let oauth_state = oauth::OAuthState::new(
-            auth_db,
-            password,
-            public_url.clone(),
-            limits.clone(),
-            &cfg.token,
-        );
+        let oauth_state =
+            oauth::OAuthState::new(auth_db, password, public_url.clone(), limits.clone());
         app = app.merge(oauth::router(oauth_state));
     }
 

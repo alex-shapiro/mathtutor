@@ -555,6 +555,12 @@ impl Txn {
         self.queue([Op::insert_expiring(row, ttl)]);
     }
 
+    /// Queue the insert of OAuth row `row`, which the server keeps until a delete.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn insert_lasting_oauth<R: OAuthRow>(&mut self, row: &R) {
+        self.queue([Op::insert(row)]);
+    }
+
     /// Queue the delete of the OAuth row of type `R` with primary key `pk`.
     #[cfg(feature = "mcp")]
     pub(crate) fn delete_oauth<R: OAuthRow>(&mut self, pk: &str) {

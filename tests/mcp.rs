@@ -669,7 +669,22 @@ async fn a_second_server_on_the_same_database_answers_without_an_initialize() {
     let path_id = created["structuredContent"]["path_id"].clone();
     first.stop().await;
 
-    let second = spawn_server_on(cfg, auth).await;
+    let new_key = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .create_api_key(&baserunna_client::api::NewApiKey {
+            name: "rotated".into(),
+            db: Some(cfg.db.clone()),
+            read_only: false,
+            rate_limit: None,
+        })
+        .await
+        .unwrap()
+        .key;
+    let rotated = mathtutor::db::DbConfig {
+        token: new_key,
+        ..cfg
+    };
+    let second = spawn_server_on(rotated, auth).await;
     let next = call_tool(&second, "get_next", json!({ "path_id": path_id })).await;
     assert_ne!(next["isError"], json!(true), "{next}");
     assert_eq!(next["structuredContent"]["path"], path_id);
@@ -1496,7 +1511,7 @@ async fn repeated_incorrect_passwords_delay_the_next_sign_in() {
 }
 
 #[tokio::test]
-async fn the_sign_in_delay_and_an_open_form_survive_a_server_restart() {
+async fn the_sign_in_delay_and_an_open_form_survive_a_restart_with_a_new_database_key() {
     let cfg = common::fresh_config();
     let auth = AuthConfig {
         admin_password: Some(ADMIN_PASSWORD.into()),
@@ -1522,7 +1537,22 @@ async fn the_sign_in_delay_and_an_open_form_survive_a_server_restart() {
     }
     first.stop().await;
 
-    let second = spawn_server_on(cfg, auth).await;
+    let new_key = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .create_api_key(&baserunna_client::api::NewApiKey {
+            name: "rotated".into(),
+            db: Some(cfg.db.clone()),
+            read_only: false,
+            rate_limit: None,
+        })
+        .await
+        .unwrap()
+        .key;
+    let rotated = mathtutor::db::DbConfig {
+        token: new_key,
+        ..cfg
+    };
+    let second = spawn_server_on(rotated, auth).await;
     let res = submit_login(&second, &form_html, ADMIN_PASSWORD).await;
     assert_eq!(res.status(), 429, "the restart keeps the delay");
 

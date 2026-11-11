@@ -25,7 +25,7 @@ use url::Url;
 use super::throttle::{self, AddrLimits};
 use crate::db::{Db, Op, Txn, run_txn};
 use crate::schema::{
-    OAUTH_CLIENT_TTL, OAuthAccessToken, OAuthClient, OAuthCode, OAuthRefreshToken,
+    OAUTH_CLIENT_TTL, OAuthAccessToken, OAuthClient, OAuthCode, OAuthKey, OAuthRefreshToken,
 };
 
 const AUTHORIZATION_CODE_TTL: Duration = Duration::seconds(60);
@@ -39,8 +39,8 @@ const UNUSED_CLIENT_TTL: Duration = Duration::days(1);
 /// Scope that gives access to the MCP tools, and the only scope that this server grants.
 const MCP_SCOPE: &str = "mcp";
 
-/// Label that separates the CSRF key from other keys that could derive from the same secret.
-const CSRF_KEY_LABEL: &[u8] = b"mt mcp sign-in form";
+/// Name of the stored key that signs the CSRF tokens of the sign-in form.
+const CSRF_KEY_NAME: &str = "csrf";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -50,28 +50,33 @@ pub struct OAuthState {
     db: Db,
     admin_password: Arc<[u8]>,
     public_url: Arc<Url>,
-    csrf_key: Arc<[u8; 32]>,
+    csrf_key: Arc<tokio::sync::OnceCell<CsrfKey>>,
     limits: AddrLimits,
 }
 
 impl OAuthState {
-    /// Create the state of a server whose sign-in form signs its CSRF tokens with a key that derives from `server_secret`.
+    /// Create the state of a server whose sign-in form signs its CSRF tokens with the key that `db` stores.
     ///
-    /// Every server with the same `server_secret` accepts the forms of the others.
-    pub(crate) fn new(
-        db: Db,
-        admin_password: &str,
-        public_url: Url,
-        limits: AddrLimits,
-        server_secret: &str,
-    ) -> Self {
+    /// Every server on the same database accepts the forms of the others.
+    pub(crate) fn new(db: Db, admin_password: &str, public_url: Url, limits: AddrLimits) -> Self {
         Self {
             db,
             admin_password: Arc::from(admin_password.as_bytes().to_vec().into_boxed_slice()),
             public_url: Arc::new(public_url),
-            csrf_key: Arc::new(csrf_key(server_secret)),
+            csrf_key: Arc::default(),
             limits,
         }
+    }
+
+    /// Return the key that signs the CSRF tokens of the sign-in form, and store a new random key if the database holds none.
+    async fn csrf_key(&self) -> Result<&CsrfKey, OAuthError> {
+        self.csrf_key
+            .get_or_try_init(|| async {
+                let key = run_txn!(&self.db, |txn| load_or_create_key(&mut txn, CSRF_KEY_NAME)
+                    .await)?;
+                Ok::<_, OAuthError>(CsrfKey(key.into_bytes()))
+            })
+            .await
     }
 
     /// Return the public issuer URL.
@@ -261,7 +266,7 @@ async fn authorize_get(
     Query(q): Query<AuthorizeQuery>,
 ) -> Result<Html<String>, OAuthError> {
     let client = validate_authorize_request(&s, &q).await?;
-    let csrf = csrf_mint(&s.csrf_key, &q);
+    let csrf = csrf_mint(s.csrf_key().await?, &q);
     Ok(Html(render_login_form(&client, &q, &csrf, None)))
 }
 
@@ -281,10 +286,11 @@ async fn authorize_post(
 ) -> Result<Response, OAuthError> {
     let q = f.query;
     let client = validate_authorize_request(&s, &q).await?;
-    if !csrf_verify(&s.csrf_key, &q, &f.csrf) {
+    let csrf_key = s.csrf_key().await?;
+    if !csrf_verify(csrf_key, &q, &f.csrf) {
         tracing::warn!(client_id = %client.client_id, "csrf token rejected on authorize POST");
         let message = "This sign-in form expired. Enter the password again.";
-        let html = render_login_form(&client, &q, &csrf_mint(&s.csrf_key, &q), Some(message));
+        let html = render_login_form(&client, &q, &csrf_mint(csrf_key, &q), Some(message));
         return Ok((StatusCode::BAD_REQUEST, Html(html)).into_response());
     }
     let addr = s.limits.client_addr(peer, &headers);
@@ -293,7 +299,7 @@ async fn authorize_post(
         let secs = throttle::retry_after_secs(wait);
         let unit = if secs == 1 { "second" } else { "seconds" };
         let message = format!("Too many incorrect passwords. Try again in {secs} {unit}.");
-        let html = render_login_form(&client, &q, &csrf_mint(&s.csrf_key, &q), Some(&message));
+        let html = render_login_form(&client, &q, &csrf_mint(csrf_key, &q), Some(&message));
         return Ok((
             StatusCode::TOO_MANY_REQUESTS,
             [(header::RETRY_AFTER, secs.to_string())],
@@ -303,7 +309,7 @@ async fn authorize_post(
     }
     if !constant_time_eq(s.admin_password.as_ref(), f.password.as_bytes()) {
         tracing::warn!(%addr, client_id = %client.client_id, "admin password rejected");
-        let csrf = csrf_mint(&s.csrf_key, &q);
+        let csrf = csrf_mint(csrf_key, &q);
         let html = render_login_form(&client, &q, &csrf, Some("Incorrect password."));
         return Ok((StatusCode::UNAUTHORIZED, Html(html)).into_response());
     }
@@ -808,21 +814,29 @@ pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 
-/// Return the key that signs the CSRF tokens of the sign-in form, derived from `server_secret`.
-fn csrf_key(server_secret: &str) -> [u8; 32] {
-    let mut mac =
-        HmacSha256::new_from_slice(server_secret.as_bytes()).expect("HMAC accepts any key length");
-    mac.update(CSRF_KEY_LABEL);
-    mac.finalize().into_bytes().into()
+/// Key that signs the CSRF tokens of the sign-in form.
+struct CsrfKey(Vec<u8>);
+
+/// Return the stored key named `name`, and queue the insert of a new random key if the database holds none.
+async fn load_or_create_key(txn: &mut Txn, name: &str) -> Result<String, OAuthError> {
+    if let Some(row) = txn.get_oauth::<OAuthKey>(name).await? {
+        return Ok(row.key);
+    }
+    let row = OAuthKey {
+        name: name.to_string(),
+        key: random_token(),
+    };
+    txn.insert_lasting_oauth(&row);
+    Ok(row.key)
 }
 
-fn csrf_mint(key: &[u8; 32], q: &AuthorizeQuery) -> String {
+fn csrf_mint(key: &CsrfKey, q: &AuthorizeQuery) -> String {
     let ts = Utc::now().timestamp();
     let mac_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(csrf_mac(key, ts, q));
     format!("{ts}.{mac_b64}")
 }
 
-fn csrf_verify(key: &[u8; 32], q: &AuthorizeQuery, token: &str) -> bool {
+fn csrf_verify(key: &CsrfKey, q: &AuthorizeQuery, token: &str) -> bool {
     let Some((ts_str, mac_b64)) = token.split_once('.') else {
         return false;
     };
@@ -840,8 +854,8 @@ fn csrf_verify(key: &[u8; 32], q: &AuthorizeQuery, token: &str) -> bool {
 }
 
 // Length-prefix each field before hashing to prevent canonicalization ambiguity.
-fn csrf_mac(key: &[u8; 32], ts: i64, q: &AuthorizeQuery) -> Vec<u8> {
-    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+fn csrf_mac(key: &CsrfKey, ts: i64, q: &AuthorizeQuery) -> Vec<u8> {
+    let mut mac = HmacSha256::new_from_slice(&key.0).expect("HMAC accepts any key length");
     mac.update(&ts.to_be_bytes());
     for field in [
         q.client_id.as_str(),

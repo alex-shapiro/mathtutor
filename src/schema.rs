@@ -38,7 +38,7 @@ impl TableSet {
     pub fn version(self) -> &'static str {
         match self {
             TableSet::Learner => "3",
-            TableSet::Auth => "3",
+            TableSet::Auth => "4",
         }
     }
 
@@ -59,6 +59,7 @@ impl TableSet {
                 OAuthAccessToken::new_table(),
                 OAuthRefreshToken::new_table(),
                 OAuthAddrCount::new_table(),
+                OAuthKey::new_table(),
             ],
         }
     }
@@ -373,6 +374,16 @@ row_table! {
     }
 }
 
+row_table! {
+    /// Row in the `oauth_keys` table: a random key that the server creates once and that every machine of the app shares.
+    pub struct OAuthKey in "oauth_keys", primary key (name) {
+        /// Use of the key, such as `csrf`.
+        pub name: String,
+        /// URL-safe base64 of the random key bytes.
+        pub key: String,
+    }
+}
+
 /// Time after its last token grant at which the server deletes an OAuth client registration.
 pub(crate) const OAUTH_CLIENT_TTL: std::time::Duration = std::time::Duration::from_hours(30 * 24);
 
@@ -390,6 +401,8 @@ impl OAuthRow for OAuthAccessToken {}
 impl OAuthRow for OAuthRefreshToken {}
 #[cfg(feature = "mcp")]
 impl OAuthRow for OAuthAddrCount {}
+#[cfg(feature = "mcp")]
+impl OAuthRow for OAuthKey {}
 
 /// Schema state of a table set in a database.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -622,7 +635,7 @@ mod tests {
         );
         assert_eq!(
             pinned(TableSet::Auth),
-            ("3", "09479194933c807a".into()),
+            ("4", "e547933f4947cad3".into()),
             "{hint}"
         );
     }
