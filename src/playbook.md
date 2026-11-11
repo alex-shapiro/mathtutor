@@ -54,7 +54,7 @@ Ask the user which strategy they prefer if they have not specified it.
     mt graph list [<id>] [--path P] [--recursive]
     mt graph show <id>   [--path P]
 
-Run `mt graph list` to list top-level areas, or pass a node ID to list its children. Run `mt graph show <id>` to inspect a node's prerequisites, lesson status, and quiz count. Pass `--path P` to include the `lesson_taught` and `complete` flags for that path.
+Run `mt graph list` to list top-level areas, or pass a node ID to list its children. Run `mt graph show <id>` to inspect a node's prerequisites, lesson status, and quiz count. Pass `--path P` to include the lesson and quiz status of each atom for that path.
 
 Run `mt path syllabus [-n N]` to preview upcoming untaught lesson topics in scheduled order.
 <!-- mcp -->

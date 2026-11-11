@@ -41,6 +41,46 @@ impl PathProgress {
     }
 }
 
+/// Lesson and quiz status of an atom on a path.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct AtomStatus {
+    pub lesson_taught: bool,
+    pub complete: bool,
+    pub easy: QuizSlot,
+    pub medium: QuizSlot,
+    pub hard: QuizSlot,
+}
+
+impl AtomStatus {
+    /// Return the status of atom `c` in `progress`.
+    pub fn of(progress: &PathProgress, c: &FlatConcept) -> Self {
+        let slot = |difficulty| progress.quiz_slot(c, difficulty);
+        Self {
+            lesson_taught: progress.lesson_taught(&c.id),
+            complete: scheduler::atom_action(c, progress).is_none(),
+            easy: slot(Difficulty::Easy),
+            medium: slot(Difficulty::Medium),
+            hard: slot(Difficulty::Hard),
+        }
+    }
+
+    /// Format the `[LEMH]` badge of this status.
+    pub fn badge(&self) -> String {
+        let slot = |s: QuizSlot, upper: char| match s {
+            QuizSlot::Missing => '·',
+            QuizSlot::Authored => upper.to_ascii_lowercase(),
+            QuizSlot::Correct => upper,
+        };
+        let lesson = if self.lesson_taught { 'L' } else { '·' };
+        format!(
+            "[{lesson}{}{}{}]",
+            slot(self.easy, 'E'),
+            slot(self.medium, 'M'),
+            slot(self.hard, 'H')
+        )
+    }
+}
+
 /// Status of a difficulty slot of an atom on a path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

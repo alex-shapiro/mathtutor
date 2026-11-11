@@ -54,7 +54,7 @@ mt import-turso [--url URL]
 
 Each `TEXT` value is a single shell word. Put the text in single quotes, and write each single quote in the text as `'\''`. The shell then keeps `$`, `\`, `"`, and line breaks unchanged, so LaTeX such as `$x^2$` reaches `mt` intact. The `next_step` field and the agent playbook use this form.
 
-If `--path P` is provided to `mt graph show` or `mt graph list`, the output includes the `lesson_taught` and `complete` fields for that path. `mt graph list --recursive` also lists every descendant of the node.
+If `--path P` is provided to `mt graph show` or `mt graph list`, the output includes the `lesson_taught` and `complete` fields of each atom for that path, and the `easy`, `medium`, and `hard` quiz slots. Each slot is `missing`, `authored`, or `correct`. `mt graph list --recursive` also lists every descendant of the node.
 
 ### Target ID resolution
 

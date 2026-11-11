@@ -7,10 +7,10 @@ use serde::Serialize;
 
 use crate::Result;
 use crate::db::Db;
-use crate::graph::{FlatConcept, Graph, natural_id_cmp};
-use crate::progress::{PathCompletion, PathProgress, QuizSlot, ReachProgress, TargetProgress};
+use crate::graph::{FlatConcept, Graph};
+use crate::progress::{AtomStatus, PathCompletion, PathProgress, ReachProgress, TargetProgress};
 use crate::scheduler::{self, PathPlan};
-use crate::types::{Difficulty, Strategy};
+use crate::types::Strategy;
 use crate::view::Want;
 
 /// Prerequisite tree of a learning path, grouped by curriculum area.
@@ -48,49 +48,9 @@ pub struct TreeNode {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub on_subpath: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<TreeAtomStatus>,
+    pub status: Option<AtomStatus>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TreeNode>,
-}
-
-/// Lesson and quiz status of an atom on a path.
-#[derive(Debug, Serialize)]
-pub struct TreeAtomStatus {
-    pub lesson_taught: bool,
-    pub complete: bool,
-    pub easy: QuizSlot,
-    pub medium: QuizSlot,
-    pub hard: QuizSlot,
-}
-
-impl TreeAtomStatus {
-    /// Return the status of atom `c` of `g` in `progress`.
-    pub fn of(g: &Graph, progress: &PathProgress, c: &FlatConcept) -> Self {
-        let slot = |difficulty| progress.quiz_slot(c, difficulty);
-        Self {
-            lesson_taught: progress.lesson_taught(&c.id),
-            complete: scheduler::is_atom_complete(g, progress, &c.id),
-            easy: slot(Difficulty::Easy),
-            medium: slot(Difficulty::Medium),
-            hard: slot(Difficulty::Hard),
-        }
-    }
-
-    /// Format the `[LEMH]` badge of this status.
-    pub fn badge(&self) -> String {
-        let slot = |s: QuizSlot, upper: char| match s {
-            QuizSlot::Missing => '·',
-            QuizSlot::Authored => upper.to_ascii_lowercase(),
-            QuizSlot::Correct => upper,
-        };
-        let lesson = if self.lesson_taught { 'L' } else { '·' };
-        format!(
-            "[{lesson}{}{}{}]",
-            slot(self.easy, 'E'),
-            slot(self.medium, 'M'),
-            slot(self.hard, 'H')
-        )
-    }
 }
 
 /// Print the prerequisite tree for `explicit_id` or the latest path as text for `mt path tree`.
@@ -132,9 +92,13 @@ pub async fn compute_tree(
         .areas
         .iter()
         .filter_map(|area| {
-            let nodes: Vec<TreeNode> = top_level_in_area(g, &area.prefix)
+            let nodes: Vec<TreeNode> = g
+                .by_id
+                .get(&area.prefix)
                 .into_iter()
-                .filter(|c| builder.spine.contains(&c.id))
+                .flat_map(|root| &root.children_ids)
+                .filter(|id| builder.spine.contains(*id))
+                .filter_map(|id| g.by_id.get(id))
                 .map(|c| builder.node(c, 1))
                 .collect();
             (!nodes.is_empty()).then(|| TreeArea {
@@ -187,7 +151,7 @@ impl NodeBuilder<'_> {
             is_atom,
             is_target: self.targets.contains(c.id.as_str()),
             on_subpath: self.subpath.contains(c.id.as_str()),
-            status: is_atom.then(|| TreeAtomStatus::of(self.g, self.progress, c)),
+            status: is_atom.then(|| AtomStatus::of(self.progress, c)),
             children,
         }
     }
@@ -283,41 +247,10 @@ where
     for atom in atoms {
         spine.insert(atom.clone());
         let mut id = atom.as_str();
-        while let Some(parent) = parent_id(id) {
-            if g.by_id.contains_key(parent) {
-                spine.insert(parent.to_string());
-            }
-            id = parent;
+        while let Some(parent) = g.parent(id) {
+            spine.insert(parent.id.clone());
+            id = &parent.id;
         }
     }
     spine
-}
-
-fn parent_id(id: &str) -> Option<&str> {
-    id.rfind('.').map(|i| &id[..i])
-}
-
-fn top_level_in_area<'a>(g: &'a Graph, prefix: &str) -> Vec<&'a FlatConcept> {
-    let mut out: Vec<&FlatConcept> = g
-        .by_id
-        .values()
-        .filter(|c| {
-            let parts: Vec<&str> = c.id.split('.').collect();
-            parts.len() == 2 && parts[0] == prefix
-        })
-        .collect();
-    out.sort_by(|a, b| natural_id_cmp(&a.id, &b.id));
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parent_id;
-
-    #[test]
-    fn parent_id_drops_last_segment() {
-        assert_eq!(parent_id("la.5.4.7"), Some("la.5.4"));
-        assert_eq!(parent_id("la.5"), Some("la"));
-        assert_eq!(parent_id("la"), None);
-    }
 }

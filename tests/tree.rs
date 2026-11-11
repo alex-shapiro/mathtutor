@@ -3,8 +3,8 @@
 use std::collections::HashSet;
 
 use mathtutor::graph::{FlatConcept, Graph};
-use mathtutor::progress::PathProgress;
-use mathtutor::tree::{self, TreeAtomStatus, TreeNode, build_spine};
+use mathtutor::progress::{AtomStatus, PathProgress};
+use mathtutor::tree::{self, TreeNode, build_spine};
 use mathtutor::types::{Difficulty, Rating, Strategy};
 
 mod common;
@@ -12,7 +12,7 @@ mod common;
 use common::{atom, cluster, quiz};
 
 fn state_badge(progress: &PathProgress, c: &FlatConcept) -> String {
-    TreeAtomStatus::of(&Graph::of_concepts(vec![c.clone()]), progress, c).badge()
+    AtomStatus::of(progress, c).badge()
 }
 
 fn find<'a>(nodes: &'a [TreeNode], id: &str) -> Option<&'a TreeNode> {

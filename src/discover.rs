@@ -6,8 +6,7 @@ use serde::Serialize;
 
 use crate::db::Db;
 use crate::graph::{Curriculum, FlatConcept, Graph, natural_id_cmp};
-use crate::progress::PathProgress;
-use crate::scheduler;
+use crate::progress::{AtomStatus, PathProgress};
 use crate::view::Want;
 use crate::{Error, Result};
 
@@ -149,13 +148,6 @@ pub struct ChildBrief {
     pub status: Option<AtomStatus>,
 }
 
-/// Progress of a path on an atom.
-#[derive(Serialize, Debug, Clone, Copy)]
-pub struct AtomStatus {
-    pub lesson_taught: bool,
-    pub complete: bool,
-}
-
 /// Curriculum atom or cluster.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
@@ -227,20 +219,16 @@ fn concept_view(g: &Graph, c: &FlatConcept) -> ConceptView {
             is_atom: false,
             prerequisites: briefs(&c.prerequisites),
             children: briefs(&c.children_ids),
-            atomic_descendants: count_atomic_descendants(g, &c.id),
+            atomic_descendants: g.atomic_descendants(&c.id).len(),
         })
     }
 }
 
 fn atom_status(g: &Graph, progress: &PathProgress, atom_id: &str) -> Option<AtomStatus> {
     let c = g.by_id.get(atom_id)?;
-    if !c.children_ids.is_empty() {
-        return None;
-    }
-    Some(AtomStatus {
-        lesson_taught: progress.lesson_taught(atom_id),
-        complete: scheduler::is_atom_complete(g, progress, atom_id),
-    })
+    c.children_ids
+        .is_empty()
+        .then(|| AtomStatus::of(progress, c))
 }
 
 /// Return every node below `roots` in natural ID order.
@@ -258,16 +246,4 @@ fn descendants<'a>(g: &'a Graph, roots: &[&str]) -> Vec<&'a FlatConcept> {
     }
     out.sort_by(|a, b| natural_id_cmp(&a.id, &b.id));
     out
-}
-
-fn count_atomic_descendants(g: &Graph, id: &str) -> usize {
-    let Some(c) = g.by_id.get(id) else { return 0 };
-    if c.children_ids.is_empty() {
-        1
-    } else {
-        c.children_ids
-            .iter()
-            .map(|cid| count_atomic_descendants(g, cid))
-            .sum()
-    }
 }

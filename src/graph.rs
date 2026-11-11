@@ -341,6 +341,8 @@ pub struct Graph {
     pub by_id: HashMap<String, FlatConcept>,
     /// Curriculum areas in manifest order.
     pub areas: Vec<ManifestArea>,
+    /// ID of the parent of each concept that has a parent, keyed by concept ID.
+    parent_ids: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -363,18 +365,43 @@ impl Graph {
             let raw = source.area(&entry.file)?;
             flatten(area_root_concept(entry, raw.into_concepts()), &mut by_id);
         }
-        Ok(Self {
-            by_id,
-            areas: manifest.areas,
-        })
+        Ok(Self::new(by_id, manifest.areas))
     }
 
     /// Build a graph of `concepts` without areas.
     pub fn of_concepts(concepts: impl IntoIterator<Item = FlatConcept>) -> Self {
+        Self::new(
+            concepts.into_iter().map(|c| (c.id.clone(), c)).collect(),
+            Vec::new(),
+        )
+    }
+
+    fn new(by_id: HashMap<String, FlatConcept>, areas: Vec<ManifestArea>) -> Self {
+        let parent_ids = by_id
+            .values()
+            .flat_map(|c| {
+                c.children_ids
+                    .iter()
+                    .map(|child| (child.clone(), c.id.clone()))
+            })
+            .collect();
         Self {
-            by_id: concepts.into_iter().map(|c| (c.id.clone(), c)).collect(),
-            areas: Vec::new(),
+            by_id,
+            areas,
+            parent_ids,
         }
+    }
+
+    /// Return the cluster or area that holds concept `id`, or `None` for an area or an unknown ID.
+    pub fn parent(&self, id: &str) -> Option<&FlatConcept> {
+        self.by_id.get(self.parent_ids.get(id)?)
+    }
+
+    /// Return the atoms below concept `id` in first-seen order, or `id` itself if it is an atom.
+    pub fn atomic_descendants(&self, id: &str) -> Vec<String> {
+        let mut atoms = Vec::new();
+        self.collect_atomic_descendants(id, &mut HashSet::new(), &mut atoms);
+        atoms
     }
 
     /// Return all atomic descendants of `targets` and their transitive prerequisites.
@@ -408,8 +435,7 @@ impl Graph {
             if !self.by_id.contains_key(id) {
                 return Err(Error::UnknownId(id.clone()));
             }
-            let mut atoms = Vec::new();
-            self.collect_atomic_descendants(id, &mut HashSet::new(), &mut atoms);
+            let atoms = self.atomic_descendants(id);
             if atoms.is_empty() {
                 return Err(Error::EmptyCluster(id.clone()));
             }
