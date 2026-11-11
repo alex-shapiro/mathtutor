@@ -773,8 +773,8 @@ async fn import_reports_source_rows_that_it_did_not_store() {
     assert_eq!(
         r.mismatches,
         [
-            "events: 9 rows in libSQL, but the import stored 8",
             "path_targets: 4 rows in libSQL, but the import stored 3",
+            "events: 9 rows in libSQL, but the import stored 8",
         ]
     );
     let blocked = db.snapshot(&Want::overlay()).await.unwrap_err();

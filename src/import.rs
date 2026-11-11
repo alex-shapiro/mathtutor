@@ -192,61 +192,77 @@ impl Value {
     }
 }
 
-fn decode_rows<T: DeserializeOwned>(table: &str, rows: Vec<Map<String, Json>>) -> Result<Vec<T>> {
-    rows.into_iter()
+/// Remove the rows of `table` from `rows` and decode them.
+fn decode_rows<T: DeserializeOwned>(rows: &mut SourceRows, table: SourceTable) -> Result<Vec<T>> {
+    rows.remove(&table)
+        .unwrap_or_default()
+        .into_iter()
         .map(|r| {
             serde_json::from_value(Json::Object(r))
-                .map_err(|e| Error::BadRow(format!("libSQL {table}: {e}")))
+                .map_err(|e| Error::BadRow(format!("libSQL {}: {e}", table.name())))
         })
         .collect()
 }
 
-/// Source tables and the queries that read them, in the order of the results that [`read_legacy`] decodes.
-const QUERIES: [(&str, &str); 10] = [
-    (
-        "schema_migrations",
+/// Declare [`SourceTable`] with the name of each source table and the query that reads it.
+macro_rules! source_tables {
+    ($($table:ident = $name:literal => $query:expr,)+) => {
+        /// Table of a libSQL source database, read by one query of [`read_legacy`].
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        enum SourceTable {
+            $($table,)+
+        }
+
+        impl SourceTable {
+            const ALL: &[SourceTable] = &[$(SourceTable::$table,)+];
+
+            /// Return the name of this table in libSQL.
+            fn name(self) -> &'static str {
+                match self {
+                    $(SourceTable::$table => $name,)+
+                }
+            }
+
+            /// Return the query that reads this table.
+            fn query(self) -> &'static str {
+                match self {
+                    $(SourceTable::$table => $query,)+
+                }
+            }
+        }
+    };
+}
+
+source_tables! {
+    SchemaMigrations = "schema_migrations" =>
         "SELECT COALESCE(MAX(version), 0) AS version FROM schema_migrations",
-    ),
-    ("paths", "SELECT id, goal, created_at, strategy FROM paths"),
-    (
-        "path_targets",
+    Paths = "paths" => "SELECT id, goal, created_at, strategy FROM paths",
+    PathTargets = "path_targets" =>
         "SELECT path_id, target_id AS id FROM path_targets ORDER BY path_id, position",
-    ),
-    (
-        "path_subpath",
+    PathSubpath = "path_subpath" =>
         "SELECT path_id, atom_id AS id FROM path_subpath ORDER BY path_id, position",
-    ),
-    (
-        "events",
+    Events = "events" =>
         "SELECT ts, kind, path_id, atom_id, quiz_id, rating, payload FROM events ORDER BY id",
-    ),
-    (
-        "overlay_lessons",
+    OverlayLessons = "overlay_lessons" =>
         "SELECT atom_id, body FROM overlay_lessons ORDER BY atom_id",
-    ),
-    (
-        "overlay_quizzes",
+    OverlayQuizzes = "overlay_quizzes" =>
         "SELECT atom_id, quiz_id, difficulty, kind, question, answer, rubric \
          FROM overlay_quizzes ORDER BY quiz_id",
-    ),
-    (
-        "overlay_removed_quizzes",
+    OverlayRemovedQuizzes = "overlay_removed_quizzes" =>
         "SELECT r.quiz_id, q.atom_id FROM overlay_removed_quizzes r \
          LEFT JOIN overlay_quizzes q ON q.quiz_id = r.quiz_id ORDER BY r.quiz_id",
-    ),
-    (
-        "cards",
+    Cards = "cards" =>
         "SELECT path_id, quiz_id, stability, difficulty, due_at, last_reviewed_at, reps, lapses \
          FROM cards",
-    ),
-    (
-        "oauth_clients",
+    OAuthClients = "oauth_clients" =>
         "SELECT client_id, client_name, redirect_uris, created_at FROM oauth_clients",
-    ),
-];
+}
 
-/// Number of rows in each table, keyed by the name of the source table.
-type RowCounts = BTreeMap<&'static str, usize>;
+/// Rows that each source table returned.
+type SourceRows = HashMap<SourceTable, Vec<Map<String, Json>>>;
+
+/// Number of rows in each source table.
+type RowCounts = BTreeMap<SourceTable, usize>;
 
 /// Row of the libSQL `schema_migrations` query.
 #[derive(Deserialize)]
@@ -412,34 +428,18 @@ struct Legacy {
 }
 
 async fn read_legacy(turso: &Turso) -> Result<Legacy> {
-    let [
-        version,
-        paths,
-        targets,
-        subpaths,
-        events,
-        lessons,
-        quizzes,
-        removed,
-        cards,
-        oauth_clients,
-    ]: [_; 10] = turso
-        .read(&QUERIES.map(|(_, sql)| sql))
-        .await?
-        .try_into()
-        .map_err(|_| Error::Turso("missing statement results".into()))?;
-    let row_counts = RowCounts::from([
-        ("paths", paths.len()),
-        ("path_targets", targets.len()),
-        ("path_subpath", subpaths.len()),
-        ("events", events.len()),
-        ("overlay_lessons", lessons.len()),
-        ("overlay_quizzes", quizzes.len()),
-        ("overlay_removed_quizzes", removed.len()),
-        ("cards", cards.len()),
-        ("oauth_clients", oauth_clients.len()),
-    ]);
-    let version = decode_rows::<LegacyVersion>("schema_migrations", version)?
+    let queries: Vec<&str> = SourceTable::ALL.iter().map(|t| t.query()).collect();
+    let results = turso.read(&queries).await?;
+    if results.len() != SourceTable::ALL.len() {
+        return Err(Error::Turso("missing statement results".into()));
+    }
+    let mut rows: SourceRows = SourceTable::ALL.iter().copied().zip(results).collect();
+    let row_counts: RowCounts = rows
+        .iter()
+        .filter(|(table, _)| **table != SourceTable::SchemaMigrations)
+        .map(|(table, r)| (*table, r.len()))
+        .collect();
+    let version = decode_rows::<LegacyVersion>(&mut rows, SourceTable::SchemaMigrations)?
         .first()
         .map_or(0, |v| v.version);
     if version != SCHEMA_VERSION {
@@ -448,9 +448,15 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
         )));
     }
 
-    let mut targets = group_by_path(decode_rows::<LegacyPathAtom>("path_targets", targets)?);
-    let mut subpaths = group_by_path(decode_rows::<LegacyPathAtom>("path_subpath", subpaths)?);
-    let mut paths: Vec<PathFile> = decode_rows::<LegacyPathRow>("paths", paths)?
+    let mut targets = group_by_path(decode_rows::<LegacyPathAtom>(
+        &mut rows,
+        SourceTable::PathTargets,
+    )?);
+    let mut subpaths = group_by_path(decode_rows::<LegacyPathAtom>(
+        &mut rows,
+        SourceTable::PathSubpath,
+    )?);
+    let mut paths: Vec<PathFile> = decode_rows::<LegacyPathRow>(&mut rows, SourceTable::Paths)?
         .into_iter()
         .map(|p| PathFile {
             targets: targets.remove(&p.id).unwrap_or_default(),
@@ -467,17 +473,17 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
             .then_with(|| a.id.cmp(&b.id))
     });
 
-    let events = group_events(decode_rows("events", events)?)?;
+    let events = group_events(decode_rows(&mut rows, SourceTable::Events)?)?;
     let overlay = overlay_changes(
-        decode_rows("overlay_lessons", lessons)?,
-        decode_rows("overlay_quizzes", quizzes)?,
-        decode_rows("overlay_removed_quizzes", removed)?,
+        decode_rows(&mut rows, SourceTable::OverlayLessons)?,
+        decode_rows(&mut rows, SourceTable::OverlayQuizzes)?,
+        decode_rows(&mut rows, SourceTable::OverlayRemovedQuizzes)?,
     );
     let mut cards_by_path: HashMap<String, Vec<LegacyCardRow>> = HashMap::new();
-    for c in decode_rows::<LegacyCardRow>("cards", cards)? {
+    for c in decode_rows::<LegacyCardRow>(&mut rows, SourceTable::Cards)? {
         cards_by_path.entry(c.path_id.clone()).or_default().push(c);
     }
-    let oauth_clients = decode_rows::<LegacyOAuthClientRow>("oauth_clients", oauth_clients)?
+    let oauth_clients = decode_rows::<LegacyOAuthClientRow>(&mut rows, SourceTable::OAuthClients)?
         .into_iter()
         .map(OAuthClient::try_from)
         .collect::<Result<_>>()?;
@@ -793,43 +799,44 @@ async fn verify_row_counts(
         oauth_clients += page.rows::<OAuthClient>()?.len();
     }
     let stored = RowCounts::from([
-        ("paths", paths.len()),
+        (SourceTable::Paths, paths.len()),
         (
-            "path_targets",
+            SourceTable::PathTargets,
             paths.iter().map(|p| p.file.targets.len()).sum(),
         ),
         (
-            "path_subpath",
+            SourceTable::PathSubpath,
             paths.iter().map(|p| p.file.subpath.len()).sum(),
         ),
-        ("events", stored_events),
+        (SourceTable::Events, stored_events),
         (
-            "overlay_lessons",
+            SourceTable::OverlayLessons,
             atoms.clone().filter(|a| a.lesson.is_some()).count(),
         ),
         (
-            "overlay_quizzes",
+            SourceTable::OverlayQuizzes,
             atoms.clone().map(|a| a.quizzes.len()).sum(),
         ),
         (
-            "overlay_removed_quizzes",
+            SourceTable::OverlayRemovedQuizzes,
             atoms.map(|a| a.removed.len()).sum(),
         ),
         (
-            "cards",
+            SourceTable::Cards,
             paths
                 .iter()
                 .flat_map(|p| p.projection.cards.values())
                 .filter(|c| c.state.is_some())
                 .count(),
         ),
-        ("oauth_clients", oauth_clients),
+        (SourceTable::OAuthClients, oauth_clients),
     ]);
     Ok(source
         .iter()
         .filter(|(table, n)| stored.get(*table) != Some(n))
         .map(|(table, n)| {
             let found = stored.get(table).copied().unwrap_or_default();
+            let table = table.name();
             format!("{table}: {n} rows in libSQL, but the import stored {found}")
         })
         .collect())
