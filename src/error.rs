@@ -129,6 +129,9 @@ pub enum Error {
     #[error("malformed row: {0}")]
     BadRow(String),
 
+    #[error("cannot write to stdout: {0}")]
+    Stdout(std::io::Error),
+
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
 
@@ -292,9 +295,10 @@ impl Error {
             | Error::BadClientIpHeader(_) => ErrorKind::Config,
             Error::NoPath(_) => ErrorKind::NoPath,
             Error::NoLesson(_) => ErrorKind::NoLesson,
-            Error::FileIo { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => {
-                ErrorKind::Io
-            }
+            Error::FileIo { .. }
+            | Error::AymlParse { .. }
+            | Error::AymlSerialize(_)
+            | Error::Stdout(_) => ErrorKind::Io,
             Error::GraphCheckFailed => ErrorKind::GraphCheck,
             Error::Baserunna(baserunna_client::Error::Decode { .. })
             | Error::BadRow(_)
@@ -327,6 +331,11 @@ impl Error {
             _ => return self.to_string(),
         };
         format!("{self}; {step}")
+    }
+
+    /// Return `true` if this error reports that the reader of stdout closed it, as `head` does after its last line.
+    pub fn is_closed_stdout(&self) -> bool {
+        matches!(self, Error::Stdout(e) if e.kind() == std::io::ErrorKind::BrokenPipe)
     }
 
     /// Return the process exit code of this error.

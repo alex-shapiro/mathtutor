@@ -5,13 +5,13 @@ use std::io::{self, Write};
 
 use serde::Serialize;
 
-use crate::Result;
 use crate::db::Db;
 use crate::graph::{FlatConcept, Graph};
 use crate::progress::{AtomStatus, PathCompletion, PathProgress, ReachProgress, TargetProgress};
 use crate::scheduler::{self, PathPlan};
 use crate::types::Strategy;
 use crate::view::Want;
+use crate::{Error, Result};
 
 /// Prerequisite tree of a learning path, grouped by curriculum area.
 #[derive(Debug, Serialize)]
@@ -54,13 +54,9 @@ pub struct TreeNode {
 }
 
 /// Print the prerequisite tree for `explicit_id` or the latest path as text for `mt path tree`.
-///
-/// # Panics
-/// Panics if writing to stdout fails.
 pub async fn cmd_path_tree(db: &Db, explicit_id: Option<&str>, depth: Option<u32>) -> Result<()> {
     let tree = compute_tree(db, explicit_id, depth).await?;
-    write_tree(&mut io::stdout(), &tree).expect("write to stdout");
-    Ok(())
+    write_tree(&mut io::stdout().lock(), &tree).map_err(Error::Stdout)
 }
 
 /// Compute the prerequisite tree for `explicit_id` or the latest path, to at most `depth` levels below each area.

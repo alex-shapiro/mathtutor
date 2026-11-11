@@ -224,8 +224,7 @@ pub(crate) fn filled_steps() -> Vec<Step> {
 
 /// Print the CLI agent playbook (`mt instruct`).
 pub fn cmd_instruct() -> Result<()> {
-    print!("{}", playbook(Surface::Cli));
-    Ok(())
+    crate::print_stdout(&playbook(Surface::Cli))
 }
 
 #[cfg(test)]

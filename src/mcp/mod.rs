@@ -503,8 +503,7 @@ pub(crate) fn tool_fields() -> std::collections::HashMap<String, std::collection
 
 pub fn print_tools() -> CrateResult<()> {
     let tools = MathTutorServer::tool_router().list_all();
-    println!("{}", serde_json::to_string_pretty(&tools)?);
-    Ok(())
+    crate::print_stdout(&format!("{}\n", serde_json::to_string_pretty(&tools)?))
 }
 
 /// Run the MCP server on `addr` until SIGINT or SIGTERM.

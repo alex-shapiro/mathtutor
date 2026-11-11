@@ -333,7 +333,7 @@ If a user is blocked on a target atom in `top_down` mode, the agent can set a su
   `mt path state` and `mt path tree` print text for people to read.
 - Standard error: Confirmation messages from write commands, including the ID of a new quiz or path.
 - Standard error: Diagnostic and error messages.
-- Exit codes: `0` for success, `1` for runtime or state errors, `2` for usage or validation errors, and `3` if the commit status is unknown. After exit `3`, the command prints its safe next step.
+- Exit codes: `0` for success, `1` for runtime or state errors, `2` for usage or validation errors, and `3` if the commit status is unknown. After exit `3`, the command prints its safe next step. If the reader closes stdout early, as `head` does, a command that otherwise succeeds stops without a message and exits with code `0`.
 
 Each error has a kind that sets its exit code. An MCP tool error reports the same kind in its `kind` field.
 

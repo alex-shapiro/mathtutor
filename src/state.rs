@@ -5,13 +5,13 @@ use std::io::{self, Write};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::Result;
 use crate::db::Db;
 use crate::graph::{FlatConcept, Graph};
 use crate::progress::{PathCompletion, PathProgress, ReachProgress, TargetProgress};
 use crate::scheduler::{self, PathPlan};
 use crate::types::Strategy;
 use crate::view::{PathState, Want};
+use crate::{Error, Result};
 
 /// Progress summary for a learning path.
 #[derive(Debug, Serialize)]
@@ -41,13 +41,9 @@ pub struct AtomRef {
 }
 
 /// Print the progress summary for a learning path for `mt path state`.
-///
-/// # Panics
-/// Panics if writing to stdout fails.
 pub async fn cmd_path_state(db: &Db, explicit_id: Option<&str>) -> Result<()> {
     let s = compute_state(db, explicit_id).await?;
-    write_state(&mut io::stdout(), &s).expect("write to stdout");
-    Ok(())
+    write_state(&mut io::stdout().lock(), &s).map_err(Error::Stdout)
 }
 
 /// Format `s` as human-readable text to `w`.

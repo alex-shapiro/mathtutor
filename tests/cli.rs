@@ -39,6 +39,31 @@ fn commands_without_learner_state_run_without_a_database() {
 }
 
 #[test]
+fn a_closed_stdout_ends_a_command_quietly() {
+    for args in [
+        &["instruct"][..],
+        &["graph", "list", "fnd", "--recursive"],
+        &["graph", "check"],
+        &["--help"],
+    ] {
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let out = Command::new(env!("CARGO_BIN_EXE_mt"))
+            .args(args)
+            .env_remove("BASERUNNA_TOKEN")
+            .env_remove("MT_GRAPH")
+            .stdout(writer)
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "mt {args:?}: {stderr}");
+        assert!(!stderr.contains("panicked"), "mt {args:?}: {stderr}");
+        assert!(!stderr.contains("error:"), "mt {args:?}: {stderr}");
+    }
+}
+
+#[test]
 fn commands_with_learner_state_require_a_database_token() {
     for args in [
         &["path", "list"][..],

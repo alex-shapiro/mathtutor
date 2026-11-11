@@ -1018,31 +1018,31 @@ fn detect_cycles(
 /// Validate the curriculum files of `source`, print the report, and fail if the report has issues (`mt graph check`).
 pub fn cmd_graph_check(source: &CurriculumSource) -> Result<()> {
     let report = run_check(source)?;
-    report.print();
+    let printed = crate::print_stdout(&report.to_string());
     if report.issues.is_empty() {
-        Ok(())
+        printed
     } else {
         Err(Error::GraphCheckFailed)
     }
 }
 
-impl CheckReport {
-    pub fn print(&self) {
-        println!();
-        println!("Statistics");
-        println!("  areas:        {}", self.areas);
-        println!("  clusters:     {}", self.clusters);
-        println!("  atoms:        {}", self.atoms);
-        println!("  total nodes:  {}", self.clusters + self.atoms);
-        println!("  max depth:    {}", self.max_depth);
-        println!("  prereq edges: {}", self.prereq_edges);
+impl std::fmt::Display for CheckReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f)?;
+        writeln!(f, "Statistics")?;
+        writeln!(f, "  areas:        {}", self.areas)?;
+        writeln!(f, "  clusters:     {}", self.clusters)?;
+        writeln!(f, "  atoms:        {}", self.atoms)?;
+        writeln!(f, "  total nodes:  {}", self.clusters + self.atoms)?;
+        writeln!(f, "  max depth:    {}", self.max_depth)?;
+        writeln!(f, "  prereq edges: {}", self.prereq_edges)?;
 
         if self.issues.is_empty() {
-            println!();
-            println!("graph check passed.");
+            writeln!(f)?;
+            writeln!(f, "graph check passed.")?;
         } else {
-            println!();
-            println!("Issues ({}):", self.issues.len());
+            writeln!(f)?;
+            writeln!(f, "Issues ({}):", self.issues.len())?;
             for i in &self.issues {
                 let prefix = match (&i.area, &i.node) {
                     (Some(a), Some(n)) => format!("{a}/{n}"),
@@ -1050,11 +1050,12 @@ impl CheckReport {
                     (None, Some(n)) => n.clone(),
                     _ => "(graph)".to_string(),
                 };
-                println!("  {prefix}: {}", i.message);
+                writeln!(f, "  {prefix}: {}", i.message)?;
             }
-            println!();
-            println!("graph check FAILED.");
+            writeln!(f)?;
+            writeln!(f, "graph check FAILED.")?;
         }
+        Ok(())
     }
 }
 

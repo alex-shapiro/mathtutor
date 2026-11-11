@@ -1,3 +1,4 @@
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -46,6 +47,7 @@ async fn real_main() -> ExitCode {
     let recovery = cli.cmd.operation().unknown_outcome_step(Surface::Cli);
     match dispatch(&ctx, cli.cmd).await {
         Ok(()) => ExitCode::SUCCESS,
+        Err(e) if e.is_closed_stdout() => ExitCode::SUCCESS,
         Err(e) => {
             if e.outcome_is_unknown() {
                 eprintln!("the command may have been applied; {recovery}");
@@ -104,7 +106,7 @@ fn parse_args() -> std::result::Result<Mt, ExitCode> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     Mt::from_args(&["mt"], &args).map_err(|early| {
         if early.status.is_ok() {
-            print!("{}", early.output);
+            let _closed = std::io::stdout().write_all(early.output.as_bytes());
             ExitCode::SUCCESS
         } else {
             eprint!("{}", early.output);
