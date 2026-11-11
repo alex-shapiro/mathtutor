@@ -1,6 +1,7 @@
 //! Streamable HTTP MCP server for `mt mcp`.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -778,11 +779,16 @@ async fn health() -> &'static str {
 /// Time that the server reuses the result of a readiness check, so that `/ready` sends at most one Baserunna request in each interval.
 const READY_CHECK_INTERVAL: Duration = Duration::from_secs(10);
 
-/// Last result of the readiness check of the database.
+/// Longest time that a readiness check waits for the database before it reports a failure.
+const READY_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Readiness check of the database, with the result of the last check.
 #[derive(Clone)]
 struct Readiness {
     db: Db,
-    last: Arc<tokio::sync::Mutex<Option<ReadyCheck>>>,
+    last: Arc<std::sync::Mutex<Option<ReadyCheck>>>,
+    /// A request runs a check now.
+    checking: Arc<AtomicBool>,
 }
 
 /// Result of one readiness check.
@@ -798,30 +804,70 @@ impl Readiness {
         Self {
             db,
             last: Arc::default(),
+            checking: Arc::default(),
         }
+    }
+
+    /// Return the kind of the error if the database is not usable, from the last check if it is recent or if another request runs a check now.
+    async fn failure(&self) -> Option<ErrorKind> {
+        let last = *self.lock();
+        if let Some(check) = last.filter(|c| c.at.elapsed() < READY_CHECK_INTERVAL) {
+            return check.failure;
+        }
+        let claim = CheckClaim::take(&self.checking);
+        if claim.is_none()
+            && let Some(check) = last
+        {
+            return check.failure;
+        }
+        let failure = match tokio::time::timeout(READY_CHECK_TIMEOUT, self.db.check_usable()).await
+        {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "readiness check failed");
+                Some(e.kind())
+            }
+            Err(_) => {
+                tracing::warn!("readiness check timed out");
+                Some(ErrorKind::Database)
+            }
+        };
+        *self.lock() = Some(ReadyCheck {
+            at: Instant::now(),
+            failure,
+        });
+        failure
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<ReadyCheck>> {
+        self.last
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Claim of the one readiness check that runs at a time, released when the check ends or its request stops.
+struct CheckClaim<'a>(&'a AtomicBool);
+
+impl<'a> CheckClaim<'a> {
+    /// Claim `checking`, or return `None` if another request holds it.
+    fn take(checking: &'a AtomicBool) -> Option<Self> {
+        checking
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self(checking))
+    }
+}
+
+impl Drop for CheckClaim<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
     }
 }
 
 /// Return `200` if the tools can use the database, or `503` with the error kind.
 async fn ready(State(readiness): State<Readiness>) -> Response {
-    let failure = {
-        let mut last = readiness.last.lock().await;
-        match *last {
-            Some(check) if check.at.elapsed() < READY_CHECK_INTERVAL => check.failure,
-            _ => {
-                let failure = readiness.db.check_usable().await.err().map(|e| {
-                    tracing::warn!(error = %e, "readiness check failed");
-                    e.kind()
-                });
-                *last = Some(ReadyCheck {
-                    at: Instant::now(),
-                    failure,
-                });
-                failure
-            }
-        }
-    };
-    match failure {
+    match readiness.failure().await {
         None => (StatusCode::OK, "ready").into_response(),
         Some(kind) => (
             StatusCode::SERVICE_UNAVAILABLE,

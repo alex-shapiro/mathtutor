@@ -176,6 +176,44 @@ async fn server_answers_health_while_baserunna_is_unreachable() {
 }
 
 #[tokio::test]
+async fn ready_fails_within_its_timeout_while_baserunna_does_not_answer() {
+    let silent = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let cfg = mathtutor::db::DbConfig {
+        url: format!("http://{}", silent.local_addr().unwrap()),
+        ..common::fresh_config()
+    };
+    let held = tokio::spawn(async move {
+        let mut open = Vec::new();
+        while let Ok((stream, _)) = silent.accept().await {
+            open.push(stream);
+        }
+    });
+    let auth = AuthConfig {
+        api_key: Some(API_KEY.into()),
+        ..AuthConfig::default()
+    };
+    let server = spawn_server_without_setup(cfg, auth).await;
+    let patient = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap();
+
+    let started = std::time::Instant::now();
+    let ready = patient.get(server.url("/ready")).send().await.unwrap();
+
+    assert_eq!(ready.status(), 503);
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "{:?}",
+        started.elapsed()
+    );
+    let health = client().get(server.url("/health")).send().await.unwrap();
+    assert_eq!(health.status(), 200);
+    held.abort();
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn database_failure_during_token_check_returns_503_without_a_login_challenge() {
     let cfg = common::fresh_config();
     let server = spawn_server_on(
