@@ -327,3 +327,37 @@ If a user is blocked on a target atom in `top_down` mode, the agent can set a su
 - Standard error: Confirmation messages from write commands, including the ID of a new quiz or path.
 - Standard error: Diagnostic and error messages.
 - Exit codes: `0` for success, `1` for runtime or state errors, `2` for usage or validation errors, and `3` if the commit status is unknown. After exit `3`, the command prints its safe next step.
+
+Each error has a kind that sets its exit code. An MCP tool error reports the same kind in its `kind` field.
+
+| Kind                      | Exit code | Cause                                                                           |
+| ------------------------- | --------- | ------------------------------------------------------------------------------- |
+| `unknown_id`              | 2         | The curriculum does not contain the ID.                                         |
+| `empty_cluster`           | 2         | A cluster target has zero atoms.                                                |
+| `cycle`                   | 2         | The target atoms form a prerequisite cycle.                                     |
+| `not_atom`                | 2         | The ID names a cluster where an atom is necessary.                              |
+| `atom_not_found`          | 2         | A subpath atom is not in the curriculum.                                        |
+| `invalid_rating`          | 2         | A stored rating is not valid.                                                   |
+| `invalid_difficulty`      | 2         | The difficulty is not `easy`, `medium`, or `hard`.                              |
+| `invalid_quiz_type`       | 2         | The quiz type is not `free_text` or `multiple_choice`.                          |
+| `invalid_strategy`        | 2         | The strategy is not `bottom_up` or `top_down`.                                  |
+| `subpath_not_top_down`    | 2         | The path does not use the `top_down` strategy.                                  |
+| `subpath_empty`           | 2         | The subpath has zero atoms.                                                     |
+| `subpath_tail_not_target` | 2         | The last subpath atom is not a path target.                                     |
+| `subpath_duplicate_atom`  | 2         | The subpath lists an atom more than once.                                       |
+| `conflicting_flags`       | 2         | The command has flags that cannot occur together.                               |
+| `config`                  | 2         | A setting is missing or incorrect, such as `BASERUNNA_TOKEN` or `BASERUNNA_DB`. |
+| `no_path`                 | 1         | The learning path does not exist.                                               |
+| `no_lesson`               | 1         | The atom does not have a stored lesson.                                         |
+| `no_home`                 | 1         | Neither `MATHTUTOR_HOME` nor `HOME` is set.                                     |
+| `io`                      | 1         | A file read, file write, or AYML conversion failed.                             |
+| `graph_check`             | 1         | The curriculum check found problems.                                            |
+| `corrupt`                 | 1         | `mt` cannot decode a stored row or a server response.                           |
+| `database`                | 1         | A Baserunna request failed, or the database has a different schema version.     |
+| `json`                    | 1         | A JSON conversion failed.                                                       |
+| `fsrs`                    | 1         | The FSRS scheduler failed.                                                      |
+| `import`                  | 1         | An import failed, or an import of the database is open.                         |
+| `http`                    | 1         | `mt` cannot start an HTTP client.                                               |
+| `server`                  | 1         | `mt mcp` cannot bind or serve its address.                                      |
+| `internal`                | 1         | `mt` has a defect.                                                              |
+| `outcome_unknown`         | 3         | The commit status is unknown. `mt` prints the safe next step.                   |

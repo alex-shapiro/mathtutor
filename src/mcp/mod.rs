@@ -437,58 +437,12 @@ fn encode<T: Serialize>(
             Ok(CallToolResult::structured(object))
         }
         Err(e) => {
-            let mut body = json!({ "error": format!("{e}"), "kind": error_kind(&e) });
+            let mut body = json!({ "error": format!("{e}"), "kind": e.kind().name() });
             if e.outcome_is_unknown() {
                 body["next_step"] = json!(op.unknown_outcome_step(Surface::Mcp));
             }
             Ok(CallToolResult::structured_error(body))
         }
-    }
-}
-
-fn error_kind(e: &Error) -> &'static str {
-    match e {
-        Error::UnknownId(_) => "unknown_id",
-        Error::EmptyCluster(_) => "empty_cluster",
-        Error::Cycle => "cycle",
-        Error::NotAtom(_) => "not_atom",
-        Error::AtomNotFound(_) => "atom_not_found",
-        Error::NoPath => "no_path",
-        Error::PathNotLoaded(_) => "internal",
-        Error::NoLesson(_) => "no_lesson",
-        Error::InvalidRating(_) => "invalid_rating",
-        Error::InvalidDifficulty(_) => "invalid_difficulty",
-        Error::InvalidQuizType(_) => "invalid_quiz_type",
-        Error::InvalidStrategy(_) => "invalid_strategy",
-        Error::SubpathNotTopDown => "subpath_not_top_down",
-        Error::SubpathEmpty => "subpath_empty",
-        Error::SubpathTailNotTarget(_) => "subpath_tail_not_target",
-        Error::SubpathDuplicateAtom(_) => "subpath_duplicate_atom",
-        Error::CardsCorrupt(_) => "cards_corrupt",
-        Error::NoHome => "no_home",
-        Error::FileIo { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => "io",
-        Error::GraphCheckFailed => "graph_check",
-        Error::Baserunna(baserunna_client::Error::Decode { .. }) | Error::BadRow(_) => "corrupt",
-        e if e.outcome_is_unknown() => "outcome_unknown",
-        Error::Baserunna(_)
-        | Error::MissingToken
-        | Error::DatabaseNotFound { .. }
-        | Error::SchemaMismatch { .. } => "database",
-        Error::Json(_) => "json",
-        Error::Fsrs(_) => "fsrs",
-        Error::ConflictingFlags(_, _) => "conflicting_flags",
-        Error::MissingTursoUrl
-        | Error::Turso(_)
-        | Error::ImportMismatch(_)
-        | Error::ImportAlreadyComplete
-        | Error::ImportTargetNotEmpty
-        | Error::ImportInProgress
-        | Error::Http(_) => "import",
-        Error::MissingAuth
-        | Error::BadBindAddr { .. }
-        | Error::BadPublicUrl { .. }
-        | Error::Bind { .. }
-        | Error::Serve(_) => "server",
     }
 }
 

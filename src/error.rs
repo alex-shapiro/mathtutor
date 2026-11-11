@@ -153,56 +153,125 @@ pub enum Error {
     Serve(#[source] std::io::Error),
 }
 
+/// Define [`ErrorKind`] from one row per kind: variant, MCP name, and exit code.
+macro_rules! error_kinds {
+    ($($(#[doc = $doc:literal])* $kind:ident = $name:literal => $code:literal,)*) => {
+        /// Class of an error, which sets the exit code of `mt` and the `kind` of an MCP tool error.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum ErrorKind {
+            $($(#[doc = $doc])* $kind,)*
+        }
+
+        impl ErrorKind {
+            /// Every error kind.
+            pub const ALL: &[ErrorKind] = &[$(ErrorKind::$kind,)*];
+
+            /// Return the `kind` name of an MCP tool error of this kind.
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(ErrorKind::$kind => $name,)*
+                }
+            }
+
+            /// Return the process exit code of this kind, as `docs/design.md` documents it.
+            pub fn exit_code(self) -> u8 {
+                match self {
+                    $(ErrorKind::$kind => $code,)*
+                }
+            }
+        }
+    };
+}
+
+error_kinds! {
+    UnknownId = "unknown_id" => 2,
+    EmptyCluster = "empty_cluster" => 2,
+    Cycle = "cycle" => 2,
+    NotAtom = "not_atom" => 2,
+    AtomNotFound = "atom_not_found" => 2,
+    InvalidRating = "invalid_rating" => 2,
+    InvalidDifficulty = "invalid_difficulty" => 2,
+    InvalidQuizType = "invalid_quiz_type" => 2,
+    InvalidStrategy = "invalid_strategy" => 2,
+    SubpathNotTopDown = "subpath_not_top_down" => 2,
+    SubpathEmpty = "subpath_empty" => 2,
+    SubpathTailNotTarget = "subpath_tail_not_target" => 2,
+    SubpathDuplicateAtom = "subpath_duplicate_atom" => 2,
+    ConflictingFlags = "conflicting_flags" => 2,
+    /// A missing or incorrect setting, such as an absent token or database.
+    Config = "config" => 2,
+    NoPath = "no_path" => 1,
+    NoLesson = "no_lesson" => 1,
+    NoHome = "no_home" => 1,
+    Io = "io" => 1,
+    GraphCheck = "graph_check" => 1,
+    /// A stored row or response that `mt` cannot decode.
+    Corrupt = "corrupt" => 1,
+    Database = "database" => 1,
+    Json = "json" => 1,
+    Fsrs = "fsrs" => 1,
+    Import = "import" => 1,
+    Http = "http" => 1,
+    Server = "server" => 1,
+    Internal = "internal" => 1,
+    /// The command may have committed its writes.
+    OutcomeUnknown = "outcome_unknown" => 3,
+}
+
 impl Error {
-    /// Return the process exit code documented in `docs/design.md`.
-    pub fn exit_code(&self) -> u8 {
+    /// Return the class of this error.
+    pub fn kind(&self) -> ErrorKind {
         if self.outcome_is_unknown() {
-            return 3;
+            return ErrorKind::OutcomeUnknown;
         }
         match self {
-            Error::UnknownId(_)
-            | Error::EmptyCluster(_)
-            | Error::Cycle
-            | Error::NotAtom(_)
-            | Error::AtomNotFound(_)
-            | Error::InvalidRating(_)
-            | Error::InvalidDifficulty(_)
-            | Error::InvalidQuizType(_)
-            | Error::InvalidStrategy(_)
-            | Error::SubpathNotTopDown
-            | Error::SubpathEmpty
-            | Error::SubpathTailNotTarget(_)
-            | Error::SubpathDuplicateAtom(_)
-            | Error::ConflictingFlags(_, _)
-            | Error::MissingToken
+            Error::UnknownId(_) => ErrorKind::UnknownId,
+            Error::EmptyCluster(_) => ErrorKind::EmptyCluster,
+            Error::Cycle => ErrorKind::Cycle,
+            Error::NotAtom(_) => ErrorKind::NotAtom,
+            Error::AtomNotFound(_) => ErrorKind::AtomNotFound,
+            Error::InvalidRating(_) => ErrorKind::InvalidRating,
+            Error::InvalidDifficulty(_) => ErrorKind::InvalidDifficulty,
+            Error::InvalidQuizType(_) => ErrorKind::InvalidQuizType,
+            Error::InvalidStrategy(_) => ErrorKind::InvalidStrategy,
+            Error::SubpathNotTopDown => ErrorKind::SubpathNotTopDown,
+            Error::SubpathEmpty => ErrorKind::SubpathEmpty,
+            Error::SubpathTailNotTarget(_) => ErrorKind::SubpathTailNotTarget,
+            Error::SubpathDuplicateAtom(_) => ErrorKind::SubpathDuplicateAtom,
+            Error::ConflictingFlags(_, _) => ErrorKind::ConflictingFlags,
+            Error::MissingToken
             | Error::DatabaseNotFound { .. }
             | Error::MissingTursoUrl
             | Error::MissingAuth
             | Error::BadBindAddr(_)
-            | Error::BadPublicUrl(_) => 2,
-            Error::FileIo { .. }
-            | Error::GraphCheckFailed
-            | Error::AymlParse { .. }
-            | Error::AymlSerialize(_)
-            | Error::NoPath
-            | Error::PathNotLoaded(_)
-            | Error::NoHome
-            | Error::NoLesson(_)
-            | Error::Fsrs(_)
-            | Error::Baserunna(_)
-            | Error::SchemaMismatch { .. }
-            | Error::Http(_)
+            | Error::BadPublicUrl(_) => ErrorKind::Config,
+            Error::NoPath => ErrorKind::NoPath,
+            Error::NoLesson(_) => ErrorKind::NoLesson,
+            Error::NoHome => ErrorKind::NoHome,
+            Error::FileIo { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => {
+                ErrorKind::Io
+            }
+            Error::GraphCheckFailed => ErrorKind::GraphCheck,
+            Error::Baserunna(baserunna_client::Error::Decode { .. })
             | Error::BadRow(_)
-            | Error::Json(_)
-            | Error::CardsCorrupt(_)
-            | Error::Turso(_)
+            | Error::CardsCorrupt(_) => ErrorKind::Corrupt,
+            Error::Baserunna(_) | Error::SchemaMismatch { .. } => ErrorKind::Database,
+            Error::Json(_) => ErrorKind::Json,
+            Error::Fsrs(_) => ErrorKind::Fsrs,
+            Error::Turso(_)
             | Error::ImportMismatch(_)
             | Error::ImportAlreadyComplete
             | Error::ImportTargetNotEmpty
-            | Error::ImportInProgress
-            | Error::Bind { .. }
-            | Error::Serve(_) => 1,
+            | Error::ImportInProgress => ErrorKind::Import,
+            Error::Http(_) => ErrorKind::Http,
+            Error::Bind { .. } | Error::Serve(_) => ErrorKind::Server,
+            Error::PathNotLoaded(_) => ErrorKind::Internal,
         }
+    }
+
+    /// Return the process exit code of this error.
+    pub fn exit_code(&self) -> u8 {
+        self.kind().exit_code()
     }
 
     /// Mark a failure from a read-only or setup step as not applied.
@@ -249,6 +318,25 @@ mod tests {
         let lost = Error::Baserunna(lost);
         assert!(lost.outcome_is_unknown());
         assert_eq!(lost.exit_code(), 3);
+    }
+
+    #[test]
+    fn every_kind_has_the_exit_code_that_the_design_doc_lists() {
+        let doc = include_str!("../docs/design.md");
+        let documented: Vec<(String, u8)> = doc
+            .lines()
+            .filter_map(|line| {
+                let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+                let name = cells.get(1)?.strip_prefix('`')?.strip_suffix('`')?;
+                let code = cells.get(2)?.parse().ok()?;
+                Some((name.to_string(), code))
+            })
+            .collect();
+        let kinds: Vec<(String, u8)> = ErrorKind::ALL
+            .iter()
+            .map(|k| (k.name().to_string(), k.exit_code()))
+            .collect();
+        assert_eq!(documented, kinds);
     }
 
     #[test]

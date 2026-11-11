@@ -14,7 +14,7 @@
 - **`path_id`**:
   - Required for all path-scoped tools.
   - Optional for the curriculum inspection tools `get_item` and `get_children`. If omitted, those tools return the curriculum with the authored lessons and quizzes, without path completion state. Unlike `mt graph show` and `mt graph list`, they always read the overlay, because the server always has the database.
-- **Return format**: All tools return JSON. A read tool returns the same record as the matching CLI command: `get_paths` as `mt path list`, `get_state` as `mt path state`, `get_tree` as `mt path tree`, `get_syllabus` as `mt path syllabus`, `get_item` as `mt graph show`, and `get_children` as `mt graph list`. `get_next` returns the `mt path next` record, and its `next_step` is an MCP tool call. Business logic errors return a `CallToolResult` with `isError: true` and a JSON object with `error` and `kind`. If the commit status is unknown, `kind` is `outcome_unknown`, and `next_step` gives the safe next call.
+- **Return format**: All tools return JSON. A read tool returns the same record as the matching CLI command: `get_paths` as `mt path list`, `get_state` as `mt path state`, `get_tree` as `mt path tree`, `get_syllabus` as `mt path syllabus`, `get_item` as `mt graph show`, and `get_children` as `mt graph list`. `get_next` returns the `mt path next` record, and its `next_step` is an MCP tool call. Business logic errors return a `CallToolResult` with `isError: true` and a JSON object with `error` and `kind`. The error kinds are listed in "Tool I/O and exit codes" in `docs/design.md`. If the commit status is unknown, `kind` is `outcome_unknown`, and `next_step` gives the safe next call.
 
 ### Prompt
 
