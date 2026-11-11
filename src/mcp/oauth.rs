@@ -233,9 +233,9 @@ async fn authorize_get(
     State(s): State<OAuthState>,
     Query(q): Query<AuthorizeQuery>,
 ) -> Result<Html<String>, OAuthError> {
-    validate_authorize_request(&s, &q).await?;
+    let client = validate_authorize_request(&s, &q).await?;
     let csrf = csrf_mint(&s.csrf_key, &q);
-    Ok(Html(render_login_form(&q, &csrf, None)))
+    Ok(Html(render_login_form(&client, &q, &csrf, None)))
 }
 
 #[derive(Deserialize)]
@@ -258,7 +258,7 @@ async fn authorize_post(
     if !csrf_verify(&s.csrf_key, &q, &f.csrf) {
         tracing::warn!(client_id = %client.client_id, "csrf token rejected on authorize POST");
         let message = "This sign-in form expired. Enter the password again.";
-        let html = render_login_form(&q, &csrf_mint(&s.csrf_key, &q), Some(message));
+        let html = render_login_form(&client, &q, &csrf_mint(&s.csrf_key, &q), Some(message));
         return Ok((StatusCode::BAD_REQUEST, Html(html)).into_response());
     }
     let addr = s.limits.client_addr(peer, &headers);
@@ -267,7 +267,7 @@ async fn authorize_post(
         let secs = throttle::retry_after_secs(wait);
         let unit = if secs == 1 { "second" } else { "seconds" };
         let message = format!("Too many incorrect passwords. Try again in {secs} {unit}.");
-        let html = render_login_form(&q, &csrf_mint(&s.csrf_key, &q), Some(&message));
+        let html = render_login_form(&client, &q, &csrf_mint(&s.csrf_key, &q), Some(&message));
         return Ok((
             StatusCode::TOO_MANY_REQUESTS,
             [(header::RETRY_AFTER, secs.to_string())],
@@ -278,7 +278,7 @@ async fn authorize_post(
     if !constant_time_eq(s.admin_password.as_ref(), f.password.as_bytes()) {
         tracing::warn!(%addr, client_id = %client.client_id, "admin password rejected");
         let csrf = csrf_mint(&s.csrf_key, &q);
-        let html = render_login_form(&q, &csrf, Some("Incorrect password."));
+        let html = render_login_form(&client, &q, &csrf, Some("Incorrect password."));
         return Ok((StatusCode::UNAUTHORIZED, Html(html)).into_response());
     }
     s.limits.record_success(addr).await?;
@@ -695,7 +695,13 @@ async fn load_client(db: &Db, client_id: &str) -> Result<OAuthClient, OAuthError
         .ok_or_else(|| OAuthError::invalid_request("unknown client_id"))
 }
 
-fn render_login_form(q: &AuthorizeQuery, csrf: &str, error: Option<&str>) -> String {
+/// Render the sign-in form that grants `client` access, with the host that receives the code.
+fn render_login_form(
+    client: &OAuthClient,
+    q: &AuthorizeQuery,
+    csrf: &str,
+    error: Option<&str>,
+) -> String {
     fn esc(s: &str) -> String {
         s.replace('&', "&amp;")
             .replace('<', "&lt;")
@@ -718,6 +724,8 @@ fn render_login_form(q: &AuthorizeQuery, csrf: &str, error: Option<&str>) -> Str
     let error_html = error.map_or(String::new(), |msg| {
         format!(r#"<p style="color:#b00020">{}</p>"#, esc(msg))
     });
+    let client_name = client.client_name.as_deref().unwrap_or("An unnamed client");
+    let redirect_host = redirect_host(&q.redirect_uri);
     format!(
         r#"<!doctype html>
 <html><head><meta charset="utf-8"><title>mt mcp — sign in</title>
@@ -725,12 +733,14 @@ fn render_login_form(q: &AuthorizeQuery, csrf: &str, error: Option<&str>) -> Str
 body {{ font: 14px/1.5 system-ui, sans-serif; max-width: 22rem; margin: 4rem auto; padding: 0 1rem; }}
 h1 {{ font-size: 1.1rem; margin-bottom: 0.5rem; }}
 p {{ color: #555; }}
+.grant {{ color: #000; font-size: 1rem; }}
 input[type=password] {{ width: 100%; padding: 0.5rem; font-size: 1rem; box-sizing: border-box; }}
 button {{ margin-top: 1rem; padding: 0.5rem 1rem; font-size: 1rem; }}
 </style></head>
 <body>
 <h1>Sign in to mt mcp</h1>
-<p>Authorizing client <code>{client_id}</code>. Enter the admin password to grant access.</p>
+<p class="grant"><strong>{client_name}</strong> asks for access to your Math Tutor data. After you sign in, your browser goes to <strong>{redirect_host}</strong>.</p>
+<p>Sign in only if you started this connection, and only if you trust {redirect_host}. Client ID: <code>{client_id}</code>.</p>
 {error_html}
 <form method="post" action="/oauth/authorize">
 <input type="hidden" name="response_type" value="{response_type}">
@@ -745,6 +755,8 @@ button {{ margin-top: 1rem; padding: 0.5rem 1rem; font-size: 1rem; }}
 </form>
 </body></html>"#,
         client_id = esc(&q.client_id),
+        client_name = esc(client_name),
+        redirect_host = esc(&redirect_host),
         response_type = esc(&q.response_type),
         redirect_uri = esc(&q.redirect_uri),
         code_challenge = esc(&q.code_challenge),
@@ -755,6 +767,18 @@ button {{ margin-top: 1rem; padding: 0.5rem 1rem; font-size: 1rem; }}
 
 /// Number of random bytes in each issued code and token.
 const TOKEN_BYTES: usize = 32;
+
+/// Return the host and port of `redirect_uri`, which receives the authorization code.
+fn redirect_host(redirect_uri: &str) -> String {
+    let Ok(url) = Url::parse(redirect_uri) else {
+        return redirect_uri.to_string();
+    };
+    match (url.host_str(), url.port()) {
+        (Some(host), Some(port)) => format!("{host}:{port}"),
+        (Some(host), None) => host.to_string(),
+        (None, _) => redirect_uri.to_string(),
+    }
+}
 
 fn random_token() -> String {
     let mut buf = [0u8; TOKEN_BYTES];

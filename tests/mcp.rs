@@ -1599,6 +1599,52 @@ async fn an_expired_sign_in_form_shows_a_new_form() {
 }
 
 #[tokio::test]
+async fn the_sign_in_page_names_the_client_and_the_redirect_host() {
+    let server = spawn_oauth_server().await;
+    let redirect = "https://connector.example:8443/callback";
+    let reg: RegisterResponseDe = oauth_client()
+        .post(server.url("/oauth/register"))
+        .json(&json!({
+            "client_name": "Claude <script>",
+            "redirect_uris": [redirect],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pkce = PkcePair::new();
+    let mut url = url::Url::parse(&server.url("/oauth/authorize")).unwrap();
+    url.query_pairs_mut()
+        .append_pair("response_type", "code")
+        .append_pair("client_id", &reg.client_id)
+        .append_pair("redirect_uri", redirect)
+        .append_pair("code_challenge", &pkce.challenge)
+        .append_pair("code_challenge_method", "S256");
+
+    let page = oauth_client()
+        .get(url.as_str())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    assert!(
+        page.contains("<strong>Claude &lt;script&gt;</strong>"),
+        "{page}"
+    );
+    assert!(
+        page.contains("<strong>connector.example:8443</strong>"),
+        "{page}"
+    );
+    assert!(!page.contains("<script>"), "{page}");
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn registrations_from_one_address_are_limited() {
     let server = spawn_oauth_server().await;
     for i in 0..10 {
