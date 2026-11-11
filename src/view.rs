@@ -313,13 +313,14 @@ impl Changes {
 
     /// Append `e` to its path event stream and update derived `cards` and `taught` rows.
     ///
-    /// Fails with [`Error::PathNotLoaded`] unless `view` holds the path of `e` or this write set creates the path.
+    /// Fails with [`Error::PathNotLoaded`] unless `view` holds the path of `e` or this write set creates the path, and with [`Error::PathCreatedOutsideCreation`] for a `path_created` event of a path that this write set does not create.
     pub fn append(&mut self, view: &View, e: &Event) -> Result<()> {
         let base = view.paths.get(&e.path);
-        if matches!(e.kind, EventKind::PathCreated {}) {
-            self.created.insert(e.path.clone());
+        let creates_path = self.created.contains(&e.path);
+        if matches!(e.kind, EventKind::PathCreated {}) && !creates_path {
+            return Err(Error::PathCreatedOutsideCreation(e.path.clone()));
         }
-        if base.is_none() && !self.created.contains(&e.path) {
+        if base.is_none() && !creates_path {
             return Err(Error::PathNotLoaded(e.path.clone()));
         }
         self.projections

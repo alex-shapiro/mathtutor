@@ -504,20 +504,75 @@ async fn append_rejects_a_path_outside_the_view_and_keeps_its_history() {
 }
 
 #[tokio::test]
-async fn append_accepts_events_after_the_path_created_event_in_one_write() {
+async fn append_accepts_events_of_a_path_that_the_same_write_creates() {
     let db = common::empty_db().await;
-    let created = Event::now("p_new", EventKind::PathCreated {});
-    let taught = Event::now("p_new", EventKind::LessonTaught { atom: "a".into() });
+    let p = PathFile {
+        id: "p_new".into(),
+        ..common::path_with(&[])
+    };
+    let taught = Event::now(&p.id, EventKind::LessonTaught { atom: "a".into() });
 
     db.transact(&Want::nothing(), |view, changes| {
-        changes.append(view, &created)?;
+        changes.create_path(view, &p)?;
         changes.append(view, &taught)
     })
     .await
     .unwrap();
 
-    let events = event_log::load(&db, "p_new").await.unwrap();
+    let events = event_log::load(&db, &p.id).await.unwrap();
     assert_eq!(events.len(), 2);
+    assert_eq!(
+        common::path_state(&db, &p.id).await.projection.taught["a"].count,
+        1
+    );
+}
+
+#[tokio::test]
+async fn path_created_for_an_existing_path_is_rejected_and_keeps_its_rows() {
+    let db = common::fresh_db(PATH_ID).await;
+    common::append(&db, &[common::taught("a")]).await;
+
+    let e = db
+        .transact(&Want::nothing(), |view, changes| {
+            changes.append(view, &Event::now(PATH_ID, EventKind::PathCreated {}))?;
+            changes.append(view, &common::taught("a"))
+        })
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(&e, Error::PathCreatedOutsideCreation(id) if id == PATH_ID),
+        "{e:?}"
+    );
+    assert_eq!(
+        common::path_state(&db, PATH_ID).await.projection.taught["a"].count,
+        1
+    );
+    assert_eq!(event_log::load(&db, PATH_ID).await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn a_new_path_rejects_a_path_created_event_of_another_path() {
+    let db = common::fresh_db(PATH_ID).await;
+    let p = PathFile {
+        id: "p_history".into(),
+        ..common::path_with(&[])
+    };
+    let other = Event::now(PATH_ID, EventKind::PathCreated {});
+
+    let e = db
+        .transact(&Want::nothing(), |view, changes| {
+            changes.create_path_with_history(view, &p, std::slice::from_ref(&other), Utc::now())
+        })
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(&e, Error::PathCreatedOutsideCreation(id) if id == PATH_ID),
+        "{e:?}"
+    );
+    let view = db.snapshot(&Want::path(Some(&p.id))).await.unwrap();
+    assert!(view.path().is_err(), "the failed write set stores nothing");
 }
 
 #[tokio::test]

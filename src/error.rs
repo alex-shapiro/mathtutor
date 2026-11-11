@@ -51,6 +51,11 @@ pub enum Error {
     PathNotLoaded(String),
 
     #[error(
+        "a path_created event for path '{0}' is outside the write that creates the path; mt records path_created only with the path row"
+    )]
+    PathCreatedOutsideCreation(String),
+
+    #[error(
         "the overlay is not loaded in this view; mt must load the overlay before it reads lessons or quizzes"
     )]
     OverlayNotLoaded,
@@ -325,7 +330,9 @@ impl Error {
             | Error::ImportInProgress => ErrorKind::Import,
             Error::Http(_) => ErrorKind::Http,
             Error::Bind { .. } | Error::Serve(_) => ErrorKind::Server,
-            Error::PathNotLoaded(_) | Error::OverlayNotLoaded => ErrorKind::Internal,
+            Error::PathNotLoaded(_)
+            | Error::PathCreatedOutsideCreation(_)
+            | Error::OverlayNotLoaded => ErrorKind::Internal,
         }
     }
 
