@@ -6,8 +6,9 @@ use std::sync::Arc;
 
 use axum::{
     Form, Json, Router,
-    extract::{ConnectInfo, Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    extract::{ConnectInfo, Query, Request, State},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
@@ -80,13 +81,19 @@ impl OAuthState {
 }
 
 /// Build the OAuth discovery and authorization router.
+///
+/// Browser-based MCP clients read the metadata, register, and exchange tokens with `fetch`, so only those routes allow other origins. The sign-in form at `/oauth/authorize` is a page that the browser opens, and other origins cannot read it.
 pub fn router(state: OAuthState) -> Router {
+    let limit = middleware::from_fn_with_state(state.clone(), limit_requests);
     let cors = CorsLayer::new()
         .allow_origin(Any)
-        .allow_methods(Any)
+        .allow_methods([Method::GET, Method::POST])
         .allow_headers(Any);
 
-    Router::new()
+    let token = Router::new()
+        .route("/oauth/token", post(token))
+        .route_layer(limit.clone());
+    let cross_origin = Router::new()
         .route(
             "/.well-known/oauth-protected-resource",
             get(protected_resource_metadata),
@@ -96,10 +103,30 @@ pub fn router(state: OAuthState) -> Router {
             get(authorization_server_metadata),
         )
         .route("/oauth/register", post(register))
+        .merge(token)
+        .layer(cors);
+    Router::new()
         .route("/oauth/authorize", get(authorize_get).post(authorize_post))
-        .route("/oauth/token", post(token))
-        .layer(cors)
+        .route_layer(limit)
+        .merge(cross_origin)
         .with_state(state)
+}
+
+/// Refuse a request from a client address over its request limit before the route reads the database.
+async fn limit_requests(
+    State(s): State<OAuthState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let addr = s.limits.client_addr(peer, req.headers());
+    match s.limits.try_request(addr) {
+        Some(wait) => {
+            tracing::warn!(%addr, path = %req.uri().path(), "OAuth request limit reached");
+            OAuthError::TooManyRequests(wait).into_response()
+        }
+        None => next.run(req).await,
+    }
 }
 
 async fn protected_resource_metadata(State(s): State<OAuthState>) -> Json<serde_json::Value> {

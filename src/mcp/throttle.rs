@@ -1,4 +1,4 @@
-//! Limits on failed credentials and client registrations from each client address.
+//! Limits on failed credentials, client registrations, and OAuth requests from each client address.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
@@ -27,6 +27,11 @@ const FAILURE_MEMORY: Duration = Duration::hours(1);
 const REGISTRATIONS_PER_WINDOW: u32 = 10;
 
 const REGISTRATION_WINDOW: Duration = Duration::hours(1);
+
+/// Number of requests to the OAuth routes that read the database that an address can make in each [`REQUEST_WINDOW`].
+const REQUESTS_PER_WINDOW: u32 = 60;
+
+const REQUEST_WINDOW: Duration = Duration::minutes(1);
 
 /// Number of addresses that each limit keeps in memory.
 const MAX_TRACKED_ADDRS: usize = 10_000;
@@ -84,6 +89,8 @@ enum Rule {
     Failures,
     /// Client registrations are limited per window.
     Registrations,
+    /// Requests to the OAuth routes that read the database are limited per window, in memory only.
+    Requests,
 }
 
 impl Rule {
@@ -92,6 +99,7 @@ impl Rule {
         match self {
             Rule::Failures => "failures",
             Rule::Registrations => "registrations",
+            Rule::Requests => "requests",
         }
     }
 
@@ -100,6 +108,7 @@ impl Rule {
         match self {
             Rule::Failures => FAILURE_MEMORY,
             Rule::Registrations => REGISTRATION_WINDOW,
+            Rule::Requests => REQUEST_WINDOW,
         }
     }
 
@@ -118,10 +127,14 @@ impl Rule {
                     since: now,
                 })
             }
-            Rule::Registrations => {
+            Rule::Registrations | Rule::Requests => {
+                let per_window = match self {
+                    Rule::Requests => REQUESTS_PER_WINDOW,
+                    _ => REGISTRATIONS_PER_WINDOW,
+                };
                 let window = last.unwrap_or(Count { n: 0, since: now });
-                if window.n >= REGISTRATIONS_PER_WINDOW {
-                    return Err(REGISTRATION_WINDOW - (now - window.since));
+                if window.n >= per_window {
+                    return Err(self.memory() - (now - window.since));
                 }
                 Ok(Count {
                     n: window.n + 1,
@@ -289,12 +302,13 @@ impl AddrLimit {
     }
 }
 
-/// Limits on failed credentials and client registrations from each client address.
+/// Limits on failed credentials, client registrations, and OAuth requests from each client address.
 #[derive(Clone)]
 pub(crate) struct AddrLimits {
     client_addrs: ClientAddrSource,
     failures: Arc<AddrLimit>,
     registrations: Arc<AddrLimit>,
+    requests: Arc<AddrLimit>,
 }
 
 impl AddrLimits {
@@ -304,6 +318,7 @@ impl AddrLimits {
             client_addrs,
             failures: Arc::new(AddrLimit::new(Rule::Failures, db.clone())),
             registrations: Arc::new(AddrLimit::new(Rule::Registrations, db.clone())),
+            requests: Arc::new(AddrLimit::new(Rule::Requests, db.clone())),
         }
     }
 
@@ -334,6 +349,13 @@ impl AddrLimits {
     /// Forget the failures of `addr` after a correct credential.
     pub(crate) async fn record_success(&self, addr: IpAddr) -> Result<()> {
         self.failures.reset(addr).await
+    }
+
+    /// Count a request from `addr` to an OAuth route that reads the database, only in memory, or return the time until the window of `addr` ends if the window is full.
+    pub(crate) fn try_request(&self, addr: IpAddr) -> Option<Duration> {
+        self.requests
+            .count_locally(addr_key(addr), Utc::now())
+            .err()
     }
 
     /// Count a client registration from `addr`, or return the time until the window of `addr` ends if the window is full.
@@ -400,6 +422,16 @@ mod tests {
             Err(half)
         );
         let next = t0 + REGISTRATION_WINDOW;
+        assert!(rule.next(rule.current(last, next), next).is_ok());
+    }
+
+    #[test]
+    fn requests_from_an_address_are_limited_per_minute() {
+        let rule = Rule::Requests;
+        let t0 = Utc::now();
+        let last = count_n(rule, None, REQUESTS_PER_WINDOW, t0);
+        assert_eq!(rule.next(last, t0), Err(REQUEST_WINDOW));
+        let next = t0 + REQUEST_WINDOW;
         assert!(rule.next(rule.current(last, next), next).is_ok());
     }
 

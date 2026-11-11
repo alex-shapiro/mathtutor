@@ -1758,3 +1758,72 @@ async fn new_path_accepts_a_target_inside_another_target() {
     assert_ne!(next["isError"], json!(true), "{next}");
     server.stop().await;
 }
+
+#[tokio::test]
+async fn sign_in_and_token_requests_from_one_address_are_limited() {
+    let server = spawn_oauth_server().await;
+    let token_request = || {
+        oauth_client()
+            .post(server.url("/oauth/token"))
+            .form(&[("grant_type", "password")])
+            .send()
+    };
+    for _ in 0..60 {
+        assert_eq!(token_request().await.unwrap().status(), 400);
+    }
+
+    let res = token_request().await.unwrap();
+    assert_eq!(res.status(), 429);
+    assert!(res.headers().contains_key("retry-after"));
+    let res = oauth_client()
+        .get(server.url("/oauth/authorize?client_id=x"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 429, "the sign-in form shares the limit");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn only_the_routes_for_browser_clients_allow_other_origins() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Origin").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&server, &reg.client_id, &pkce.challenge, None, None);
+    let origin = "https://elsewhere.example";
+    let allowed =
+        |res: &reqwest::Response| res.headers().contains_key("access-control-allow-origin");
+
+    let form = oauth_client()
+        .get(&auth_url)
+        .header("origin", origin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(form.status(), 200);
+    assert!(!allowed(&form), "the sign-in form allows another origin");
+
+    for path in [
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-protected-resource",
+    ] {
+        let res = oauth_client()
+            .get(server.url(path))
+            .header("origin", origin)
+            .send()
+            .await
+            .unwrap();
+        assert!(allowed(&res), "{path}");
+    }
+    for path in ["/oauth/token", "/oauth/register"] {
+        let preflight = oauth_client()
+            .request(reqwest::Method::OPTIONS, server.url(path))
+            .header("origin", origin)
+            .header("access-control-request-method", "POST")
+            .send()
+            .await
+            .unwrap();
+        assert!(allowed(&preflight), "{path}");
+    }
+    server.stop().await;
+}

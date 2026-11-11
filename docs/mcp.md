@@ -40,6 +40,8 @@ Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticat
 | `/oauth/authorize`                        | POST   | Verifies `MT_ADMIN_PASSWORD` and issues an auth code   |
 | `/oauth/token`                            | POST   | Exchanges an auth code with S256 PKCE or refresh token |
 
+Only the metadata routes, `/oauth/register`, and `/oauth/token` send CORS headers, so a browser-based MCP client on another origin can use them. `/oauth/authorize` sends no CORS headers, so another website cannot read the sign-in form.
+
 ### Token parameters and storage
 
 - **Entropy:** 256-bit random tokens encoded with base64url.
@@ -54,6 +56,7 @@ Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticat
 
 - **Failed credentials:** Incorrect passwords and failed bearer tokens on `/mcp` count against one limit. After 5 failures from an address, each next attempt must wait. The wait starts at 1 second and doubles after each further failure, up to 15 minutes. Thus an address can try about 17 credentials in the first hour and 4 in each later hour. The server forgets the failures of an address after a correct password or access token, or 1 hour after the last failure. A delayed attempt receives `429 Too Many Requests` with a `Retry-After` header, and the server does not check its credential. A cached access token does not wait.
 - **Registration:** An address can register 10 clients per hour. More registrations receive `429 Too Many Requests` with a `Retry-After` header.
+- **Sign-in and token requests:** An address can send 60 requests per minute to `/oauth/authorize` and `/oauth/token` together, because each request reads the database. More requests receive `429 Too Many Requests` with a `Retry-After` header before the server reads the database. Each server counts these requests only in memory.
 - **Client address:** The server uses the TCP peer address. Behind a proxy, set `MT_CLIENT_IP_HEADER` or `--client-ip-header` to the header that the proxy sets to the client address. Use only a header that the proxy replaces, because a client can send any header. `fly.toml` sets `Fly-Client-IP`. All IPv6 addresses of one `/64` network share their limits.
 - **Storage:** The server stores the count of each address in `oauth_addr_counts`, so the limits stay the same after a restart and on every machine of the app. Each server also counts in memory, for at most 10,000 addresses, so a burst of requests reaches the database only for the attempts that the limits admit. A failed token without the form of an access token counts only in memory.
 
