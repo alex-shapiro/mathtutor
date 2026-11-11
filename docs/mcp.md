@@ -25,7 +25,7 @@ The `mathtutor-playbook` MCP prompt returns the agent instructions for operating
 
 The server operates as a single-user, single-tenant instance backed by a single Baserunna database. Two authentication modes are supported on `/mcp`:
 
-1. **Static bearer token:** Configured via `MT_API_KEY` and passed in `Authorization: Bearer <token>` or `?token=<token>`. The key must have at least 32 characters. Use a random key, such as the output of `openssl rand -base64 32`.
+1. **Static bearer token:** Configured via `MT_API_KEY` and passed in `Authorization: Bearer <token>` or `?token=<token>`. The server accepts the `?token=` form only for `MT_API_KEY`, because proxies and servers log URLs. The key must have at least 32 characters. Use a random key, such as the output of `openssl rand -base64 32`.
 2. **OAuth 2.1 access token:** Issued by the built-in authorization server if `MT_ADMIN_PASSWORD` is set, and passed in `Authorization: Bearer <token>`.
 
 Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticated requests receive `401 Unauthorized` with a `WWW-Authenticate` header pointing to `/.well-known/oauth-protected-resource`. The server keeps each valid access token in memory until it expires, so it reads a token from Baserunna once. The server has no revocation endpoint, so the cache does not extend the life of a token. If the server cannot read an access token from Baserunna, the request receives `503 Service Unavailable` with a `Retry-After` header. A token without the form of an issued access token fails without a Baserunna request.

@@ -647,7 +647,7 @@ struct TokenQuery {
     token: Option<String>,
 }
 
-/// Admit a request with `MT_API_KEY` or a valid access token, and delay the bearer tokens of a client address after too many rejected tokens.
+/// Admit a request with `MT_API_KEY` in the `Authorization` header or the `token` query parameter, or with a valid access token in the header, and delay the bearer tokens of a client address after too many rejected tokens.
 async fn auth_middleware(
     State(state): State<AuthState>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
@@ -661,15 +661,18 @@ async fn auth_middleware(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(str::to_string);
-    let Some(token) = from_header.or(q.token) else {
-        return state.challenge();
+    let (token, in_query) = match (from_header, q.token) {
+        (Some(token), _) => (token, false),
+        (None, Some(token)) => (token, true),
+        (None, None) => return state.challenge(),
     };
     if let Some(expected) = state.api_key.as_deref()
         && oauth::constant_time_eq(token.as_bytes(), expected.as_bytes())
     {
         return next.run(req).await;
     }
-    if let Some(access_tokens) = &state.access_tokens
+    let access_tokens = state.access_tokens.as_ref().filter(|_| !in_query);
+    if let Some(access_tokens) = access_tokens
         && access_tokens.is_cached(&token)
     {
         return next.run(req).await;
@@ -678,11 +681,7 @@ async fn auth_middleware(
     if let Some(wait) = state.limits.bearer_wait(addr) {
         return too_many_requests(wait);
     }
-    let Some(access_tokens) = state
-        .access_tokens
-        .as_ref()
-        .filter(|_| oauth::has_issued_form(&token))
-    else {
+    let Some(access_tokens) = access_tokens.filter(|_| oauth::has_issued_form(&token)) else {
         tracing::warn!(%addr, "bearer token rejected");
         state.limits.record_bearer_failure(addr);
         return state.challenge();

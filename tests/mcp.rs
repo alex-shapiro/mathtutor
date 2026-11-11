@@ -934,6 +934,34 @@ async fn register_rejects_empty_redirect_uris() {
 }
 
 #[tokio::test]
+async fn an_access_token_works_only_in_the_authorization_header() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Query").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+    let list = json!({"jsonrpc":"2.0","id":2,"method":"tools/list"});
+    let res = mcp_post_with_token(&server, &tokens.access_token, &list).await;
+    assert_eq!(
+        res.status(),
+        200,
+        "the header form works and caches the token"
+    );
+
+    let url = format!("{}?token={}", server.url("/mcp"), tokens.access_token);
+    let res = client()
+        .post(&url)
+        .header(ACCEPT, "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .body(initialize_body())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn full_authorization_code_flow_yields_a_working_access_token() {
     let server = spawn_oauth_server().await;
     let reg = register_client(&server, "Full Flow").await;
