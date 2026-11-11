@@ -33,7 +33,7 @@ Ask the user which strategy they prefer if they have not specified it.
 On each turn:
 
 1. Call `get_next { path_id }` to receive `create_lesson`, `present_lesson`, `create_quiz`, `present_quiz`, or `done`.
-2. Perform the action specified in `action`.
+2. Perform the action specified in `action`. The `next_step` field gives the tool call to make after the action, with the path ID.
 3. Call `get_next` again after the user responds.
 
 Stop if `action: done` is returned or if the user pauses the session.

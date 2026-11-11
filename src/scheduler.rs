@@ -12,6 +12,7 @@ use crate::graph::{FlatConcept, Graph};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::subpath;
+use crate::surface::Surface;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::{PathState, Want};
 use crate::{Error, Result};
@@ -20,7 +21,7 @@ const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Dif
 
 /// Compute the next action for `path_id` and print its AYML envelope for `mt path next`.
 pub async fn cmd_path_next(db: &Db, path_id: Option<&str>, mode: NextMode) -> Result<()> {
-    let envelope = compute_next(db, path_id, mode).await?;
+    let envelope = compute_next(db, path_id, mode, Surface::Cli).await?;
     let text = ayml::to_string(&envelope).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
@@ -49,8 +50,13 @@ impl NextMode {
     }
 }
 
-/// Select the next action for `path_id` and append its presentation event.
-pub async fn compute_next(db: &Db, path_id: Option<&str>, mode: NextMode) -> Result<Envelope> {
+/// Select the next action for `path_id`, append its presentation event, and return its envelope with the next step in the syntax of `surface`.
+pub async fn compute_next(
+    db: &Db,
+    path_id: Option<&str>,
+    mode: NextMode,
+    surface: Surface,
+) -> Result<Envelope> {
     db.transact(&Want::path(path_id), |view, changes| {
         let ps = view.path()?;
         let p = &ps.file;
@@ -62,7 +68,7 @@ pub async fn compute_next(db: &Db, path_id: Option<&str>, mode: NextMode) -> Res
 
         let action = next_action(&g, p, &targets, &progress, &due, &subpath, mode);
         // Build the envelope before appending presentation events so history reflects prior attempts.
-        let envelope = Envelope::build(ps, &g, action.clone());
+        let envelope = Envelope::build(ps, &g, action.clone(), surface);
 
         match &action {
             Action::PresentQuiz { quiz_id, atom_id } => changes.append(
@@ -309,6 +315,9 @@ pub struct Envelope {
     schema_version: u32,
     action: String,
     path: String,
+    /// Command or tool call that performs the action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_step: Option<String>,
     payload: Payload,
     #[serde(skip)]
     next: Action,
@@ -328,7 +337,6 @@ enum Payload {
 struct CreateLessonPayload {
     atom: AtomBrief,
     prerequisites: Vec<PrereqBrief>,
-    next_step: String,
 }
 
 #[derive(Serialize)]
@@ -336,7 +344,6 @@ struct PresentLessonPayload {
     atom: AtomBrief,
     reason: &'static str,
     history: LessonHistory,
-    next_step: String,
 }
 
 #[derive(Serialize, Default, Debug)]
@@ -352,7 +359,6 @@ struct CreateQuizPayload {
     target_difficulty: Difficulty,
     existing_quizzes: Vec<ExistingQuizBrief>,
     prerequisites: Vec<PrereqBrief>,
-    next_step: String,
 }
 
 #[derive(Serialize)]
@@ -360,7 +366,6 @@ struct PresentQuizPayload {
     atom: AtomBrief,
     quiz: QuizFull,
     history: QuizHistory,
-    next_step: String,
 }
 
 #[derive(Serialize)]
@@ -412,8 +417,9 @@ impl Envelope {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn build(ps: &PathState, g: &Graph, action: Action) -> Self {
+    fn build(ps: &PathState, g: &Graph, action: Action, surface: Surface) -> Self {
         let p = &ps.file;
+        let next_step = next_step(surface, &action, &p.id);
         let next = action.clone();
         match action {
             Action::PresentLesson { atom_id } => {
@@ -427,6 +433,7 @@ impl Envelope {
                 let history = lesson_history(ps, &atom_id);
                 Envelope {
                     next,
+                    next_step,
                     schema_version: 1,
                     action: "present_lesson".to_string(),
                     path: p.id.clone(),
@@ -434,7 +441,6 @@ impl Envelope {
                         atom,
                         reason: "not_taught",
                         history,
-                        next_step: "mt path next".to_string(),
                     }),
                 }
             }
@@ -462,6 +468,7 @@ impl Envelope {
                 let history = quiz_history(ps, &quiz_id);
                 Envelope {
                     next,
+                    next_step,
                     schema_version: 1,
                     action: "present_quiz".to_string(),
                     path: p.id.clone(),
@@ -469,9 +476,6 @@ impl Envelope {
                         atom,
                         quiz,
                         history,
-                        next_step: format!(
-                            "mt quiz answer {quiz_id} --rating {{again|hard|good|easy}}"
-                        ),
                     }),
                 }
             }
@@ -486,13 +490,13 @@ impl Envelope {
                 let prerequisites = collect_prereqs(g, c);
                 Envelope {
                     next,
+                    next_step,
                     schema_version: 1,
                     action: "create_lesson".to_string(),
                     path: p.id.clone(),
                     payload: Payload::CreateLesson(CreateLessonPayload {
                         atom,
                         prerequisites,
-                        next_step: format!("mt lesson upsert {atom_id} --body TEXT"),
                     }),
                 }
             }
@@ -517,12 +521,9 @@ impl Envelope {
                     })
                     .collect();
                 let prerequisites = collect_prereqs(g, c);
-                let next_step = format!(
-                    "mt quiz create {atom_id} --difficulty {difficulty} \
-                     --question TEXT --answer TEXT [--rubric TEXT]"
-                );
                 Envelope {
                     next,
+                    next_step,
                     schema_version: 1,
                     action: "create_quiz".to_string(),
                     path: p.id.clone(),
@@ -531,12 +532,12 @@ impl Envelope {
                         target_difficulty: difficulty,
                         existing_quizzes,
                         prerequisites,
-                        next_step,
                     }),
                 }
             }
             Action::Done => Envelope {
                 next,
+                next_step,
                 schema_version: 1,
                 action: "done".to_string(),
                 path: p.id.clone(),
@@ -546,6 +547,52 @@ impl Envelope {
             },
         }
     }
+}
+
+/// Return the command or tool call in the syntax of `surface` that performs `action` on path `path_id`, or `None` for [`Action::Done`].
+fn next_step(surface: Surface, action: &Action, path_id: &str) -> Option<String> {
+    let step = match (surface, action) {
+        (Surface::Cli, Action::PresentLesson { .. }) => format!("mt path next --path {path_id}"),
+        (Surface::Mcp, Action::PresentLesson { .. }) => {
+            format!("get_next {{ path_id: \"{path_id}\" }}")
+        }
+        (Surface::Cli, Action::PresentQuiz { quiz_id, .. }) => format!(
+            "mt quiz answer {quiz_id} --path {path_id} --rating {{again|hard|good|easy}} \
+             --user-answer \"<verbatim reply>\""
+        ),
+        (Surface::Mcp, Action::PresentQuiz { quiz_id, .. }) => format!(
+            "answer_quiz {{ quiz_id: \"{quiz_id}\", path_id: \"{path_id}\", \
+             rating: \"again|hard|good|easy\", answer: \"<verbatim reply>\" }}"
+        ),
+        (Surface::Cli, Action::CreateLesson { atom_id }) => {
+            format!("mt lesson upsert {atom_id} --path {path_id} --body TEXT")
+        }
+        (Surface::Mcp, Action::CreateLesson { atom_id }) => {
+            format!("upsert_lesson {{ atom: \"{atom_id}\", path_id: \"{path_id}\", body: TEXT }}")
+        }
+        (
+            Surface::Cli,
+            Action::CreateQuiz {
+                atom_id,
+                difficulty,
+            },
+        ) => format!(
+            "mt quiz create {atom_id} --path {path_id} --difficulty {difficulty} \
+             --question TEXT --answer TEXT [--rubric TEXT]"
+        ),
+        (
+            Surface::Mcp,
+            Action::CreateQuiz {
+                atom_id,
+                difficulty,
+            },
+        ) => format!(
+            "create_quiz {{ atom: \"{atom_id}\", path_id: \"{path_id}\", \
+             difficulty: \"{difficulty}\", question: TEXT, answer: TEXT, rubric?: TEXT }}"
+        ),
+        (_, Action::Done) => return None,
+    };
+    Some(step)
 }
 
 fn collect_prereqs(g: &Graph, c: &FlatConcept) -> Vec<PrereqBrief> {

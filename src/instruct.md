@@ -48,7 +48,7 @@ Run `mt path syllabus [-n N]` to preview upcoming untaught lesson topics in sche
 On each turn:
 
 1. Run `mt path next`.
-2. Perform the action specified in the `action` field.
+2. Perform the action specified in the `action` field. The `next_step` field gives the command to run after the action, with the path ID.
 3. Continue with `mt path next` after the user responds.
 
 Stop if `action: done` is returned or if the user pauses the session.

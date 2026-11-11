@@ -76,8 +76,11 @@ Each `--targets` entry is either an atom ID, such as `tx.1.1`, or a cluster ID, 
 schema_version: 1
 action: create_lesson | present_lesson | create_quiz | present_quiz | done
 path: <path-id>
+next_step: <command that performs the action>
 payload: ...
 ```
+
+`next_step` names the path explicitly, so that the agent acts on the same path. `mt mcp` returns `next_step` as an MCP tool call, such as `answer_quiz { quiz_id: "...", path_id: "...", rating: "again|hard|good|easy", answer: "<verbatim reply>" }`. The `done` action omits `next_step`.
 
 ### `create_lesson`
 
@@ -86,6 +89,7 @@ The selected atom does not have a lesson in the merged graph. The agent authors 
 ```yaml
 action: create_lesson
 path: p_2026_05_09_173_42
+next_step: "mt lesson upsert la.5.4.7 --path p_2026_05_09_173_42 --body TEXT"
 payload:
   atom:
     id: la.5.4.7
@@ -95,7 +99,6 @@ payload:
     - id: la.5.4.2
       name: "Singular value"
       description: "Diagonal entry of Σ; non-negative real number."
-  next_step: "mt lesson upsert la.5.4.7 --body TEXT"
 ```
 
 ### `present_lesson`
@@ -105,6 +108,7 @@ A lesson exists in the merged graph, but it has not been taught on this path. `m
 ```yaml
 action: present_lesson
 path: p_2026_05_09_173_42
+next_step: "mt path next --path p_2026_05_09_173_42"
 payload:
   atom:
     id: la.5.4.7
@@ -114,7 +118,6 @@ payload:
   reason: not_taught
   history:
     repetitions: 0
-  next_step: "mt path next"
 ```
 
 ### `create_quiz`
@@ -124,6 +127,7 @@ The lesson has been taught on this path, but a difficulty slot does not have a q
 ```yaml
 action: create_quiz
 path: p_2026_05_09_173_42
+next_step: "mt quiz create la.5.4.7 --path p_2026_05_09_173_42 --difficulty medium --question TEXT --answer TEXT [--rubric TEXT]"
 payload:
   atom:
     id: la.5.4.7
@@ -139,7 +143,6 @@ payload:
     - id: la.5.4.2
       name: "Singular value"
       description: "..."
-  next_step: "mt quiz create la.5.4.7 --difficulty medium --question TEXT --answer TEXT [--rubric TEXT]"
 ```
 
 ### `present_quiz`
@@ -149,6 +152,7 @@ A quiz card is due or required for atom completion. The agent presents the quest
 ```yaml
 action: present_quiz
 path: p_2026_05_09_173_42
+next_step: "mt quiz answer la.5.4.7.q2 --path p_2026_05_09_173_42 --rating {again|hard|good|easy} --user-answer \"<verbatim reply>\""
 payload:
   atom:
     id: la.5.4.7
@@ -169,7 +173,6 @@ payload:
     total_count: 5
     correct_pct: 60
     recent_ratings: [easy, good, hard, again, good]
-  next_step: "mt quiz answer la.5.4.7.q2 --rating {again|hard|good|easy}"
 ```
 
 ### `done`

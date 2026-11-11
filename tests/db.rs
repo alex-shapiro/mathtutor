@@ -692,6 +692,7 @@ async fn path_next_makes_its_path_the_most_recent_even_without_an_event() {
         &db,
         Some("p_a_older"),
         mathtutor::scheduler::NextMode::Default,
+        mathtutor::surface::Surface::Cli,
     )
     .await
     .unwrap();

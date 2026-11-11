@@ -477,7 +477,7 @@ async fn call_tool(server: &ServerHandle, session: &str, name: &str, arguments: 
 }
 
 #[tokio::test]
-async fn path_list_and_tree_tools_return_the_cli_views() {
+async fn path_tools_return_the_cli_views_with_mcp_next_steps() {
     let server = spawn_server().await;
     let session = handshake(&server).await;
     let created = call_tool(
@@ -496,6 +496,11 @@ async fn path_list_and_tree_tools_return_the_cli_views() {
         summary["targets"],
         json!({ "total": 1, "learned": 0, "learned_pct": 0 })
     );
+
+    let next = call_tool(&server, &session, "get_next", json!({ "path_id": path_id })).await;
+    let step = next["structuredContent"]["next_step"].as_str().unwrap();
+    assert!(step.contains(&format!("path_id: {path_id}")), "{step}");
+    assert!(!step.starts_with("mt "), "{step}");
 
     let tree = call_tool(&server, &session, "get_tree", json!({ "path_id": path_id })).await;
     let tree = &tree["structuredContent"];

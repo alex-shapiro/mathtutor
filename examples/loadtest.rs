@@ -398,14 +398,20 @@ impl Learner {
             out.push(("path list", t.elapsed(), r.map_err(|e| e.to_string())));
             return;
         }
-        let envelope =
-            match scheduler::compute_next(&self.db, Some(&p), scheduler::NextMode::Default).await {
-                Ok(e) => e,
-                Err(e) => {
-                    out.push(("path next", t.elapsed(), Err(e.to_string())));
-                    return;
-                }
-            };
+        let envelope = match scheduler::compute_next(
+            &self.db,
+            Some(&p),
+            scheduler::NextMode::Default,
+            mathtutor::surface::Surface::Cli,
+        )
+        .await
+        {
+            Ok(e) => e,
+            Err(e) => {
+                out.push(("path next", t.elapsed(), Err(e.to_string())));
+                return;
+            }
+        };
         out.push(("path next", t.elapsed(), Ok(())));
         let t = Instant::now();
         match envelope.action() {

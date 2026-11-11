@@ -1,10 +1,12 @@
-//! Integration tests for `scheduler::quiz_history` and `scheduler::lesson_history`.
+//! Integration tests for the `mt path next` envelope, `scheduler::quiz_history`, and `scheduler::lesson_history`.
 
 use chrono::{Duration, TimeZone, Utc};
 use mathtutor::db::Db;
 use mathtutor::event_log::{Event, EventKind, EventPayload};
 use mathtutor::scheduler::{self, LessonHistory, QuizHistory};
-use mathtutor::types::{Rating, Strategy};
+use mathtutor::surface::Surface;
+use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
+use mathtutor::{path, store};
 
 mod common;
 
@@ -182,4 +184,71 @@ async fn lesson_history_isolates_atom_and_path() {
 
     let h = lesson_history(&db).await;
     assert_eq!(h.repetitions, 0);
+}
+
+async fn next_envelope(db: &Db, path_id: &str, surface: Surface) -> serde_json::Value {
+    let envelope =
+        scheduler::compute_next(db, Some(path_id), scheduler::NextMode::Default, surface)
+            .await
+            .expect("next");
+    serde_json::to_value(envelope).expect("json")
+}
+
+#[tokio::test]
+async fn next_step_names_the_path_and_the_verbatim_answer_on_each_surface() {
+    let db = common::empty_db().await;
+    let id = path::cmd_path_new(&db, "g", &["fnd.1.1.2".into()], Strategy::TopDown)
+        .await
+        .unwrap();
+    store::cmd_lesson_upsert(&db, "fnd.1.1.2", "body".into(), Some(&id))
+        .await
+        .unwrap();
+
+    let create = next_envelope(&db, &id, Surface::Cli).await;
+    assert_eq!(create["action"], "create_quiz");
+    let step = create["next_step"].as_str().unwrap();
+    assert!(
+        step.starts_with("mt quiz create fnd.1.1.2 --path "),
+        "{step}"
+    );
+    assert!(step.contains(&id), "{step}");
+    let mcp_create = next_envelope(&db, &id, Surface::Mcp).await;
+    let step = mcp_create["next_step"].as_str().unwrap();
+    assert!(
+        step.starts_with("create_quiz { atom: \"fnd.1.1.2\""),
+        "{step}"
+    );
+    assert!(step.contains(&format!("path_id: \"{id}\"")), "{step}");
+
+    let quiz = store::cmd_quiz_create(
+        &db,
+        "fnd.1.1.2",
+        Difficulty::Easy,
+        "q".into(),
+        "a".into(),
+        None,
+        QuizType::FreeText,
+        Some(&id),
+    )
+    .await
+    .unwrap();
+
+    let present = next_envelope(&db, &id, Surface::Cli).await;
+    assert_eq!(present["action"], "present_quiz");
+    let step = present["next_step"].as_str().unwrap();
+    assert!(
+        step.starts_with(&format!("mt quiz answer {quiz} --path {id} --rating ")),
+        "{step}"
+    );
+    assert!(step.contains("--user-answer"), "{step}");
+    let mcp_present = next_envelope(&db, &id, Surface::Mcp).await;
+    let step = mcp_present["next_step"].as_str().unwrap();
+    assert!(
+        step.starts_with(&format!(
+            "answer_quiz {{ quiz_id: \"{quiz}\", path_id: \"{id}\""
+        )),
+        "{step}"
+    );
+    assert!(step.contains("answer: "), "{step}");
+    assert!(!step.contains("mt "), "{step}");
 }

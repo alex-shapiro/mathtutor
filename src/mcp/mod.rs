@@ -242,7 +242,8 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetNextArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = scheduler::compute_next(&self.db, Some(&args.path_id), args.mode).await;
+        let result =
+            scheduler::compute_next(&self.db, Some(&args.path_id), args.mode, Surface::Mcp).await;
         encode(result)
     }
 
