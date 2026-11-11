@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use argh::FromArgs;
 
-use crate::surface::Operation;
+use crate::surface::{Operation, Tool};
 use crate::types;
 
 /// Manage math lessons and spaced-repetition quizzes over a curriculum graph.
@@ -32,36 +32,48 @@ pub enum Cmd {
 }
 
 impl Cmd {
+    /// Return the agent command of this command, or `None` for an operator command.
+    pub fn tool(&self) -> Option<Tool> {
+        let tool = match self {
+            Cmd::Path(p) => match &p.op {
+                PathOp::List(_) => Tool::GetPaths,
+                PathOp::New(_) => Tool::NewPath,
+                PathOp::State(_) => Tool::GetState,
+                PathOp::Next(_) => Tool::GetNext,
+                PathOp::Strategy(_) => Tool::SetStrategy,
+                PathOp::Subpath(s) => match s.op {
+                    SubpathOp::Set(_) => Tool::SubpathSet,
+                    SubpathOp::Clear(_) => Tool::SubpathClear,
+                },
+                PathOp::Syllabus(_) => Tool::GetSyllabus,
+                PathOp::Tree(_) => Tool::GetTree,
+            },
+            Cmd::Graph(g) => match g.op {
+                GraphOp::Show(_) => Tool::GetItem,
+                GraphOp::List(_) => Tool::GetChildren,
+                GraphOp::Check(_) | GraphOp::Dump(_) => return None,
+            },
+            Cmd::Lesson(l) => match l.op {
+                LessonOp::Upsert(_) => Tool::UpsertLesson,
+            },
+            Cmd::Quiz(q) => match q.op {
+                QuizOp::Create(_) => Tool::CreateQuiz,
+                QuizOp::Update(_) => Tool::UpdateQuiz,
+                QuizOp::Delete(_) => Tool::DeleteQuiz,
+                QuizOp::Answer(_) => Tool::AnswerQuiz,
+            },
+            Cmd::Instruct(_) | Cmd::ImportTurso(_) => return None,
+            #[cfg(feature = "mcp")]
+            Cmd::Mcp(_) => return None,
+        };
+        Some(tool)
+    }
+
     /// Return the operation of this command.
     pub fn operation(&self) -> Operation {
         match self {
             Cmd::ImportTurso(_) => Operation::ImportTurso,
-            Cmd::Path(p) => match p.op {
-                PathOp::New(_) => Operation::NewPath,
-                PathOp::List(_)
-                | PathOp::State(_)
-                | PathOp::Next(_)
-                | PathOp::Strategy(_)
-                | PathOp::Subpath(_)
-                | PathOp::Syllabus(_)
-                | PathOp::Tree(_) => Operation::Repeatable,
-            },
-            Cmd::Quiz(q) => match q.op {
-                QuizOp::Create(_) => Operation::CreateQuiz,
-                QuizOp::Answer(_) => Operation::AnswerQuiz,
-                QuizOp::Update(_) | QuizOp::Delete(_) => Operation::Repeatable,
-            },
-            Cmd::Lesson(l) => match l.op {
-                LessonOp::Upsert(_) => Operation::Repeatable,
-            },
-            Cmd::Graph(g) => match g.op {
-                GraphOp::Show(_) | GraphOp::List(_) | GraphOp::Check(_) | GraphOp::Dump(_) => {
-                    Operation::Repeatable
-                }
-            },
-            Cmd::Instruct(_) => Operation::Repeatable,
-            #[cfg(feature = "mcp")]
-            Cmd::Mcp(_) => Operation::Repeatable,
+            _ => self.tool().map_or(Operation::Repeatable, Tool::operation),
         }
     }
 }
@@ -495,36 +507,56 @@ pub fn flatten_ids(raw: &[String]) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn operation(args: &[&str]) -> Operation {
-        Mt::from_args(&["mt"], args)
-            .expect("valid args")
-            .cmd
-            .operation()
+    #[test]
+    fn each_agent_command_parses_as_its_tool() {
+        let samples: &[&[&str]] = &[
+            &["path", "list"],
+            &["path", "new", "goal", "--targets", "a"],
+            &["path", "strategy", "top_down"],
+            &["path", "subpath", "set", "--atoms", "a"],
+            &["path", "subpath", "clear"],
+            &["path", "next"],
+            &["path", "state"],
+            &["path", "tree"],
+            &["path", "syllabus"],
+            &["graph", "show", "a"],
+            &["graph", "list"],
+            &["lesson", "upsert", "a", "--body", "b"],
+            &[
+                "quiz",
+                "create",
+                "a",
+                "--difficulty",
+                "easy",
+                "--question",
+                "q",
+                "--answer",
+                "a",
+            ],
+            &["quiz", "update", "a.q1"],
+            &["quiz", "delete", "a.q1"],
+            &["quiz", "answer", "a.q1", "--rating", "good"],
+        ];
+        let tools: Vec<Tool> = samples
+            .iter()
+            .map(|args| {
+                let cmd = Mt::from_args(&["mt"], args).expect("valid args").cmd;
+                let tool = cmd.tool().expect("an agent command");
+                assert!(args.join(" ").starts_with(tool.cli()), "{tool:?}: {args:?}");
+                assert_eq!(cmd.operation(), tool.operation());
+                tool
+            })
+            .collect();
+        assert_eq!(tools, Tool::ALL);
     }
 
     #[test]
-    fn writes_that_must_not_repeat_have_their_own_operation() {
-        let answer = ["quiz", "answer", "a.q1", "--rating", "good"];
-        assert_eq!(operation(&answer), Operation::AnswerQuiz);
-        let create = [
-            "quiz",
-            "create",
-            "a",
-            "--difficulty",
-            "easy",
-            "--question",
-            "q",
-            "--answer",
-            "a",
-        ];
-        assert_eq!(operation(&create), Operation::CreateQuiz);
-        let new = ["path", "new", "goal", "--targets", "a"];
-        assert_eq!(operation(&new), Operation::NewPath);
-        assert_eq!(operation(&["import-turso"]), Operation::ImportTurso);
-        assert_eq!(
-            operation(&["quiz", "delete", "a.q1"]),
-            Operation::Repeatable
-        );
-        assert_eq!(operation(&["path", "next"]), Operation::Repeatable);
+    fn operator_commands_have_no_tool() {
+        for args in [&["import-turso"][..], &["graph", "dump"], &["instruct"]] {
+            let cmd = Mt::from_args(&["mt"], args).expect("valid args").cmd;
+            assert_eq!(cmd.tool(), None);
+        }
+        let import = Mt::from_args(&["mt"], &["import-turso"]).unwrap().cmd;
+        assert_eq!(import.operation(), Operation::ImportTurso);
     }
 }

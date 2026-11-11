@@ -23,36 +23,111 @@ struct StepArg {
     optional: bool,
 }
 
-/// Command or tool that a [`Step`] invokes.
+/// Agent command, which is both an MCP tool and an `mt` subcommand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
+    GetPaths,
+    NewPath,
+    SetStrategy,
+    SubpathSet,
+    SubpathClear,
     GetNext,
+    GetState,
+    GetTree,
+    GetSyllabus,
+    GetItem,
+    GetChildren,
     UpsertLesson,
     CreateQuiz,
     UpdateQuiz,
+    DeleteQuiz,
     AnswerQuiz,
 }
 
 impl Tool {
-    /// Return the `mt` subcommand words of this tool.
-    fn cli(self) -> &'static str {
+    /// Every agent command.
+    pub const ALL: &[Tool] = &[
+        Tool::GetPaths,
+        Tool::NewPath,
+        Tool::SetStrategy,
+        Tool::SubpathSet,
+        Tool::SubpathClear,
+        Tool::GetNext,
+        Tool::GetState,
+        Tool::GetTree,
+        Tool::GetSyllabus,
+        Tool::GetItem,
+        Tool::GetChildren,
+        Tool::UpsertLesson,
+        Tool::CreateQuiz,
+        Tool::UpdateQuiz,
+        Tool::DeleteQuiz,
+        Tool::AnswerQuiz,
+    ];
+
+    /// Return the `mt` subcommand words of this command.
+    pub fn cli(self) -> &'static str {
         match self {
+            Tool::GetPaths => "path list",
+            Tool::NewPath => "path new",
+            Tool::SetStrategy => "path strategy",
+            Tool::SubpathSet => "path subpath set",
+            Tool::SubpathClear => "path subpath clear",
             Tool::GetNext => "path next",
+            Tool::GetState => "path state",
+            Tool::GetTree => "path tree",
+            Tool::GetSyllabus => "path syllabus",
+            Tool::GetItem => "graph show",
+            Tool::GetChildren => "graph list",
             Tool::UpsertLesson => "lesson upsert",
             Tool::CreateQuiz => "quiz create",
             Tool::UpdateQuiz => "quiz update",
+            Tool::DeleteQuiz => "quiz delete",
             Tool::AnswerQuiz => "quiz answer",
         }
     }
 
-    /// Return the MCP tool name of this tool.
+    /// Return the MCP tool name of this command.
     pub fn mcp(self) -> &'static str {
         match self {
+            Tool::GetPaths => "get_paths",
+            Tool::NewPath => "new_path",
+            Tool::SetStrategy => "set_strategy",
+            Tool::SubpathSet => "subpath_set",
+            Tool::SubpathClear => "subpath_clear",
             Tool::GetNext => "get_next",
+            Tool::GetState => "get_state",
+            Tool::GetTree => "get_tree",
+            Tool::GetSyllabus => "get_syllabus",
+            Tool::GetItem => "get_item",
+            Tool::GetChildren => "get_children",
             Tool::UpsertLesson => "upsert_lesson",
             Tool::CreateQuiz => "create_quiz",
             Tool::UpdateQuiz => "update_quiz",
+            Tool::DeleteQuiz => "delete_quiz",
             Tool::AnswerQuiz => "answer_quiz",
+        }
+    }
+
+    /// Return the operation of this command, which sets the safe step after an unknown outcome.
+    pub fn operation(self) -> Operation {
+        match self {
+            Tool::NewPath => Operation::NewPath,
+            Tool::CreateQuiz => Operation::CreateQuiz,
+            Tool::AnswerQuiz => Operation::AnswerQuiz,
+            Tool::GetPaths
+            | Tool::SetStrategy
+            | Tool::SubpathSet
+            | Tool::SubpathClear
+            | Tool::GetNext
+            | Tool::GetState
+            | Tool::GetTree
+            | Tool::GetSyllabus
+            | Tool::GetItem
+            | Tool::GetChildren
+            | Tool::UpsertLesson
+            | Tool::UpdateQuiz
+            | Tool::DeleteQuiz => Operation::Repeatable,
         }
     }
 }
@@ -322,6 +397,15 @@ impl Operation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writes_that_must_not_repeat_have_their_own_operation() {
+        assert_eq!(Tool::NewPath.operation(), Operation::NewPath);
+        assert_eq!(Tool::CreateQuiz.operation(), Operation::CreateQuiz);
+        assert_eq!(Tool::AnswerQuiz.operation(), Operation::AnswerQuiz);
+        assert_eq!(Tool::DeleteQuiz.operation(), Operation::Repeatable);
+        assert_eq!(Tool::GetNext.operation(), Operation::Repeatable);
+    }
 
     #[test]
     fn steps_after_a_write_that_must_not_repeat_advance_instead() {
