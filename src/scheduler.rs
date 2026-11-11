@@ -1,6 +1,7 @@
 //! Action scheduler and AYML output envelope for `mt path next`.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -13,7 +14,7 @@ use crate::progress::PathProgress;
 use crate::subpath;
 use crate::surface::{self, Field, Step, Surface, Tool, Value};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
-use crate::view::{PathState, Want};
+use crate::view::{PathState, View, Want};
 use crate::{Error, Result};
 
 const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
@@ -49,6 +50,53 @@ impl NextMode {
     }
 }
 
+/// Inputs that every view of a path reads: the merged graph, the progress, the target atoms, the subpath, and the due cards.
+pub struct PathPlan<'v> {
+    pub state: &'v PathState,
+    pub graph: Arc<Graph>,
+    pub progress: PathProgress,
+    /// Topologically sorted target atoms.
+    pub targets: Vec<String>,
+    /// Atoms of the stored subpath.
+    pub subpath: Vec<String>,
+    /// Cards due now, from earliest to latest.
+    pub due: Vec<(String, DateTime<Utc>)>,
+}
+
+impl<'v> PathPlan<'v> {
+    /// Return the plan of the path that `view` selected.
+    pub fn of(view: &'v View) -> Result<Self> {
+        let state = view.path()?;
+        let graph = view.graph()?;
+        Ok(Self {
+            progress: state.progress(),
+            targets: state.file.resolve_targets(&graph)?,
+            subpath: subpath::resolved(&state.file, &graph)?,
+            due: state.due(Utc::now()),
+            graph,
+            state,
+        })
+    }
+
+    /// Return the next action of this path in `mode`.
+    pub fn next_action(&self, mode: NextMode) -> Action {
+        next_action(
+            &self.graph,
+            &self.state.file,
+            &self.targets,
+            &self.progress,
+            &self.due,
+            &self.subpath,
+            mode,
+        )
+    }
+
+    /// Return `true` if the atom `atom_id` is complete on this path.
+    pub fn is_complete(&self, atom_id: &str) -> bool {
+        is_atom_complete(&self.graph, &self.progress, atom_id)
+    }
+}
+
 /// Select the next action for `path_id`, append its presentation event, and return its envelope with the next step in the syntax of `surface`.
 pub async fn compute_next(
     db: &Db,
@@ -57,17 +105,11 @@ pub async fn compute_next(
     surface: Surface,
 ) -> Result<Envelope> {
     db.transact(&Want::path(path_id), |view, changes| {
-        let ps = view.path()?;
-        let p = &ps.file;
-        let g = view.graph()?;
-        let progress = ps.progress();
-        let due = ps.due(Utc::now());
-        let subpath = subpath::resolved(p, &g)?;
-        let targets = p.resolve_targets(&g)?;
-
-        let action = next_action(&g, p, &targets, &progress, &due, &subpath, mode);
+        let plan = PathPlan::of(view)?;
+        let p = &plan.state.file;
+        let action = plan.next_action(mode);
         // Build the envelope before appending presentation events so history reflects prior attempts.
-        let envelope = Envelope::build(ps, &g, action.clone(), surface);
+        let envelope = Envelope::build(plan.state, &plan.graph, action.clone(), surface);
 
         match &action {
             Action::PresentQuiz { quiz_id, atom_id } => {
@@ -87,8 +129,8 @@ pub async fn compute_next(
         }
 
         if p.strategy == Strategy::TopDown
-            && !subpath.is_empty()
-            && subpath.iter().all(|a| is_atom_complete(&g, &progress, a))
+            && !plan.subpath.is_empty()
+            && plan.subpath.iter().all(|a| plan.is_complete(a))
         {
             changes.replace_path(&PathFile {
                 subpath: Vec::new(),
@@ -153,55 +195,55 @@ pub fn next_action(
     if mode == NextMode::Due {
         return Action::NoReviewsDue;
     }
-
-    match p.strategy {
-        Strategy::BottomUp => {
-            let mut visited = HashSet::new();
-            for target in targets {
-                if let Some(action) = next_atom_action(g, progress, target, &mut visited) {
-                    return action;
-                }
-            }
-            Action::Done
-        }
-        Strategy::TopDown => {
-            for atom in subpath.iter().chain(targets) {
-                if let Some(action) = atom_action(g, progress, atom) {
-                    return action;
-                }
-            }
-            Action::Done
-        }
-    }
+    teaching_order(g, p.strategy, targets, subpath)
+        .iter()
+        .find_map(|atom| atom_action(g, progress, atom))
+        .unwrap_or(Action::Done)
 }
 
-fn next_atom_action(
+/// Return the atoms of a path in the order that the scheduler teaches them.
+///
+/// `bottom_up` visits the prerequisites and the children of each target before the target. `top_down` lists the subpath and then the targets.
+pub fn teaching_order(
     g: &Graph,
-    progress: &PathProgress,
-    id: &str,
-    visited: &mut HashSet<String>,
-) -> Option<Action> {
-    if !visited.insert(id.to_string()) {
-        return None;
-    }
-    let c = g.by_id.get(id)?;
-
-    for prereq in &c.prerequisites {
-        if let Some(action) = next_atom_action(g, progress, prereq, visited) {
-            return Some(action);
-        }
-    }
-
-    if !c.children_ids.is_empty() {
-        for child_id in &c.children_ids {
-            if let Some(action) = next_atom_action(g, progress, child_id, visited) {
-                return Some(action);
+    strategy: Strategy,
+    targets: &[String],
+    subpath: &[String],
+) -> Vec<String> {
+    let mut visited = HashSet::new();
+    let mut out = Vec::new();
+    match strategy {
+        Strategy::BottomUp => {
+            for target in targets {
+                visit_bottom_up(g, target, &mut visited, &mut out);
             }
         }
-        return None;
+        Strategy::TopDown => {
+            for id in subpath.iter().chain(targets) {
+                let is_atom = g.by_id.get(id).is_some_and(|c| c.children_ids.is_empty());
+                if is_atom && visited.insert(id.clone()) {
+                    out.push(id.clone());
+                }
+            }
+        }
     }
+    out
+}
 
-    atom_action(g, progress, id)
+fn visit_bottom_up(g: &Graph, id: &str, visited: &mut HashSet<String>, out: &mut Vec<String>) {
+    if !visited.insert(id.to_string()) {
+        return;
+    }
+    let Some(c) = g.by_id.get(id) else { return };
+    for prereq in &c.prerequisites {
+        visit_bottom_up(g, prereq, visited, out);
+    }
+    if c.children_ids.is_empty() {
+        out.push(id.to_string());
+    }
+    for child in &c.children_ids {
+        visit_bottom_up(g, child, visited, out);
+    }
 }
 
 fn atom_action(g: &Graph, progress: &PathProgress, id: &str) -> Option<Action> {

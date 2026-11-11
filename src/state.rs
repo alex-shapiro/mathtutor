@@ -9,8 +9,7 @@ use crate::Result;
 use crate::db::Db;
 use crate::graph::{FlatConcept, Graph};
 use crate::progress::{PathCompletion, PathProgress, ReachProgress, TargetProgress};
-use crate::scheduler;
-use crate::subpath;
+use crate::scheduler::{self, PathPlan};
 use crate::types::Strategy;
 use crate::view::{PathState, Want};
 
@@ -98,38 +97,26 @@ pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
 /// Compute the progress summary for `explicit_id` or the latest path.
 pub async fn compute_state(db: &Db, explicit_id: Option<&str>) -> Result<StateSummary> {
     let view = db.snapshot(&Want::path(explicit_id)).await?;
-    let ps = view.path()?;
+    let plan = PathPlan::of(&view)?;
+    let (ps, g, progress) = (plan.state, &plan.graph, &plan.progress);
     let p = ps.file.clone();
-    let g = view.graph()?;
-    let progress = ps.progress();
-    let due = ps.due(Utc::now());
+    let completion = PathCompletion::of(g, &plan.targets, progress);
 
-    let subpath_ids = subpath::resolved(&p, &g)?;
-    let target_atoms = p.resolve_targets(&g)?;
-    let completion = PathCompletion::of(&g, &target_atoms, &progress);
-
-    let next = scheduler::next_action(
-        &g,
-        &p,
-        &target_atoms,
-        &progress,
-        &due,
-        &subpath_ids,
-        scheduler::NextMode::Default,
-    )
-    .atom_id()
-    .and_then(|id| atom_ref(&g, id));
-    let most_recent =
-        most_recent_completed_target(ps, &g, &progress, &target_atoms).map(atom_ref_of);
+    let next = plan
+        .next_action(scheduler::NextMode::Default)
+        .atom_id()
+        .and_then(|id| atom_ref(g, id));
+    let most_recent = most_recent_completed_target(ps, g, progress, &plan.targets).map(atom_ref_of);
 
     let reachable = match p.strategy {
         Strategy::BottomUp => Some(completion.reachable),
         Strategy::TopDown => None,
     };
-    let subpath = subpath_ids
+    let subpath = plan
+        .subpath
         .iter()
-        .filter(|a| !scheduler::is_atom_complete(&g, &progress, a))
-        .filter_map(|a| atom_ref(&g, a))
+        .filter(|a| !plan.is_complete(a))
+        .filter_map(|a| atom_ref(g, a))
         .collect();
 
     Ok(StateSummary {
@@ -141,9 +128,10 @@ pub async fn compute_state(db: &Db, explicit_id: Option<&str>) -> Result<StateSu
         targets: completion.targets,
         reachable,
         subpath,
-        past_due: due
+        past_due: plan
+            .due
             .iter()
-            .filter(|(quiz_id, _)| scheduler::atom_of_live_quiz(&g, quiz_id).is_some())
+            .filter(|(quiz_id, _)| scheduler::atom_of_live_quiz(g, quiz_id).is_some())
             .count(),
         most_recent,
         next,

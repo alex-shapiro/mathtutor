@@ -1,13 +1,11 @@
 //! Upcoming untaught lesson preview for `mt path syllabus`.
 
-use std::collections::HashSet;
-
 use serde::Serialize;
 
 use crate::db::Db;
 use crate::graph::Graph;
 use crate::progress::PathProgress;
-use crate::subpath;
+use crate::scheduler::{self, PathPlan};
 use crate::types::Strategy;
 use crate::view::Want;
 use crate::{Error, Result};
@@ -47,19 +45,10 @@ pub async fn compute_syllabus(
     n: usize,
 ) -> Result<SyllabusView> {
     let view = db.snapshot(&Want::path(explicit_id)).await?;
-    let ps = view.path()?;
-    let p = ps.file.clone();
-    let g = view.graph()?;
-    let progress = ps.progress();
-    let targets = p.resolve_targets(&g)?;
-
-    let upcoming = match p.strategy {
-        Strategy::BottomUp => upcoming_atoms(&g, &targets, &progress),
-        Strategy::TopDown => {
-            let subpath = subpath::resolved(&p, &g)?;
-            upcoming_top_down(&g, &targets, &progress, &subpath)
-        }
-    };
+    let plan = PathPlan::of(&view)?;
+    let g = &plan.graph;
+    let strategy = plan.state.file.strategy;
+    let upcoming = upcoming(g, strategy, &plan.targets, &plan.subpath, &plan.progress);
     let total_remaining = upcoming.len();
     let atoms: Vec<SyllabusAtom> = upcoming
         .into_iter()
@@ -75,78 +64,22 @@ pub async fn compute_syllabus(
 
     Ok(SyllabusView {
         schema_version: 1,
-        path: p.id,
-        goal: p.goal,
+        path: plan.state.file.id.clone(),
+        goal: plan.state.file.goal.clone(),
         total_remaining,
         atoms,
     })
 }
 
-/// Return untaught atoms reachable from `targets` in bottom-up traversal order.
-pub fn upcoming_atoms(g: &Graph, targets: &[String], progress: &PathProgress) -> Vec<String> {
-    let mut visited = HashSet::new();
-    let mut out = Vec::new();
-    for target in targets {
-        collect_untaught(g, progress, target, &mut visited, &mut out);
-    }
-    out
-}
-
-fn collect_untaught(
+/// Return the atoms of a path with untaught lessons, in teaching order.
+pub fn upcoming(
     g: &Graph,
-    progress: &PathProgress,
-    id: &str,
-    visited: &mut HashSet<String>,
-    out: &mut Vec<String>,
-) {
-    if !visited.insert(id.to_string()) {
-        return;
-    }
-    let Some(c) = g.by_id.get(id) else { return };
-    for prereq in &c.prerequisites {
-        collect_untaught(g, progress, prereq, visited, out);
-    }
-    if !c.children_ids.is_empty() {
-        for child in &c.children_ids {
-            collect_untaught(g, progress, child, visited, out);
-        }
-        return;
-    }
-    if !progress.lesson_taught(id) {
-        out.push(id.to_string());
-    }
-}
-
-/// Return untaught atoms from `subpath` followed by `targets` in top-down order.
-pub fn upcoming_top_down(
-    g: &Graph,
+    strategy: Strategy,
     targets: &[String],
-    progress: &PathProgress,
     subpath: &[String],
-) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for id in subpath.iter().chain(targets) {
-        push_upcoming_leaf(g, progress, id, &mut seen, &mut out);
-    }
-    out
-}
-
-fn push_upcoming_leaf(
-    g: &Graph,
     progress: &PathProgress,
-    id: &str,
-    seen: &mut HashSet<String>,
-    out: &mut Vec<String>,
-) {
-    if !seen.insert(id.to_string()) {
-        return;
-    }
-    let Some(c) = g.by_id.get(id) else { return };
-    if !c.children_ids.is_empty() {
-        return;
-    }
-    if !progress.lesson_taught(id) {
-        out.push(id.to_string());
-    }
+) -> Vec<String> {
+    let mut order = scheduler::teaching_order(g, strategy, targets, subpath);
+    order.retain(|atom| !progress.lesson_taught(atom));
+    order
 }

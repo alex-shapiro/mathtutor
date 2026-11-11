@@ -3,14 +3,13 @@
 use std::collections::HashSet;
 use std::io::{self, Write};
 
-use chrono::Utc;
 use serde::Serialize;
 
 use crate::Result;
 use crate::db::Db;
 use crate::graph::{FlatConcept, Graph, natural_id_cmp};
 use crate::progress::{PathCompletion, PathProgress, ReachProgress, TargetProgress};
-use crate::scheduler;
+use crate::scheduler::{self, PathPlan};
 use crate::types::{Difficulty, Strategy};
 use crate::view::Want;
 
@@ -124,29 +123,20 @@ pub async fn compute_tree(
     depth: Option<u32>,
 ) -> Result<TreeView> {
     let view = db.snapshot(&Want::path(explicit_id)).await?;
-    let ps = view.path()?;
-    let p = &ps.file;
-    let g = view.graph()?;
-    let progress = ps.progress();
-    let subpath = crate::subpath::resolved(p, &g)?;
-    let target_atoms = p.resolve_targets(&g)?;
-    let completion = PathCompletion::of(&g, &target_atoms, &progress);
-    let next = scheduler::next_action(
-        &g,
-        p,
-        &target_atoms,
-        &progress,
-        &ps.due(Utc::now()),
-        &subpath,
-        scheduler::NextMode::Default,
-    )
-    .atom_id()
-    .map(String::from);
+    let plan = PathPlan::of(&view)?;
+    let (p, g, progress) = (&plan.state.file, &plan.graph, &plan.progress);
+    let target_atoms = &plan.targets;
+    let subpath = &plan.subpath;
+    let completion = PathCompletion::of(g, target_atoms, progress);
+    let next = plan
+        .next_action(scheduler::NextMode::Default)
+        .atom_id()
+        .map(String::from);
 
     let builder = NodeBuilder {
-        g: &g,
-        progress: &progress,
-        spine: build_spine(&g, &g.reachable_atoms(&target_atoms)),
+        g,
+        progress,
+        spine: build_spine(g, &g.reachable_atoms(target_atoms)),
         targets: target_atoms.iter().map(String::as_str).collect(),
         subpath: subpath.iter().map(String::as_str).collect(),
         depth,
@@ -155,7 +145,7 @@ pub async fn compute_tree(
         .areas
         .iter()
         .filter_map(|area| {
-            let nodes: Vec<TreeNode> = top_level_in_area(&g, &area.prefix)
+            let nodes: Vec<TreeNode> = top_level_in_area(g, &area.prefix)
                 .into_iter()
                 .filter(|c| builder.spine.contains(&c.id))
                 .map(|c| builder.node(c, 1))
@@ -174,7 +164,7 @@ pub async fn compute_tree(
         strategy: p.strategy,
         targets: completion.targets,
         reachable: completion.reachable,
-        subpath,
+        subpath: subpath.clone(),
         next,
         areas,
     })
