@@ -1,4 +1,4 @@
-//! Agent interfaces of Math Tutor and the safe step after a command with an unknown outcome.
+//! Agent interfaces of Math Tutor, the steps that agents send on each interface, and the safe step after a command with an unknown outcome.
 
 /// Interface through which an agent operates Math Tutor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7,6 +7,265 @@ pub enum Surface {
     Cli,
     /// The tools of `mt mcp`.
     Mcp,
+}
+
+/// Command or tool call that an agent sends, with a placeholder for each value that the agent supplies.
+#[derive(Debug, Clone)]
+pub struct Step {
+    tool: Tool,
+    args: Vec<StepArg>,
+}
+
+#[derive(Debug, Clone)]
+struct StepArg {
+    field: Field,
+    value: Value,
+    optional: bool,
+}
+
+/// Command or tool that a [`Step`] invokes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    GetNext,
+    UpsertLesson,
+    CreateQuiz,
+    UpdateQuiz,
+    AnswerQuiz,
+}
+
+impl Tool {
+    /// Return the `mt` subcommand words of this tool.
+    fn cli(self) -> &'static str {
+        match self {
+            Tool::GetNext => "path next",
+            Tool::UpsertLesson => "lesson upsert",
+            Tool::CreateQuiz => "quiz create",
+            Tool::UpdateQuiz => "quiz update",
+            Tool::AnswerQuiz => "quiz answer",
+        }
+    }
+
+    /// Return the MCP tool name of this tool.
+    pub fn mcp(self) -> &'static str {
+        match self {
+            Tool::GetNext => "get_next",
+            Tool::UpsertLesson => "upsert_lesson",
+            Tool::CreateQuiz => "create_quiz",
+            Tool::UpdateQuiz => "update_quiz",
+            Tool::AnswerQuiz => "answer_quiz",
+        }
+    }
+}
+
+/// Argument of a [`Step`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Field {
+    Atom,
+    QuizId,
+    PathId,
+    Body,
+    Question,
+    Answer,
+    Rubric,
+    Difficulty,
+    QuizType,
+    Rating,
+    UserAnswer,
+}
+
+impl Field {
+    /// Return the MCP argument name of this field.
+    fn mcp(self) -> &'static str {
+        match self {
+            Field::Atom => "atom",
+            Field::QuizId => "quiz_id",
+            Field::PathId => "path_id",
+            Field::Body => "body",
+            Field::Question => "question",
+            Field::Answer | Field::UserAnswer => "answer",
+            Field::Rubric => "rubric",
+            Field::Difficulty => "difficulty",
+            Field::QuizType => "kind",
+            Field::Rating => "rating",
+        }
+    }
+
+    /// Return the CLI flag of this field, or `None` for the positional argument.
+    fn cli_flag(self) -> Option<&'static str> {
+        match self {
+            Field::Atom | Field::QuizId => None,
+            Field::PathId => Some("--path"),
+            Field::Body => Some("--body"),
+            Field::Question => Some("--question"),
+            Field::Answer => Some("--answer"),
+            Field::Rubric => Some("--rubric"),
+            Field::Difficulty => Some("--difficulty"),
+            Field::QuizType => Some("--type"),
+            Field::Rating => Some("--rating"),
+            Field::UserAnswer => Some("--user-answer"),
+        }
+    }
+}
+
+/// Value of a [`Step`] argument.
+#[derive(Debug, Clone)]
+pub enum Value {
+    /// A value that the server knows.
+    Known(String),
+    /// An identifier that the agent supplies, with its placeholder name.
+    Id(&'static str),
+    /// Free text that the agent writes, with its placeholder name.
+    Text(&'static str),
+    /// A value that the agent selects from a fixed list.
+    Choice(&'static [&'static str]),
+}
+
+pub const RATINGS: &[&str] = &["again", "hard", "good", "easy"];
+pub const DIFFICULTIES: &[&str] = &["easy", "medium", "hard"];
+pub const QUIZ_TYPES: &[&str] = &["free_text", "multiple_choice"];
+
+impl Step {
+    /// Return a step that invokes `tool` on path `path`.
+    pub fn new(tool: Tool, path: Value) -> Self {
+        Self {
+            tool,
+            args: vec![StepArg {
+                field: Field::PathId,
+                value: path,
+                optional: false,
+            }],
+        }
+    }
+
+    /// Add the required argument `field`.
+    #[must_use]
+    pub fn arg(mut self, field: Field, value: Value) -> Self {
+        self.args.push(StepArg {
+            field,
+            value,
+            optional: false,
+        });
+        self
+    }
+
+    /// Add the optional argument `field`.
+    #[must_use]
+    pub fn optional(mut self, field: Field, value: Value) -> Self {
+        self.args.push(StepArg {
+            field,
+            value,
+            optional: true,
+        });
+        self
+    }
+
+    /// Return the tool that this step invokes.
+    pub fn tool(&self) -> Tool {
+        self.tool
+    }
+
+    /// Return this step with each placeholder replaced by `value_of` its field, and with every optional argument present.
+    #[must_use]
+    pub fn fill(&self, value_of: impl Fn(Field) -> String) -> Self {
+        let args = self.args.iter().map(|a| StepArg {
+            field: a.field,
+            value: match &a.value {
+                Value::Known(v) => Value::Known(v.clone()),
+                _ => Value::Known(value_of(a.field)),
+            },
+            optional: false,
+        });
+        Self {
+            tool: self.tool,
+            args: args.collect(),
+        }
+    }
+
+    /// Return this step in the syntax of `surface`.
+    pub fn render(&self, surface: Surface) -> String {
+        match surface {
+            Surface::Cli => self.render_cli(),
+            Surface::Mcp => self.render_mcp(),
+        }
+    }
+
+    /// Return the arguments with the positional argument first.
+    fn ordered_args(&self) -> impl Iterator<Item = &StepArg> {
+        let (positional, flags): (Vec<_>, Vec<_>) =
+            self.args.iter().partition(|a| a.field.cli_flag().is_none());
+        positional.into_iter().chain(flags)
+    }
+
+    fn render_cli(&self) -> String {
+        let words = self.ordered_args().map(|a| {
+            let value = a.value.cli();
+            let word = match a.field.cli_flag() {
+                Some(flag) => format!("{flag} {value}"),
+                None => value,
+            };
+            if a.optional {
+                format!("[{word}]")
+            } else {
+                word
+            }
+        });
+        std::iter::once(format!("mt {}", self.tool.cli()))
+            .chain(words)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn render_mcp(&self) -> String {
+        let fields: Vec<String> = self
+            .ordered_args()
+            .map(|a| {
+                let mark = if a.optional { "?" } else { "" };
+                format!("{}{mark}: {}", a.field.mcp(), a.value.mcp())
+            })
+            .collect();
+        format!("{} {{ {} }}", self.tool.mcp(), fields.join(", "))
+    }
+}
+
+impl Value {
+    /// Return a value that the server knows.
+    pub fn known(v: impl Into<String>) -> Self {
+        Value::Known(v.into())
+    }
+
+    /// Return the value as an argument string without shell quotes.
+    fn raw(&self) -> String {
+        match self {
+            Value::Known(v) => v.clone(),
+            Value::Id(name) | Value::Text(name) => format!("<{name}>"),
+            Value::Choice(options) => options.join("|"),
+        }
+    }
+
+    fn cli(&self) -> String {
+        match self {
+            Value::Known(v) => shell_word(v),
+            Value::Id(name) => format!("<{name}>"),
+            Value::Text(name) => format!("'<{name}>'"),
+            Value::Choice(options) => format!("<{}>", options.join("|")),
+        }
+    }
+
+    fn mcp(&self) -> String {
+        serde_json::Value::from(self.raw()).to_string()
+    }
+}
+
+/// Return `s` as a single shell word: unchanged if it holds only safe characters, or in single quotes with each `'` written as `'\''`.
+pub fn shell_word(s: &str) -> String {
+    let plain = !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-/:,".contains(&b));
+    if plain {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
 }
 
 /// Command kind that sets the safe step after the command fails with an unknown outcome.

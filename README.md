@@ -67,4 +67,6 @@ mt import-turso [--url URL]           # import a libSQL database into Baserunna
 mt --graph DIR <COMMAND>              # use the curriculum in DIR instead of the embedded one
 ```
 
+Put each `TEXT` value in single quotes, and write each single quote in the text as `'\''`. The shell then passes `$`, `\`, `"`, and line breaks to `mt` unchanged.
+
 See `docs/design.md` for architecture details.

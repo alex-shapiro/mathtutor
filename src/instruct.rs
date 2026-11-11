@@ -1,11 +1,11 @@
 //! Agent playbook for each surface, rendered from one template.
 
 use crate::Result;
-use crate::surface::Surface;
+use crate::surface::{DIFFICULTIES, Field, QUIZ_TYPES, RATINGS, Step, Surface, Tool, Value};
 
 /// Playbook template.
 ///
-/// A line `<!-- cli -->` or `<!-- mcp -->` starts a block for that surface only, and `<!-- end -->` ends it. Each `{{name}}` is a term of [`TERMS`].
+/// A line `<!-- cli -->` or `<!-- mcp -->` starts a block for that surface only, and `<!-- end -->` ends it. Each `{{name}}` is a term of [`TERMS`] or a step of [`playbook_steps`].
 const TEMPLATE: &str = include_str!("playbook.md");
 
 /// Name, CLI form, and MCP form of each term in [`TEMPLATE`].
@@ -51,34 +51,10 @@ const TERMS: &[(&str, &str, &str)] = &[
         "run `mt path subpath clear`",
         "call `subpath_clear { path_id }`",
     ),
-    (
-        "upsert_lesson",
-        "`mt lesson upsert <atom-id> --body TEXT`",
-        "`upsert_lesson { atom, body, path_id }`",
-    ),
-    (
-        "create_quiz",
-        "mt quiz create <atom-id> --difficulty <easy|medium|hard> --question \"...\" --answer \"...\" [--rubric \"...\"] [--type T]",
-        "create_quiz { atom, question, answer, rubric?, difficulty, kind?, path_id }",
-    ),
     ("quiz_type", "`--type`", "`kind`"),
-    (
-        "answer_quiz",
-        "mt quiz answer <quiz-id> --rating <again|hard|good|easy> --user-answer \"...verbatim reply...\"",
-        "answer_quiz { quiz_id, answer, rating, path_id }",
-    ),
     ("answer_name", "`mt quiz answer`", "`answer_quiz`"),
     ("verbatim_field", "`--user-answer`", "`answer`"),
-    (
-        "update_lesson",
-        "Run `mt lesson upsert <atom-id> --body \"...\"`",
-        "Call `upsert_lesson { atom, body, path_id }`",
-    ),
-    (
-        "update_quiz",
-        "Run `mt quiz update <quiz-id> [--question ...] [--answer ...] [--rubric ...] [--difficulty ...] [--type ...]`",
-        "Call `update_quiz { quiz_id, question?, answer?, rubric?, difficulty?, kind?, path_id }`",
-    ),
+    ("run", "Run", "Call"),
     (
         "delete_quiz",
         "Run `mt quiz delete <quiz-id>`",
@@ -97,6 +73,48 @@ const TERMS: &[(&str, &str, &str)] = &[
         "The error kind `outcome_unknown` indicates that the commit status is unknown, and the `next_step` field of the error then gives the safe next call.",
     ),
 ];
+
+/// Return the steps with free text that the playbook names, each with its term name.
+pub fn playbook_steps() -> Vec<(&'static str, Step)> {
+    let path = || Value::Id("path-id");
+    let atom = || Value::Id("atom-id");
+    let quiz = || Value::Id("quiz-id");
+    vec![
+        (
+            "upsert_lesson",
+            Step::new(Tool::UpsertLesson, path())
+                .arg(Field::Atom, atom())
+                .arg(Field::Body, Value::Text("lesson")),
+        ),
+        (
+            "create_quiz",
+            Step::new(Tool::CreateQuiz, path())
+                .arg(Field::Atom, atom())
+                .arg(Field::Difficulty, Value::Choice(DIFFICULTIES))
+                .arg(Field::Question, Value::Text("question"))
+                .arg(Field::Answer, Value::Text("answer"))
+                .optional(Field::Rubric, Value::Text("rubric"))
+                .optional(Field::QuizType, Value::Choice(QUIZ_TYPES)),
+        ),
+        (
+            "answer_quiz",
+            Step::new(Tool::AnswerQuiz, path())
+                .arg(Field::QuizId, quiz())
+                .arg(Field::Rating, Value::Choice(RATINGS))
+                .arg(Field::UserAnswer, Value::Text("verbatim reply")),
+        ),
+        (
+            "update_quiz",
+            Step::new(Tool::UpdateQuiz, path())
+                .arg(Field::QuizId, quiz())
+                .optional(Field::Question, Value::Text("question"))
+                .optional(Field::Answer, Value::Text("answer"))
+                .optional(Field::Rubric, Value::Text("rubric"))
+                .optional(Field::Difficulty, Value::Choice(DIFFICULTIES))
+                .optional(Field::QuizType, Value::Choice(QUIZ_TYPES)),
+        ),
+    ]
+}
 
 /// Return the agent playbook for `surface`.
 pub fn playbook(surface: Surface) -> String {
@@ -120,6 +138,9 @@ pub fn playbook(surface: Surface) -> String {
             Surface::Mcp => mcp,
         };
         out = out.replace(&format!("{{{{{name}}}}}"), term);
+    }
+    for (name, step) in playbook_steps() {
+        out = out.replace(&format!("{{{{{name}}}}}"), &step.render(surface));
     }
     out
 }
@@ -166,7 +187,8 @@ mod tests {
             assert!(!text.contains("{{"), "{surface:?}: unresolved term");
             assert!(!text.contains("<!--"), "{surface:?}: block marker");
         }
-        for (name, _, _) in TERMS {
+        let steps = playbook_steps().into_iter().map(|(name, _)| name);
+        for name in TERMS.iter().map(|(name, _, _)| *name).chain(steps) {
             assert!(
                 TEMPLATE.contains(&format!("{{{{{name}}}}}")),
                 "unused {name}"

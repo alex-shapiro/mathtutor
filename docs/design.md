@@ -50,6 +50,8 @@ mt instruct
 mt import-turso [--url URL]
 ```
 
+Each `TEXT` value is a single shell word. Put the text in single quotes, and write each single quote in the text as `'\''`. The shell then keeps `$`, `\`, `"`, and line breaks unchanged, so LaTeX such as `$x^2$` reaches `mt` intact. The `next_step` field and the agent playbook use this form.
+
 If `--path P` is provided to `mt graph show` or `mt graph list`, the output includes the `lesson_taught` and `complete` fields for that path. `mt graph list --recursive` also lists every descendant of the node.
 
 ### Target ID resolution
@@ -89,7 +91,7 @@ The selected atom does not have a lesson in the merged graph. The agent authors 
 ```yaml
 action: create_lesson
 path: p_2026_05_09_173_42
-next_step: "mt lesson upsert la.5.4.7 --path p_2026_05_09_173_42 --body TEXT"
+next_step: "mt lesson upsert la.5.4.7 --path p_2026_05_09_173_42 --body '<lesson>'"
 payload:
   atom:
     id: la.5.4.7
@@ -127,7 +129,7 @@ The lesson has been taught on this path, but a difficulty slot does not have a q
 ```yaml
 action: create_quiz
 path: p_2026_05_09_173_42
-next_step: "mt quiz create la.5.4.7 --path p_2026_05_09_173_42 --difficulty medium --question TEXT --answer TEXT [--rubric TEXT]"
+next_step: "mt quiz create la.5.4.7 --path p_2026_05_09_173_42 --difficulty medium --question '<question>' --answer '<answer>' [--rubric '<rubric>']"
 payload:
   atom:
     id: la.5.4.7
@@ -152,7 +154,7 @@ A quiz card is due or required for atom completion. The agent presents the quest
 ```yaml
 action: present_quiz
 path: p_2026_05_09_173_42
-next_step: "mt quiz answer la.5.4.7.q2 --path p_2026_05_09_173_42 --rating {again|hard|good|easy} --user-answer \"<verbatim reply>\""
+next_step: "mt quiz answer la.5.4.7.q2 --path p_2026_05_09_173_42 --rating <again|hard|good|easy> --user-answer '<verbatim reply>'"
 payload:
   atom:
     id: la.5.4.7

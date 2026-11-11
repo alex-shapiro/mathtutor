@@ -2,6 +2,13 @@
 
 use std::process::{Command, Output};
 
+use mathtutor::db::DbConfig;
+use mathtutor::event_log::{self, EventKind};
+use mathtutor::instruct::playbook_steps;
+use mathtutor::scheduler::{Action, next_step};
+use mathtutor::surface::{Field, Step, Surface};
+use mathtutor::types::{Difficulty, Strategy};
+
 mod common;
 
 /// Run `mt` with `args` and without any Baserunna setting.
@@ -67,4 +74,126 @@ fn top_level_graph_option_selects_the_curriculum_of_every_command() {
     assert!(stdout.contains("orphan atom 'local atom'"), "{stdout}");
     let stderr = String::from_utf8_lossy(&check.stderr);
     assert!(stderr.contains("curriculum check failed"), "{stderr}");
+}
+
+/// Run the CLI form of `step` through `sh -c` against the database of `cfg`.
+fn run_in_shell(cfg: &DbConfig, step: &Step) {
+    let bin = std::path::Path::new(env!("CARGO_BIN_EXE_mt"));
+    let path = format!(
+        "{}:{}",
+        bin.parent().unwrap().display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let home = tempfile::TempDir::new().unwrap();
+    let line = step.render(Surface::Cli);
+    let out = Command::new("sh")
+        .args(["-c", &line])
+        .env("PATH", path)
+        .env("BASERUNNA_URL", &cfg.url)
+        .env("BASERUNNA_TOKEN", &cfg.token)
+        .env("BASERUNNA_DB", &cfg.db)
+        .env("MATHTUTOR_HOME", home.path())
+        .env_remove("MT_GRAPH")
+        .output()
+        .expect("run sh");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{line}: {stderr}");
+}
+
+/// Return text for `field` that a shell changes unless the step quotes it.
+fn shell_text(field: Field) -> String {
+    format!(
+        "{field:?}: Solve $x^2 = 4$ for $x$; `x` is $(echo -2).\nIt's \"both\" quote kinds, a \\ and a '\\''.\n"
+    )
+}
+
+#[tokio::test]
+async fn cli_steps_store_free_text_unchanged() {
+    let cfg = common::fresh_config();
+    let db = common::create_db(&cfg).await;
+    let path_id = "p_shell";
+    common::seed_path(&db, path_id, &["fnd.1.1.1"], Strategy::TopDown).await;
+    let (first, second) = ("fnd.1.1.1", "fnd.1.1.2");
+    let fill = |atom: &'static str, quiz: &'static str| {
+        move |field: Field| match field {
+            Field::Atom => atom.to_string(),
+            Field::QuizId => quiz.to_string(),
+            Field::PathId => path_id.to_string(),
+            Field::Difficulty => "easy".to_string(),
+            Field::QuizType => "free_text".to_string(),
+            Field::Rating => "good".to_string(),
+            _ => shell_text(field),
+        }
+    };
+    let template = |name: &str| {
+        playbook_steps()
+            .into_iter()
+            .find(|(n, _)| *n == name)
+            .expect("playbook step")
+            .1
+    };
+    let scheduled = |action: Action| next_step(&action, path_id).expect("next step");
+
+    run_in_shell(&cfg, &template("upsert_lesson").fill(fill(first, "")));
+    let create_lesson = Action::CreateLesson {
+        atom_id: second.into(),
+    };
+    run_in_shell(&cfg, &scheduled(create_lesson).fill(fill(second, "")));
+    let overlay = common::overlay(&db).await;
+    for atom in [first, second] {
+        let lesson = overlay.atoms[atom].lesson.as_deref();
+        assert_eq!(lesson, Some(shell_text(Field::Body).as_str()));
+    }
+
+    run_in_shell(&cfg, &template("create_quiz").fill(fill(first, "")));
+    let create_quiz = Action::CreateQuiz {
+        atom_id: second.into(),
+        difficulty: Difficulty::Medium,
+    };
+    run_in_shell(&cfg, &scheduled(create_quiz).fill(fill(second, "")));
+    let overlay = common::overlay(&db).await;
+    for atom in [first, second] {
+        let q = &overlay.atoms[atom].quizzes[0];
+        assert_eq!(q.question, shell_text(Field::Question));
+        assert_eq!(q.answer, shell_text(Field::Answer));
+        assert_eq!(q.rubric, Some(shell_text(Field::Rubric)));
+    }
+    let (q1, q2) = ("fnd.1.1.1.q1", "fnd.1.1.2.q1");
+
+    let update = template("update_quiz").fill(|field| match field {
+        Field::Question | Field::Answer | Field::Rubric => format!("new {}", shell_text(field)),
+        _ => fill(first, q1)(field),
+    });
+    run_in_shell(&cfg, &update);
+    let q = &common::overlay(&db).await.atoms[first].quizzes[0];
+    assert_eq!(q.question, format!("new {}", shell_text(Field::Question)));
+    assert_eq!(q.rubric, Some(format!("new {}", shell_text(Field::Rubric))));
+
+    run_in_shell(&cfg, &template("answer_quiz").fill(fill(first, q1)));
+    let present_quiz = Action::PresentQuiz {
+        quiz_id: q2.into(),
+        atom_id: second.into(),
+    };
+    run_in_shell(&cfg, &scheduled(present_quiz).fill(fill(second, q2)));
+    let present_lesson = Action::PresentLesson {
+        atom_id: first.into(),
+    };
+    run_in_shell(&cfg, &scheduled(present_lesson));
+
+    let answers: Vec<_> = event_log::load(&db, path_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.kind {
+            EventKind::QuizAnswered {
+                quiz, user_answer, ..
+            } => Some((quiz, user_answer)),
+            _ => None,
+        })
+        .collect();
+    let reply = Some(shell_text(Field::UserAnswer));
+    assert_eq!(
+        answers,
+        vec![(q1.to_string(), reply.clone()), (q2.to_string(), reply)]
+    );
 }

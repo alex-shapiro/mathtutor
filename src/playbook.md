@@ -14,6 +14,10 @@ Read commands write to stdout:
 
 Write commands print a confirmation to stderr, including the ID of a new quiz or path.
 
+Put each text value in single quotes, and write each single quote in the text as `'\''`. The shell does not change other characters in single quotes, including `$`, `\`, `"`, and line breaks:
+
+    mt quiz answer <quiz-id> --rating good --user-answer 'It'\''s $x = 2$'
+
 <!-- end -->
 ## Starting a session
 
@@ -24,7 +28,7 @@ If a learning path does not exist, offer to create a path with `mt path new`. Us
 
 To create a path, ask what the user wants to learn, identify the target node IDs from the curriculum, and run:
 
-    mt path new "Understand SVD" --targets la.5.4
+    mt path new 'Understand SVD' --targets la.5.4
 
 `--targets` accepts comma-separated atom or cluster IDs. Cluster IDs expand to all atomic descendants.
 <!-- mcp -->
@@ -83,16 +87,7 @@ If the user is blocked on a target atom in `{{top_down}}` mode, create a subpath
 
 ### `create_lesson`
 
-The selected atom does not have a stored lesson. Author a lesson of 1–2 paragraphs that introduces at most a single theorem, rule, or definition and builds on the prerequisites in the payload without repeating them. Save the lesson with {{upsert_lesson}}, present it to the user, and wait for their response.
-<!-- cli -->
-
-To pass a lesson of several lines, use a here-document:
-
-    mt lesson upsert <atom-id> --body "$(cat <<'BODY'
-    ...lesson...
-    BODY
-    )"
-<!-- end -->
+The selected atom does not have a stored lesson. Author a lesson of 1–2 paragraphs that introduces at most a single theorem, rule, or definition and builds on the prerequisites in the payload without repeating them. Save the lesson with `{{upsert_lesson}}`, present it to the user, and wait for their response.
 
 ### `present_lesson`
 
@@ -129,8 +124,8 @@ All target atoms on the path are complete. Inform the user and offer to start a 
 
 ## Updating or deleting content
 
-- **Update a lesson:** {{update_lesson}} to replace the stored lesson body, and present the updated lesson.
-- **Update a quiz:** {{update_quiz}} to modify specific fields while preserving the quiz ID and FSRS review history.
+- **Update a lesson:** {{run}} `{{upsert_lesson}}` to replace the stored lesson body, and present the updated lesson.
+- **Update a quiz:** {{run}} `{{update_quiz}}` to modify specific fields while preserving the quiz ID and FSRS review history.
 - **Delete a quiz:** {{delete_quiz}} to tombstone the quiz so that the scheduler prompts for a replacement via `create_quiz`. Prefer {{update_quiz_name}} over {{delete_quiz_name}} to preserve FSRS state.
 
 ## Style rules

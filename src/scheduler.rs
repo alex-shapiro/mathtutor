@@ -11,7 +11,7 @@ use crate::graph::{self, FlatConcept, Graph};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::subpath;
-use crate::surface::Surface;
+use crate::surface::{self, Field, Step, Surface, Tool, Value};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::view::{PathState, Want};
 use crate::{Error, Result};
@@ -424,7 +424,7 @@ impl Envelope {
     #[allow(clippy::too_many_lines)]
     fn build(ps: &PathState, g: &Graph, action: Action, surface: Surface) -> Self {
         let p = &ps.file;
-        let next_step = next_step(surface, &action, &p.id);
+        let next_step = next_step(&action, &p.id).map(|s| s.render(surface));
         let next = action.clone();
         match action {
             Action::PresentLesson { atom_id } => {
@@ -554,48 +554,28 @@ impl Envelope {
     }
 }
 
-/// Return the command or tool call in the syntax of `surface` that performs `action` on path `path_id`, or `None` for [`Action::Done`].
-fn next_step(surface: Surface, action: &Action, path_id: &str) -> Option<String> {
-    let step = match (surface, action) {
-        (Surface::Cli, Action::PresentLesson { .. }) => format!("mt path next --path {path_id}"),
-        (Surface::Mcp, Action::PresentLesson { .. }) => {
-            format!("get_next {{ path_id: \"{path_id}\" }}")
-        }
-        (Surface::Cli, Action::PresentQuiz { quiz_id, .. }) => format!(
-            "mt quiz answer {quiz_id} --path {path_id} --rating {{again|hard|good|easy}} \
-             --user-answer \"<verbatim reply>\""
-        ),
-        (Surface::Mcp, Action::PresentQuiz { quiz_id, .. }) => format!(
-            "answer_quiz {{ quiz_id: \"{quiz_id}\", path_id: \"{path_id}\", \
-             rating: \"again|hard|good|easy\", answer: \"<verbatim reply>\" }}"
-        ),
-        (Surface::Cli, Action::CreateLesson { atom_id }) => {
-            format!("mt lesson upsert {atom_id} --path {path_id} --body TEXT")
-        }
-        (Surface::Mcp, Action::CreateLesson { atom_id }) => {
-            format!("upsert_lesson {{ atom: \"{atom_id}\", path_id: \"{path_id}\", body: TEXT }}")
-        }
-        (
-            Surface::Cli,
-            Action::CreateQuiz {
-                atom_id,
-                difficulty,
-            },
-        ) => format!(
-            "mt quiz create {atom_id} --path {path_id} --difficulty {difficulty} \
-             --question TEXT --answer TEXT [--rubric TEXT]"
-        ),
-        (
-            Surface::Mcp,
-            Action::CreateQuiz {
-                atom_id,
-                difficulty,
-            },
-        ) => format!(
-            "create_quiz {{ atom: \"{atom_id}\", path_id: \"{path_id}\", \
-             difficulty: \"{difficulty}\", question: TEXT, answer: TEXT, rubric?: TEXT }}"
-        ),
-        (_, Action::Done) => return None,
+/// Return the step that performs `action` on path `path_id`, or `None` for [`Action::Done`].
+pub fn next_step(action: &Action, path_id: &str) -> Option<Step> {
+    let path = Value::known(path_id);
+    let step = match action {
+        Action::PresentLesson { .. } => Step::new(Tool::GetNext, path),
+        Action::PresentQuiz { quiz_id, .. } => Step::new(Tool::AnswerQuiz, path)
+            .arg(Field::QuizId, Value::known(quiz_id))
+            .arg(Field::Rating, Value::Choice(surface::RATINGS))
+            .arg(Field::UserAnswer, Value::Text("verbatim reply")),
+        Action::CreateLesson { atom_id } => Step::new(Tool::UpsertLesson, path)
+            .arg(Field::Atom, Value::known(atom_id))
+            .arg(Field::Body, Value::Text("lesson")),
+        Action::CreateQuiz {
+            atom_id,
+            difficulty,
+        } => Step::new(Tool::CreateQuiz, path)
+            .arg(Field::Atom, Value::known(atom_id))
+            .arg(Field::Difficulty, Value::known(difficulty.as_str()))
+            .arg(Field::Question, Value::Text("question"))
+            .arg(Field::Answer, Value::Text("answer"))
+            .optional(Field::Rubric, Value::Text("rubric")),
+        Action::Done => return None,
     };
     Some(step)
 }
