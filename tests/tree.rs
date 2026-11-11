@@ -42,6 +42,10 @@ async fn compute_tree_reports_progress_targets_and_next_atom() {
     tree::write_tree(&mut text, &t).unwrap();
     let text = String::from_utf8(text).unwrap();
     assert!(text.contains("targets:     0 / 1 learned (0%)"), "{text}");
+    assert!(
+        text.contains("reachable:   2 atoms (0 taught, 0 learned)"),
+        "{text}"
+    );
     let line = |id: &str| text.lines().find(|l| l.contains(id)).unwrap().to_string();
     assert!(line("fnd.1.1.1 ").ends_with("← NEXT"), "{text}");
     assert!(line("fnd.1.1.2 ").ends_with(" *"), "{text}");

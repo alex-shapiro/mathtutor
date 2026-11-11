@@ -181,9 +181,9 @@ fn write_state_emits_past_due_line() {
             learned_pct: 0,
         },
         reachable: Some(ReachProgress {
-            total: 0,
-            taught: 0,
-            learned: 0,
+            total: 3,
+            taught: 2,
+            learned: 1,
         }),
         subpath: Vec::new(),
         past_due: 7,
@@ -196,6 +196,10 @@ fn write_state_emits_past_due_line() {
         out.lines()
             .any(|l| l.starts_with("past due:") && l.contains('7')),
         "missing 'past due: 7' line in:\n{out}"
+    );
+    assert!(
+        out.contains("reachable:   3 atoms (2 taught, 1 learned)"),
+        "{out}"
     );
 }
 

@@ -75,7 +75,7 @@ pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
     if let Some(reach) = &s.reachable {
         writeln!(
             w,
-            "{:13}{} atoms ({} with lesson, {} learned)",
+            "{:13}{} atoms ({} taught, {} learned)",
             "reachable:", reach.total, reach.taught, reach.learned
         )?;
     }

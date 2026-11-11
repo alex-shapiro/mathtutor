@@ -169,7 +169,7 @@ pub fn write_tree<W: Write>(w: &mut W, t: &TreeView) -> io::Result<()> {
     )?;
     writeln!(
         w,
-        "{:13}{} atoms ({} with lesson, {} learned)",
+        "{:13}{} atoms ({} taught, {} learned)",
         "reachable:", t.reachable.total, t.reachable.taught, t.reachable.learned
     )?;
     if !t.subpath.is_empty() {
