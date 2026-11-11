@@ -160,6 +160,27 @@ async fn repeated_lesson_upsert_after_a_lost_response_counts_one_teaching() {
 }
 
 #[tokio::test]
+async fn same_lesson_body_on_a_second_path_records_only_its_teaching() {
+    let (db, path_id) = fresh_db_with_path().await;
+    common::seed_path(&db, "p_second", &[NO_LESSON_ATOM], Strategy::BottomUp).await;
+    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "body".into(), Some(&path_id))
+        .await
+        .unwrap();
+
+    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "body".into(), Some("p_second"))
+        .await
+        .unwrap();
+    assert_eq!(event_kinds(&db, "p_second").await, [taught(NO_LESSON_ATOM)]);
+
+    store::cmd_lesson_upsert(&db, NO_LESSON_ATOM, "body".into(), Some("p_second"))
+        .await
+        .unwrap();
+    assert_eq!(event_kinds(&db, "p_second").await, [taught(NO_LESSON_ATOM)]);
+    let state = common::path_state(&db, "p_second").await;
+    assert_eq!(state.taught[NO_LESSON_ATOM].count, 1);
+}
+
+#[tokio::test]
 async fn quiz_create_after_delete_skips_tombstoned_id() {
     let (db, path_id) = fresh_db_with_path().await;
 

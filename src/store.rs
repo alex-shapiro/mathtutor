@@ -11,7 +11,7 @@ use crate::{Error, Result};
 
 /// Store a lesson body for `atom_id` in the overlay and log its authoring and presentation events.
 ///
-/// A body equal to the stored lesson changes nothing, so the command is safe to repeat.
+/// A body equal to the stored lesson records only the presentation, and only if the path has not taught the lesson, so the command is safe to repeat.
 pub async fn cmd_lesson_upsert(
     db: &Db,
     atom_id: &str,
@@ -19,23 +19,27 @@ pub async fn cmd_lesson_upsert(
     path_id: Option<&str>,
 ) -> Result<()> {
     db.transact(&Want::path(path_id), |view, changes| {
-        let id = view.path()?.file.id.clone();
+        let ps = view.path()?;
+        let id = ps.file.id.clone();
         let g = view.graph()?;
         let stored = g.atom(atom_id)?.lesson.as_deref();
+        let atom = atom_id.to_string();
+        let taught = Event::now(&id, EventKind::LessonTaught { atom: atom.clone() });
         if stored == Some(body.as_str()) {
-            return Ok(());
+            if ps.taught.contains_key(atom_id) {
+                return Ok(());
+            }
+            return changes.append(view, &taught);
         }
-        let amended = stored.is_some();
 
         overlay::upsert_lesson(changes, atom_id, &body);
-        let atom = atom_id.to_string();
-        let change = if amended {
-            EventKind::LessonAmended { atom: atom.clone() }
+        let change = if stored.is_some() {
+            EventKind::LessonAmended { atom }
         } else {
-            EventKind::LessonAuthored { atom: atom.clone() }
+            EventKind::LessonAuthored { atom }
         };
         changes.append(view, &Event::now(&id, change))?;
-        changes.append(view, &Event::now(id, EventKind::LessonTaught { atom }))
+        changes.append(view, &taught)
     })
     .await
 }
