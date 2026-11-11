@@ -1,7 +1,7 @@
 //! Integration tests for database initialization, streams, concurrency, and caching.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use baserunna_client::api::ListTablesQuery;
 use baserunna_client::bytes::Bytes;
@@ -131,8 +131,8 @@ async fn commands_check_the_database_in_their_first_request() {
     db.snapshot(&Want::path(Some(PATH_ID))).await.unwrap();
     assert_eq!(
         traffic.requests.load(Ordering::Relaxed),
-        1,
-        "a read sends 1 request"
+        2,
+        "a read with a cold cache loads the overlay beside the path"
     );
 }
 
@@ -371,6 +371,19 @@ async fn recompute_reproduces_incremental_rows_exactly() {
 struct Traffic {
     requests: AtomicUsize,
     received: AtomicUsize,
+    /// Operations sent in interactive transaction requests.
+    txn_ops: Mutex<Vec<serde_json::Value>>,
+}
+
+impl Traffic {
+    /// Return the tables that interactive transactions queried.
+    fn txn_queried_tables(&self) -> Vec<String> {
+        let ops = self.txn_ops.lock().unwrap();
+        ops.iter()
+            .filter(|op| op["op"] == "query_rows")
+            .filter_map(|op| op["table"].as_str().map(str::to_string))
+            .collect()
+    }
 }
 
 /// Transport that counts requests and response bytes.
@@ -386,6 +399,17 @@ impl Transport for CountingTransport {
     ) -> BoxFuture<'_, Result<http::Response<Bytes>, TransportError>> {
         Box::pin(async move {
             self.traffic.requests.fetch_add(1, Ordering::Relaxed);
+            if req.uri().path().contains("/transactions") {
+                let body: serde_json::Value =
+                    serde_json::from_slice(req.body()).unwrap_or_default();
+                if let Some(ops) = body["ops"].as_array() {
+                    self.traffic
+                        .txn_ops
+                        .lock()
+                        .unwrap()
+                        .extend(ops.iter().cloned());
+                }
+            }
             let resp = self.inner.send(req).await?;
             self.traffic
                 .received
@@ -455,6 +479,70 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
         third.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
         Some("revised")
     );
+}
+
+#[tokio::test]
+async fn write_with_a_cold_cache_reads_overlay_rows_outside_the_transaction() {
+    let cfg = common::fresh_config();
+    let writer = common::create_db(&cfg).await;
+    common::seed_path(&writer, PATH_ID, &[], Strategy::BottomUp).await;
+    store::cmd_lesson_upsert(&writer, "fnd.1.1.1", "first".into(), Some(PATH_ID), None)
+        .await
+        .unwrap();
+
+    let (db, traffic) = counting_db(&cfg);
+    store::cmd_lesson_upsert(&db, "fnd.1.1.2", "second".into(), Some(PATH_ID), None)
+        .await
+        .unwrap();
+
+    let queried = traffic.txn_queried_tables();
+    assert!(!queried.is_empty(), "the transaction reads the path");
+    for table in ["lessons", "quizzes", "removed_quizzes"] {
+        assert!(
+            !queried.iter().any(|t| t == table),
+            "{table} in {queried:?}"
+        );
+    }
+    let view = db.snapshot(&Want::overlay()).await.unwrap();
+    assert_eq!(
+        view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        Some("first")
+    );
+    assert_eq!(
+        view.overlay.atoms["fnd.1.1.2"].lesson.as_deref(),
+        Some("second")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn transaction_restarts_with_an_overlay_that_another_client_writes() {
+    let cfg = common::fresh_config();
+    let db = common::create_db(&cfg).await;
+    common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
+    store::cmd_lesson_upsert(&db, "fnd.1.1.1", "cached".into(), Some(PATH_ID), None)
+        .await
+        .unwrap();
+    let other = Db::connect(&cfg).unwrap();
+    let mut seen = Vec::new();
+
+    db.transact(&Want::path(Some(PATH_ID)), |view, _| {
+        seen.push(view.overlay.atoms["fnd.1.1.1"].lesson.clone().unwrap());
+        if seen.len() == 1 {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    store::cmd_lesson_upsert(&other, "fnd.1.1.1", "new".into(), None, None)
+                        .await
+                        .unwrap();
+                });
+            });
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(seen.first().map(String::as_str), Some("cached"));
+    assert_eq!(seen.last().map(String::as_str), Some("new"), "{seen:?}");
 }
 
 #[tokio::test]
