@@ -37,7 +37,7 @@ fn chained_steps_use_gap_to_most_recent_answer_not_first() {
 
     assert!(
         (three_step.stability - two_step_skipping_middle.stability).abs() > 1e-6,
-        "three answers (gaps 30, 60) must differ from two answers (gap 90); \
+        "three answers with gaps 30 and 60 must differ from two answers with gap 90; \
          otherwise the third step is using gap-to-first instead of gap-to-prev"
     );
 }

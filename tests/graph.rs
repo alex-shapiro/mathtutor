@@ -1,18 +1,17 @@
 //! Unit tests for `Graph` lookup helpers and `graph::run_check`.
 
-use std::fs;
-
 use mathtutor::Error;
+use mathtutor::discover::Lookup;
 use mathtutor::graph;
+use mathtutor::graph::Graph;
 use mathtutor::types::Difficulty;
-use tempfile::TempDir;
 
 mod common;
 
-use common::{atom, cluster, graph_of, quiz};
+use common::{atom, cluster, quiz, write_graph};
 
 fn graph_with_quiz(atom_id: &str, quiz_id: &str) -> mathtutor::graph::Graph {
-    graph_of(vec![atom(
+    Graph::of_concepts(vec![atom(
         atom_id,
         &[],
         Some("body"),
@@ -37,7 +36,7 @@ fn quiz_rejects_malformed_id() {
 #[test]
 fn quiz_rejects_unknown_atom() {
     let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
-    assert!(matches!(g.quiz("nope.1.q1"), Err(Error::AtomNotFound(_))));
+    assert!(matches!(g.quiz("nope.1.q1"), Err(Error::UnknownId(_))));
 }
 
 #[test]
@@ -55,83 +54,60 @@ fn atom_accepts_leaf_concept() {
 
 #[test]
 fn atom_rejects_cluster() {
-    let g = graph_of(vec![cluster("fnd.1", &["fnd.1.1"])]);
+    let g = Graph::of_concepts(vec![cluster("fnd.1", &["fnd.1.1"])]);
     assert!(matches!(g.atom("fnd.1"), Err(Error::NotAtom(_))));
 }
 
 #[test]
 fn atom_rejects_unknown_id() {
     let g = graph_with_quiz("fnd.1.1.1", "fnd.1.1.1.q1");
-    assert!(matches!(g.atom("nope"), Err(Error::AtomNotFound(_))));
+    assert!(matches!(g.atom("nope"), Err(Error::UnknownId(_))));
 }
 
 #[test]
 fn reachable_includes_transitive_prereqs() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         common::empty_atom("tx.1.1", &["la.2.2", "fnd.2.3.1"]),
         common::empty_atom("la.2.2", &["la.1.1"]),
         common::empty_atom("la.1.1", &[]),
         common::empty_atom("fnd.2.3.1", &[]),
     ]);
-    let reach = g.reachable_atoms(&["tx.1.1".to_string()]);
-    assert!(reach.contains("tx.1.1"));
-    assert!(reach.contains("la.2.2"));
-    assert!(reach.contains("la.1.1"));
-    assert!(reach.contains("fnd.2.3.1"));
+    let reach = g.prerequisite_order(&["tx.1.1".to_string()]);
+    assert!(reach.contains(&"tx.1.1".to_string()));
+    assert!(reach.contains(&"la.2.2".to_string()));
+    assert!(reach.contains(&"la.1.1".to_string()));
+    assert!(reach.contains(&"fnd.2.3.1".to_string()));
 }
 
 #[test]
 fn reachable_expands_cluster_prereqs_to_their_atoms() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         common::empty_atom("tx.1.1", &["la.2.2"]),
         cluster("la.2.2", &["la.2.2.1", "la.2.2.2"]),
         common::empty_atom("la.2.2.1", &[]),
         common::empty_atom("la.2.2.2", &[]),
     ]);
-    let reach = g.reachable_atoms(&["tx.1.1".to_string()]);
-    assert!(reach.contains("tx.1.1"));
-    assert!(reach.contains("la.2.2.1"));
-    assert!(reach.contains("la.2.2.2"));
-    assert!(!reach.contains("la.2.2"));
+    let reach = g.prerequisite_order(&["tx.1.1".to_string()]);
+    assert!(reach.contains(&"tx.1.1".to_string()));
+    assert!(reach.contains(&"la.2.2.1".to_string()));
+    assert!(reach.contains(&"la.2.2.2".to_string()));
+    assert!(!reach.contains(&"la.2.2".to_string()));
 }
 
 #[test]
 fn reachable_handles_diamond_without_looping() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         common::empty_atom("tx.1", &["a", "b"]),
         common::empty_atom("a", &["c"]),
         common::empty_atom("b", &["c"]),
         common::empty_atom("c", &[]),
     ]);
-    let reach = g.reachable_atoms(&["tx.1".to_string()]);
-    assert_eq!(reach.len(), 4);
-}
-
-fn write_graph(area_body: &str) -> TempDir {
-    let dir = TempDir::new().expect("tempdir");
-    let areas = dir.path().join("areas");
-    fs::create_dir(&areas).expect("areas/");
-    let manifest = "
-schema_version: 1
-areas:
-  - prefix: ta
-    slug: test-area
-    file: areas/test.ayml
-    summary: \"t\"
-";
-    fs::write(dir.path().join("manifest.ayml"), manifest).expect("manifest");
-    let area = format!(
-        "
-schema_version: 2
-area: test-area
-prefix: ta
-summary: \"t\"
-motivation: \"t\"
-children:
-{area_body}"
+    let reach = g.prerequisite_order(&["tx.1".to_string()]);
+    assert_eq!(
+        reach,
+        ["c", "a", "b", "tx.1"],
+        "each atom follows its prerequisites"
     );
-    fs::write(areas.join("test.ayml"), area).expect("area");
-    dir
 }
 
 #[test]
@@ -151,7 +127,7 @@ fn area_root_is_a_cluster_node_that_expands_to_atoms() {
         terminal: true
 ",
     );
-    let g = graph::Graph::load(dir.path()).expect("load");
+    let g = graph::Graph::load(&graph::CurriculumSource::Dir(dir.path().into())).expect("load");
 
     let area = g.by_id.get("ta").expect("area root is a node");
     assert_eq!(area.children_ids, vec!["ta.1".to_string()]);
@@ -182,7 +158,8 @@ fn orphan_check_flags_unreferenced_atom() {
         description: nobody cites me
 ",
     );
-    let report = graph::run_check(Some(dir.path())).expect("run_check");
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
     assert_eq!(orphan_ids(&report), vec!["ta.1.1".to_string()]);
     let msg = &report
         .issues
@@ -206,7 +183,8 @@ fn orphan_check_skips_terminal_atoms() {
         terminal: true
 ",
     );
-    let report = graph::run_check(Some(dir.path())).expect("run_check");
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
     assert!(
         orphan_ids(&report).is_empty(),
         "terminal:true must suppress: {:?}",
@@ -215,7 +193,7 @@ fn orphan_check_skips_terminal_atoms() {
 }
 
 #[test]
-fn orphan_check_clears_when_referenced_as_prereq() {
+fn orphan_check_clears_if_referenced_as_prereq() {
     let dir = write_graph(
         "
   - id: ta.1
@@ -231,7 +209,8 @@ fn orphan_check_clears_when_referenced_as_prereq() {
           - ta.1.1
 ",
     );
-    let report = graph::run_check(Some(dir.path())).expect("run_check");
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
     assert_eq!(orphan_ids(&report), vec!["ta.1.2".to_string()]);
 }
 
@@ -248,7 +227,8 @@ fn orphan_check_does_not_flag_clusters() {
         terminal: true
 ",
     );
-    let report = graph::run_check(Some(dir.path())).expect("run_check");
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
     assert!(orphan_ids(&report).is_empty(), "{:?}", report.issues);
 }
 
@@ -276,6 +256,210 @@ fn orphan_check_cluster_prereq_covers_descendant_atoms() {
           - ta.1
 ",
     );
-    let report = graph::run_check(Some(dir.path())).expect("run_check");
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
     assert!(orphan_ids(&report).is_empty(), "{:?}", report.issues);
+}
+
+fn issues_of(report: &graph::CheckReport, prefix: &str) -> Vec<String> {
+    report
+        .issues
+        .iter()
+        .filter(|i| i.message.starts_with(prefix))
+        .filter_map(|i| i.node.clone())
+        .collect()
+}
+
+#[test]
+fn graph_check_rejects_an_atom_inside_its_own_prerequisite_cluster() {
+    let dir = write_graph(
+        "
+  - id: ta.1
+    name: cluster
+    children:
+      - id: ta.1.1
+        name: needs its own cluster
+        description: d
+        terminal: true
+        prerequisites:
+          - ta.1
+",
+    );
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
+    assert_eq!(
+        issues_of(&report, "a prerequisite of this atom"),
+        vec!["ta.1.1".to_string()],
+        "{:?}",
+        report.issues
+    );
+}
+
+#[test]
+fn graph_check_rejects_a_cycle_through_a_prerequisite_cluster() {
+    let dir = write_graph(
+        "
+  - id: ta.1
+    name: cluster
+    children:
+      - id: ta.1.1
+        name: needs the other cluster
+        description: d
+        prerequisites:
+          - ta.2.1
+  - id: ta.2
+    name: other cluster
+    children:
+      - id: ta.2.1
+        name: needs the first cluster
+        description: d
+        terminal: true
+        prerequisites:
+          - ta.1
+",
+    );
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
+    assert!(
+        !issues_of(&report, "prerequisite cycle").is_empty(),
+        "{:?}",
+        report.issues
+    );
+}
+
+#[test]
+fn graph_check_rejects_a_curriculum_quiz_id_outside_the_curriculum_form() {
+    let dir = write_graph(
+        "
+  - id: ta.1
+    name: cluster
+    children:
+      - id: ta.1.1
+        name: atom
+        description: d
+        terminal: true
+        quizzes:
+          - id: ta.1.1.q1
+            difficulty: easy
+            question: q
+            answer: a
+          - id: ta.1.1.u1
+            difficulty: medium
+            question: q
+            answer: a
+",
+    );
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
+    let quiz_issues: Vec<&str> = report
+        .issues
+        .iter()
+        .filter(|i| i.message.starts_with("quiz id"))
+        .map(|i| i.message.as_str())
+        .collect();
+    assert_eq!(quiz_issues.len(), 1, "{:?}", report.issues);
+    assert!(quiz_issues[0].contains("'ta.1.1.u1'"), "{quiz_issues:?}");
+}
+
+#[test]
+fn atomic_prerequisites_expand_clusters_and_include_the_holding_clusters() {
+    let mut holder = cluster("c.1", &["c.1.1"]);
+    holder.prerequisites = vec!["c.3".to_string()];
+    let g = Graph::of_concepts(vec![
+        cluster("c", &["c.1", "c.2", "c.3"]),
+        holder,
+        atom("c.1.1", &["c.2"], None, Vec::new()),
+        cluster("c.2", &["c.2.1", "c.2.2"]),
+        atom("c.2.1", &[], None, Vec::new()),
+        atom("c.2.2", &[], None, Vec::new()),
+        atom("c.3", &[], None, Vec::new()),
+    ]);
+    assert_eq!(
+        g.atomic_prerequisites("c.1.1"),
+        vec!["c.3", "c.2.1", "c.2.2"],
+    );
+}
+
+#[test]
+fn curriculum_lookup_runs_without_database_credentials() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_mt"))
+        .args(["graph", "list"])
+        .env_remove("BASERUNNA_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn invalid_arguments_exit_with_the_usage_code_and_help_succeeds() {
+    let mt = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_mt"))
+            .args(args)
+            .env_remove("BASERUNNA_TOKEN")
+            .output()
+            .unwrap()
+            .status
+            .code()
+    };
+    assert_eq!(mt(&["quiz", "answer", "a.q1", "--rating", "bad"]), Some(2));
+    assert_eq!(mt(&["no-such-command"]), Some(2));
+    assert_eq!(mt(&["--help"]), Some(0));
+}
+
+#[tokio::test]
+async fn recursive_children_list_every_descendant_in_natural_order() {
+    let curriculum = graph::Curriculum::embedded();
+    let view =
+        mathtutor::discover::compute_children(Lookup::Curriculum(&curriculum), Some("fnd.1"), true)
+            .await
+            .unwrap();
+    let mathtutor::discover::ListView::Children(view) = view else {
+        panic!("expected children of a node");
+    };
+    let ids: Vec<&str> = view.descendants.iter().map(|d| d.id.as_str()).collect();
+    assert!(!ids.contains(&"fnd.1"), "{ids:?}");
+    assert!(
+        ids.contains(&"fnd.1.1") && ids.contains(&"fnd.1.1.1"),
+        "{ids:?}"
+    );
+    let mut sorted = ids.clone();
+    sorted.sort_by(|a, b| graph::natural_id_cmp(a, b));
+    assert_eq!(ids, sorted);
+    assert!(view.descendants.iter().all(|d| d.status.is_none()));
+
+    let flat = mathtutor::discover::compute_children(
+        Lookup::Curriculum(&curriculum),
+        Some("fnd.1"),
+        false,
+    )
+    .await
+    .unwrap();
+    let mathtutor::discover::ListView::Children(flat) = flat else {
+        panic!("expected children of a node");
+    };
+    assert!(flat.descendants.is_empty());
+}
+
+#[test]
+fn overlapping_targets_expand_once_each() {
+    let g = Graph::of_concepts(vec![
+        cluster("c", &["c.1", "c.2"]),
+        cluster("c.1", &["c.1.a"]),
+        atom("c.1.a", &[], None, Vec::new()),
+        atom("c.2", &[], None, Vec::new()),
+        cluster("empty", &["missing"]),
+    ]);
+    let ids = |ids: &[&str]| ids.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        g.expand_to_atoms(&ids(&["c", "c.1", "c.1.a"])).unwrap(),
+        ids(&["c.1.a", "c.2"])
+    );
+    assert!(matches!(
+        g.expand_to_atoms(&ids(&["c", "empty"])),
+        Err(Error::EmptyCluster(id)) if id == "empty"
+    ));
 }

@@ -3,29 +3,15 @@
 mod common;
 
 use common::{
-    PATH_ID, cluster, complete_atom, empty_atom, graph_of, path_state, path_with_strategy,
+    PATH_ID, cluster, complete_atom, complete_events, empty_atom, path_state, path_with_strategy,
 };
 
-use chrono::Utc;
 use mathtutor::db::Db;
-use mathtutor::path::{self, PathFile};
-use mathtutor::progress::PathProgress;
-use mathtutor::scheduler::{self, Action, NextMode};
+use mathtutor::graph::Graph;
+use mathtutor::path::{self, PathRow};
+use mathtutor::scheduler::{Action, NextMode};
 use mathtutor::types::Strategy;
 use mathtutor::{Error, subpath};
-
-const NO_DUE: &[(String, chrono::DateTime<Utc>)] = &[];
-
-fn progress_complete(ids: &[&str]) -> PathProgress {
-    let mut p = PathProgress::default();
-    for id in ids {
-        p.taught_atoms.insert((*id).to_string());
-        for n in 1..=3 {
-            p.correct_quizzes.insert(format!("{id}.q{n}"));
-        }
-    }
-    p
-}
 
 fn atom_id(a: &Action) -> Option<&str> {
     a.atom_id()
@@ -33,17 +19,9 @@ fn atom_id(a: &Action) -> Option<&str> {
 
 #[test]
 fn top_down_presents_target_before_its_prereqs() {
-    let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
+    let g = Graph::of_concepts(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &PathProgress::default(),
-        NO_DUE,
-        &[],
-        NextMode::Default,
-    );
+    let action = common::next_action(&g, &p, &[], NextMode::Default);
     assert_eq!(
         atom_id(&action),
         Some("t"),
@@ -53,17 +31,9 @@ fn top_down_presents_target_before_its_prereqs() {
 
 #[test]
 fn bottom_up_descends_into_prereqs_first() {
-    let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
+    let g = Graph::of_concepts(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::BottomUp);
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &PathProgress::default(),
-        NO_DUE,
-        &[],
-        NextMode::Default,
-    );
+    let action = common::next_action(&g, &p, &[], NextMode::Default);
     assert_eq!(
         atom_id(&action),
         Some("p"),
@@ -73,36 +43,20 @@ fn bottom_up_descends_into_prereqs_first() {
 
 #[test]
 fn top_down_subpath_walked_in_order() {
-    let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
-    let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let subpath = vec!["p".to_string(), "t".to_string()];
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &PathProgress::default(),
-        NO_DUE,
-        &subpath,
-        NextMode::Default,
-    );
+    let g = Graph::of_concepts(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
+    let mut p = path_with_strategy(&["t"], Strategy::TopDown);
+    p.subpath = vec!["p".to_string(), "t".to_string()];
+    let action = common::next_action(&g, &p, &[], NextMode::Default);
     assert_eq!(atom_id(&action), Some("p"), "first incomplete subpath atom");
 }
 
 #[test]
-fn top_down_subpath_advances_when_earlier_atom_complete() {
-    let g = graph_of(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
-    let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let subpath = vec!["p".to_string(), "t".to_string()];
-    let progress = progress_complete(&["p"]);
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &progress,
-        NO_DUE,
-        &subpath,
-        NextMode::Default,
-    );
+fn top_down_subpath_advances_once_earlier_atom_completes() {
+    let g = Graph::of_concepts(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
+    let mut p = path_with_strategy(&["t"], Strategy::TopDown);
+    p.subpath = vec!["p".to_string(), "t".to_string()];
+    let events = complete_events("p");
+    let action = common::next_action(&g, &p, &events, NextMode::Default);
     assert_eq!(
         atom_id(&action),
         Some("t"),
@@ -112,19 +66,11 @@ fn top_down_subpath_advances_when_earlier_atom_complete() {
 
 #[test]
 fn top_down_drained_subpath_falls_through_to_targets() {
-    let g = graph_of(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
-    let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let subpath = vec!["p".to_string()];
-    let progress = progress_complete(&["p"]);
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &progress,
-        NO_DUE,
-        &subpath,
-        NextMode::Default,
-    );
+    let g = Graph::of_concepts(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
+    let mut p = path_with_strategy(&["t"], Strategy::TopDown);
+    p.subpath = vec!["p".to_string()];
+    let events = complete_events("p");
+    let action = common::next_action(&g, &p, &events, NextMode::Default);
     assert_eq!(
         atom_id(&action),
         Some("t"),
@@ -133,19 +79,11 @@ fn top_down_drained_subpath_falls_through_to_targets() {
 }
 
 #[test]
-fn top_down_done_when_targets_complete() {
-    let g = graph_of(vec![complete_atom("t", &[])]);
+fn top_down_returns_done_if_targets_complete() {
+    let g = Graph::of_concepts(vec![complete_atom("t", &[])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
-    let progress = progress_complete(&["t"]);
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &p.targets,
-        &progress,
-        NO_DUE,
-        &[],
-        NextMode::Default,
-    );
+    let events = complete_events("t");
+    let action = common::next_action(&g, &p, &events, NextMode::Default);
     assert!(
         matches!(action, Action::Done),
         "all targets complete → done"
@@ -153,26 +91,15 @@ fn top_down_done_when_targets_complete() {
 }
 
 #[test]
-fn top_down_cluster_target_resolves_to_atomic_children() {
-    let g = graph_of(vec![
+fn top_down_cluster_target_expands_to_atomic_children() {
+    let g = Graph::of_concepts(vec![
         cluster("tx.1", &["tx.1.1", "tx.1.2"]),
         empty_atom("tx.1.1", &[]),
         empty_atom("tx.1.2", &[]),
     ]);
     let p = path_with_strategy(&["tx.1"], Strategy::TopDown);
 
-    let targets = p.resolve_targets(&g).unwrap();
-    assert_eq!(targets, vec!["tx.1.1".to_string(), "tx.1.2".to_string()]);
-
-    let action = scheduler::next_action(
-        &g,
-        &p,
-        &targets,
-        &PathProgress::default(),
-        NO_DUE,
-        &[],
-        NextMode::Default,
-    );
+    let action = common::next_action(&g, &p, &[], NextMode::Default);
     assert_eq!(
         atom_id(&action),
         Some("tx.1.1"),
@@ -180,18 +107,53 @@ fn top_down_cluster_target_resolves_to_atomic_children() {
     );
 }
 
+#[test]
+fn top_down_teaches_the_atoms_of_a_prerequisite_cluster_first() {
+    let g = Graph::of_concepts(vec![
+        cluster("tx", &["tx.1", "tx.2"]),
+        cluster("tx.1", &["tx.1.1"]),
+        cluster("tx.2", &["tx.2.1"]),
+        empty_atom("tx.1.1", &["tx.2"]),
+        empty_atom("tx.2.1", &[]),
+    ]);
+    let p = path_with_strategy(&["tx"], Strategy::TopDown);
+    assert_eq!(
+        common::upcoming(&g, &p, &[]),
+        vec!["tx.2.1", "tx.1.1"],
+        "`tx.1.1` needs cluster `tx.2`, so the atoms of `tx.2` come first",
+    );
+}
+
+#[test]
+fn top_down_teaches_the_prerequisites_of_an_ancestor_cluster_first() {
+    let mut holder = cluster("tx.1", &["tx.1.1"]);
+    holder.prerequisites = vec!["tx.2".to_string()];
+    let g = Graph::of_concepts(vec![
+        cluster("tx", &["tx.1", "tx.2"]),
+        holder,
+        cluster("tx.2", &["tx.2.1"]),
+        empty_atom("tx.1.1", &[]),
+        empty_atom("tx.2.1", &[]),
+    ]);
+    let top_down = path_with_strategy(&["tx"], Strategy::TopDown);
+    assert_eq!(
+        common::upcoming(&g, &top_down, &[]),
+        vec!["tx.2.1", "tx.1.1"]
+    );
+    let bottom_up = path_with_strategy(&["tx.1.1"], Strategy::BottomUp);
+    assert_eq!(
+        common::upcoming(&g, &bottom_up, &[]),
+        vec!["tx.2.1", "tx.1.1"],
+        "bottom-up reaches the prerequisite of the cluster that holds the target",
+    );
+}
+
 #[tokio::test]
 async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
     let conn = common::empty_db().await;
-    let id = path::cmd_path_new(
-        &conn,
-        "transformers",
-        &["tx".into()],
-        Strategy::TopDown,
-        None,
-    )
-    .await
-    .expect("new path");
+    let id = path::cmd_path_new(&conn, "transformers", &["tx".into()], Strategy::TopDown)
+        .await
+        .expect("new path");
 
     assert_eq!(
         load_path(&conn, &id).await.targets,
@@ -199,7 +161,7 @@ async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
         "the area root is stored as given, not pre-expanded",
     );
 
-    let view = mathtutor::syllabus::compute_syllabus(&conn, Some(&id), 10, None)
+    let view = mathtutor::syllabus::compute_syllabus(&conn, Some(&id), 10)
         .await
         .expect("syllabus");
     assert!(
@@ -209,13 +171,15 @@ async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
 }
 
 #[tokio::test]
-async fn subpath_cluster_atom_resolves_on_load() {
+async fn subpath_cluster_atom_expands_on_load() {
     // Store a cluster ID directly to simulate curriculum refactoring after subpath creation.
     let conn = common::empty_db().await;
     let id = save(&conn, &["tx.1.1.1"], Strategy::TopDown).await;
     replace_subpath(&conn, &id, &["tx.1".into()]).await;
 
-    let g = mathtutor::graph::Graph::merged(&common::overlay(&conn).await, None).unwrap();
+    let g = mathtutor::graph::Curriculum::embedded()
+        .merged(&common::overlay(&conn).await)
+        .unwrap();
     let resolved = subpath::resolved(&load_path(&conn, &id).await, &g).unwrap();
 
     assert!(
@@ -237,12 +201,19 @@ async fn save(db: &Db, targets: &[&str], strategy: Strategy) -> String {
     PATH_ID.into()
 }
 
-async fn load_path(db: &Db, id: &str) -> PathFile {
-    path_state(db, id).await.file
+async fn load_path(db: &Db, id: &str) -> PathRow {
+    path_state(db, id).await.row
 }
 
 async fn replace_subpath(db: &Db, id: &str, atoms: &[String]) {
-    common::write(db, id, |_, changes| path::set_subpath(changes, id, atoms)).await;
+    common::write(db, id, |view, changes| {
+        let p = PathRow {
+            subpath: atoms.to_vec(),
+            ..view.path().unwrap().row.clone()
+        };
+        changes.replace_path(&p);
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -263,7 +234,7 @@ async fn strategy_persists_and_switches() {
 }
 
 #[tokio::test]
-async fn subpath_round_trips_and_clears() {
+async fn subpath_persists_and_clears() {
     let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
@@ -282,14 +253,9 @@ async fn subpath_set_happy_path() {
     let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
-    subpath::cmd_subpath_set(
-        &conn,
-        Some(&id),
-        &["fnd.1.1.1".into(), "fnd.1.1.2".into()],
-        None,
-    )
-    .await
-    .expect("valid subpath ending in a target");
+    subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.1".into(), "fnd.1.1.2".into()])
+        .await
+        .expect("valid subpath ending in a target");
     assert_eq!(
         load_path(&conn, &id).await.subpath,
         vec!["fnd.1.1.1", "fnd.1.1.2"],
@@ -301,7 +267,7 @@ async fn subpath_set_rejected_on_bottom_up_path() {
     let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::BottomUp).await;
 
-    let err = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.2".into()], None)
+    let err = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.2".into()])
         .await
         .unwrap_err();
     assert!(matches!(err, Error::SubpathNotTopDown), "got {err:?}");
@@ -312,7 +278,7 @@ async fn subpath_set_requires_target_tail() {
     let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
-    let err = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.1".into()], None)
+    let err = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.1".into()])
         .await
         .unwrap_err();
     assert!(matches!(err, Error::SubpathTailNotTarget(_)), "got {err:?}");
@@ -323,28 +289,42 @@ async fn subpath_set_rejects_empty_and_duplicates_and_unknown() {
     let conn = common::empty_db().await;
     let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
 
-    let empty = subpath::cmd_subpath_set(&conn, Some(&id), &[], None)
+    let empty = subpath::cmd_subpath_set(&conn, Some(&id), &[])
         .await
         .unwrap_err();
     assert!(matches!(empty, Error::SubpathEmpty), "got {empty:?}");
 
-    let dup = subpath::cmd_subpath_set(
-        &conn,
-        Some(&id),
-        &["fnd.1.1.2".into(), "fnd.1.1.2".into()],
-        None,
-    )
-    .await
-    .unwrap_err();
+    let dup = subpath::cmd_subpath_set(&conn, Some(&id), &["fnd.1.1.2".into(), "fnd.1.1.2".into()])
+        .await
+        .unwrap_err();
     assert!(matches!(dup, Error::SubpathDuplicateAtom(_)), "got {dup:?}");
 
-    let unknown = subpath::cmd_subpath_set(
-        &conn,
-        Some(&id),
-        &["nope.0.0.0".into(), "fnd.1.1.2".into()],
-        None,
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(unknown, Error::AtomNotFound(_)), "got {unknown:?}");
+    let unknown =
+        subpath::cmd_subpath_set(&conn, Some(&id), &["nope.0.0.0".into(), "fnd.1.1.2".into()])
+            .await
+            .unwrap_err();
+    assert!(matches!(unknown, Error::UnknownId(_)), "got {unknown:?}");
+}
+
+#[tokio::test]
+async fn each_path_row_write_marks_the_activity_of_its_path() {
+    let conn = common::empty_db().await;
+    let id = save(&conn, &["fnd.1.1.2"], Strategy::TopDown).await;
+    let pause = || tokio::time::sleep(std::time::Duration::from_millis(5));
+
+    let created = path_state(&conn, &id).await.updated_at;
+    pause().await;
+    path::cmd_path_strategy(&conn, None, Strategy::TopDown)
+        .await
+        .unwrap();
+    let after_strategy = path_state(&conn, &id).await.updated_at;
+    assert!(after_strategy > created, "a strategy write without --path");
+
+    pause().await;
+    subpath::cmd_subpath_clear(&conn, None).await.unwrap();
+    let after_clear = path_state(&conn, &id).await.updated_at;
+    assert!(
+        after_clear > after_strategy,
+        "a subpath write without --path"
+    );
 }

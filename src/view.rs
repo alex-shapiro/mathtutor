@@ -1,50 +1,97 @@
 //! Transactional database snapshots and atomic write sets.
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
-use std::sync::{Arc, Mutex, Weak};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Utc};
 
-use crate::cards::{self, CardRow};
-use crate::db::{self, Db, Op, OpResult, Txn, ts};
+use crate::cards::{Card, Projection, Taught};
+use crate::db::client::api::{ApiError, ErrorCode, PAGE_MAX};
+use crate::db::client::{self, Entry};
+use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
 use crate::event_log::{Event, EventKind};
-use crate::graph::Graph;
-use crate::overlay::{Edit, Overlay};
-use crate::path::PathFile;
+use crate::graph::{Curriculum, Graph};
+use crate::overlay::{Overlay, RowChange};
+use crate::path::PathRow;
 use crate::progress::PathProgress;
 use crate::schema::{
-    ACTIVITY_PREFIX, CardRecord, LessonRow, QuizRow, RemovedQuizRow, TaughtRow, activity_key,
+    ACTIVITY_PREFIX, CardRow, LessonRow, QuizRow, RemovedQuizRow, TaughtRow, activity_key,
     events_stream,
 };
 use crate::{Error, Result};
 
-const RETRY_FOR: std::time::Duration = std::time::Duration::from_secs(30);
-const OVERLAY_VERSION_KEY: &str = "overlay_version";
+pub(crate) const OVERLAY_VERSION_KEY: &str = "overlay_version";
 
-pub(crate) type CachedOverlay = (u64, Arc<Overlay>);
+/// Version string of a database before any overlay writes.
+const UNWRITTEN_OVERLAY_VERSION: &str = "";
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CacheFile {
-    version: u64,
+/// Overlay at a stored version, with the curriculum graph that it amends merged on first use.
+#[derive(Debug)]
+pub(crate) struct CachedOverlay {
+    version: String,
     overlay: Overlay,
+    merged: OnceLock<Arc<Graph>>,
 }
 
-pub(crate) fn read_cached_overlay(path: &Path) -> Option<CachedOverlay> {
-    let f: CacheFile = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
-    Some((f.version, Arc::new(f.overlay)))
+impl CachedOverlay {
+    fn new(version: String, overlay: Overlay) -> Arc<Self> {
+        Arc::new(Self {
+            version,
+            overlay,
+            merged: OnceLock::new(),
+        })
+    }
 }
 
-fn write_cached_overlay(path: &Path, version: u64, overlay: &Overlay) {
+/// Overlay row changes queued by a transaction and the version that they commit under.
+pub(crate) struct OverlayWrite {
+    version: String,
+    changes: Vec<RowChange>,
+}
+
+fn new_overlay_version() -> String {
+    format!("{:032x}", rand::random::<u128>())
+}
+
+/// Content of the overlay cache file, which a write borrows and a read owns.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CacheFile<V, O> {
+    version: V,
+    overlay: O,
+}
+
+/// Overlay cache of a database handle.
+#[derive(Debug, Default)]
+pub(crate) struct OverlayCache {
+    memory: Option<Arc<CachedOverlay>>,
+    /// The handle has read its cache file or does not need to read it.
+    file_read: bool,
+}
+
+fn read_cached_overlay(path: &Path) -> Option<Arc<CachedOverlay>> {
+    let f: CacheFile<String, Overlay> = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    Some(CachedOverlay::new(f.version, f.overlay))
+}
+
+/// Return a unique temporary sibling of `path`.
+fn cache_temp_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".{}.{:016x}.tmp",
+        std::process::id(),
+        rand::random::<u64>()
+    ));
+    path.with_file_name(name)
+}
+
+fn write_cached_overlay(path: &Path, version: &str, overlay: &Overlay) {
     let write = || -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let tmp = path.with_extension("tmp");
-        let f = CacheFile {
-            version,
-            overlay: overlay.clone(),
-        };
+        let tmp = cache_temp_path(path);
+        let f = CacheFile { version, overlay };
         std::fs::write(&tmp, serde_json::to_vec(&f)?)?;
         std::fs::rename(tmp, path)
     };
@@ -53,45 +100,62 @@ fn write_cached_overlay(path: &Path, version: u64, overlay: &Overlay) {
     }
 }
 
-/// Target path selector for a [`Want`] query.
+/// Paths that a [`ViewRequest`] loads.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PathSel {
+enum PathSel {
     None,
     Id(String),
     Recent,
-}
-
-impl PathSel {
-    /// Return [`PathSel::Id`] if `explicit` is `Some`, or [`PathSel::Recent`] if `None`.
-    pub fn from(explicit: Option<&str>) -> Self {
-        explicit.map_or(Self::Recent, |id| Self::Id(id.to_string()))
-    }
+    All,
 }
 
 /// Specification of data to load into a [`View`].
 #[derive(Debug, Clone)]
-pub struct Want {
-    pub path: PathSel,
-    pub overlay: bool,
-    pub all_paths: bool,
+pub struct ViewRequest {
+    path: PathSel,
+    overlay: bool,
 }
 
-impl Want {
-    /// Request the curriculum overlay and the selected path state.
-    pub fn path(explicit: Option<&str>) -> Self {
+impl ViewRequest {
+    /// Request only the database and import checks.
+    pub fn nothing() -> Self {
         Self {
-            path: PathSel::from(explicit),
-            overlay: true,
-            all_paths: false,
+            path: PathSel::None,
+            overlay: false,
         }
     }
 
     /// Request only the curriculum overlay.
     pub fn overlay() -> Self {
         Self {
-            path: PathSel::None,
             overlay: true,
-            all_paths: false,
+            ..Self::nothing()
+        }
+    }
+
+    /// Request the curriculum overlay and the state of path `explicit`, or of the most recent path if `explicit` is `None`.
+    pub fn path(explicit: Option<&str>) -> Self {
+        let path = explicit.map_or(PathSel::Recent, |id| PathSel::Id(id.to_string()));
+        Self {
+            path,
+            ..Self::overlay()
+        }
+    }
+
+    /// Request the curriculum overlay and the state of every path.
+    pub fn all_paths() -> Self {
+        Self {
+            path: PathSel::All,
+            ..Self::overlay()
+        }
+    }
+
+    /// Remove the curriculum overlay from this request.
+    #[must_use]
+    pub fn without_overlay(self) -> Self {
+        Self {
+            overlay: false,
+            ..self
         }
     }
 }
@@ -99,46 +163,22 @@ impl Want {
 /// Loaded state for a single learning path.
 #[derive(Debug, Clone)]
 pub struct PathState {
-    pub file: PathFile,
-    pub cards: HashMap<String, CardRow>,
-    pub taught: HashMap<String, Taught>,
-}
-
-/// Presentation count and last presentation timestamp for a lesson on a path.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Taught {
-    pub count: u32,
-    pub last_at: Option<DateTime<Utc>>,
-}
-
-impl Taught {
-    pub fn into_row(self, path_id: &str, atom_id: String) -> TaughtRow {
-        TaughtRow {
-            path_id: path_id.to_string(),
-            atom_id,
-            count: self.count,
-            last_at: self.last_at,
-        }
-    }
+    pub row: PathRow,
+    /// Time of the latest write for the path, or its creation time if the path lacks a recorded write.
+    pub updated_at: DateTime<Utc>,
+    pub projection: Projection,
 }
 
 impl PathState {
     /// Return the [`PathProgress`] derived from this path state.
     pub fn progress(&self) -> PathProgress {
-        PathProgress {
-            taught_atoms: self.taught.keys().cloned().collect(),
-            correct_quizzes: self
-                .cards
-                .values()
-                .filter(|c| c.reps > c.lapses)
-                .map(|c| c.quiz_id.clone())
-                .collect(),
-        }
+        self.projection.progress()
     }
 
     /// Return quiz cards due at or before `now`, ordered from earliest to latest due timestamp.
     pub fn due(&self, now: DateTime<Utc>) -> Vec<(String, DateTime<Utc>)> {
         let mut due: Vec<_> = self
+            .projection
             .cards
             .values()
             .filter_map(|c| Some((c.quiz_id.clone(), c.state?.due)))
@@ -150,120 +190,146 @@ impl PathState {
 }
 
 /// Database snapshot read by a transaction or [`Db::snapshot`].
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct View {
-    pub overlay: Arc<Overlay>,
-    path: Option<PathState>,
-    pub paths: Vec<PathState>,
+    /// Overlay that the view loaded, or `None` if the request did not want it.
+    overlay: Option<Arc<CachedOverlay>>,
+    curriculum: Arc<Curriculum>,
+    /// State of each loaded path, keyed by path ID.
+    paths: HashMap<String, PathState>,
+    /// ID of the path that [`ViewRequest::path`] selected.
+    selected: Option<String>,
 }
 
 impl View {
-    /// Return the curriculum graph merged with this view's overlay.
-    pub fn graph(&self, graph_dir: Option<&Path>) -> Result<Arc<Graph>> {
-        static MERGED: Mutex<Vec<(Weak<Overlay>, Arc<Graph>)>> = Mutex::new(Vec::new());
-        const KEEP: usize = 64;
-        if graph_dir.is_some() || std::env::var_os("MT_GRAPH").is_some() {
-            return Ok(Arc::new(Graph::merged(&self.overlay, graph_dir)?));
+    fn new(curriculum: Arc<Curriculum>, selected: Option<String>) -> Self {
+        Self {
+            overlay: None,
+            curriculum,
+            paths: HashMap::new(),
+            selected,
         }
-        let hit = |m: &[(Weak<Overlay>, Arc<Graph>)]| {
-            m.iter()
-                .find(|(o, _)| o.upgrade().is_some_and(|o| Arc::ptr_eq(&o, &self.overlay)))
-                .map(|(_, g)| g.clone())
-        };
-        if let Some(g) = hit(&MERGED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner))
-        {
-            return Ok(g);
+    }
+
+    fn loaded_overlay(&self) -> Result<&Arc<CachedOverlay>> {
+        self.overlay.as_ref().ok_or(Error::OverlayNotLoaded)
+    }
+
+    /// Return the user overlay, or [`Error::OverlayNotLoaded`] if the view did not load it.
+    pub fn overlay(&self) -> Result<&Overlay> {
+        Ok(&self.loaded_overlay()?.overlay)
+    }
+
+    /// Return the curriculum graph merged with the user overlay, or [`Error::OverlayNotLoaded`] if the view did not load the overlay.
+    pub fn graph(&self) -> Result<Arc<Graph>> {
+        let loaded = self.loaded_overlay()?;
+        if let Some(g) = loaded.merged.get() {
+            return Ok(g.clone());
         }
-        let g = Arc::new(Graph::merged(&self.overlay, None)?);
-        let mut m = MERGED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        m.retain(|(o, _)| o.strong_count() > 0);
-        if m.len() >= KEEP {
-            m.remove(0);
-        }
-        m.push((Arc::downgrade(&self.overlay), g.clone()));
-        Ok(g)
+        let g = self.curriculum.merged(&loaded.overlay)?;
+        Ok(loaded.merged.get_or_init(|| g).clone())
     }
 
     /// Return the selected [`PathState`], or [`Error::NoPath`] if not found.
     pub fn path(&self) -> Result<&PathState> {
-        self.path.as_ref().ok_or(Error::NoPath)
+        self.selected
+            .as_ref()
+            .and_then(|id| self.paths.get(id))
+            .ok_or_else(|| Error::NoPath(self.selected.clone()))
+    }
+
+    /// Return every loaded path, ordered by creation time.
+    pub fn paths(&self) -> Vec<&PathState> {
+        let mut paths: Vec<&PathState> = self.paths.values().collect();
+        paths.sort_by(|a, b| (a.row.created_at, &a.row.id).cmp(&(b.row.created_at, &b.row.id)));
+        paths
     }
 }
 
 /// Pending write operations accumulated during a transaction.
 #[derive(Debug, Default)]
-pub struct Changes {
+pub struct WriteSet {
+    /// Writes of `paths` rows.
     ops: Vec<Op>,
-    overlay: Vec<Edit>,
-    cards: BTreeMap<(String, String), CardRow>,
-    taught: BTreeMap<(String, String), Taught>,
+    overlay: Vec<RowChange>,
+    /// Derived rows that the appended events change, keyed by path ID.
+    projections: BTreeMap<String, Projection>,
     events: BTreeMap<String, Vec<Event>>,
+    /// IDs of the paths that this write set creates.
+    created: BTreeSet<String>,
+    /// Activity time of each path that this write set touches, keyed by path ID.
+    activity: BTreeMap<String, DateTime<Utc>>,
 }
 
-impl Changes {
-    pub fn is_empty(&self) -> bool {
-        self.ops.is_empty()
-            && self.overlay.is_empty()
-            && self.cards.is_empty()
-            && self.events.is_empty()
+impl WriteSet {
+    /// Insert path `p` and append its `path_created` event.
+    pub fn create_path(&mut self, view: &View, p: &PathRow) -> Result<()> {
+        let created = Event {
+            ts: p.created_at,
+            path: p.id.clone(),
+            kind: EventKind::PathCreated {},
+        };
+        self.create_path_with_history(view, p, std::slice::from_ref(&created), Utc::now())
     }
 
-    /// Record a raw database write operation.
-    pub fn op(&mut self, op: Op) {
-        self.ops.push(op);
+    /// Insert path `p` with the events of its `history`, and record `active_at` as the time of its latest activity.
+    ///
+    /// The path becomes the most recent path, whatever the value of `active_at`.
+    pub fn create_path_with_history(
+        &mut self,
+        view: &View,
+        p: &PathRow,
+        history: &[Event],
+        active_at: DateTime<Utc>,
+    ) -> Result<()> {
+        self.ops.push(Op::insert(p));
+        self.created.insert(p.id.clone());
+        for e in history {
+            self.append(view, e)?;
+        }
+        self.activity.insert(p.id.clone(), active_at);
+        Ok(())
     }
 
-    /// Set the updated [`CardRow`] for its `(path_id, quiz_id)` pair.
-    pub fn set_card(&mut self, c: CardRow) {
-        self.cards.insert((c.path_id.clone(), c.quiz_id.clone()), c);
+    /// Replace the stored row of path `p.id` with `p`, and make `p` the most recent path.
+    pub fn replace_path(&mut self, p: &PathRow) {
+        self.ops.push(Op::upsert(p));
+        self.touch_path(&p.id);
     }
 
-    /// Record an overlay [`Edit`].
-    pub fn overlay(&mut self, e: Edit) {
-        self.overlay.push(e);
+    /// Make `path_id` the most recent path.
+    pub fn touch_path(&mut self, path_id: &str) {
+        self.activity
+            .entry(path_id.to_string())
+            .or_insert_with(Utc::now);
+    }
+
+    /// Record the overlay row change `change`.
+    ///
+    /// Fails with [`Error::OverlayNotLoaded`] unless `view` loaded the overlay, so that the commit checks the overlay version that the edit is based on.
+    pub fn overlay(&mut self, view: &View, change: RowChange) -> Result<()> {
+        view.loaded_overlay()?;
+        self.overlay.push(change);
+        Ok(())
     }
 
     /// Append `e` to its path event stream and update derived `cards` and `taught` rows.
+    ///
+    /// Fails with [`Error::PathNotLoaded`] unless `view` holds the path of `e` or this write set creates the path, and with [`Error::PathCreatedOutsideCreation`] for a `path_created` event of a path that this write set does not create.
     pub fn append(&mut self, view: &View, e: &Event) -> Result<()> {
-        let base = view
-            .path
-            .as_ref()
-            .filter(|p| p.file.id == e.path)
-            .or_else(|| view.paths.iter().find(|p| p.file.id == e.path));
-        match e.kind {
-            EventKind::LessonTaught | EventKind::LessonAuthored => {
-                let atom = e
-                    .atom
-                    .clone()
-                    .ok_or_else(|| Error::BadEvent("lesson event without atom"))?;
-                let key = (e.path.clone(), atom.clone());
-                let t = self.taught.entry(key).or_insert_with(|| {
-                    base.and_then(|p| p.taught.get(&atom).cloned())
-                        .unwrap_or_default()
-                });
-                if e.kind == EventKind::LessonTaught {
-                    t.count += 1;
-                    t.last_at = Some(e.ts);
-                }
-            }
-            EventKind::QuizPresented | EventKind::QuizAnswered => {
-                let quiz = e
-                    .quiz
-                    .clone()
-                    .ok_or_else(|| Error::BadEvent("quiz event without quiz"))?;
-                let key = (e.path.clone(), quiz.clone());
-                let c = self.cards.entry(key).or_insert_with(|| {
-                    base.and_then(|p| p.cards.get(&quiz).cloned())
-                        .unwrap_or_else(|| CardRow::new(&e.path, &quiz))
-                });
-                cards::apply_event(c, e)?;
-            }
-            _ => {}
+        let base = view.paths.get(&e.path);
+        let creates_path = self.created.contains(&e.path);
+        if matches!(e.kind, EventKind::PathCreated {}) && !creates_path {
+            return Err(Error::PathCreatedOutsideCreation(e.path.clone()));
         }
+        if base.is_none() && !creates_path {
+            return Err(Error::PathNotLoaded(e.path.clone()));
+        }
+        self.projections
+            .entry(e.path.clone())
+            .or_default()
+            .apply(e, base.map(|p| &p.projection))?;
+        self.touch_path(&e.path);
         self.events
             .entry(e.path.clone())
             .or_default()
@@ -271,256 +337,393 @@ impl Changes {
         Ok(())
     }
 
-    fn into_ops(self) -> Vec<Op> {
+    /// Return the write operations of this set, and its overlay row changes with the new overlay version if it has changes.
+    pub(crate) fn into_ops(self) -> (Vec<Op>, Option<OverlayWrite>) {
         let mut ops = self.ops;
-        if !self.overlay.is_empty() {
-            ops.extend(self.overlay.iter().flat_map(Edit::ops));
-            ops.push(Op::increment(OVERLAY_VERSION_KEY));
+        let overlay_write = (!self.overlay.is_empty()).then(|| OverlayWrite {
+            version: new_overlay_version(),
+            changes: self.overlay,
+        });
+        if let Some(write) = &overlay_write {
+            ops.extend(write.changes.iter().map(RowChange::op));
+            ops.push(Op::put(OVERLAY_VERSION_KEY, write.version.clone()));
         }
-        ops.extend(
-            self.cards
-                .values()
-                .map(|c| Op::upsert(&CardRecord::from(c))),
-        );
-        ops.extend(
-            self.taught
-                .into_iter()
-                .map(|((path_id, atom_id), t)| Op::upsert(&t.into_row(&path_id, atom_id))),
-        );
+        for (path_id, projection) in self.projections {
+            ops.extend(
+                projection
+                    .cards
+                    .values()
+                    .map(|c| Op::upsert(&CardRow::from(c))),
+            );
+            ops.extend(
+                projection
+                    .taught
+                    .into_iter()
+                    .map(|(atom_id, t)| Op::upsert(&t.into_row(&path_id, atom_id))),
+            );
+        }
+        for (path_id, at) in &self.activity {
+            ops.push(Op::put(activity_key(path_id), ts::format(*at)));
+        }
         for (path_id, events) in self.events {
-            ops.push(Op::put(activity_key(&path_id), ts::format(Utc::now())));
-            ops.push(Op::append(events_stream(&path_id), &events));
+            let stream = events_stream(&path_id);
+            ops.extend(
+                events
+                    .chunks(PAGE_MAX)
+                    .map(|chunk| Op::append(stream.clone(), chunk)),
+            );
         }
-        ops
+        (ops, overlay_write)
     }
 }
 
 impl Db {
     /// Load `want` from a strong read snapshot without starting a write transaction.
-    pub async fn snapshot(&self, want: &Want) -> Result<View> {
-        let mut plan = Plan::new(want, self.hint(), self.cached_overlay());
-        let mut results = self.read(&plan.ops()).await?;
-        while let Some(more) = plan.absorb(results)? {
-            results = self.read(&more).await?;
+    pub async fn snapshot(&self, want: &ViewRequest) -> Result<View> {
+        let path_id = self.selected_path_id(&want.path).await?;
+        let overlay = if want.overlay {
+            self.cached_overlay()
+                .map_or(OverlayPlan::Read, OverlayPlan::Check)
+        } else {
+            OverlayPlan::Skip
+        };
+        self.read_view(want, path_id.as_deref(), overlay).await
+    }
+
+    /// Read `want` and get the overlay as `overlay` plans without a transaction, and cache the overlay if the read loaded its rows.
+    ///
+    /// Reads the overlay rows again if the stored version differs from the cached overlay or changes between pages.
+    async fn read_view(
+        &self,
+        want: &ViewRequest,
+        path_id: Option<&str>,
+        mut overlay: OverlayPlan,
+    ) -> Result<View> {
+        for _ in 0..OVERLAY_READ_ATTEMPTS {
+            let reads_rows = matches!(overlay, OverlayPlan::Read);
+            let mut plan = self.plan(want, path_id, overlay);
+            let mut results = self.read(&plan.ops()).await?;
+            while let Some(more) = plan.absorb(results)? {
+                results = self.read(&more).await?;
+            }
+            if !plan.overlay_stale {
+                if reads_rows {
+                    self.cache_overlay(plan.view.overlay.clone());
+                }
+                return Ok(plan.view);
+            }
+            overlay = OverlayPlan::Read;
         }
-        self.remember(&plan);
-        Ok(plan.view)
+        Err(overlay_conflict())
     }
 
     /// Execute `f` against `want` in a serializable transaction, retrying on conflict.
     pub async fn transact<T>(
         &self,
-        want: &Want,
-        mut f: impl FnMut(&View, &mut Changes) -> Result<T>,
+        want: &ViewRequest,
+        mut f: impl FnMut(&View, &mut WriteSet) -> Result<T>,
     ) -> Result<T> {
-        let started = std::time::Instant::now();
-        let mut attempt = 0;
-        loop {
-            match self.attempt(want, &mut f).await {
-                Err(e) if db::is_retryable(&e) && started.elapsed() < RETRY_FOR => {
-                    attempt += 1;
-                    tokio::time::sleep(db::backoff(attempt)).await;
-                }
-                r => return r,
-            }
+        let path_id = self.selected_path_id(&want.path).await?;
+        let done = run_txn!(self, |txn| {
+            self.attempt(&mut txn, want, path_id.as_deref(), &mut f)
+                .await
+        })?;
+        if let Some(write) = done.overlay_write {
+            self.remember_overlay_write(done.overlay, write);
         }
+        Ok(done.out)
     }
 
+    /// Read `want` in `txn` and queue the writes of `f`.
+    ///
+    /// Fails with a conflict that restarts the transaction if the stored overlay differs from the cached overlay, and refreshes the cache for the next attempt.
     async fn attempt<T>(
         &self,
-        want: &Want,
-        f: &mut impl FnMut(&View, &mut Changes) -> Result<T>,
-    ) -> Result<T> {
-        let mut plan = Plan::new(want, self.hint(), self.cached_overlay());
-        let (txn, mut results) = self.begin(&plan.ops()).await?;
-        loop {
-            match plan.absorb(results) {
-                Ok(Some(more)) => results = txn.ops(&more).await?,
-                Ok(None) => break,
-                Err(e) => return abort(txn, e).await,
+        txn: &mut Txn,
+        want: &ViewRequest,
+        path_id: Option<&str>,
+        f: &mut impl FnMut(&View, &mut WriteSet) -> Result<T>,
+    ) -> Result<Attempted<T>> {
+        let overlay = if want.overlay {
+            Some(self.overlay_or_load().await?)
+        } else {
+            None
+        };
+        let check = overlay
+            .clone()
+            .map_or(OverlayPlan::Skip, OverlayPlan::Check);
+        let mut plan = self.plan(want, path_id, check);
+        let mut results = txn.run(&plan.ops()).await?;
+        while let Some(more) = plan.absorb(results)? {
+            results = txn.run(&more).await?;
+        }
+        if plan.overlay_stale {
+            self.load_overlay().await?;
+            return Err(overlay_conflict());
+        }
+        let mut changes = WriteSet::default();
+        let out = f(&plan.view, &mut changes)?;
+        if let PathSel::Id(explicit_id) = &want.path {
+            changes.touch_path(explicit_id);
+        }
+        let overlay_write = txn.queue_write_set(changes);
+        Ok(Attempted {
+            out,
+            overlay,
+            overlay_write,
+        })
+    }
+
+    fn plan(&self, want: &ViewRequest, path_id: Option<&str>, overlay: OverlayPlan) -> Plan {
+        Plan::new(self.curriculum.clone(), want, path_id, overlay)
+    }
+
+    /// Return the cached overlay, or load it if the cache is empty.
+    async fn overlay_or_load(&self) -> Result<Arc<CachedOverlay>> {
+        match self.cached_overlay() {
+            Some(cached) => Ok(cached),
+            None => self.load_overlay().await,
+        }
+    }
+
+    /// Read the overlay rows and their version without a transaction and cache them.
+    async fn load_overlay(&self) -> Result<Arc<CachedOverlay>> {
+        let view = self
+            .read_view(&ViewRequest::overlay(), None, OverlayPlan::Read)
+            .await?;
+        view.loaded_overlay().cloned()
+    }
+
+    /// Resolve `selector` to a path ID, choosing the most recent path at most once per command.
+    async fn selected_path_id(&self, selector: &PathSel) -> Result<Option<String>> {
+        match selector {
+            PathSel::None | PathSel::All => Ok(None),
+            PathSel::Id(id) => Ok(Some(id.clone())),
+            PathSel::Recent => self.most_recent_path_id().await,
+        }
+    }
+
+    /// Return the ID of the path whose activity key the latest commit wrote.
+    ///
+    /// The server assigns the version of each commit, so a writer clock that runs ahead cannot keep its path the most recent.
+    async fn most_recent_path_id(&self) -> Result<Option<String>> {
+        let mut latest: Option<(Option<u64>, String)> = None;
+        for page in self.read_pages(Op::scan(ACTIVITY_PREFIX)).await? {
+            for e in page.scan_page()?.entries {
+                let (id, _) = parse_activity(&e)?;
+                if latest
+                    .as_ref()
+                    .is_none_or(|l| (e.version, id) > (l.0, l.1.as_str()))
+                {
+                    latest = Some((e.version, id.to_string()));
+                }
             }
         }
-        let mut changes = Changes::default();
-        let out = match f(&plan.view, &mut changes) {
-            Ok(out) => out,
-            Err(e) => return abort(txn, e).await,
-        };
-        let edits = changes.overlay.clone();
-        txn.commit(&changes.into_ops()).await?;
-        self.remember(&plan);
-        if !edits.is_empty() {
-            self.remember_edits(&plan, &edits);
-        }
-        Ok(out)
+        Ok(latest.map(|(_, id)| id))
     }
 
-    fn hint(&self) -> Option<String> {
-        self.path_hint
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
-    }
-
-    fn cache_overlay(&self, next: Option<CachedOverlay>) {
-        let mut cache = self
-            .overlay_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let changed = cache.as_ref().map(|c| c.0) != next.as_ref().map(|n| n.0);
-        if changed && let (Some(file), Some((v, o))) = (&self.cache_file, &next) {
-            write_cached_overlay(file, *v, o);
-        }
-        *cache = next;
-    }
-
-    fn cached_overlay(&self) -> Option<CachedOverlay> {
+    fn lock_overlay_cache(&self) -> std::sync::MutexGuard<'_, OverlayCache> {
         self.overlay_cache
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
     }
 
-    fn remember_edits(&self, plan: &Plan, edits: &[Edit]) {
-        let next = plan.overlay_version.map(|v| {
-            let mut o = (*plan.view.overlay).clone();
-            for e in edits {
-                o.apply(e);
+    /// Replace the cached overlay with `next`, and write `next` to the cache file if its version is new.
+    fn cache_overlay(&self, next: Option<Arc<CachedOverlay>>) {
+        let new_version = {
+            let mut cache = self.lock_overlay_cache();
+            let changed =
+                cache.memory.as_ref().map(|c| &c.version) != next.as_ref().map(|n| &n.version);
+            let new_version = next.clone().filter(|_| changed);
+            cache.memory = next;
+            cache.file_read = true;
+            new_version
+        };
+        if let (Some(file), Some(n)) = (&self.cache_file, new_version) {
+            write_cached_overlay(file, &n.version, &n.overlay);
+        }
+    }
+
+    /// Return the cached overlay, and read the cache file on the first call that finds the memory cache empty.
+    fn cached_overlay(&self) -> Option<Arc<CachedOverlay>> {
+        {
+            let mut cache = self.lock_overlay_cache();
+            if cache.memory.is_some() || cache.file_read {
+                return cache.memory.clone();
             }
-            (v + 1, Arc::new(o))
+            cache.file_read = true;
+        }
+        let from_file = self.cache_file.as_deref().and_then(read_cached_overlay);
+        let mut cache = self.lock_overlay_cache();
+        if cache.memory.is_none() {
+            cache.memory = from_file;
+        }
+        cache.memory.clone()
+    }
+
+    /// Cache the overlay `base` that a transaction checked with its committed `write` applied, or clear the cache if the transaction did not check an overlay.
+    fn remember_overlay_write(&self, base: Option<Arc<CachedOverlay>>, write: OverlayWrite) {
+        let next = base.map(|base| {
+            let mut overlay = base.overlay.clone();
+            for change in write.changes {
+                overlay.apply(change);
+            }
+            CachedOverlay::new(write.version, overlay)
         });
         self.cache_overlay(next);
     }
-
-    fn remember(&self, plan: &Plan) {
-        if let Some(p) = &plan.view.path {
-            *self
-                .path_hint
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(p.file.id.clone());
-        }
-        if let Some(v) = plan.overlay_version {
-            self.cache_overlay(Some((v, plan.view.overlay.clone())));
-        }
-    }
 }
 
-async fn abort<T>(txn: Txn, e: Error) -> Result<T> {
-    txn.abort().await;
-    Err(e)
+/// Transaction attempt whose writes are queued for the commit.
+struct Attempted<T> {
+    out: T,
+    /// Overlay that the attempt read.
+    overlay: Option<Arc<CachedOverlay>>,
+    overlay_write: Option<OverlayWrite>,
 }
 
-#[derive(Debug)]
-enum PathRow {
-    Unread,
-    Missing,
-    Found(PathFile),
+/// Number of times a read without a transaction starts again after the stored overlay version changes.
+const OVERLAY_READ_ATTEMPTS: usize = 10;
+
+/// Return the conflict that restarts a transaction or a read whose stored overlay differs from the overlay that it uses.
+fn overlay_conflict() -> Error {
+    let error = ApiError {
+        code: ErrorCode::Conflict,
+        message: format!("{OVERLAY_VERSION_KEY} changed while mt read the overlay"),
+        retryable: true,
+        details: None,
+    };
+    Error::Baserunna(client::Error::Api {
+        status: 409,
+        error,
+        retry_after_ms: None,
+    })
 }
 
+/// How a [`Plan`] gets the overlay.
+enum OverlayPlan {
+    /// The view does not load the overlay.
+    Skip,
+    /// Use the cached overlay if the stored version matches it.
+    Check(Arc<CachedOverlay>),
+    /// Read the overlay rows, and read the version again with each page.
+    Read,
+}
+
+/// Decode the overlay version from the result of a read of [`OVERLAY_VERSION_KEY`].
+fn overlay_version(r: OpResult) -> Result<String> {
+    Ok(match r.entry()? {
+        Some(e) => entry_str(&e)?.1.to_string(),
+        None => UNWRITTEN_OVERLAY_VERSION.to_string(),
+    })
+}
+
+/// Accumulator that receives the result of a planned read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Slot {
     OverlayVersion,
     Lessons,
     Quizzes,
-    Removed,
+    RemovedQuizzes,
+    /// A single `paths` row.
+    Path,
+    /// A page of `paths` rows.
     Paths,
-    AllCards,
-    AllTaught,
-    Activity,
-    PathActivity,
-    PathRow,
     Cards,
     Taught,
+    /// A single activity key.
+    Activity,
+    /// A page of activity keys.
+    ActivityScan,
 }
 
+/// Reads that load a [`View`], accumulated across pages.
 struct Plan {
     view: View,
-    cache: Option<CachedOverlay>,
-    overlay_version: Option<u64>,
-    overlay_cached: bool,
+    overlay: OverlayPlan,
+    /// Overlay version that the first request read.
+    overlay_version: Option<String>,
+    /// The stored overlay version differs from the cached overlay, or changed between pages.
+    overlay_stale: bool,
     pending: Vec<(Slot, Op)>,
-    path_id: Option<String>,
-    recent: bool,
-    activity: HashMap<String, DateTime<Utc>>,
-    path_row: PathRow,
-    cards: Vec<CardRecord>,
-    taught: Vec<TaughtRow>,
     lessons: Vec<LessonRow>,
     quizzes: Vec<QuizRow>,
-    removed: Vec<RemovedQuizRow>,
-    paths: Vec<PathFile>,
-    all_cards: Vec<CardRecord>,
-    all_taught: Vec<TaughtRow>,
+    removed_quizzes: Vec<RemovedQuizRow>,
+    paths: Vec<PathRow>,
+    cards: Vec<CardRow>,
+    taught: Vec<TaughtRow>,
+    activity: HashMap<String, DateTime<Utc>>,
 }
 
-fn path_reads(id: &str) -> [(Slot, Op); 3] {
-    [
-        (Slot::PathRow, Op::get_row::<PathFile>(&[id])),
-        (Slot::Cards, Op::query::<CardRecord>(&[id])),
-        (Slot::Taught, Op::query::<TaughtRow>(&[id])),
-    ]
+/// Return the planned read of the overlay version.
+fn overlay_version_read() -> (Slot, Op) {
+    (Slot::OverlayVersion, Op::get(OVERLAY_VERSION_KEY))
 }
 
-fn overlay_reads() -> [(Slot, Op); 3] {
-    [
-        (Slot::Lessons, Op::query::<LessonRow>(&[])),
-        (Slot::Quizzes, Op::query::<QuizRow>(&[])),
-        (Slot::Removed, Op::query::<RemovedQuizRow>(&[])),
-    ]
+/// Return the key and value of `e` as UTF-8.
+fn entry_str(e: &Entry) -> Result<(&str, &str)> {
+    let key = std::str::from_utf8(&e.key)
+        .map_err(|_| Error::BadRow(format!("{:?}: key is not UTF-8", e.key)))?;
+    let value = e.value.data().and_then(|d| std::str::from_utf8(d).ok());
+    Ok((
+        key,
+        value.ok_or_else(|| Error::BadRow(format!("{key}: not UTF-8")))?,
+    ))
 }
 
-fn parse_activity(key: &str, value: Option<&str>) -> Result<DateTime<Utc>> {
-    value
-        .ok_or_else(|| Error::BadRow(format!("{key}: not UTF-8")))
-        .and_then(|v| ts::parse(v).map_err(|e| Error::BadRow(format!("{key}: {e}"))))
+fn parse_activity(e: &Entry) -> Result<(&str, DateTime<Utc>)> {
+    let (key, value) = entry_str(e)?;
+    let at = ts::parse(value).map_err(|err| Error::BadRow(format!("{key}: {err}")))?;
+    Ok((key.strip_prefix(ACTIVITY_PREFIX).unwrap_or(key), at))
 }
 
 impl Plan {
-    fn new(want: &Want, hint: Option<String>, cache: Option<CachedOverlay>) -> Self {
+    /// Plan the reads of `want`, and get the overlay as `overlay` plans.
+    fn new(
+        curriculum: Arc<Curriculum>,
+        want: &ViewRequest,
+        path_id: Option<&str>,
+        overlay: OverlayPlan,
+    ) -> Self {
         let mut pending = Vec::new();
-        if want.overlay {
-            pending.push((Slot::OverlayVersion, Op::get(OVERLAY_VERSION_KEY)));
-            if cache.is_none() {
-                pending.extend(overlay_reads());
-            }
+        match overlay {
+            OverlayPlan::Skip => {}
+            OverlayPlan::Check(_) => pending.push(overlay_version_read()),
+            OverlayPlan::Read => pending.extend([
+                overlay_version_read(),
+                (Slot::Lessons, Op::query_all::<LessonRow>()),
+                (Slot::Quizzes, Op::query_all::<QuizRow>()),
+                (Slot::RemovedQuizzes, Op::query_all::<RemovedQuizRow>()),
+            ]),
         }
-        let recent = want.path == PathSel::Recent;
-        if want.all_paths {
-            pending.push((Slot::Paths, Op::query::<PathFile>(&[])));
-            pending.push((Slot::AllCards, Op::query::<CardRecord>(&[])));
-            pending.push((Slot::AllTaught, Op::query::<TaughtRow>(&[])));
-        }
-        if want.all_paths || recent {
-            pending.push((Slot::Activity, Op::scan(ACTIVITY_PREFIX)));
-        }
-        let path_id = match &want.path {
-            PathSel::None => None,
-            PathSel::Id(id) => {
-                pending.push((Slot::PathActivity, Op::get(activity_key(id))));
-                Some(id.clone())
-            }
-            PathSel::Recent => hint,
-        };
-        if let Some(id) = &path_id {
-            pending.extend(path_reads(id));
+        if want.path == PathSel::All {
+            pending.extend([
+                (Slot::Paths, Op::query_all::<PathRow>()),
+                (Slot::Cards, Op::query_all::<CardRow>()),
+                (Slot::Taught, Op::query_all::<TaughtRow>()),
+                (Slot::ActivityScan, Op::scan(ACTIVITY_PREFIX)),
+            ]);
+        } else if let Some(id) = path_id {
+            pending.extend([
+                (Slot::Path, Op::get_row::<PathRow>(id)),
+                (Slot::Cards, Op::query::<CardRow>(id)),
+                (Slot::Taught, Op::query::<TaughtRow>(id)),
+                (Slot::Activity, Op::get(activity_key(id))),
+            ]);
         }
         Self {
-            view: View::default(),
-            cache,
+            view: View::new(curriculum, path_id.map(str::to_string)),
+            overlay,
             overlay_version: None,
-            overlay_cached: false,
+            overlay_stale: false,
             pending,
-            path_id,
-            recent,
-            activity: HashMap::new(),
-            path_row: PathRow::Unread,
-            cards: Vec::new(),
-            taught: Vec::new(),
             lessons: Vec::new(),
             quizzes: Vec::new(),
-            removed: Vec::new(),
+            removed_quizzes: Vec::new(),
             paths: Vec::new(),
-            all_cards: Vec::new(),
-            all_taught: Vec::new(),
+            cards: Vec::new(),
+            taught: Vec::new(),
+            activity: HashMap::new(),
         }
     }
 
@@ -528,6 +731,9 @@ impl Plan {
         self.pending.iter().map(|(_, op)| op.clone()).collect()
     }
 
+    /// Accumulate `results` of the pending reads, and return the reads of the next pages.
+    ///
+    /// Returns `None` if the reads are complete or the overlay is stale.
     fn absorb(&mut self, results: Vec<OpResult>) -> Result<Option<Vec<Op>>> {
         let pending = std::mem::take(&mut self.pending);
         for ((slot, op), r) in pending.into_iter().zip(results) {
@@ -536,138 +742,111 @@ impl Plan {
             }
             match slot {
                 Slot::OverlayVersion => {
-                    let v = r
-                        .value()
-                        .map_or(Ok(0), str::parse)
-                        .map_err(|e| Error::BadRow(format!("{OVERLAY_VERSION_KEY}: {e}")))?;
-                    self.overlay_version = Some(v);
-                    match self.cache.take() {
-                        Some((cached, overlay)) if cached == v => {
-                            self.view.overlay = overlay;
-                            self.overlay_cached = true;
-                        }
-                        Some(_) => self.pending.extend(overlay_reads()),
-                        None => {}
+                    let stored = overlay_version(r)?;
+                    let cached = match &self.overlay {
+                        OverlayPlan::Check(c) => Some(&c.version),
+                        _ => self.overlay_version.as_ref(),
+                    };
+                    if cached.is_some_and(|v| *v != stored) {
+                        self.overlay_stale = true;
+                        return Ok(None);
                     }
+                    self.overlay_version = Some(stored);
                 }
                 Slot::Lessons => self.lessons.extend(r.rows()?),
                 Slot::Quizzes => self.quizzes.extend(r.rows()?),
-                Slot::Removed => self.removed.extend(r.rows()?),
+                Slot::RemovedQuizzes => self.removed_quizzes.extend(r.rows()?),
+                Slot::Path => self.paths.extend(r.row()?),
                 Slot::Paths => self.paths.extend(r.rows()?),
-                Slot::AllCards => self.all_cards.extend(r.rows()?),
-                Slot::AllTaught => self.all_taught.extend(r.rows()?),
                 Slot::Cards => self.cards.extend(r.rows()?),
                 Slot::Taught => self.taught.extend(r.rows()?),
-                Slot::PathRow => {
-                    self.path_row = r.row()?.map_or(PathRow::Missing, PathRow::Found);
-                }
                 Slot::Activity => {
-                    for item in r.items() {
-                        let at = parse_activity(&item.key, item.value.as_deref())?;
-                        let id = item.key.strip_prefix(ACTIVITY_PREFIX).unwrap_or(&item.key);
+                    if let Some(e) = r.entry()? {
+                        let (id, at) = parse_activity(&e)?;
                         self.activity.insert(id.to_string(), at);
                     }
                 }
-                Slot::PathActivity => {
-                    if let (Some(id), Some(at)) = (&self.path_id, r.value()) {
-                        let at = parse_activity(&activity_key(id), Some(at))?;
-                        self.activity.insert(id.clone(), at);
+                Slot::ActivityScan => {
+                    for e in r.scan_page()?.entries {
+                        let (id, at) = parse_activity(&e)?;
+                        self.activity.insert(id.to_string(), at);
                     }
                 }
             }
         }
-        if self.recent && !self.pending.iter().any(|(s, _)| *s == Slot::Activity) {
-            self.recent = false;
-            let latest = self
-                .activity
-                .iter()
-                .max_by(|a, b| a.1.cmp(b.1).then_with(|| a.0.cmp(b.0)));
-            let latest = latest.map(|(id, _)| id.clone());
-            if latest != self.path_id {
-                // Discard speculative reads for the stale path hint and schedule reads for `latest`.
-                self.path_row = PathRow::Unread;
-                self.cards.clear();
-                self.taught.clear();
-                self.pending
-                    .retain(|(s, _)| !matches!(s, Slot::PathRow | Slot::Cards | Slot::Taught));
-                if let Some(id) = &latest {
-                    self.pending.extend(path_reads(id));
-                }
-                self.path_id = latest;
-            }
+        if self.pending.is_empty() {
+            self.finish()?;
+            return Ok(None);
         }
-        if !self.pending.is_empty() {
-            return Ok(Some(self.ops()));
+        if matches!(self.overlay, OverlayPlan::Read) {
+            self.pending.insert(0, overlay_version_read());
         }
-        self.finish()?;
-        Ok(None)
+        Ok(Some(self.ops()))
     }
 
+    /// Build the overlay and the path states from the accumulated rows.
     fn finish(&mut self) -> Result<()> {
         use std::mem::take;
-        if !self.overlay_cached {
-            self.view.overlay = Arc::new(Overlay::from_rows(
-                take(&mut self.lessons),
-                take(&mut self.quizzes),
-                take(&mut self.removed),
-            ));
-        }
-        if let PathRow::Found(file) = std::mem::replace(&mut self.path_row, PathRow::Unread) {
-            let (cards, taught) = (take(&mut self.cards), take(&mut self.taught));
-            self.view.path = Some(self.path_state(file, cards, taught)?);
-        }
-        let mut cards: HashMap<String, Vec<CardRecord>> = HashMap::new();
-        for c in take(&mut self.all_cards) {
-            cards.entry(c.path_id.clone()).or_default().push(c);
-        }
-        let mut taught: HashMap<String, Vec<TaughtRow>> = HashMap::new();
-        for t in take(&mut self.all_taught) {
-            taught.entry(t.path_id.clone()).or_default().push(t);
-        }
-        let mut paths = take(&mut self.paths);
-        paths.sort_by(|a, b| {
-            a.created_at
-                .cmp(&b.created_at)
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        self.view.paths = paths
+        self.view.overlay = match std::mem::replace(&mut self.overlay, OverlayPlan::Skip) {
+            OverlayPlan::Skip => None,
+            OverlayPlan::Check(cached) => Some(cached),
+            OverlayPlan::Read => Some(CachedOverlay::new(
+                self.overlay_version.take().unwrap_or_default(),
+                Overlay::from_rows(
+                    take(&mut self.lessons),
+                    take(&mut self.quizzes),
+                    take(&mut self.removed_quizzes),
+                ),
+            )),
+        };
+        let mut paths: HashMap<String, PathState> = take(&mut self.paths)
             .into_iter()
-            .map(|file| {
-                let c = cards.remove(&file.id).unwrap_or_default();
-                let t = taught.remove(&file.id).unwrap_or_default();
-                self.path_state(file, c, t)
+            .map(|row| {
+                let updated_at = self
+                    .activity
+                    .get(&row.id)
+                    .copied()
+                    .unwrap_or(row.created_at);
+                let state = PathState {
+                    updated_at,
+                    row,
+                    projection: Projection::default(),
+                };
+                (state.row.id.clone(), state)
             })
-            .collect::<Result<_>>()?;
+            .collect();
+        for r in take(&mut self.cards) {
+            if let Some(p) = paths.get_mut(&r.path_id) {
+                p.projection
+                    .cards
+                    .insert(r.quiz_id.clone(), Card::try_from(r)?);
+            }
+        }
+        for t in take(&mut self.taught) {
+            if let Some(p) = paths.get_mut(&t.path_id) {
+                let taught = Taught {
+                    count: t.count,
+                    last_at: t.last_at,
+                };
+                p.projection.taught.insert(t.atom_id, taught);
+            }
+        }
+        self.view.paths = paths;
         Ok(())
     }
+}
 
-    fn path_state(
-        &self,
-        mut file: PathFile,
-        cards: Vec<CardRecord>,
-        taught: Vec<TaughtRow>,
-    ) -> Result<PathState> {
-        file.updated_at = self
-            .activity
-            .get(&file.id)
-            .copied()
-            .unwrap_or(file.created_at);
-        Ok(PathState {
-            file,
-            cards: cards
-                .into_iter()
-                .map(|r| Ok((r.quiz_id.clone(), CardRow::try_from(r)?)))
-                .collect::<Result<_>>()?,
-            taught: taught
-                .into_iter()
-                .map(|t| {
-                    let taught = Taught {
-                        count: t.count,
-                        last_at: t.last_at,
-                    };
-                    (t.atom_id, taught)
-                })
-                .collect(),
-        })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_writes_use_distinct_temporary_files_beside_the_cache() {
+        let cache = Path::new("/tmp/mt/overlay-host-db.json");
+        let (a, b) = (cache_temp_path(cache), cache_temp_path(cache));
+        assert_ne!(a, b);
+        assert_eq!(a.parent(), cache.parent());
+        let name = a.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("overlay-host-db.json."), "{name}");
     }
 }

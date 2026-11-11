@@ -1,11 +1,19 @@
+use std::io::Write as _;
+use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
+
+use argh::FromArgs;
 
 use mathtutor::cli;
 #[cfg(feature = "mcp")]
 use mathtutor::cli::McpOp;
 use mathtutor::cli::{Cmd, GraphOp, LessonOp, Mt, PathOp, QuizOp, SubpathOp};
+use mathtutor::graph::{Curriculum, CurriculumSource};
 #[cfg(feature = "mcp")]
 use mathtutor::mcp;
+use mathtutor::overlay::{QuizDraft, QuizPatch};
+use mathtutor::surface::Surface;
 use mathtutor::{
     Error, Result, answer, db, discover, graph, import, instruct, overlay, path, scheduler, state,
     store, subpath, syllabus, tree,
@@ -24,96 +32,90 @@ async fn main() -> ExitCode {
 }
 
 async fn real_main() -> ExitCode {
-    let cli: Mt = argh::from_env();
+    let cli = match parse_args() {
+        Ok(cli) => cli,
+        Err(code) => return code,
+    };
 
     init_tracing(is_mcp(&cli.cmd));
-
-    if let Cmd::Graph(g) = &cli.cmd
-        && let GraphOp::Check(c) = &g.op
-    {
-        return match graph::run_check(c.path.as_deref()) {
-            Ok(report) => {
-                report.print();
-                if report.issues.is_empty() {
-                    ExitCode::SUCCESS
-                } else {
-                    ExitCode::from(1)
-                }
-            }
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::from(2)
-            }
-        };
-    }
-
-    if matches!(cli.cmd, Cmd::Instruct(_)) {
-        return match instruct::cmd_instruct() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::from(1)
-            }
-        };
-    }
-
-    #[cfg(feature = "mcp")]
-    if let Cmd::Mcp(c) = cli.cmd {
-        if let Some(McpOp::Tools(_)) = c.op {
-            return match mcp::print_tools() {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    ExitCode::from(2)
-                }
-            };
-        }
-        let auth = mcp::AuthConfig {
-            api_key: nonempty(c.api_key.or_else(|| std::env::var("MT_API_KEY").ok())),
-            admin_password: nonempty(
-                c.admin_password
-                    .or_else(|| std::env::var("MT_ADMIN_PASSWORD").ok()),
-            ),
-            public_url: nonempty(c.public_url.or_else(|| std::env::var("MT_PUBLIC_URL").ok())),
-        };
-        let cfg = match db::DbConfig::from_env() {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("error: {e}");
-                return ExitCode::from(2);
-            }
-        };
-        return match mcp::run(&c.addr, auth, cfg, c.graph).await {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::from(2)
-            }
-        };
-    }
-
-    let db = match db::DbConfig::from_env() {
-        Ok(cfg) => db::Db::open(&cfg).await,
-        Err(e) => Err(e),
+    let ctx = Context {
+        curriculum: Curriculum::open(
+            cli.graph
+                .or_else(|| nonempty(std::env::var("MT_GRAPH").ok()).map(PathBuf::from)),
+        ),
     };
-    let db = match db {
-        Ok(db) => db,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    let (result, err_code) = dispatch(&db, cli.cmd).await;
-    match result {
+    let recovery = cli.cmd.recovery().step(Surface::Cli);
+    match dispatch(&ctx, cli.cmd).await {
         Ok(()) => ExitCode::SUCCESS,
+        Err(e) if e.is_closed_stdout() => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::from(err_code)
+            if e.outcome_is_unknown() {
+                eprintln!("the command may have been applied; {recovery}");
+            }
+            report_failure(&e)
         }
     }
 }
 
-/// Filters out empty strings so unset environment variables do not match empty bearer tokens.
+/// Settings that every command of the process shares.
+struct Context {
+    curriculum: Arc<Curriculum>,
+}
+
+impl Context {
+    /// Read the database configuration from the environment, with the curriculum of this process.
+    fn db_config(&self) -> Result<db::DbConfig> {
+        Ok(db::DbConfig {
+            curriculum: self.curriculum.clone(),
+            ..db::DbConfig::from_env()?
+        })
+    }
+
+    /// Connect to the learner database without network I/O.
+    fn db(&self) -> Result<db::Db> {
+        db::Db::connect(&self.db_config()?)
+    }
+
+    /// Return the lookup of path `path` in `db`, or of the curriculum alone if `db` is `None`.
+    fn lookup<'a>(&'a self, db: Option<&'a db::Db>, path: Option<&'a str>) -> discover::Lookup<'a> {
+        match db {
+            Some(db) => discover::Lookup::Db { db, path },
+            None => discover::Lookup::Curriculum(&self.curriculum),
+        }
+    }
+
+    /// Connect to the learner database, create it if it does not exist, and report a creation on stderr.
+    async fn create_db(&self) -> Result<db::Db> {
+        let db = self.db()?;
+        if db.create_if_missing().await? {
+            eprintln!("created database '{}' at {}", db.name(), db.url());
+        }
+        Ok(db)
+    }
+}
+
+/// Print `e` to stderr and return its exit code.
+fn report_failure(e: &Error) -> ExitCode {
+    eprintln!("error: {}", e.message(Surface::Cli));
+    ExitCode::from(e.exit_code())
+}
+
+/// Parse the command line, and return the exit code if the process should stop.
+fn parse_args() -> std::result::Result<Mt, ExitCode> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    Mt::from_args(&["mt"], &args).map_err(|early| {
+        if early.status.is_ok() {
+            let _closed = std::io::stdout().write_all(early.output.as_bytes());
+            ExitCode::SUCCESS
+        } else {
+            eprint!("{}", early.output);
+            ExitCode::from(2)
+        }
+    })
+}
+
+/// Filter out empty strings so unset environment variables do not match empty bearer tokens.
 fn nonempty(value: Option<String>) -> Option<String> {
     value.filter(|s| !s.is_empty())
 }
@@ -142,190 +144,159 @@ fn init_tracing(verbose: bool) {
         .init();
 }
 
-#[allow(clippy::too_many_lines)]
-async fn dispatch(db: &db::Db, cmd: Cmd) -> (Result<()>, u8) {
+async fn dispatch(ctx: &Context, cmd: Cmd) -> Result<()> {
     match cmd {
-        Cmd::Instruct(_) => unreachable!("handled before dispatch"),
-        Cmd::ImportTurso(c) => match c.url.or_else(|| nonempty(std::env::var("TURSO_URL").ok())) {
-            Some(url) => (
-                import::cmd_import_turso(
-                    db,
-                    &url,
-                    nonempty(std::env::var("TURSO_AUTH_TOKEN").ok()),
-                )
-                .await,
-                1,
-            ),
-            None => (Err(Error::MissingTursoUrl), 2),
-        },
+        Cmd::Instruct(_) => instruct::cmd_instruct(),
+        Cmd::ImportTurso(c) => {
+            let url = c
+                .url
+                .or_else(|| nonempty(std::env::var("TURSO_URL").ok()))
+                .ok_or(Error::MissingTursoUrl)?;
+            let token = nonempty(std::env::var("TURSO_AUTH_TOKEN").ok());
+            import::cmd_import_turso(&ctx.create_db().await?, &url, token).await
+        }
         #[cfg(feature = "mcp")]
-        Cmd::Mcp(_) => unreachable!("handled before dispatch"),
-        Cmd::Path(p) => dispatch_path(db, p.op).await,
-        Cmd::Graph(g) => dispatch_graph(db, g.op).await,
-        Cmd::Lesson(l) => dispatch_lesson(db, l.op).await,
-        Cmd::Quiz(q) => dispatch_quiz(db, q.op).await,
+        Cmd::Mcp(c) => run_mcp(ctx, c).await,
+        Cmd::Path(p) => dispatch_path(ctx, p.op).await,
+        Cmd::Graph(g) => dispatch_graph(ctx, g.op).await,
+        Cmd::Lesson(l) => dispatch_lesson(&ctx.db()?, l.op).await,
+        Cmd::Quiz(q) => dispatch_quiz(&ctx.db()?, q.op).await,
     }
 }
 
-async fn dispatch_path(db: &db::Db, op: PathOp) -> (Result<()>, u8) {
+#[cfg(feature = "mcp")]
+async fn run_mcp(ctx: &Context, c: cli::McpCmd) -> Result<()> {
+    if let Some(McpOp::Tools(_)) = c.op {
+        return mcp::print_tools();
+    }
+    let auth = mcp::AuthConfig {
+        api_key: nonempty(c.api_key.or_else(|| std::env::var("MT_API_KEY").ok())),
+        admin_password: nonempty(
+            c.admin_password
+                .or_else(|| std::env::var("MT_ADMIN_PASSWORD").ok()),
+        ),
+        public_url: nonempty(c.public_url.or_else(|| std::env::var("MT_PUBLIC_URL").ok())),
+        client_addrs: match nonempty(
+            c.client_ip_header
+                .or_else(|| std::env::var("MT_CLIENT_IP_HEADER").ok()),
+        ) {
+            Some(name) => mcp::ClientAddrSource::Header(
+                name.parse().map_err(|_| Error::BadClientIpHeader(name))?,
+            ),
+            None => mcp::ClientAddrSource::Peer,
+        },
+    };
+    mcp::run(&c.addr, auth, ctx.db_config()?).await
+}
+
+async fn dispatch_path(ctx: &Context, op: PathOp) -> Result<()> {
     match op {
-        PathOp::List(c) => (path::cmd_path_list(db, c.graph.as_deref()).await, 1),
+        PathOp::List(_) => path::cmd_path_list(&ctx.db()?).await,
         PathOp::New(c) => {
             let targets = cli::flatten_ids(&c.targets);
-            let r = path::cmd_path_new(db, &c.goal, &targets, c.strategy, c.graph.as_deref())
-                .await
-                .map(|id| {
-                    eprintln!("created path: {id}");
-                });
-            (r, 2)
+            let p =
+                path::PathRow::create(&*ctx.curriculum.graph()?, &c.goal, &targets, c.strategy)?;
+            path::store_new_path(&ctx.create_db().await?, &p).await?;
+            eprintln!("created path: {}", p.id);
+            Ok(())
         }
-        PathOp::State(c) => (
-            state::cmd_path_state(db, c.path.as_deref(), c.graph.as_deref()).await,
-            1,
-        ),
-        PathOp::Next(c) => match scheduler::NextMode::from_flags(c.new, c.due) {
-            Err(e) => (Err(e), 2),
-            Ok(mode) => (
-                scheduler::cmd_path_next(db, c.path.as_deref(), c.graph.as_deref(), mode).await,
-                1,
-            ),
-        },
-        PathOp::Strategy(c) => {
-            let r = path::cmd_path_strategy(db, c.path.as_deref(), c.strategy)
-                .await
-                .map(|id| eprintln!("path {id}: strategy → {}", c.strategy));
-            (r, 2)
+        PathOp::State(c) => state::cmd_path_state(&ctx.db()?, c.path.as_deref()).await,
+        PathOp::Next(c) => {
+            let mode = scheduler::NextMode::from_flags(c.new, c.due)?;
+            scheduler::cmd_path_next(&ctx.db()?, c.path.as_deref(), mode).await
         }
-        PathOp::Subpath(c) => dispatch_subpath(db, c.op).await,
-        PathOp::Syllabus(c) => (
-            syllabus::cmd_path_syllabus(db, c.path.as_deref(), c.n, c.graph.as_deref()).await,
-            1,
-        ),
-        PathOp::Tree(c) => (
-            tree::cmd_path_tree(db, c.path.as_deref(), c.graph.as_deref()).await,
-            1,
-        ),
+        PathOp::Strategy(c) => path::cmd_path_strategy(&ctx.db()?, c.path.as_deref(), c.strategy)
+            .await
+            .map(|id| eprintln!("path {id}: strategy → {}", c.strategy)),
+        PathOp::Subpath(c) => dispatch_subpath(&ctx.db()?, c.op).await,
+        PathOp::Syllabus(c) => {
+            syllabus::cmd_path_syllabus(&ctx.db()?, c.path.as_deref(), c.n).await
+        }
+        PathOp::Tree(c) => tree::cmd_path_tree(&ctx.db()?, c.path.as_deref(), c.depth).await,
     }
 }
 
-async fn dispatch_subpath(db: &db::Db, op: SubpathOp) -> (Result<()>, u8) {
+async fn dispatch_subpath(db: &db::Db, op: SubpathOp) -> Result<()> {
     match op {
         SubpathOp::Set(c) => {
             let atoms = cli::flatten_ids(&c.atoms);
-            let r = subpath::cmd_subpath_set(db, c.path.as_deref(), &atoms, c.graph.as_deref())
+            subpath::cmd_subpath_set(db, c.path.as_deref(), &atoms)
                 .await
-                .map(|id| eprintln!("path {id}: subpath set ({} atoms)", atoms.len()));
-            (r, 2)
+                .map(|id| eprintln!("path {id}: subpath set ({} atoms)", atoms.len()))
         }
-        SubpathOp::Clear(c) => {
-            let r = subpath::cmd_subpath_clear(db, c.path.as_deref())
-                .await
-                .map(|id| eprintln!("path {id}: subpath cleared"));
-            (r, 2)
-        }
+        SubpathOp::Clear(c) => subpath::cmd_subpath_clear(db, c.path.as_deref())
+            .await
+            .map(|id| eprintln!("path {id}: subpath cleared")),
     }
 }
 
-async fn dispatch_graph(db: &db::Db, op: GraphOp) -> (Result<()>, u8) {
+async fn dispatch_graph(ctx: &Context, op: GraphOp) -> Result<()> {
     match op {
-        GraphOp::Check(_) => unreachable!("handled before dispatch"),
-        GraphOp::Show(c) => (
-            discover::cmd_graph_show(db, &c.id, c.path.as_deref(), c.graph.as_deref()).await,
-            2,
-        ),
-        GraphOp::List(c) => (
-            discover::cmd_graph_list(db, c.id.as_deref(), c.path.as_deref(), c.graph.as_deref())
-                .await,
-            2,
-        ),
-        GraphOp::Dump(_) => (overlay::cmd_graph_dump(db).await, 1),
+        GraphOp::Check(c) => {
+            let source = c
+                .path
+                .map_or_else(|| ctx.curriculum.source().clone(), CurriculumSource::Dir);
+            graph::cmd_graph_check(&source)
+        }
+        GraphOp::Show(c) => {
+            let db = c.path.as_ref().map(|_| ctx.db()).transpose()?;
+            discover::cmd_graph_show(ctx.lookup(db.as_ref(), c.path.as_deref()), &c.id).await
+        }
+        GraphOp::List(c) => {
+            let db = c.path.as_ref().map(|_| ctx.db()).transpose()?;
+            let lookup = ctx.lookup(db.as_ref(), c.path.as_deref());
+            discover::cmd_graph_list(lookup, c.id.as_deref(), c.recursive).await
+        }
+        GraphOp::Dump(_) => overlay::cmd_graph_dump(&ctx.db()?).await,
     }
 }
 
-async fn dispatch_lesson(db: &db::Db, op: LessonOp) -> (Result<()>, u8) {
+async fn dispatch_lesson(db: &db::Db, op: LessonOp) -> Result<()> {
     match op {
         LessonOp::Upsert(c) => {
-            let atom = c.atom.clone();
-            let r = store::cmd_lesson_upsert(
-                db,
-                &c.atom,
-                c.body,
-                c.path.as_deref(),
-                c.graph.as_deref(),
-            )
-            .await
-            .map(|()| {
-                eprintln!("upserted lesson: {atom}");
-            });
-            (r, 2)
+            store::cmd_lesson_upsert(db, &c.atom, c.body, c.path.as_deref()).await?;
+            eprintln!("upserted lesson: {}", c.atom);
+            Ok(())
         }
     }
 }
 
-async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> (Result<()>, u8) {
+async fn dispatch_quiz(db: &db::Db, op: QuizOp) -> Result<()> {
     match op {
         QuizOp::Create(c) => {
-            let r = store::cmd_quiz_create(
-                db,
-                &c.atom,
-                c.difficulty,
-                c.question,
-                c.answer,
-                c.rubric,
-                c.quiz_type,
-                c.path.as_deref(),
-                c.graph.as_deref(),
-            )
-            .await
-            .map(|qid| {
-                eprintln!("created quiz: {qid}");
-            });
-            (r, 2)
+            let draft = QuizDraft {
+                difficulty: c.difficulty,
+                question: c.question,
+                answer: c.answer,
+                rubric: c.rubric,
+                kind: c.quiz_type,
+            };
+            let quiz = store::cmd_quiz_create(db, &c.atom, draft, c.path.as_deref()).await?;
+            eprintln!("created quiz: {quiz}");
+            Ok(())
         }
         QuizOp::Update(c) => {
-            let quiz = c.quiz.clone();
-            let r = store::cmd_quiz_update(
-                db,
-                &c.quiz,
-                c.question,
-                c.answer,
-                c.rubric,
-                c.difficulty,
-                c.quiz_type,
-                c.path.as_deref(),
-                c.graph.as_deref(),
-            )
-            .await
-            .map(|()| {
-                eprintln!("updated quiz: {quiz}");
-            });
-            (r, 2)
+            let patch = QuizPatch {
+                difficulty: c.difficulty,
+                question: c.question,
+                answer: c.answer,
+                rubric: c.rubric,
+                kind: c.quiz_type,
+            };
+            store::cmd_quiz_update(db, &c.quiz, &patch, c.path.as_deref()).await?;
+            eprintln!("updated quiz: {}", c.quiz);
+            Ok(())
         }
         QuizOp::Delete(c) => {
-            let quiz = c.quiz.clone();
-            let r = store::cmd_quiz_delete(db, &c.quiz, c.path.as_deref(), c.graph.as_deref())
-                .await
-                .map(|()| {
-                    eprintln!("deleted quiz: {quiz}");
-                });
-            (r, 2)
+            store::cmd_quiz_delete(db, &c.quiz, c.path.as_deref()).await?;
+            eprintln!("deleted quiz: {}", c.quiz);
+            Ok(())
         }
         QuizOp::Answer(c) => {
-            let quiz = c.quiz.clone();
-            let rating = c.rating;
-            let r = answer::cmd_quiz_answer(
-                db,
-                &c.quiz,
-                c.rating,
-                c.user_answer,
-                c.path.as_deref(),
-                c.graph.as_deref(),
-            )
-            .await
-            .map(|()| {
-                eprintln!("recorded {rating} for {quiz}");
-            });
-            (r, 2)
+            answer::cmd_quiz_answer(db, &c.quiz, c.rating, c.user_answer, c.path.as_deref())
+                .await?;
+            eprintln!("recorded {} for {}", c.rating, c.quiz);
+            Ok(())
         }
     }
 }

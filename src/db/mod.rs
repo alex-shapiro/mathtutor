@@ -1,515 +1,617 @@
-//! Baserunna HTTP client and transaction execution.
+//! Baserunna database handle and configuration.
 
-mod op;
 pub mod ts;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use reqwest::{Method, StatusCode};
-use serde::de::{DeserializeOwned, IgnoredAny};
-use serde::{Deserialize, Serialize};
+pub use baserunna_client::{self as client, Op, OpResult, Row, Transport};
 
-pub use op::{KvItem, Op, OpResult, PAGE, Row};
+use client::api::ErrorCode;
 
+use crate::graph::Curriculum;
+#[cfg(feature = "mcp")]
+use crate::schema::OAuthRow;
+use crate::schema::{self, DbState, ImportMarker, OAuthClient, SchemaState, TableSet};
+use crate::view::{OverlayCache, OverlayWrite, WriteSet};
 use crate::{Error, Result};
 
 pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
 pub const DEFAULT_DB: &str = "mathtutor";
 
-const MAX_ATTEMPTS: u32 = 10;
-
-/// Delay before querying commit status after an ambiguous response, exceeding the server commit deadline.
-const AMBIGUOUS_COMMIT_WAIT: Duration = Duration::from_secs(15);
-
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DbConfig {
     pub url: String,
     pub token: String,
     pub db: String,
     /// Directory used to persist the cached overlay across processes, or `None` for in-memory caching only.
     pub cache_dir: Option<PathBuf>,
+    /// Curriculum that the user overlay amends.
+    pub curriculum: Arc<Curriculum>,
+}
+
+impl std::fmt::Debug for DbConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbConfig")
+            .field("url", &self.url)
+            .field("token", &"<hidden>")
+            .field("db", &self.db)
+            .field("cache_dir", &self.cache_dir)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Return the local Math Tutor home directory: `MATHTUTOR_HOME`, or `$HOME/.mathtutor`, or `None` if neither variable is set.
+fn mt_home() -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os("MATHTUTOR_HOME") {
+        return Some(PathBuf::from(p));
+    }
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".mathtutor"))
 }
 
 impl DbConfig {
-    /// Reads `BASERUNNA_URL`, `BASERUNNA_TOKEN` (required), and `BASERUNNA_DB` from the environment.
+    /// Read `BASERUNNA_URL`, `BASERUNNA_TOKEN`, and `BASERUNNA_DB` from the environment, and use the embedded curriculum.
     pub fn from_env() -> Result<Self> {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         Ok(Self {
             url: var("BASERUNNA_URL").unwrap_or_else(|| DEFAULT_URL.into()),
             token: var("BASERUNNA_TOKEN").ok_or(Error::MissingToken)?,
             db: var("BASERUNNA_DB").unwrap_or_else(|| DEFAULT_DB.into()),
-            cache_dir: crate::path::mt_home().ok(),
+            cache_dir: mt_home(),
+            curriculum: Curriculum::embedded(),
         })
     }
-}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RequestKind {
-    Txn,
-    Begin,
-    Ops,
-    Commit,
-    Abort,
-    Status,
-    Create,
-}
-
-impl std::fmt::Display for RequestKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.pad(match self {
-            Self::Txn => "txn",
-            Self::Begin => "begin",
-            Self::Ops => "ops",
-            Self::Commit => "commit",
-            Self::Abort => "abort",
-            Self::Status => "status",
-            Self::Create => "create",
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Sample {
-    pub kind: RequestKind,
-    pub status: u16,
-    pub elapsed: Duration,
-    pub server: Option<ServerTiming>,
-    pub sent_bytes: usize,
-    pub received_bytes: usize,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ServerTiming {
-    pub total: Duration,
-    pub store: Duration,
-    pub store_calls: u32,
-    pub commit: Duration,
-    pub wait: Duration,
-}
-
-impl ServerTiming {
-    pub fn parse(v: &str) -> Self {
-        let mut t = Self::default();
-        for metric in v.split(',') {
-            let mut parts = metric.trim().split(';');
-            let name = parts.next().unwrap_or_default();
-            let (mut dur, mut desc) = (Duration::ZERO, 0);
-            for p in parts {
-                if let Some(ms) = p.strip_prefix("dur=").and_then(|d| d.parse::<f64>().ok()) {
-                    dur = Duration::from_secs_f64(ms / 1000.0);
-                } else if let Some(n) = p.strip_prefix("desc=").and_then(|d| d.parse().ok()) {
-                    desc = n;
-                }
-            }
-            match name {
-                "total" => t.total = dur,
-                "store" => (t.store, t.store_calls) = (dur, desc),
-                "commit" => t.commit = dur,
-                "wait" => t.wait = dur,
-                _ => {}
-            }
-        }
-        t
-    }
-}
-
-pub type Observer = Arc<dyn Fn(Sample) + Send + Sync>;
-
-#[derive(Clone)]
-pub struct Db {
-    http: reqwest::Client,
-    url: String,
-    name: String,
-    token: String,
-    observer: Option<Observer>,
-    pub(crate) path_hint: Arc<Mutex<Option<String>>>,
-    pub(crate) overlay_cache: Arc<Mutex<Option<crate::view::CachedOverlay>>>,
-    pub(crate) cache_file: Option<PathBuf>,
-}
-
-impl std::fmt::Debug for Db {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Db")
-            .field("url", &self.url)
-            .field("name", &self.name)
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ApiError {
-    pub status: u16,
-    pub code: String,
-    pub message: String,
-    pub retryable: bool,
-    pub outcome_unknown: bool,
-    /// True when the response originated from Baserunna rather than an intermediate proxy.
-    pub from_server: bool,
-}
-
-impl std::fmt::Display for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}: {}", self.status, self.code, self.message)
-    }
-}
-
-impl ApiError {
-    fn retry_not_applied(&self) -> bool {
-        matches!(self.status, 404 if self.code == "txn_not_found")
-            || (self.retryable && !self.outcome_unknown)
-    }
-
-    fn from_response(status: StatusCode, body: &[u8]) -> Self {
-        #[derive(Deserialize)]
-        struct Body {
-            error: Detail,
-        }
-        #[derive(Deserialize)]
-        struct Detail {
-            code: String,
-            message: String,
-            retryable: bool,
-            #[serde(default)]
-            details: Details,
-        }
-        #[derive(Deserialize, Default)]
-        struct Details {
-            outcome: Option<String>,
-        }
-        match serde_json::from_slice::<Body>(body) {
-            Ok(Body { error: e }) => Self {
-                status: status.as_u16(),
-                code: e.code,
-                message: e.message,
-                retryable: e.retryable,
-                outcome_unknown: e.details.outcome.as_deref() == Some("unknown"),
-                from_server: true,
-            },
-            Err(_) => Self {
-                status: status.as_u16(),
-                code: "unknown".into(),
-                message: String::from_utf8_lossy(body).into_owned(),
-                retryable: status.is_server_error(),
-                outcome_unknown: false,
-                from_server: false,
-            },
-        }
-    }
-
-    fn not_applied(message: &str) -> Error {
-        Error::Api(Self {
-            status: 503,
-            code: "unavailable".into(),
-            message: message.into(),
-            retryable: true,
-            outcome_unknown: false,
-            from_server: true,
-        })
-    }
-}
-
-#[derive(Serialize)]
-struct Ops<'a> {
-    ops: &'a [Op],
-}
-
-#[derive(Deserialize)]
-struct Results {
-    #[serde(default)]
-    results: Option<Vec<OpResult>>,
-}
-
-#[derive(Deserialize)]
-struct Begun {
-    txn_id: String,
-    commit_id: String,
-    results: Vec<OpResult>,
-}
-
-#[derive(Deserialize)]
-struct CommitStatus {
-    status: CommitState,
-}
-
-#[derive(Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum CommitState {
-    Committed,
-    NotCommitted,
-}
-
-impl Db {
-    /// Connects to the database and creates the database and tables if they do not exist.
-    pub async fn open(cfg: &DbConfig) -> Result<Self> {
-        let db = Self::connect(cfg)?;
-        crate::schema::ensure(&db).await?;
-        Ok(db)
-    }
-
-    /// Creates a client handle without performing network I/O; the database and tables must already exist.
-    pub fn connect(cfg: &DbConfig) -> Result<Self> {
+    /// Return the HTTP transport to the configured server.
+    pub fn transport(&self) -> Result<client::HttpTransport> {
         let http = reqwest::Client::builder()
             .user_agent(concat!("mathtutor/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_mins(1))
             .pool_idle_timeout(Duration::from_secs(50))
             .build()?;
-        let url = cfg.url.trim_end_matches('/').to_string();
-        let cache_file = cfg
-            .cache_dir
-            .as_ref()
-            .map(|d| d.join(cache_name(&url, &cfg.db)));
-        let cached = cache_file
-            .as_deref()
-            .and_then(crate::view::read_cached_overlay);
-        Ok(Self {
-            url,
-            name: cfg.db.clone(),
-            http,
-            token: cfg.token.clone(),
-            observer: None,
-            path_hint: Arc::default(),
-            overlay_cache: Arc::new(Mutex::new(cached)),
-            cache_file,
-        })
+        Ok(client::HttpTransport::with_client(&self.url, http))
+    }
+}
+
+/// Handle to the learner database, with the overlay cached across transactions.
+#[derive(Clone)]
+pub struct Db {
+    client: client::Db,
+    url: Arc<str>,
+    pub(crate) overlay_cache: Arc<Mutex<OverlayCache>>,
+    pub(crate) cache_file: Option<PathBuf>,
+    pub(crate) curriculum: Arc<Curriculum>,
+    allow_open_import: bool,
+    /// Each request also checks the schema version of the authorization tables.
+    checks_auth_tables: bool,
+}
+
+impl std::fmt::Debug for Db {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Db")
+            .field("name", &self.client.name())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Db {
+    /// Create the database and its tables if they do not exist, and return `true` if this call created the database.
+    pub async fn create_if_missing(&self) -> Result<bool> {
+        self.create_tables_if_missing()
+            .await
+            .map_err(|e| self.setup_error(e))
     }
 
+    /// Return the error of a failed table setup, which did not apply the command's writes.
+    fn setup_error(&self, e: Error) -> Error {
+        self.explain_key_error(e).into_not_applied()
+    }
+
+    async fn create_tables_if_missing(&self) -> Result<bool> {
+        let state = schema::state(&self.client, TableSet::Learner).await?.schema;
+        let created = state == SchemaState::NoDatabase;
+        match state {
+            SchemaState::Current => {}
+            SchemaState::Other(_) => return Err(self.schema_error(TableSet::Learner, state)),
+            SchemaState::NoDatabase => {
+                self.client
+                    .ensure()
+                    .await
+                    .map_err(|e| self.creation_error(e))?;
+                schema::create_tables(&self.client, TableSet::Learner).await?;
+            }
+            SchemaState::NoTables => schema::create_tables(&self.client, TableSet::Learner).await?,
+        }
+        Ok(created)
+    }
+
+    /// Create the tables of each checked table set that the existing database does not hold, and replace the tables of each set that an older release stored.
+    async fn set_up_tables(&self) -> Result<()> {
+        let setup = async {
+            for &set in self.checked_sets() {
+                match schema::state(&self.client, set).await?.schema {
+                    SchemaState::NoTables => schema::create_tables(&self.client, set).await?,
+                    SchemaState::Other(found) if set.replaces(&found) => {
+                        tracing::warn!(tables = %set, %found, "replacing tables of an older schema version");
+                        schema::recreate_tables(&self.client, set).await?;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(())
+        };
+        setup.await.map_err(|e| self.setup_error(e))
+    }
+
+    /// Return a handle whose requests also check the authorization tables, and create them in the first request if they are missing.
     #[must_use]
-    pub fn observed(mut self, observer: Observer) -> Self {
-        self.observer = Some(observer);
-        self
+    pub fn with_auth_tables(&self) -> Self {
+        Self {
+            checks_auth_tables: true,
+            ..self.clone()
+        }
     }
 
-    /// Executes read-only `ops` in a single snapshot request.
-    pub async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
-        let r: Results = retry(|| self.run(RequestKind::Txn, "/txn", ops)).await?;
-        one_per_op(ops, r.results.unwrap_or_default())
+    /// Return `true` if [`Self::set_up_tables`] repairs the database state that `e` reports.
+    fn needs_table_setup(e: &Error) -> bool {
+        match e {
+            Error::TablesMissing { .. } => true,
+            Error::SchemaMismatch { tables, found, .. } => tables.replaces(found),
+            _ => false,
+        }
     }
 
-    pub async fn read_one(&self, op: Op) -> Result<OpResult> {
-        let mut r = self.read(std::slice::from_ref(&op)).await?;
-        Ok(r.swap_remove(0))
+    /// Return the error that reports `state` of `set` for a database that is not ready.
+    fn schema_error(&self, set: TableSet, state: SchemaState) -> Error {
+        let db = self.name().to_string();
+        match (set, state) {
+            (_, SchemaState::Other(found)) => Error::SchemaMismatch {
+                db,
+                tables: set,
+                found,
+                expected: set.version(),
+            },
+            (_, SchemaState::NoTables) => Error::TablesMissing { db, tables: set },
+            _ => Error::DatabaseNotFound {
+                db,
+                url: self.url.to_string(),
+            },
+        }
     }
 
-    /// Executes `ops` in a single transaction, retrying only when the transaction was not applied.
-    pub async fn write(&self, ops: &[Op]) -> Result<()> {
-        retry(|| self.run::<IgnoredAny>(RequestKind::Txn, "/txn", ops)).await?;
+    /// Return the name of this database.
+    pub fn name(&self) -> &str {
+        self.client.name()
+    }
+
+    /// Return the curriculum that the user overlay of this database amends.
+    pub fn curriculum(&self) -> &Arc<Curriculum> {
+        &self.curriculum
+    }
+
+    /// Return the URL of the Baserunna server.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// Return a handle that can use the database while an import is open.
+    pub(crate) fn for_import(&self) -> Self {
+        Self {
+            allow_open_import: true,
+            ..self.clone()
+        }
+    }
+
+    /// Return a handle that reads the overlay from the database instead of a cache.
+    #[must_use]
+    pub fn without_overlay_cache(&self) -> Self {
+        Self {
+            overlay_cache: Arc::default(),
+            cache_file: None,
+            ..self.clone()
+        }
+    }
+
+    /// Return every table set whose state each request of this handle checks.
+    fn checked_sets(&self) -> &'static [TableSet] {
+        if self.checks_auth_tables {
+            &[TableSet::Learner, TableSet::Auth]
+        } else {
+            &[TableSet::Learner]
+        }
+    }
+
+    /// Fail unless `state` of `set` permits this handle to use the database.
+    fn check_state(&self, set: TableSet, state: DbState) -> Result<()> {
+        if state.schema != SchemaState::Current {
+            return Err(self.schema_error(set, state.schema));
+        }
+        if state.import == Some(ImportMarker::Open) && !self.allow_open_import {
+            return Err(Error::ImportInProgress);
+        }
         Ok(())
     }
 
-    pub async fn begin(&self, ops: &[Op]) -> Result<(Txn, Vec<OpResult>)> {
-        let r: Begun = self.run(RequestKind::Begin, "/transactions", ops).await?;
-        let txn = Txn {
+    /// Read and check the state of every checked table set.
+    async fn check_states(&self) -> Result<()> {
+        for &set in self.checked_sets() {
+            self.check_state(set, schema::state(&self.client, set).await?)?;
+        }
+        Ok(())
+    }
+
+    /// Return `ops` after the reads of the table set states that each request checks.
+    fn gated(&self, ops: &[Op]) -> Vec<Op> {
+        let sets = self.checked_sets().iter().map(|&set| schema::state_op(set));
+        sets.chain(ops.iter().cloned()).collect()
+    }
+
+    /// Check the states that a request read before `ops`, and return the learner import marker and the results of `ops`.
+    fn pass_gate(
+        &self,
+        mut results: Vec<OpResult>,
+    ) -> Result<(Option<ImportMarker>, Vec<OpResult>)> {
+        let sets = self.checked_sets();
+        if results.len() < sets.len() {
+            return Err(Error::BadRow("request did not return a state".into()));
+        }
+        let rest = results.split_off(sets.len());
+        let mut import = None;
+        for (&set, result) in sets.iter().zip(results) {
+            let entry = result.entry()?;
+            let state = DbState::from_entry(set, entry.as_ref());
+            if set == TableSet::Learner {
+                import = state.import;
+            }
+            self.check_state(set, state)?;
+        }
+        Ok((import, rest))
+    }
+
+    /// Return the error for a failed request, and report a missing database or a blocked state instead of a missing table or stream.
+    async fn gate_failure(&self, e: client::Error) -> Error {
+        if e.code() != Some(ErrorCode::NotFound) {
+            return self.explain_key_error(e.into());
+        }
+        match self.check_states().await {
+            Ok(()) => e.into(),
+            Err(check) => self.explain_key_error(check),
+        }
+    }
+
+    /// Return the configuration error that `e` reports if the server rejected or limited the key, or `e` otherwise.
+    fn explain_key_error(&self, e: Error) -> Error {
+        match &e {
+            Error::Baserunna(c) => self.key_error(c).unwrap_or(e),
+            _ => e,
+        }
+    }
+
+    /// Return [`Error::TokenRejected`] or [`Error::KeyDenied`] if `e` reports that the server rejected or limited the key.
+    fn key_error(&self, e: &client::Error) -> Option<Error> {
+        match e.code()? {
+            ErrorCode::Unauthenticated => Some(Error::TokenRejected {
+                url: self.url.to_string(),
+            }),
+            ErrorCode::PermissionDenied => Some(Error::KeyDenied {
+                db: self.name().to_string(),
+                url: self.url.to_string(),
+                reason: api_message(e),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Return the error for a failed creation of this database.
+    fn creation_error(&self, e: client::Error) -> Error {
+        if e.code() == Some(ErrorCode::PermissionDenied) {
+            return Error::KeyCannotCreate {
+                db: self.name().to_string(),
+                url: self.url.to_string(),
+                reason: api_message(&e),
+            };
+        }
+        e.into()
+    }
+
+    /// Read `ops` at the latest version after the database and import checks, and set up the tables first if necessary.
+    pub(crate) async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
+        match self.read_once(ops).await {
+            Err(e) if Self::needs_table_setup(&e) => {
+                self.set_up_tables().await?;
+                self.read_once(ops).await
+            }
+            result => result,
+        }
+    }
+
+    async fn read_once(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
+        match self.client.read(&self.gated(ops)).await {
+            Ok(results) => self.pass_gate(results).map(|(_, rest)| rest),
+            Err(e) => Err(self.gate_failure(e).await.into_not_applied()),
+        }
+    }
+
+    /// Fail unless the database exists and the first request of this handle can use it, without a change to the database.
+    ///
+    /// Tables that the next request creates or replaces count as usable.
+    pub async fn check_usable(&self) -> Result<()> {
+        match self.read_once(&[]).await {
+            Err(e) if Self::needs_table_setup(&e) => Ok(()),
+            result => result.map(|_| ()),
+        }
+    }
+
+    /// Read `op` at the latest version after the database and import checks.
+    pub(crate) async fn read_one(&self, op: Op) -> Result<OpResult> {
+        let mut results = self.read(std::slice::from_ref(&op)).await?;
+        results
+            .pop()
+            .ok_or_else(|| Error::BadRow("read did not return a result".into()))
+    }
+
+    /// Read `op` and every next page of its result at the latest version, without a transaction.
+    pub(crate) async fn read_pages(&self, mut op: Op) -> Result<Vec<OpResult>> {
+        let mut pages = Vec::new();
+        loop {
+            let page = self.read_one(op.clone()).await?;
+            let next = op.next_page(&page);
+            pages.push(page);
+            match next {
+                Some(n) => op = n,
+                None => return Ok(pages),
+            }
+        }
+    }
+
+    /// Read every page of stream `stream` after the database and import checks, or an empty list if the stream does not exist.
+    pub(crate) async fn read_stream(&self, stream: String) -> Result<Vec<OpResult>> {
+        match self.read_pages(Op::read_stream(stream, 0)).await {
+            Err(Error::Baserunna(e)) if e.code() == Some(ErrorCode::NotFound) => Ok(Vec::new()),
+            pages => pages,
+        }
+    }
+
+    /// Insert OAuth row `row`, which the server deletes after `ttl`.
+    #[cfg(feature = "mcp")]
+    pub(crate) async fn insert_oauth<R: OAuthRow>(&self, row: &R, ttl: Duration) -> Result<()> {
+        self.commit(&[Op::insert_expiring(row, ttl)]).await
+    }
+
+    /// Delete the OAuth row of type `R` with primary key `pk`.
+    #[cfg(feature = "mcp")]
+    pub(crate) async fn delete_oauth<R: OAuthRow>(&self, pk: &str) -> Result<()> {
+        self.commit(&[Op::delete_row::<R>(pk)]).await
+    }
+
+    /// Store `clients` in a single transaction without an expiry, replacing a stored client with the same ID.
+    pub(crate) async fn replace_oauth_clients(&self, clients: &[OAuthClient]) -> Result<()> {
+        let ops: Vec<Op> = clients
+            .iter()
+            .flat_map(|c| [Op::delete_row::<OAuthClient>(&c.client_id), Op::insert(c)])
+            .collect();
+        self.commit(&ops).await
+    }
+
+    /// Record `marker` as the progress of an import into this database.
+    pub(crate) async fn write_import_marker(&self, marker: ImportMarker) -> Result<()> {
+        self.commit(&[marker.write_op()]).await
+    }
+
+    /// Commit `ops` after the database and import checks.
+    async fn commit(&self, ops: &[Op]) -> Result<()> {
+        run_txn!(self, |txn| {
+            txn.queue(ops.iter().cloned());
+            Ok::<_, Error>(())
+        })
+    }
+
+    /// Begin a transaction whose first request runs the database and import checks.
+    pub(crate) fn begin(&self) -> Txn {
+        Txn {
+            inner: self.client.begin(),
+            checked: false,
+            ran_table_setup: false,
+            import: None,
             db: self.clone(),
-            id: r.txn_id,
-            commit_id: r.commit_id,
+        }
+    }
+
+    /// Return the retry state of a [`run_txn`] loop.
+    pub(crate) fn retry(&self) -> Retry {
+        Retry {
+            inner: self.client.retry(),
+            ran_table_setup: false,
+        }
+    }
+
+    /// Create a handle without network I/O. The first request fails with [`Error::DatabaseNotFound`] if the database does not exist.
+    pub fn connect(cfg: &DbConfig) -> Result<Self> {
+        Ok(Self::with_transport(cfg, cfg.transport()?))
+    }
+
+    /// Create a client handle that sends requests through `transport` instead of HTTP to `cfg.url`.
+    pub fn with_transport(cfg: &DbConfig, transport: impl Transport + 'static) -> Self {
+        let cache_file = cfg
+            .cache_dir
+            .as_ref()
+            .map(|d| d.join(cache_name(cfg.url.trim_end_matches('/'), &cfg.db)));
+        let client = client::Client::new(transport).with_token(&cfg.token);
+        Self {
+            client: client.db(&cfg.db),
+            url: Arc::from(cfg.url.as_str()),
+            overlay_cache: Arc::default(),
+            cache_file,
+            curriculum: cfg.curriculum.clone(),
+            allow_open_import: false,
+            checks_auth_tables: false,
+        }
+    }
+}
+
+/// Run `$attempt` with `$txn` bound to a new transaction of `$db` and commit its writes, restarting it after a conflict.
+///
+/// Evaluates to the result of the committed attempt. A macro lets `$attempt` borrow local state mutably inside a `Send` future, which an async closure parameter cannot do.
+macro_rules! run_txn {
+    ($db:expr, |$txn:ident| $attempt:expr) => {{
+        let db: &$crate::db::Db = $db;
+        let mut retry = db.retry();
+        loop {
+            let mut $txn = db.begin();
+            let result = $attempt;
+            match retry.finish($txn, result).await {
+                Ok(Some(out)) => break Ok(out),
+                Ok(None) => {}
+                Err(e) => break Err(e),
+            }
+        }
+    }};
+}
+pub(crate) use run_txn;
+
+/// Retry state of a [`run_txn`] loop.
+pub(crate) struct Retry {
+    inner: client::Retry,
+    /// An attempt of this loop set up missing or outdated tables.
+    ran_table_setup: bool,
+}
+
+impl Retry {
+    /// Commit `txn` if `result` is `Ok`, or abort it, and return `None` if the attempt must restart.
+    ///
+    /// An attempt restarts once after its transaction set up missing or outdated tables.
+    pub(crate) async fn finish<T, E>(
+        &mut self,
+        mut txn: Txn,
+        result: std::result::Result<T, E>,
+    ) -> std::result::Result<Option<T>, E>
+    where
+        E: client::TxnError + From<Error>,
+    {
+        let result = match result {
+            Ok(out) => txn.check_gate().await.map(|()| out).map_err(E::from),
+            Err(e) => Err(e),
         };
-        Ok((txn, one_per_op(ops, r.results)?))
-    }
-
-    pub(crate) async fn create_database(&self) -> Result<()> {
-        #[derive(Serialize)]
-        struct NewDb<'a> {
-            name: &'a str,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            org: Option<&'a str>,
+        let restart = txn.ran_table_setup && !self.ran_table_setup;
+        self.ran_table_setup |= txn.ran_table_setup;
+        let db = txn.db.clone();
+        match self.inner.finish(txn.inner, result).await {
+            Err(_) if restart => Ok(None),
+            done => done.map_err(|e| match e.client_error().and_then(|c| db.key_error(c)) {
+                Some(key_error) => E::from(key_error),
+                None => e,
+            }),
         }
-        let body = match self.name.split_once('.') {
-            Some((org, name)) => NewDb {
-                name,
-                org: Some(org),
-            },
-            None => NewDb {
-                name: &self.name,
-                org: None,
-            },
-        };
-        let url = format!("{}/v1/dbs", self.url);
-        exists_ok(
-            self.send(RequestKind::Create, Method::POST, &url, Some(&body))
-                .await,
-        )
-    }
-
-    pub(crate) async fn create_table(&self, schema: &impl Serialize) -> Result<()> {
-        exists_ok(
-            self.call(RequestKind::Create, Method::POST, "/tables", Some(schema))
-                .await,
-        )
-    }
-
-    async fn call<T: DeserializeOwned>(
-        &self,
-        kind: RequestKind,
-        method: Method,
-        path: &str,
-        body: Option<&(impl Serialize + ?Sized)>,
-    ) -> Result<T> {
-        let url = format!("{}/v1/dbs/{}{path}", self.url, self.name);
-        self.send(kind, method, &url, body).await
-    }
-
-    async fn run<T: DeserializeOwned>(
-        &self,
-        kind: RequestKind,
-        path: &str,
-        ops: &[Op],
-    ) -> Result<T> {
-        self.call(kind, Method::POST, path, Some(&Ops { ops }))
-            .await
-    }
-
-    async fn send<T: DeserializeOwned>(
-        &self,
-        kind: RequestKind,
-        method: Method,
-        url: &str,
-        body: Option<&(impl Serialize + ?Sized)>,
-    ) -> Result<T> {
-        let started = std::time::Instant::now();
-        let mut req = self.http.request(method, url).bearer_auth(&self.token);
-        let mut sent_bytes = 0;
-        if let Some(b) = body {
-            let bytes = serde_json::to_vec(b)?;
-            sent_bytes = bytes.len();
-            req = req
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(bytes);
-        }
-        let resp = req.send().await?;
-        let status = resp.status();
-        let server = resp
-            .headers()
-            .get("server-timing")
-            .and_then(|v| v.to_str().ok())
-            .map(ServerTiming::parse);
-        let bytes = resp.bytes().await?;
-        if let Some(observe) = &self.observer {
-            observe(Sample {
-                kind,
-                status: status.as_u16(),
-                elapsed: started.elapsed(),
-                server,
-                sent_bytes,
-                received_bytes: bytes.len(),
-            });
-        }
-        if !status.is_success() {
-            return Err(Error::Api(ApiError::from_response(status, &bytes)));
-        }
-        let body: &[u8] = if bytes.is_empty() { b"null" } else { &bytes };
-        serde_json::from_slice(body).map_err(|e| Error::BadResponse(format!("{kind}: {e}")))
     }
 }
 
-fn one_per_op(ops: &[Op], results: Vec<OpResult>) -> Result<Vec<OpResult>> {
-    if results.len() == ops.len() {
-        Ok(results)
-    } else {
-        Err(Error::BadResponse(format!(
-            "{} results for {} ops",
-            results.len(),
-            ops.len()
-        )))
-    }
-}
-
-fn exists_ok(r: Result<IgnoredAny>) -> Result<()> {
-    match r {
-        Err(Error::Api(e)) if e.code == "already_exists" => Ok(()),
-        r => r.map(drop),
-    }
-}
-
-pub struct Txn {
+/// Serializable transaction whose first request runs the database and import checks.
+pub(crate) struct Txn {
+    inner: client::Txn,
+    /// A request of this transaction ran the database and import checks.
+    checked: bool,
+    /// The checks of this transaction found missing or outdated tables and set them up.
+    ran_table_setup: bool,
+    /// Import marker that the checks of this transaction read.
+    import: Option<ImportMarker>,
     db: Db,
-    id: String,
-    commit_id: String,
 }
 
 impl Txn {
-    pub async fn ops(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
-        let path = format!("/transactions/{}/ops", self.id);
-        let r: Results = self.db.run(RequestKind::Ops, &path, ops).await?;
-        one_per_op(ops, r.results.unwrap_or_default())
-    }
-
-    /// Commits `ops` and reconciles ambiguous commit outcomes before returning.
-    pub async fn commit(self, ops: &[Op]) -> Result<()> {
-        let path = format!("/transactions/{}/commit", self.id);
-        match self
-            .db
-            .run::<IgnoredAny>(RequestKind::Commit, &path, ops)
-            .await
+    /// Execute `ops` in the transaction.
+    pub(crate) async fn run(&mut self, ops: &[Op]) -> Result<Vec<OpResult>> {
+        if self.checked {
+            return self
+                .inner
+                .run(ops)
+                .await
+                .map_err(|e| self.db.explain_key_error(e.into()));
+        }
+        self.checked = true;
+        let result = match self.inner.run(&self.db.gated(ops)).await {
+            Ok(results) => self.db.pass_gate(results).map(|(import, rest)| {
+                self.import = import;
+                rest
+            }),
+            Err(e) => Err(self.db.gate_failure(e).await),
+        };
+        if let Err(e) = &result
+            && Db::needs_table_setup(e)
         {
-            Ok(_) => Ok(()),
-            Err(Error::Api(e)) if e.from_server && !e.outcome_unknown => Err(Error::Api(e)),
-            Err(Error::Http(e)) if e.is_connect() => Err(Error::Http(e)),
-            Err(Error::Http(_)) if ops.is_empty() => {
-                Err(ApiError::not_applied("read-only commit lost its answer"))
-            }
-            // Wait past the server commit deadline and query `/commits/{commit_id}` to determine whether the commit was applied.
-            Err(_) => {
-                tokio::time::sleep(AMBIGUOUS_COMMIT_WAIT).await;
-                let path = format!("/commits/{}", self.commit_id);
-                let s: CommitStatus = retry(|| {
-                    self.db
-                        .call(RequestKind::Status, Method::GET, &path, None::<&()>)
-                })
-                .await?;
-                match s.status {
-                    CommitState::Committed => Ok(()),
-                    CommitState::NotCommitted => Err(ApiError::not_applied("commit did not apply")),
-                }
-            }
+            self.db.set_up_tables().await?;
+            self.ran_table_setup = true;
         }
+        result
     }
 
-    pub async fn abort(self) {
-        let path = format!("/transactions/{}", self.id);
-        let _ = self
-            .db
-            .call::<IgnoredAny>(RequestKind::Abort, Method::DELETE, &path, None::<&()>)
-            .await;
+    /// Run the database and import checks unless an earlier request of this transaction already ran them.
+    async fn check_gate(&mut self) -> Result<()> {
+        if !self.checked {
+            self.run(&[]).await?;
+        }
+        Ok(())
+    }
+
+    /// Read the OAuth row of type `R` with primary key `pk` in the transaction.
+    #[cfg(feature = "mcp")]
+    pub(crate) async fn get_oauth<R: OAuthRow>(&mut self, pk: &str) -> Result<Option<R>> {
+        let mut results = self.run(&[Op::get_row::<R>(pk)]).await?;
+        let result = results
+            .pop()
+            .ok_or_else(|| Error::BadRow("transaction did not return a result".into()))?;
+        Ok(result.row()?)
+    }
+
+    /// Queue the insert of OAuth row `row`, which the server deletes after `ttl`.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn insert_oauth<R: OAuthRow>(&mut self, row: &R, ttl: Duration) {
+        self.queue([Op::insert_expiring(row, ttl)]);
+    }
+
+    /// Queue the insert of OAuth row `row`, which the server keeps until a delete.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn insert_lasting_oauth<R: OAuthRow>(&mut self, row: &R) {
+        self.queue([Op::insert(row)]);
+    }
+
+    /// Queue the delete of the OAuth row of type `R` with primary key `pk`.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn delete_oauth<R: OAuthRow>(&mut self, pk: &str) {
+        self.queue([Op::delete_row::<R>(pk)]);
+    }
+
+    /// Return the import marker that the database and import checks of the first request of this transaction read.
+    pub(crate) fn import_marker(&self) -> Option<ImportMarker> {
+        self.import
+    }
+
+    /// Queue `marker` as the progress of an import into this database.
+    pub(crate) fn set_import_marker(&mut self, marker: ImportMarker) {
+        self.queue([marker.write_op()]);
+    }
+
+    /// Queue the writes of `changes`, and return its overlay edits if it has any.
+    pub(crate) fn queue_write_set(&mut self, write_set: WriteSet) -> Option<OverlayWrite> {
+        let (ops, overlay_write) = write_set.into_ops();
+        self.queue(ops);
+        overlay_write
+    }
+
+    /// Queue write operations to send with the next request or the commit.
+    fn queue(&mut self, ops: impl IntoIterator<Item = Op>) {
+        self.inner.write(ops);
     }
 }
 
-/// Returns true if `e` indicates a transient failure where the transaction was not applied.
-pub fn is_retryable(e: &Error) -> bool {
+/// Return the message of the API error in `e`.
+fn api_message(e: &client::Error) -> String {
     match e {
-        Error::Api(a) => a.retry_not_applied(),
-        Error::Http(h) => h.is_connect(),
-        _ => false,
+        client::Error::Api { error, .. } => error.message.clone(),
+        client::Error::NotApplied(inner) => api_message(inner),
+        other => other.to_string(),
     }
-}
-
-pub async fn retry<T, F, Fut>(mut f: F) -> Result<T>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = Result<T>>,
-{
-    let mut attempt = 0;
-    loop {
-        match f().await {
-            Err(e) if is_retryable(&e) && attempt + 1 < MAX_ATTEMPTS => {
-                attempt += 1;
-                tokio::time::sleep(backoff(attempt)).await;
-            }
-            r => return r,
-        }
-    }
-}
-
-pub fn backoff(attempt: u32) -> Duration {
-    let cap = 10u64 << attempt.min(7);
-    Duration::from_millis(rand_below(cap.min(1000)) + 1)
-}
-
-fn rand_below(n: u64) -> u64 {
-    use std::hash::{BuildHasher, RandomState};
-    RandomState::new().hash_one(std::time::Instant::now()) % n.max(1)
 }
 
 fn cache_name(url: &str, db: &str) -> String {
@@ -527,38 +629,4 @@ fn cache_name(url: &str, db: &str) -> String {
         })
         .collect();
     format!("overlay-{host}-{db}.json")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_baserunna_errors_say_whether_a_request_applied() {
-        let body = br#"{"error":{"code":"conflict","message":"m","retryable":true}}"#;
-        let server = ApiError::from_response(StatusCode::CONFLICT, body);
-        assert!(server.from_server && server.retryable && !server.outcome_unknown);
-
-        let unknown = br#"{"error":{"code":"unavailable","message":"m","retryable":true,"details":{"outcome":"unknown"}}}"#;
-        assert!(ApiError::from_response(StatusCode::SERVICE_UNAVAILABLE, unknown).outcome_unknown);
-
-        let proxy =
-            ApiError::from_response(StatusCode::BAD_GATEWAY, b"<html>502 Bad Gateway</html>");
-        assert!(
-            !proxy.from_server,
-            "a proxy response does not indicate whether the commit was applied"
-        );
-        assert!(proxy.retryable);
-    }
-
-    #[test]
-    fn server_timing_parses_every_metric() {
-        let t = ServerTiming::parse(
-            "total;dur=80.5, store;dur=75.2;desc=2, commit;dur=74.9, wait;dur=1.5",
-        );
-        assert_eq!(t.total, Duration::from_micros(80_500));
-        assert_eq!((t.store, t.store_calls), (Duration::from_micros(75_200), 2));
-        assert_eq!(t.commit, Duration::from_micros(74_900));
-        assert_eq!(t.wait, Duration::from_micros(1_500));
-    }
 }

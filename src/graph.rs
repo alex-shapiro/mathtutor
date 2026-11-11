@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use include_dir::{Dir, include_dir};
 use serde::{Deserialize, Serialize};
@@ -190,7 +191,7 @@ fn node_to_concept(n: NodeRaw) -> Concept {
     }
 }
 
-/// Wraps top-level area concepts in a synthetic root node so that area prefixes are resolved as clusters.
+/// Wrap top-level area concepts in a synthetic root node so that area prefixes are resolved as clusters.
 fn area_root_concept(entry: &ManifestArea, children: Vec<Concept>) -> Concept {
     Concept {
         id: entry.prefix.clone(),
@@ -246,46 +247,104 @@ fn embedded_file_str(name: &str) -> Result<&'static str> {
     })
 }
 
-fn load_manifest_embedded() -> Result<Manifest> {
-    let s = embedded_file_str("manifest.ayml")?;
-    ayml::from_str(s).map_err(|e| Error::AymlParse {
-        path: embedded_path("manifest.ayml"),
+fn parse_embedded<T: serde::de::DeserializeOwned>(name: &str) -> Result<T> {
+    ayml::from_str(embedded_file_str(name)?).map_err(|e| Error::AymlParse {
+        path: embedded_path(name),
         message: e.to_string(),
     })
 }
 
-fn load_area_embedded(filename: &str) -> Result<AreaFileRaw> {
-    let s = embedded_file_str(filename)?;
-    ayml::from_str(s).map_err(|e| Error::AymlParse {
-        path: embedded_path(filename),
-        message: e.to_string(),
-    })
+/// Location of the curriculum files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CurriculumSource {
+    /// The curriculum compiled into the binary.
+    Embedded,
+    /// A directory that holds `manifest.ayml` and the area files.
+    Dir(PathBuf),
 }
 
-/// Loads `manifest.ayml` from `explicit`, `$MT_GRAPH`, or the embedded curriculum directory.
-pub fn load_manifest_default(explicit: Option<&Path>) -> Result<Manifest> {
-    if let Some(p) = explicit {
-        return load_manifest(&p.join("manifest.ayml"));
+impl CurriculumSource {
+    fn manifest(&self) -> Result<Manifest> {
+        match self {
+            Self::Embedded => parse_embedded("manifest.ayml"),
+            Self::Dir(dir) => load_manifest(&dir.join("manifest.ayml")),
+        }
     }
-    if let Some(env_path) = std::env::var_os("MT_GRAPH") {
-        return load_manifest(&Path::new(&env_path).join("manifest.ayml"));
+
+    fn area(&self, file: &str) -> Result<AreaFileRaw> {
+        match self {
+            Self::Embedded => parse_embedded(file),
+            Self::Dir(dir) => load_area(&dir.join(file)),
+        }
     }
-    load_manifest_embedded()
 }
 
-fn load_area_default(explicit: Option<&Path>, filename: &str) -> Result<AreaFileRaw> {
-    if let Some(p) = explicit {
-        return load_area(&p.join(filename));
-    }
-    if let Some(env_path) = std::env::var_os("MT_GRAPH") {
-        return load_area(&Path::new(&env_path).join(filename));
-    }
-    load_area_embedded(filename)
+/// Curriculum graph of a process, parsed from its source on first use.
+#[derive(Debug)]
+pub struct Curriculum {
+    source: CurriculumSource,
+    graph: OnceLock<Arc<Graph>>,
 }
 
-#[derive(Debug, Clone)]
+impl Curriculum {
+    pub fn new(source: CurriculumSource) -> Self {
+        Self {
+            source,
+            graph: OnceLock::new(),
+        }
+    }
+
+    /// Return the embedded curriculum, which every caller in the process shares.
+    pub fn embedded() -> Arc<Self> {
+        static EMBEDDED: OnceLock<Arc<Curriculum>> = OnceLock::new();
+        EMBEDDED
+            .get_or_init(|| Arc::new(Self::new(CurriculumSource::Embedded)))
+            .clone()
+    }
+
+    /// Return the curriculum in `dir`, or the embedded curriculum if `dir` is `None`.
+    pub fn open(dir: Option<PathBuf>) -> Arc<Self> {
+        match dir {
+            None => Self::embedded(),
+            Some(dir) => Arc::new(Self::new(CurriculumSource::Dir(dir))),
+        }
+    }
+
+    pub fn source(&self) -> &CurriculumSource {
+        &self.source
+    }
+
+    /// Return the curriculum graph without user overlay content.
+    pub fn graph(&self) -> Result<Arc<Graph>> {
+        if let Some(g) = self.graph.get() {
+            return Ok(g.clone());
+        }
+        let g = Arc::new(Graph::load(&self.source)?);
+        Ok(self.graph.get_or_init(|| g).clone())
+    }
+
+    /// Return the curriculum graph with `overlay` overrides and tombstones applied.
+    pub fn merged(&self, overlay: &crate::overlay::Overlay) -> Result<Arc<Graph>> {
+        let base = self.graph()?;
+        if overlay.atoms.is_empty() {
+            return Ok(base);
+        }
+        let mut g = (*base).clone();
+        g.apply_overlay(overlay);
+        Ok(Arc::new(g))
+    }
+}
+
+/// Flattened curriculum graph, keyed by concept ID.
+#[derive(Debug, Clone, Default)]
 pub struct Graph {
     pub by_id: HashMap<String, FlatConcept>,
+    /// Curriculum areas in manifest order.
+    pub areas: Vec<ManifestArea>,
+    /// ID of the parent of each concept that has a parent, keyed by concept ID.
+    parent_ids: HashMap<String, String>,
+    /// ID of the atom of each quiz, keyed by quiz ID.
+    quiz_atoms: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -300,95 +359,123 @@ pub struct FlatConcept {
 }
 
 impl Graph {
-    pub fn load(graph_dir: &Path) -> Result<Self> {
-        let manifest = load_manifest(&graph_dir.join("manifest.ayml"))?;
+    /// Parse the curriculum graph from `source`.
+    pub fn load(source: &CurriculumSource) -> Result<Self> {
+        let manifest = source.manifest()?;
         let mut by_id = HashMap::new();
         for entry in &manifest.areas {
-            let raw = load_area(&graph_dir.join(&entry.file))?;
+            let raw = source.area(&entry.file)?;
             flatten(area_root_concept(entry, raw.into_concepts()), &mut by_id);
         }
-        Ok(Self { by_id })
+        Ok(Self::new(by_id, manifest.areas))
     }
 
-    pub fn load_embedded() -> Result<Self> {
-        static PARSED: std::sync::OnceLock<Graph> = std::sync::OnceLock::new();
-        if let Some(g) = PARSED.get() {
-            return Ok(g.clone());
+    /// Build a graph of `concepts` without areas.
+    pub fn of_concepts(concepts: impl IntoIterator<Item = FlatConcept>) -> Self {
+        Self::new(
+            concepts.into_iter().map(|c| (c.id.clone(), c)).collect(),
+            Vec::new(),
+        )
+    }
+
+    fn new(by_id: HashMap<String, FlatConcept>, areas: Vec<ManifestArea>) -> Self {
+        let parent_ids = by_id
+            .values()
+            .flat_map(|c| {
+                c.children_ids
+                    .iter()
+                    .map(|child| (child.clone(), c.id.clone()))
+            })
+            .collect();
+        let quiz_atoms = by_id
+            .values()
+            .flat_map(|c| c.quizzes.iter().map(|q| (q.id.clone(), c.id.clone())))
+            .collect();
+        Self {
+            by_id,
+            areas,
+            parent_ids,
+            quiz_atoms,
         }
-        let g = Self::parse_embedded()?;
-        Ok(PARSED.get_or_init(|| g).clone())
     }
 
-    fn parse_embedded() -> Result<Self> {
-        let manifest = load_manifest_embedded()?;
-        let mut by_id = HashMap::new();
-        for entry in &manifest.areas {
-            let raw = load_area_embedded(&entry.file)?;
-            flatten(area_root_concept(entry, raw.into_concepts()), &mut by_id);
+    /// Return the cluster or area that holds concept `id`, or `None` for an area or an unknown ID.
+    pub fn parent(&self, id: &str) -> Option<&FlatConcept> {
+        self.by_id.get(self.parent_ids.get(id)?)
+    }
+
+    /// Return the atoms below concept `id` in first-seen order, or `id` itself if it is an atom.
+    pub fn atomic_descendants(&self, id: &str) -> Vec<String> {
+        let mut atoms = Vec::new();
+        self.collect_atomic_descendants(id, &mut HashSet::new(), &mut atoms);
+        atoms
+    }
+
+    /// Return the atoms that atom `atom_id` requires directly, in first-seen order.
+    ///
+    /// The list holds the atoms of the prerequisites of the atom and of each cluster that holds it, outermost cluster first.
+    pub fn atomic_prerequisites(&self, atom_id: &str) -> Vec<String> {
+        let mut holders = vec![atom_id];
+        let mut id = atom_id;
+        while let Some(parent) = self.parent(id) {
+            holders.push(&parent.id);
+            id = &parent.id;
         }
-        Ok(Self { by_id })
-    }
-
-    /// Loads the curriculum graph from `explicit`, `$MT_GRAPH`, or the embedded curriculum directory.
-    pub fn load_default(explicit: Option<&Path>) -> Result<Self> {
-        if let Some(p) = explicit {
-            return Self::load(p);
-        }
-        if let Some(env_path) = std::env::var_os("MT_GRAPH") {
-            return Self::load(Path::new(&env_path));
-        }
-        Self::load_embedded()
-    }
-
-    /// Loads the curriculum graph and applies `overlay` overrides and tombstones.
-    pub fn merged(overlay: &crate::overlay::Overlay, graph_dir: Option<&Path>) -> Result<Self> {
-        let mut g = Self::load_default(graph_dir)?;
-        g.apply_overlay(overlay);
-        Ok(g)
-    }
-
-    /// Returns all atomic descendants of `targets` and their transitive prerequisites.
-    pub fn reachable_atoms(&self, targets: &[String]) -> HashSet<String> {
-        let mut out: HashSet<String> = HashSet::new();
-        let mut stack: Vec<String> = targets.to_vec();
-        while let Some(id) = stack.pop() {
-            let Some(c) = self.by_id.get(&id) else {
-                continue;
-            };
-            if !c.children_ids.is_empty() {
-                stack.extend(c.children_ids.iter().cloned());
-                stack.extend(c.prerequisites.iter().cloned());
-                continue;
+        let mut seen = HashSet::new();
+        let mut atoms = Vec::new();
+        for holder in holders.iter().rev() {
+            for p in self
+                .by_id
+                .get(*holder)
+                .into_iter()
+                .flat_map(|c| &c.prerequisites)
+            {
+                self.collect_atomic_descendants(p, &mut seen, &mut atoms);
             }
-            if !out.insert(id.clone()) {
-                continue;
-            }
-            stack.extend(c.prerequisites.iter().cloned());
         }
-        out
+        atoms
     }
 
-    /// Expands atom and cluster IDs into a deduplicated list of atomic descendant IDs in first-seen order.
+    /// Return `atoms` and their transitive atomic prerequisites, each after its prerequisites and in the order of `atoms`.
+    pub fn prerequisite_order(&self, atoms: &[String]) -> Vec<String> {
+        let mut visited = HashSet::new();
+        let mut order = Vec::new();
+        for atom in atoms {
+            self.visit_prerequisites_first(atom, &mut visited, &mut order);
+        }
+        order
+    }
+
+    fn visit_prerequisites_first(
+        &self,
+        atom: &str,
+        visited: &mut HashSet<String>,
+        order: &mut Vec<String>,
+    ) {
+        if !visited.insert(atom.to_string()) {
+            return;
+        }
+        for prereq in self.atomic_prerequisites(atom) {
+            self.visit_prerequisites_first(&prereq, visited, order);
+        }
+        order.push(atom.to_string());
+    }
+
+    /// Expand atom and cluster IDs into a deduplicated list of atomic descendant IDs in first-seen order.
+    ///
+    /// Fails with [`Error::EmptyCluster`] for a cluster without atomic descendants, even if another ID covers the same atoms.
     pub fn expand_to_atoms(&self, ids: &[String]) -> Result<Vec<String>> {
         let mut seen: HashSet<String> = HashSet::new();
         let mut out: Vec<String> = Vec::new();
-
         for id in ids {
-            let before = out.len();
-            match self.by_id.get(id) {
-                Some(c) if c.children_ids.is_empty() => {
-                    if seen.insert(id.clone()) {
-                        out.push(id.clone());
-                    }
-                }
-                Some(_) => {
-                    self.collect_atomic_descendants(id, &mut seen, &mut out);
-                    if out.len() == before {
-                        return Err(Error::EmptyCluster(id.clone()));
-                    }
-                }
-                None => return Err(Error::UnknownId(id.clone())),
+            if !self.by_id.contains_key(id) {
+                return Err(Error::UnknownId(id.clone()));
             }
+            let atoms = self.atomic_descendants(id);
+            if atoms.is_empty() {
+                return Err(Error::EmptyCluster(id.clone()));
+            }
+            out.extend(atoms.into_iter().filter(|a| seen.insert(a.clone())));
         }
         Ok(out)
     }
@@ -415,25 +502,26 @@ impl Graph {
         let c = self
             .by_id
             .get(id)
-            .ok_or_else(|| Error::AtomNotFound(id.to_string()))?;
+            .ok_or_else(|| Error::UnknownId(id.to_string()))?;
         if !c.children_ids.is_empty() {
             return Err(Error::NotAtom(id.to_string()));
         }
         Ok(c)
     }
 
+    /// Return the live quiz `quiz_id` and its atom, or [`Error::UnknownId`] if the graph does not hold the quiz.
     pub fn quiz(&self, quiz_id: &str) -> Result<(&FlatConcept, &Quiz)> {
-        let atom_id = crate::answer::atom_from_quiz_id(quiz_id)
-            .ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
+        let unknown = || Error::UnknownId(quiz_id.to_string());
         let atom = self
-            .by_id
-            .get(&atom_id)
-            .ok_or_else(|| Error::AtomNotFound(atom_id))?;
+            .quiz_atoms
+            .get(quiz_id)
+            .and_then(|atom_id| self.by_id.get(atom_id))
+            .ok_or_else(unknown)?;
         let q = atom
             .quizzes
             .iter()
             .find(|q| q.id == quiz_id)
-            .ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
+            .ok_or_else(unknown)?;
         Ok((atom, q))
     }
 
@@ -451,15 +539,19 @@ impl Graph {
                     Some(existing) => existing.clone_from(overlay_quiz),
                     None => c.quizzes.push(overlay_quiz.clone()),
                 }
+                self.quiz_atoms
+                    .insert(overlay_quiz.id.clone(), atom_id.clone());
             }
             if !entry.removed.is_empty() {
                 c.quizzes.retain(|q| !entry.removed.contains(&q.id));
+                self.quiz_atoms
+                    .retain(|quiz_id, a| a != atom_id || !entry.removed.contains(quiz_id));
             }
         }
     }
 }
 
-/// Compares dot-separated concept IDs segment by segment, ordering numeric segments by integer value.
+/// Compare dot-separated concept IDs segment by segment, ordering numeric segments by integer value.
 pub fn natural_id_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let (mut sa, mut sb) = (a.split('.'), b.split('.'));
@@ -520,8 +612,8 @@ pub struct CheckReport {
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport> {
-    let manifest = load_manifest_default(graph_dir)?;
+pub fn run_check(source: &CurriculumSource) -> Result<CheckReport> {
+    let manifest = source.manifest()?;
 
     let mut report = CheckReport {
         areas: manifest.areas.len(),
@@ -538,7 +630,7 @@ pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport> {
     eprintln!("loaded manifest: {} areas", manifest.areas.len());
 
     for entry in &manifest.areas {
-        let raw = match load_area_default(graph_dir, &entry.file) {
+        let raw = match source.area(&entry.file) {
             Ok(a) => a,
             Err(e) => {
                 report.issues.push(CheckIssue {
@@ -618,22 +710,18 @@ pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport> {
         let area_slug = entry.slug.clone();
         let concepts = raw.into_concepts();
 
-        let mut area_clusters = 0;
-        let mut area_atoms = 0;
+        let mut check = AreaCheck {
+            prefix: &prefix,
+            slug: &area_slug,
+            id_to_area: &mut id_to_area,
+            report: &mut report,
+            clusters: 0,
+            atoms: 0,
+        };
         for root in &concepts {
-            walk_validate(
-                root,
-                None,
-                &prefix,
-                &area_slug,
-                1,
-                &mut id_to_area,
-                &mut report,
-                &mut area_clusters,
-                &mut area_atoms,
-            );
+            check.visit(root, None, 1);
         }
-
+        let (area_clusters, area_atoms) = (check.clusters, check.atoms);
         report.clusters += area_clusters;
         report.atoms += area_atoms;
 
@@ -657,13 +745,46 @@ pub fn run_check(graph_dir: Option<&Path>) -> Result<CheckReport> {
             collect_prereq_edges(root, &mut adj);
         }
     }
-    detect_cycles(&id_to_area, &adj, &mut report);
+    let mut by_id = HashMap::new();
+    for (entry, _sv, concepts) in &area_trees {
+        flatten(area_root_concept(entry, concepts.clone()), &mut by_id);
+    }
+    let atom_edges =
+        atomic_prerequisite_edges(&Graph::new(by_id, Vec::new()), &id_to_area, &mut report);
+    detect_cycles(&id_to_area, &atom_edges, &mut report);
     check_orphans(&area_trees, &adj, &id_to_area, &mut report);
 
     Ok(report)
 }
 
-/// Reports non-terminal atoms that are not referenced as prerequisites directly or via an ancestor cluster.
+/// Return the atomic prerequisites of each atom in `g`, and report each atom that its own prerequisites contain.
+fn atomic_prerequisite_edges(
+    g: &Graph,
+    id_to_area: &BTreeMap<String, String>,
+    report: &mut CheckReport,
+) -> HashMap<String, Vec<String>> {
+    let mut edges = HashMap::new();
+    for (id, area) in id_to_area {
+        if g.by_id.get(id).is_none_or(|c| !c.children_ids.is_empty()) {
+            continue;
+        }
+        let mut prereqs = g.atomic_prerequisites(id);
+        if let Some(pos) = prereqs.iter().position(|p| p == id) {
+            prereqs.remove(pos);
+            report.issues.push(CheckIssue {
+                area: Some(area.clone()),
+                node: Some(id.clone()),
+                message:
+                    "a prerequisite of this atom or of a cluster that holds it contains this atom"
+                        .into(),
+            });
+        }
+        edges.insert(id.clone(), prereqs);
+    }
+    edges
+}
+
+/// Report non-terminal atoms that are not referenced as prerequisites directly or via an ancestor cluster.
 fn check_orphans(
     area_trees: &[(ManifestArea, u32, Vec<Concept>)],
     adj: &HashMap<String, Vec<String>>,
@@ -711,89 +832,95 @@ fn collect_orphan_atoms(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn walk_validate(
-    n: &Concept,
-    parent_id: Option<&str>,
-    prefix: &str,
-    area_slug: &str,
-    depth: usize,
-    id_to_area: &mut BTreeMap<String, String>,
-    report: &mut CheckReport,
-    clusters: &mut usize,
-    atoms: &mut usize,
-) {
-    if n.is_atom() {
-        *atoms += 1;
-    } else {
-        *clusters += 1;
-    }
-    if depth > report.max_depth {
-        report.max_depth = depth;
-    }
+/// Validation of the concept tree of a single area.
+struct AreaCheck<'a> {
+    prefix: &'a str,
+    slug: &'a str,
+    id_to_area: &'a mut BTreeMap<String, String>,
+    report: &'a mut CheckReport,
+    clusters: usize,
+    atoms: usize,
+}
 
-    let parts: Vec<&str> = n.id.split('.').collect();
-    if parts.is_empty() || parts[0] != prefix {
-        report.issues.push(CheckIssue {
-            area: Some(area_slug.to_string()),
-            node: Some(n.id.clone()),
-            message: format!("id does not start with area prefix '{prefix}'"),
+impl AreaCheck<'_> {
+    fn issue(&mut self, node: &str, message: String) {
+        self.report.issues.push(CheckIssue {
+            area: Some(self.slug.to_string()),
+            node: Some(node.to_string()),
+            message,
         });
     }
-    for seg in parts.iter().skip(1) {
-        let valid = !seg.is_empty()
-            && seg.chars().all(|c| c.is_ascii_digit())
-            && !(seg.len() > 1 && seg.starts_with('0'))
-            && *seg != "0";
-        if !valid {
-            report.issues.push(CheckIssue {
-                area: Some(area_slug.to_string()),
-                node: Some(n.id.clone()),
-                message: format!("id segment '{seg}' is not a positive integer (no leading zeros)"),
-            });
-        }
-    }
 
-    if let Some(p) = parent_id {
-        let expected_prefix = format!("{p}.");
-        if let Some(suffix) = n.id.strip_prefix(&expected_prefix) {
-            if suffix.contains('.') {
-                report.issues.push(CheckIssue {
-                    area: Some(area_slug.to_string()),
-                    node: Some(n.id.clone()),
-                    message: format!("id should extend parent '{p}' by exactly one segment"),
-                });
-            }
+    /// Count `n` and its descendants, record their areas, and report each malformed or duplicate ID.
+    fn visit(&mut self, n: &Concept, parent_id: Option<&str>, depth: usize) {
+        if n.is_atom() {
+            self.atoms += 1;
         } else {
-            report.issues.push(CheckIssue {
-                area: Some(area_slug.to_string()),
-                node: Some(n.id.clone()),
-                message: format!("id does not extend parent '{p}'"),
-            });
+            self.clusters += 1;
+        }
+        self.report.max_depth = self.report.max_depth.max(depth);
+
+        let parts: Vec<&str> = n.id.split('.').collect();
+        if parts.is_empty() || parts[0] != self.prefix {
+            let prefix = self.prefix;
+            self.issue(
+                &n.id,
+                format!("id does not start with area prefix '{prefix}'"),
+            );
+        }
+        for seg in parts.iter().skip(1) {
+            let valid = !seg.is_empty()
+                && seg.chars().all(|c| c.is_ascii_digit())
+                && !(seg.len() > 1 && seg.starts_with('0'))
+                && *seg != "0";
+            if !valid {
+                self.issue(
+                    &n.id,
+                    format!("id segment '{seg}' is not a positive integer without leading zeros"),
+                );
+            }
+        }
+
+        if let Some(p) = parent_id {
+            match n.id.strip_prefix(&format!("{p}.")) {
+                Some(suffix) if suffix.contains('.') => self.issue(
+                    &n.id,
+                    format!("id should extend parent '{p}' by a single segment"),
+                ),
+                Some(_) => {}
+                None => self.issue(&n.id, format!("id does not extend parent '{p}'")),
+            }
+        }
+
+        for q in &n.quizzes {
+            if !is_curriculum_quiz_id(&n.id, &q.id) {
+                self.issue(
+                    &n.id,
+                    format!(
+                        "quiz id '{}' should be '{}.q<N>' with a positive N",
+                        q.id, n.id
+                    ),
+                );
+            }
+        }
+
+        if let Some(prev_area) = self.id_to_area.insert(n.id.clone(), self.slug.to_string()) {
+            self.issue(&n.id, format!("duplicate id (also in area '{prev_area}')"));
+        }
+
+        for child in &n.children {
+            self.visit(child, Some(&n.id), depth + 1);
         }
     }
+}
 
-    if let Some(prev_area) = id_to_area.insert(n.id.clone(), area_slug.to_string()) {
-        report.issues.push(CheckIssue {
-            area: Some(area_slug.to_string()),
-            node: Some(n.id.clone()),
-            message: format!("duplicate id (also in area '{prev_area}')"),
-        });
-    }
-
-    for child in &n.children {
-        walk_validate(
-            child,
-            Some(&n.id),
-            prefix,
-            area_slug,
-            depth + 1,
-            id_to_area,
-            report,
-            clusters,
-            atoms,
-        );
-    }
+/// Return `true` if `quiz_id` has the form `<atom_id>.q<N>` of a curriculum quiz, so that it cannot equal the ID of a user quiz.
+fn is_curriculum_quiz_id(atom_id: &str, quiz_id: &str) -> bool {
+    quiz_id
+        .strip_prefix(atom_id)
+        .and_then(|rest| rest.strip_prefix(".q"))
+        .and_then(|n| n.parse::<u32>().ok())
+        .is_some_and(|n| n > 0)
 }
 
 fn check_prereqs_resolve(
@@ -888,23 +1015,34 @@ fn detect_cycles(
     }
 }
 
-impl CheckReport {
-    pub fn print(&self) {
-        println!();
-        println!("Statistics");
-        println!("  areas:        {}", self.areas);
-        println!("  clusters:     {}", self.clusters);
-        println!("  atoms:        {}", self.atoms);
-        println!("  total nodes:  {}", self.clusters + self.atoms);
-        println!("  max depth:    {}", self.max_depth);
-        println!("  prereq edges: {}", self.prereq_edges);
+/// Validate the curriculum files of `source`, print the report, and fail if the report has issues for `mt graph check`.
+pub fn cmd_graph_check(source: &CurriculumSource) -> Result<()> {
+    let report = run_check(source)?;
+    let printed = crate::print_stdout(&report.to_string());
+    if report.issues.is_empty() {
+        printed
+    } else {
+        Err(Error::GraphCheckFailed)
+    }
+}
+
+impl std::fmt::Display for CheckReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f)?;
+        writeln!(f, "Statistics")?;
+        writeln!(f, "  areas:        {}", self.areas)?;
+        writeln!(f, "  clusters:     {}", self.clusters)?;
+        writeln!(f, "  atoms:        {}", self.atoms)?;
+        writeln!(f, "  total nodes:  {}", self.clusters + self.atoms)?;
+        writeln!(f, "  max depth:    {}", self.max_depth)?;
+        writeln!(f, "  prereq edges: {}", self.prereq_edges)?;
 
         if self.issues.is_empty() {
-            println!();
-            println!("graph check passed.");
+            writeln!(f)?;
+            writeln!(f, "graph check passed.")?;
         } else {
-            println!();
-            println!("Issues ({}):", self.issues.len());
+            writeln!(f)?;
+            writeln!(f, "Issues ({}):", self.issues.len())?;
             for i in &self.issues {
                 let prefix = match (&i.area, &i.node) {
                     (Some(a), Some(n)) => format!("{a}/{n}"),
@@ -912,11 +1050,12 @@ impl CheckReport {
                     (None, Some(n)) => n.clone(),
                     _ => "(graph)".to_string(),
                 };
-                println!("  {prefix}: {}", i.message);
+                writeln!(f, "  {prefix}: {}", i.message)?;
             }
-            println!();
-            println!("graph check FAILED.");
+            writeln!(f)?;
+            writeln!(f, "graph check FAILED.")?;
         }
+        Ok(())
     }
 }
 

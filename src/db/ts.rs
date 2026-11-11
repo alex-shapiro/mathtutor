@@ -43,7 +43,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn formatted_times_sort_chronologically_and_round_trip() {
+    fn formatted_times_sort_chronologically_and_parse_back() {
         let a = parse("2026-05-26T09:00:00Z").unwrap();
         let b = parse("2026-05-26T10:00:00.5+01:00").unwrap() + chrono::Duration::hours(1);
         assert_eq!(format(a), "2026-05-26T09:00:00.000Z");

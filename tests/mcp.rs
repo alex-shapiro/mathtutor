@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
-const API_KEY: &str = "test-api-key";
+const API_KEY: &str = "test-api-key-0123456789abcdefghij";
 const ADMIN_PASSWORD: &str = "hunter2";
 
 struct ServerHandle {
@@ -38,15 +38,26 @@ impl ServerHandle {
 
 // Probe an ephemeral port first so `mcp::run` can bind to a known address.
 async fn spawn_server_with(auth: AuthConfig) -> ServerHandle {
-    let cfg = common::fresh_config();
+    spawn_server_on(common::fresh_config(), auth).await
+}
 
+async fn spawn_server_on(cfg: mathtutor::db::DbConfig, auth: AuthConfig) -> ServerHandle {
+    common::create_db(&cfg).await;
+    spawn_server_without_setup(cfg, auth).await
+}
+
+/// Start a server on `cfg` without a request to its database.
+async fn spawn_server_without_setup(
+    cfg: mathtutor::db::DbConfig,
+    auth: AuthConfig,
+) -> ServerHandle {
     let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = probe.local_addr().unwrap();
     drop(probe);
 
     let addr_str = addr.to_string();
     let join = tokio::spawn(async move {
-        let _ = mcp::run(&addr_str, auth, cfg, None).await;
+        let _ = mcp::run(&addr_str, auth, cfg).await;
     });
 
     for _ in 0..250 {
@@ -116,7 +127,176 @@ async fn rejects_wrong_api_key_with_401() {
 }
 
 #[tokio::test]
-async fn accepts_query_token_when_header_absent() {
+async fn server_reports_a_missing_database_without_creating_it() {
+    let cfg = common::fresh_config();
+    let auth = AuthConfig {
+        api_key: Some(API_KEY.into()),
+        ..AuthConfig::default()
+    };
+    let server = spawn_server_without_setup(cfg.clone(), auth).await;
+
+    let health = client().get(server.url("/health")).send().await.unwrap();
+    assert_eq!(health.status(), 200);
+    let ready = client().get(server.url("/ready")).send().await.unwrap();
+    assert_eq!(ready.status(), 503);
+    assert_eq!(ready.json::<Value>().await.unwrap()["kind"], "config");
+    let paths = call_tool(&server, "get_paths", json!({})).await;
+    let message = paths["content"][0]["text"].as_str().unwrap();
+    assert!(message.contains("BASERUNNA_DB"), "{message}");
+    assert!(!message.contains("mt path new"), "{message}");
+
+    let raw = baserunna_client::Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
+    let info = raw.db(&cfg.db).info().await;
+    assert!(
+        info.is_err(),
+        "the server must not create the database: {info:?}"
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn server_answers_health_while_baserunna_is_unreachable() {
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let cfg = mathtutor::db::DbConfig {
+        url: format!("http://{}", closed.local_addr().unwrap()),
+        ..common::fresh_config()
+    };
+    drop(closed);
+    let auth = AuthConfig {
+        api_key: Some(API_KEY.into()),
+        ..AuthConfig::default()
+    };
+    let server = spawn_server_without_setup(cfg, auth).await;
+
+    let health = client().get(server.url("/health")).send().await.unwrap();
+    assert_eq!(health.status(), 200);
+    let ready = client().get(server.url("/ready")).send().await.unwrap();
+    assert_eq!(ready.status(), 503);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn ready_fails_within_its_timeout_while_baserunna_does_not_answer() {
+    let silent = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let cfg = mathtutor::db::DbConfig {
+        url: format!("http://{}", silent.local_addr().unwrap()),
+        ..common::fresh_config()
+    };
+    let held = tokio::spawn(async move {
+        let mut open = Vec::new();
+        while let Ok((stream, _)) = silent.accept().await {
+            open.push(stream);
+        }
+    });
+    let auth = AuthConfig {
+        api_key: Some(API_KEY.into()),
+        ..AuthConfig::default()
+    };
+    let server = spawn_server_without_setup(cfg, auth).await;
+    let patient = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap();
+
+    let started = std::time::Instant::now();
+    let ready = patient.get(server.url("/ready")).send().await.unwrap();
+
+    assert_eq!(ready.status(), 503);
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "{:?}",
+        started.elapsed()
+    );
+    let health = client().get(server.url("/health")).send().await.unwrap();
+    assert_eq!(health.status(), 200);
+    held.abort();
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn database_failure_during_token_check_returns_503_without_a_login_challenge() {
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            api_key: Some(API_KEY.into()),
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db)
+        .delete()
+        .await
+        .unwrap();
+
+    let resp = client()
+        .post(server.url("/mcp"))
+        .bearer_auth(ISSUED_FORM_TOKEN)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert!(resp.headers().contains_key("retry-after"));
+    assert!(!resp.headers().contains_key("www-authenticate"));
+
+    let malformed = client()
+        .post(server.url("/mcp"))
+        .bearer_auth("an-oauth-access-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        malformed.status(),
+        401,
+        "a malformed token fails without a database request"
+    );
+    server.stop().await;
+}
+
+/// Token with the form of an issued access token that the server did not issue.
+const ISSUED_FORM_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+#[tokio::test]
+async fn rejected_bearer_tokens_delay_only_bearer_tokens_other_than_the_api_key() {
+    let server = spawn_oauth_server().await;
+    let post = async |token: &str| {
+        client()
+            .post(server.url("/mcp"))
+            .bearer_auth(token)
+            .header(ACCEPT, "application/json, text/event-stream")
+            .header(CONTENT_TYPE, "application/json")
+            .body(initialize_body())
+            .send()
+            .await
+            .unwrap()
+    };
+    for token in [ISSUED_FORM_TOKEN, "wrong"].repeat(10) {
+        assert_eq!(post(token).await.status(), 401);
+    }
+
+    let res = post(ISSUED_FORM_TOKEN).await;
+    assert_eq!(res.status(), 429, "a further token must wait");
+    let wait: u64 = res.headers()["retry-after"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((1..=60).contains(&wait), "{wait}");
+    assert_eq!(post(API_KEY).await.status(), 200, "the API key never waits");
+
+    let reg = register_client(&server, "Shared address").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    assert!(!code.is_empty(), "rejected tokens do not delay a sign-in");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn accepts_query_token_if_header_absent() {
     let server = spawn_server().await;
     let url = format!("{}?token={API_KEY}", server.url("/mcp"));
     let res = client()
@@ -144,13 +324,10 @@ async fn initialize_returns_server_info_and_capabilities() {
         .await
         .unwrap();
     assert_eq!(res.status(), 200);
-    let session = res
-        .headers()
-        .get("mcp-session-id")
-        .expect("session id header")
-        .to_str()
-        .unwrap()
-        .to_string();
+    assert!(
+        res.headers().get("mcp-session-id").is_none(),
+        "the server omits a session"
+    );
     let body = res.text().await.unwrap();
     let json = parse_sse_message(&body).expect("sse json");
     let result = json
@@ -172,23 +349,19 @@ async fn initialize_returns_server_info_and_capabilities() {
         "prompts capability advertised"
     );
     assert_eq!(
-        result["serverInfo"]["name"].as_str().unwrap(),
-        "rmcp",
-        "name comes from rmcp's build env helper"
+        result["serverInfo"],
+        json!({ "name": "mathtutor", "version": env!("CARGO_PKG_VERSION") })
     );
 
-    assert_ne!(session, "");
     server.stop().await;
 }
 
 #[tokio::test]
 async fn tools_list_includes_every_documented_tool() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -233,11 +406,9 @@ async fn tools_list_includes_every_documented_tool() {
 #[tokio::test]
 async fn get_next_advertises_mode_enum_in_schema() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
     )
     .await;
@@ -270,11 +441,9 @@ async fn get_next_advertises_mode_enum_in_schema() {
 #[tokio::test]
 async fn prompts_list_includes_playbook() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -298,11 +467,9 @@ async fn prompts_list_includes_playbook() {
 #[tokio::test]
 async fn get_paths_returns_empty_list_on_fresh_db() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -332,13 +499,74 @@ async fn get_paths_returns_empty_list_on_fresh_db() {
 }
 
 #[tokio::test]
+async fn tool_calls_with_the_api_key_ignore_the_authorization_schema_version() {
+    let cfg = common::fresh_config();
+    common::create_db(&cfg).await;
+    baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db)
+        .write(&[baserunna_client::Op::put(
+            "mathtutor_auth_state",
+            r#"{"schema":"99"}"#,
+        )])
+        .await
+        .unwrap();
+    let server = spawn_server_without_setup(
+        cfg,
+        AuthConfig {
+            api_key: Some(API_KEY.into()),
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+
+    let result = call_tool(&server, "get_paths", json!({})).await;
+    assert_eq!(result["structuredContent"], json!({ "paths": [] }));
+    let register = oauth_client()
+        .post(server.url("/oauth/register"))
+        .json(&json!({ "redirect_uris": ["http://localhost/cb"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        register.status(),
+        500,
+        "OAuth requests still check the version"
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn server_caches_the_overlay_only_in_memory() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let cfg = mathtutor::db::DbConfig {
+        cache_dir: Some(dir.path().to_path_buf()),
+        ..common::fresh_config()
+    };
+    let server = spawn_server_on(
+        cfg,
+        AuthConfig {
+            api_key: Some(API_KEY.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+
+    let result = call_tool(&server, "get_paths", json!({})).await;
+
+    assert_eq!(result["structuredContent"], json!({ "paths": [] }));
+    let files: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+    assert!(files.is_empty(), "{files:?}");
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn unknown_atom_id_returns_structured_business_error() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -376,11 +604,9 @@ async fn unknown_atom_id_returns_structured_business_error() {
 #[tokio::test]
 async fn get_syllabus_returns_upcoming_topics_for_new_path() {
     let server = spawn_server().await;
-    let session = handshake(&server).await;
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 2,
@@ -400,7 +626,6 @@ async fn get_syllabus_returns_upcoming_topics_for_new_path() {
 
     let res = mcp_post(
         &server,
-        &session,
         &json!({
             "jsonrpc": "2.0",
             "id": 3,
@@ -424,6 +649,130 @@ async fn get_syllabus_returns_upcoming_topics_for_new_path() {
     server.stop().await;
 }
 
+/// Call tool `name` with `arguments` and return its result.
+async fn call_tool(server: &ServerHandle, name: &str, arguments: Value) -> Value {
+    let res = mcp_post(
+        server,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments }
+        }),
+    )
+    .await;
+    let msg = parse_sse_message(&res.text().await.unwrap()).expect("sse");
+    msg["result"].clone()
+}
+
+#[tokio::test]
+async fn path_tools_return_the_cli_views_with_mcp_next_steps() {
+    let server = spawn_server().await;
+    let created = call_tool(
+        &server,
+        "new_path",
+        json!({ "goal": "Test", "targets": ["fnd.1.1.2"] }),
+    )
+    .await;
+    let path_id = created["structuredContent"]["path_id"].clone();
+
+    let paths = call_tool(&server, "get_paths", json!({})).await;
+    let summary = &paths["structuredContent"]["paths"][0];
+    assert_eq!(summary["id"], path_id);
+    assert_eq!(
+        summary["targets"],
+        json!({ "total": 1, "learned": 0, "learned_pct": 0 })
+    );
+
+    let next = call_tool(&server, "get_next", json!({ "path_id": path_id })).await;
+    let step = next["structuredContent"]["next_step"].as_str().unwrap();
+    assert!(step.contains(&format!("path_id: {path_id}")), "{step}");
+    assert!(!step.starts_with("mt "), "{step}");
+
+    let tree = call_tool(&server, "get_tree", json!({ "path_id": path_id })).await;
+    let tree = &tree["structuredContent"];
+    assert_eq!(tree["next"], json!("fnd.1.1.1"));
+    assert_eq!(tree["reachable"]["total"], json!(2));
+    assert_eq!(tree["areas"][0]["prefix"], json!("fnd"));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_second_server_on_the_same_database_answers_without_an_initialize() {
+    let cfg = common::fresh_config();
+    let auth = AuthConfig {
+        api_key: Some(API_KEY.into()),
+        ..AuthConfig::default()
+    };
+    let first = spawn_server_on(cfg.clone(), auth.clone()).await;
+    let created = call_tool(
+        &first,
+        "new_path",
+        json!({ "goal": "Test", "targets": ["fnd.1.1.2"] }),
+    )
+    .await;
+    let path_id = created["structuredContent"]["path_id"].clone();
+    first.stop().await;
+
+    let new_key = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .create_api_key(&baserunna_client::api::NewApiKey {
+            name: "rotated".into(),
+            db: Some(cfg.db.clone()),
+            read_only: false,
+            rate_limit: None,
+        })
+        .await
+        .unwrap()
+        .key;
+    let rotated = mathtutor::db::DbConfig {
+        token: new_key,
+        ..cfg
+    };
+    let second = spawn_server_on(rotated, auth).await;
+    let next = call_tool(&second, "get_next", json!({ "path_id": path_id })).await;
+    assert_ne!(next["isError"], json!(true), "{next}");
+    assert_eq!(next["structuredContent"]["path"], path_id);
+    second.stop().await;
+}
+
+#[tokio::test]
+async fn quiz_tools_accept_the_shared_quiz_fields() {
+    let server = spawn_server().await;
+    let created = call_tool(
+        &server,
+        "new_path",
+        json!({ "goal": "Test", "targets": ["fnd.1.1.2"], "strategy": "top_down" }),
+    )
+    .await;
+    let path_id = created["structuredContent"]["path_id"].clone();
+    let lesson = json!({ "atom": "fnd.1.1.2", "body": "b", "path_id": path_id });
+    call_tool(&server, "upsert_lesson", lesson).await;
+
+    let quiz = json!({
+        "atom": "fnd.1.1.2",
+        "difficulty": "easy",
+        "question": "q",
+        "answer": "a",
+        "path_id": path_id,
+    });
+    let created = call_tool(&server, "create_quiz", quiz).await;
+    assert_ne!(created["isError"], json!(true), "{created}");
+    let quiz_id = created["structuredContent"]["quiz_id"].clone();
+    assert_eq!(quiz_id, json!("fnd.1.1.2.u1"));
+
+    let patch = json!({ "quiz_id": quiz_id, "question": "q2", "path_id": path_id });
+    let updated = call_tool(&server, "update_quiz", patch).await;
+    assert_ne!(updated["isError"], json!(true), "{updated}");
+    let next = call_tool(&server, "get_next", json!({ "path_id": path_id })).await;
+    let quiz = &next["structuredContent"]["payload"]["quiz"];
+    assert_eq!(
+        (&quiz["question"], &quiz["answer"]),
+        (&json!("q2"), &json!("a"))
+    );
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn health_returns_200_ok_without_auth() {
     for server in [spawn_server().await, spawn_oauth_server().await] {
@@ -432,6 +781,67 @@ async fn health_returns_200_ok_without_auth() {
         assert_eq!(res.text().await.unwrap(), "ok");
         server.stop().await;
     }
+}
+
+#[tokio::test]
+async fn ready_reports_a_usable_database_without_auth() {
+    let server = spawn_server().await;
+    let res = client().get(server.url("/ready")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.text().await.unwrap(), "ready");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn ready_reports_a_database_without_tables_as_ready_without_creating_tables() {
+    let cfg = common::fresh_config();
+    let raw = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db);
+    raw.ensure().await.unwrap();
+    let auth = AuthConfig {
+        api_key: Some(API_KEY.into()),
+        ..AuthConfig::default()
+    };
+    let server = spawn_server_without_setup(cfg.clone(), auth).await;
+
+    let res = client().get(server.url("/ready")).send().await.unwrap();
+
+    assert_eq!(res.status(), 200);
+    let tables = raw
+        .list_tables(baserunna_client::api::ListTablesQuery::default())
+        .await
+        .unwrap()
+        .tables;
+    assert!(tables.is_empty(), "{tables:?}");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn ready_fails_while_health_passes_if_the_database_is_gone() {
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            api_key: Some(API_KEY.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db)
+        .delete()
+        .await
+        .unwrap();
+
+    let res = client().get(server.url("/ready")).send().await.unwrap();
+    assert_eq!(res.status(), 503);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body, json!({ "ready": false, "kind": "config" }));
+    let health = client().get(server.url("/health")).send().await.unwrap();
+    assert_eq!(health.status(), 200, "the machine stays alive");
+    server.stop().await;
 }
 
 #[tokio::test]
@@ -511,7 +921,7 @@ async fn authorization_server_metadata_advertises_endpoints() {
 }
 
 #[tokio::test]
-async fn well_known_routes_unreachable_when_oauth_disabled() {
+async fn well_known_routes_return_404_if_oauth_disabled() {
     let server = spawn_server().await;
     let res = oauth_client()
         .get(server.url("/.well-known/oauth-authorization-server"))
@@ -523,7 +933,7 @@ async fn well_known_routes_unreachable_when_oauth_disabled() {
 }
 
 #[tokio::test]
-async fn register_issues_client_id_and_round_trips_redirect_uris() {
+async fn register_issues_client_id_and_preserves_redirect_uris() {
     let server = spawn_oauth_server().await;
     let res = register_client(&server, "Test Client").await;
     assert_ne!(res.client_id, "");
@@ -537,13 +947,59 @@ async fn register_rejects_empty_redirect_uris() {
     let server = spawn_oauth_server().await;
     let res = oauth_client()
         .post(server.url("/oauth/register"))
-        .json(&json!({ "client_name": "no redirects", "redirect_uris": [] }))
+        .json(&json!({ "client_name": "empty redirects", "redirect_uris": [] }))
         .send()
         .await
         .unwrap();
     assert_eq!(res.status(), 400);
     let body: Value = res.json().await.unwrap();
     assert_eq!(body["error"].as_str().unwrap(), "invalid_request");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn an_access_token_works_only_in_the_authorization_header() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Query").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+    let list = json!({"jsonrpc":"2.0","id":2,"method":"tools/list"});
+    let res = mcp_post_with_token(&server, &tokens.access_token, &list).await;
+    assert_eq!(
+        res.status(),
+        200,
+        "the header form works and caches the token"
+    );
+
+    let url = format!("{}?token={}", server.url("/mcp"), tokens.access_token);
+    let res = client()
+        .post(&url)
+        .header(ACCEPT, "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .body(initialize_body())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn sign_in_page_forbids_framing() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Framed").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&server, &reg.client_id, &pkce.challenge, None, None);
+    let form = oauth_client().get(&auth_url).send().await.unwrap();
+    let form_headers = form.headers().clone();
+    let html = form.text().await.unwrap();
+    let wrong = submit_login(&server, &html, "wrong").await;
+
+    for headers in [&form_headers, wrong.headers()] {
+        assert_eq!(headers["content-security-policy"], "frame-ancestors 'none'");
+        assert_eq!(headers["x-frame-options"], "DENY");
+    }
     server.stop().await;
 }
 
@@ -569,25 +1025,7 @@ async fn full_authorization_code_flow_yields_a_working_access_token() {
         .text()
         .await
         .unwrap();
-    let csrf = extract_csrf(&form_html).expect("csrf token");
-
-    let res = oauth_client_no_redirect()
-        .post(server.url("/oauth/authorize"))
-        .form(&[
-            ("response_type", "code"),
-            ("client_id", reg.client_id.as_str()),
-            ("redirect_uri", "http://localhost/cb"),
-            ("code_challenge", pkce.challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("state", state),
-            ("scope", "mcp"),
-            ("resource", ""),
-            ("csrf", csrf.as_str()),
-            ("password", ADMIN_PASSWORD),
-        ])
-        .send()
-        .await
-        .unwrap();
+    let res = submit_login(&server, &form_html, ADMIN_PASSWORD).await;
     assert_eq!(res.status(), 303, "/authorize POST redirects on success");
     let location = res
         .headers()
@@ -605,10 +1043,8 @@ async fn full_authorization_code_flow_yields_a_working_access_token() {
     assert_ne!(tokens.refresh_token, "");
     assert_eq!(tokens.token_type, "Bearer");
 
-    let session = handshake_with_token(&server, &tokens.access_token).await;
     let res = mcp_post_with_token(
         &server,
-        &session,
         &tokens.access_token,
         &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
     )
@@ -632,25 +1068,7 @@ async fn wrong_password_re_renders_form_without_issuing_code() {
         .text()
         .await
         .unwrap();
-    let csrf = extract_csrf(&form_html).expect("csrf");
-
-    let res = oauth_client_no_redirect()
-        .post(server.url("/oauth/authorize"))
-        .form(&[
-            ("response_type", "code"),
-            ("client_id", reg.client_id.as_str()),
-            ("redirect_uri", "http://localhost/cb"),
-            ("code_challenge", pkce.challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("state", ""),
-            ("scope", ""),
-            ("resource", ""),
-            ("csrf", csrf.as_str()),
-            ("password", "not the password"),
-        ])
-        .send()
-        .await
-        .unwrap();
+    let res = submit_login(&server, &form_html, "not the password").await;
     assert_eq!(res.status(), 401);
     let body = res.text().await.unwrap();
     assert!(body.contains("Incorrect password"));
@@ -731,6 +1149,191 @@ async fn refresh_token_rotates_and_returns_a_fresh_access_token() {
     server.stop().await;
 }
 
+async fn refresh_raw(
+    server: &ServerHandle,
+    client_id: &str,
+    refresh_token: &str,
+    scope: Option<&str>,
+) -> reqwest::Response {
+    let mut form = vec![
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+        ("client_id", client_id),
+    ];
+    form.extend(scope.map(|s| ("scope", s)));
+    oauth_client_no_redirect()
+        .post(server.url("/oauth/token"))
+        .form(&form)
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn sign_in_without_scope_or_state_grants_mcp_and_omits_state() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "No Scope").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&server, &reg.client_id, &pkce.challenge, None, None);
+    let form_html = oauth_client()
+        .get(&auth_url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let names: Vec<String> = hidden_fields(&form_html)
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    for absent in ["state", "scope", "resource"] {
+        assert!(!names.iter().any(|n| n == absent), "{absent} in {names:?}");
+    }
+
+    let res = submit_login(&server, &form_html, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 303);
+    let location = res.headers()["location"].to_str().unwrap().to_string();
+    let (code, state) = parse_redirect_query(&location);
+    assert_eq!(state, None, "the redirect adds a state: {location}");
+
+    let res = exchange_code_raw(&server, &reg.client_id, &code, &pkce.verifier).await;
+    assert_eq!(res.status(), 200);
+    let tokens: Value = res.json().await.unwrap();
+    assert_eq!(tokens["scope"], "mcp");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn refresh_with_mcp_scope_keeps_a_grant_without_a_requested_scope() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Scope").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let first = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+
+    let res = refresh_raw(&server, &reg.client_id, &first.refresh_token, Some("mcp")).await;
+    assert_eq!(res.status(), 200);
+    let refreshed: Value = res.json().await.unwrap();
+    assert_eq!(refreshed["scope"], "mcp");
+    let access = refreshed["access_token"].as_str().unwrap();
+    let list_tools = json!({"jsonrpc":"2.0","id":2,"method":"tools/list"});
+    let res = mcp_post_with_token(&server, access, &list_tools).await;
+    assert_eq!(res.status(), 200);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn refresh_rejects_a_scope_other_than_mcp() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Scope").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let first = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+
+    let broader = refresh_raw(
+        &server,
+        &reg.client_id,
+        &first.refresh_token,
+        Some("mcp admin"),
+    )
+    .await;
+    assert_eq!(broader.status(), 400);
+    let body: Value = broader.json().await.unwrap();
+    assert_eq!(body["error"], "invalid_scope");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn authorize_rejects_an_unknown_scope() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Unknown Scope").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(
+        &server,
+        &reg.client_id,
+        &pkce.challenge,
+        None,
+        Some("admin"),
+    );
+    let res = oauth_client().get(&auth_url).send().await.unwrap();
+    assert_eq!(res.status(), 400);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"], "invalid_scope");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn stored_codes_and_tokens_are_keyed_by_the_hash_of_the_secret() {
+    use mathtutor::db::{Op, Row};
+    use mathtutor::mcp::oauth::secret_hash;
+    use mathtutor::schema::{OAuthAccessToken, OAuthCode, OAuthRefreshToken};
+
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            api_key: Some(API_KEY.into()),
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    let reg = register_client(&server, "Hashed").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let raw = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db);
+    let codes = async || -> Vec<OAuthCode> {
+        let page = raw.read_one(Op::query_all::<OAuthCode>()).await.unwrap();
+        page.rows().unwrap()
+    };
+    let codes_before_exchange = codes().await;
+    let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+    assert!(codes().await.is_empty(), "the exchange deletes the code");
+
+    let rows = raw
+        .read(&[
+            Op::query_all::<OAuthAccessToken>(),
+            Op::query_all::<OAuthRefreshToken>(),
+        ])
+        .await
+        .unwrap();
+    let [access, refresh]: [_; 2] = rows.try_into().unwrap();
+    let access: Vec<OAuthAccessToken> = access.rows().unwrap();
+    let refresh: Vec<OAuthRefreshToken> = refresh.rows().unwrap();
+    let stored = [
+        (
+            OAuthCode::TABLE,
+            codes_before_exchange[0].code_hash.as_str(),
+            code.as_str(),
+        ),
+        (
+            OAuthAccessToken::TABLE,
+            access[0].token_hash.as_str(),
+            tokens.access_token.as_str(),
+        ),
+        (
+            OAuthRefreshToken::TABLE,
+            refresh[0].token_hash.as_str(),
+            tokens.refresh_token.as_str(),
+        ),
+    ];
+    for (table, key, secret) in stored {
+        assert_ne!(key, secret, "{table} stores the secret");
+        assert_eq!(key, secret_hash(secret), "{table}");
+    }
+    let res = mcp_post_with_token(
+        &server,
+        &tokens.access_token,
+        &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    )
+    .await;
+    assert_eq!(res.status(), 200, "the access token still authenticates");
+    server.stop().await;
+}
+
 fn oauth_client() -> reqwest::Client {
     client()
 }
@@ -793,11 +1396,38 @@ impl PkcePair {
     }
 }
 
-fn extract_csrf(html: &str) -> Option<String> {
-    let needle = r#"name="csrf" value=""#;
-    let start = html.find(needle)? + needle.len();
-    let end = start + html[start..].find('"')?;
-    Some(html[start..end].to_string())
+/// Return the name and value of every hidden input of the login form `html`.
+fn hidden_fields(html: &str) -> Vec<(String, String)> {
+    let unescape = |v: &str| {
+        v.replace("&quot;", "\"")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
+    };
+    html.split("<input type=\"hidden\" ")
+        .skip(1)
+        .map(|input| {
+            let attr = |name: &str| {
+                let needle = format!("{name}=\"");
+                let start = input.find(&needle).expect("attribute") + needle.len();
+                let end = start + input[start..].find('"').expect("closing quote");
+                unescape(&input[start..end])
+            };
+            (attr("name"), attr("value"))
+        })
+        .collect()
+}
+
+/// Post the hidden inputs of the login form `html` with `password`, as a browser does.
+async fn submit_login(server: &ServerHandle, html: &str, password: &str) -> reqwest::Response {
+    let mut fields = hidden_fields(html);
+    fields.push(("password".into(), password.into()));
+    oauth_client_no_redirect()
+        .post(server.url("/oauth/authorize"))
+        .form(&fields)
+        .send()
+        .await
+        .unwrap()
 }
 
 fn authorize_url(
@@ -835,24 +1465,7 @@ async fn full_authorize(server: &ServerHandle, client_id: &str, pkce: &PkcePair)
         .text()
         .await
         .unwrap();
-    let csrf = extract_csrf(&form_html).expect("csrf");
-    let res = oauth_client_no_redirect()
-        .post(server.url("/oauth/authorize"))
-        .form(&[
-            ("response_type", "code"),
-            ("client_id", client_id),
-            ("redirect_uri", "http://localhost/cb"),
-            ("code_challenge", pkce.challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("state", ""),
-            ("scope", ""),
-            ("resource", ""),
-            ("csrf", csrf.as_str()),
-            ("password", ADMIN_PASSWORD),
-        ])
-        .send()
-        .await
-        .unwrap();
+    let res = submit_login(server, &form_html, ADMIN_PASSWORD).await;
     assert_eq!(res.status(), 303);
     let location = res
         .headers()
@@ -909,51 +1522,8 @@ async fn exchange_code(
     res.json::<TokenResponseDe>().await.unwrap()
 }
 
-async fn handshake_with_token(server: &ServerHandle, token: &str) -> String {
-    let res = client()
-        .post(server.url("/mcp"))
-        .header(AUTHORIZATION, format!("Bearer {token}"))
-        .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .body(initialize_body())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 200, "OAuth-bearer initialize must succeed");
-    let session = res
-        .headers()
-        .get("mcp-session-id")
-        .expect("session id")
-        .to_str()
-        .unwrap()
-        .to_string();
-    let _ = res.text().await;
-
-    let res = client()
-        .post(server.url("/mcp"))
-        .header(AUTHORIZATION, format!("Bearer {token}"))
-        .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .header("mcp-session-id", &session)
-        .header("mcp-protocol-version", "2025-06-18")
-        .body(
-            json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized"
-            })
-            .to_string(),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert!(res.status().is_success());
-    let _ = res.text().await;
-    session
-}
-
 async fn mcp_post_with_token(
     server: &ServerHandle,
-    session: &str,
     token: &str,
     body: &Value,
 ) -> reqwest::Response {
@@ -962,7 +1532,6 @@ async fn mcp_post_with_token(
         .header(AUTHORIZATION, format!("Bearer {token}"))
         .header(ACCEPT, "application/json, text/event-stream")
         .header(CONTENT_TYPE, "application/json")
-        .header("mcp-session-id", session)
         .header("mcp-protocol-version", "2025-06-18")
         .body(body.to_string())
         .send()
@@ -984,61 +1553,8 @@ fn initialize_body() -> String {
     .to_string()
 }
 
-async fn handshake(server: &ServerHandle) -> String {
-    let res = client()
-        .post(server.url("/mcp"))
-        .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
-        .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .body(initialize_body())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 200, "initialize must succeed");
-    let session = res
-        .headers()
-        .get("mcp-session-id")
-        .expect("session id")
-        .to_str()
-        .unwrap()
-        .to_string();
-    let _ = res.text().await;
-
-    let res = client()
-        .post(server.url("/mcp"))
-        .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
-        .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .header("mcp-session-id", &session)
-        .header("mcp-protocol-version", "2025-06-18")
-        .body(
-            json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized"
-            })
-            .to_string(),
-        )
-        .send()
-        .await
-        .unwrap();
-    assert!(res.status().is_success(), "initialized notification");
-    let _ = res.text().await;
-
-    session
-}
-
-async fn mcp_post(server: &ServerHandle, session: &str, body: &Value) -> reqwest::Response {
-    client()
-        .post(server.url("/mcp"))
-        .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
-        .header(ACCEPT, "application/json, text/event-stream")
-        .header(CONTENT_TYPE, "application/json")
-        .header("mcp-session-id", session)
-        .header("mcp-protocol-version", "2025-06-18")
-        .body(body.to_string())
-        .send()
-        .await
-        .unwrap()
+async fn mcp_post(server: &ServerHandle, body: &Value) -> reqwest::Response {
+    mcp_post_with_token(server, API_KEY, body).await
 }
 
 // Skip non-JSON SSE priming events and return the first JSON-RPC payload.
@@ -1057,4 +1573,479 @@ fn parse_sse_message(body: &str) -> Option<Value> {
         }
     }
     None
+}
+
+#[tokio::test]
+async fn item_lookup_without_a_path_reports_authored_lessons() {
+    let server = spawn_server().await;
+    let created = call_tool(
+        &server,
+        "new_path",
+        json!({ "goal": "Test", "targets": ["fnd.1.1.2"] }),
+    )
+    .await;
+    let path_id = created["structuredContent"]["path_id"].clone();
+    let item = json!({ "id": "fnd.1.1.2" });
+    let before = call_tool(&server, "get_item", item.clone()).await;
+    assert_eq!(before["structuredContent"]["has_lesson"], json!(false));
+
+    let lesson = json!({ "atom": "fnd.1.1.2", "body": "b", "path_id": path_id });
+    call_tool(&server, "upsert_lesson", lesson).await;
+    let after = call_tool(&server, "get_item", item).await;
+    assert_eq!(after["structuredContent"]["has_lesson"], json!(true));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn repeated_incorrect_passwords_delay_the_next_sign_in() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Guesser").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&server, &reg.client_id, &pkce.challenge, None, None);
+    let form_html = oauth_client()
+        .get(&auth_url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    for _ in 0..5 {
+        let res = submit_login(&server, &form_html, "wrong").await;
+        assert_eq!(res.status(), 401);
+    }
+
+    let res = submit_login(&server, &form_html, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 429, "the correct password must wait too");
+    assert_eq!(res.headers()["retry-after"], "1");
+    assert!(res.text().await.unwrap().contains("Try again in 1 second."));
+    let bearer = client()
+        .post(server.url("/mcp"))
+        .bearer_auth(ISSUED_FORM_TOKEN)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        bearer.status(),
+        401,
+        "incorrect passwords do not delay bearer tokens"
+    );
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let res = submit_login(&server, &form_html, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 303, "the wait ends after the delay");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn sign_in_delay_and_open_form_persist_across_a_restart_with_a_new_database_key() {
+    let cfg = common::fresh_config();
+    let auth = AuthConfig {
+        admin_password: Some(ADMIN_PASSWORD.into()),
+        ..AuthConfig::default()
+    };
+    let first = spawn_server_on(cfg.clone(), auth.clone()).await;
+    let reg = register_client(&first, "Restarted").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&first, &reg.client_id, &pkce.challenge, None, None);
+    let form_html = oauth_client()
+        .get(&auth_url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    for _ in 0..5 {
+        assert_eq!(
+            submit_login(&first, &form_html, "wrong").await.status(),
+            401
+        );
+    }
+    first.stop().await;
+
+    let new_key = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .create_api_key(&baserunna_client::api::NewApiKey {
+            name: "rotated".into(),
+            db: Some(cfg.db.clone()),
+            read_only: false,
+            rate_limit: None,
+        })
+        .await
+        .unwrap()
+        .key;
+    let rotated = mathtutor::db::DbConfig {
+        token: new_key,
+        ..cfg
+    };
+    let second = spawn_server_on(rotated, auth).await;
+    let res = submit_login(&second, &form_html, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 429, "the restart keeps the delay");
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let res = submit_login(&second, &form_html, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 303, "the restart keeps the form valid");
+    second.stop().await;
+}
+
+#[tokio::test]
+async fn a_server_accepts_a_form_that_another_server_signed_with_a_new_key() {
+    use mathtutor::db::Op;
+    use mathtutor::schema::OAuthKey;
+
+    let cfg = common::fresh_config();
+    let auth = AuthConfig {
+        admin_password: Some(ADMIN_PASSWORD.into()),
+        ..AuthConfig::default()
+    };
+    let first = spawn_server_on(cfg.clone(), auth.clone()).await;
+    let reg = register_client(&first, "Two machines").await;
+    let pkce = PkcePair::new();
+    let form = async |server: &ServerHandle| {
+        let auth_url = authorize_url(server, &reg.client_id, &pkce.challenge, None, None);
+        let res = oauth_client().get(&auth_url).send().await.unwrap();
+        res.text().await.unwrap()
+    };
+    form(&first).await;
+    let new_key = OAuthKey {
+        name: "csrf".into(),
+        key: "bmV3IGtleQ".into(),
+    };
+    baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db)
+        .write(&[Op::delete_row::<OAuthKey>("csrf"), Op::insert(&new_key)])
+        .await
+        .unwrap();
+    let second = spawn_server_on(cfg, auth).await;
+    let signed_by_second = form(&second).await;
+
+    let res = submit_login(&first, &signed_by_second, ADMIN_PASSWORD).await;
+
+    assert_eq!(res.status(), 303);
+    first.stop().await;
+    second.stop().await;
+}
+
+#[tokio::test]
+async fn an_expired_sign_in_form_shows_a_new_form() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Stale").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&server, &reg.client_id, &pkce.challenge, None, None);
+    let form_html = oauth_client()
+        .get(&auth_url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let stale_csrf = hidden_fields(&form_html)
+        .into_iter()
+        .find(|(name, _)| name == "csrf")
+        .unwrap()
+        .1;
+    let stale_html = form_html.replace(&stale_csrf, "1.AAAA");
+
+    let res = submit_login(&server, &stale_html, ADMIN_PASSWORD).await;
+
+    assert_eq!(res.status(), 400);
+    assert!(
+        res.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    let page = res.text().await.unwrap();
+    assert!(page.contains("This sign-in form expired."), "{page}");
+    let res = submit_login(&server, &page, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 303, "the new form signs in");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn sign_in_page_shows_the_client_and_the_redirect_host() {
+    let server = spawn_oauth_server().await;
+    let redirect = "https://connector.example:8443/callback";
+    let reg: RegisterResponseDe = oauth_client()
+        .post(server.url("/oauth/register"))
+        .json(&json!({
+            "client_name": "Claude <script>",
+            "redirect_uris": [redirect],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pkce = PkcePair::new();
+    let mut url = url::Url::parse(&server.url("/oauth/authorize")).unwrap();
+    url.query_pairs_mut()
+        .append_pair("response_type", "code")
+        .append_pair("client_id", &reg.client_id)
+        .append_pair("redirect_uri", redirect)
+        .append_pair("code_challenge", &pkce.challenge)
+        .append_pair("code_challenge_method", "S256");
+
+    let page = oauth_client()
+        .get(url.as_str())
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    assert!(
+        page.contains("<strong>Claude &lt;script&gt;</strong>"),
+        "{page}"
+    );
+    assert!(
+        page.contains("<strong>connector.example:8443</strong>"),
+        "{page}"
+    );
+    assert!(!page.contains("<script>"), "{page}");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn registrations_from_an_address_are_limited() {
+    let server = spawn_oauth_server().await;
+    for i in 0..10 {
+        register_client(&server, &format!("client {i}")).await;
+    }
+    let res = oauth_client()
+        .post(server.url("/oauth/register"))
+        .json(&json!({ "redirect_uris": ["http://localhost/cb"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 429);
+    assert!(res.headers().contains_key("retry-after"));
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"], "too_many_requests");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_token_grant_keeps_the_client_registration_without_an_expiry() {
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    let reg = register_client(&server, "Expiring").await;
+    let days_left = async || {
+        let res: Value = client()
+            .post(format!("{}/v1/dbs/{}/txn", cfg.url, cfg.db))
+            .bearer_auth(&cfg.token)
+            .json(&json!({
+                "ops": [{ "op": "get_row", "table": "oauth_clients", "pk": reg.client_id }],
+            }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(res["results"][0]["found"], json!(true), "{res}");
+        let day = 86_400_000;
+        res["results"][0]["expires_at"]
+            .as_i64()
+            .map(|expires_at| (expires_at - chrono::Utc::now().timestamp_millis() + day / 2) / day)
+    };
+    assert_eq!(days_left().await, Some(1), "an unused registration expires");
+
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+    assert_eq!(days_left().await, None, "a code exchange keeps the client");
+
+    let res = refresh_raw(&server, &reg.client_id, &tokens.refresh_token, None).await;
+    assert_eq!(res.status(), 200);
+    assert_eq!(days_left().await, None, "a refresh keeps the client");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_token_request_from_an_unknown_client_asks_it_to_register_again() {
+    use mathtutor::db::Op;
+    use mathtutor::schema::OAuthClient;
+
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    let assert_invalid_client = async |res: reqwest::Response| {
+        assert_eq!(res.status(), 401);
+        let body: Value = res.json().await.unwrap();
+        assert_eq!(body["error"], "invalid_client", "{body}");
+    };
+    let expired = refresh_raw(&server, "gone", ISSUED_FORM_TOKEN, None).await;
+    assert_invalid_client(expired).await;
+
+    let reg = register_client(&server, "Removed").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db)
+        .write(&[Op::delete_row::<OAuthClient>(&reg.client_id)])
+        .await
+        .unwrap();
+    let exchange = exchange_code_raw(&server, &reg.client_id, &code, &pkce.verifier).await;
+    assert_invalid_client(exchange).await;
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn validated_access_token_skips_further_database_reads() {
+    use mathtutor::db::Op;
+    use mathtutor::mcp::oauth::secret_hash;
+    use mathtutor::schema::OAuthAccessToken;
+
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    let reg = register_client(&server, "Cached").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+    let list_tools = json!({"jsonrpc":"2.0","id":2,"method":"tools/list"});
+    let first = mcp_post_with_token(&server, &tokens.access_token, &list_tools).await;
+    assert_eq!(first.status(), 200);
+
+    let raw = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db);
+    let hash = secret_hash(&tokens.access_token);
+    raw.write(&[Op::delete_row::<OAuthAccessToken>(&hash)])
+        .await
+        .unwrap();
+
+    let res = mcp_post_with_token(&server, &tokens.access_token, &list_tools).await;
+    assert_eq!(res.status(), 200, "the server reads the token from memory");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn new_path_rejects_an_empty_target_list() {
+    let server = spawn_server().await;
+    let created = call_tool(
+        &server,
+        "new_path",
+        json!({ "goal": "Learn fractions", "targets": [] }),
+    )
+    .await;
+    assert_eq!(created["isError"], json!(true), "{created}");
+    assert_eq!(
+        created["structuredContent"]["kind"], "no_targets",
+        "{created}"
+    );
+    let paths = call_tool(&server, "get_paths", json!({})).await;
+    assert_eq!(paths["structuredContent"]["paths"], json!([]));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn new_path_accepts_a_target_inside_another_target() {
+    let server = spawn_server().await;
+    let created = call_tool(
+        &server,
+        "new_path",
+        json!({ "goal": "Overlap", "targets": ["la.5", "la.5.4"] }),
+    )
+    .await;
+    assert_ne!(created["isError"], json!(true), "{created}");
+    let path_id = created["structuredContent"]["path_id"].clone();
+    let next = call_tool(&server, "get_next", json!({ "path_id": path_id })).await;
+    assert_ne!(next["isError"], json!(true), "{next}");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn sign_in_and_token_requests_from_an_address_are_limited() {
+    let server = spawn_oauth_server().await;
+    let token_request = || {
+        oauth_client()
+            .post(server.url("/oauth/token"))
+            .form(&[("grant_type", "password")])
+            .send()
+    };
+    for _ in 0..60 {
+        assert_eq!(token_request().await.unwrap().status(), 400);
+    }
+
+    let res = token_request().await.unwrap();
+    assert_eq!(res.status(), 429);
+    assert!(res.headers().contains_key("retry-after"));
+    let res = oauth_client()
+        .get(server.url("/oauth/authorize?client_id=x"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 429, "the sign-in form shares the limit");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn only_the_routes_for_browser_clients_allow_other_origins() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Origin").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&server, &reg.client_id, &pkce.challenge, None, None);
+    let origin = "https://elsewhere.example";
+    let allowed =
+        |res: &reqwest::Response| res.headers().contains_key("access-control-allow-origin");
+
+    let form = oauth_client()
+        .get(&auth_url)
+        .header("origin", origin)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(form.status(), 200);
+    assert!(!allowed(&form), "the sign-in form allows another origin");
+
+    for path in [
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-protected-resource",
+    ] {
+        let res = oauth_client()
+            .get(server.url(path))
+            .header("origin", origin)
+            .send()
+            .await
+            .unwrap();
+        assert!(allowed(&res), "{path}");
+    }
+    for path in ["/oauth/token", "/oauth/register"] {
+        let preflight = oauth_client()
+            .request(reqwest::Method::OPTIONS, server.url(path))
+            .header("origin", origin)
+            .header("access-control-request-method", "POST")
+            .send()
+            .await
+            .unwrap();
+        assert!(allowed(&preflight), "{path}");
+    }
+    server.stop().await;
 }

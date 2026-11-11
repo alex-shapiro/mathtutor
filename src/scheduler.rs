@@ -1,35 +1,25 @@
 //! Action scheduler and AYML output envelope for `mt path next`.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::answer::atom_from_quiz_id;
 use crate::db::Db;
-use crate::event_log::{self, Event, EventKind};
+use crate::event_log::{Event, EventKind};
 use crate::graph::{FlatConcept, Graph};
-use crate::path::{self, PathFile};
-use crate::progress::PathProgress;
+use crate::path::PathRow;
+use crate::progress::{PathProgress, QuizSlot};
 use crate::subpath;
+use crate::surface::{AgentCommand, Field, Step, Surface, Value};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
-use crate::view::{PathState, Want};
+use crate::view::{PathState, View, ViewRequest};
 use crate::{Error, Result};
 
-const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
-
-/// Compute the next action for `path_id` and print its AYML envelope (`mt path next`).
-pub async fn cmd_path_next(
-    db: &Db,
-    path_id: Option<&str>,
-    graph_dir: Option<&Path>,
-    mode: NextMode,
-) -> Result<()> {
-    let envelope = compute_next(db, path_id, graph_dir, mode).await?;
-    let text = ayml::to_string(&envelope).map_err(|e| Error::AymlSerialize(e.to_string()))?;
-    print!("{text}");
-    Ok(())
+/// Compute the next action for `path_id` and print its AYML envelope for `mt path next`.
+pub async fn cmd_path_next(db: &Db, path_id: Option<&str>, mode: NextMode) -> Result<()> {
+    crate::print_ayml(&compute_next(db, path_id, mode, Surface::Cli).await?)
 }
 
 /// Filter for [`compute_next`] action selection.
@@ -55,45 +45,152 @@ impl NextMode {
     }
 }
 
-/// Select the next action for `path_id` and append its presentation event.
+/// Inputs that every view of a path reads: the merged graph, the progress, the target atoms, the subpath, and the due cards.
+pub struct PathPlan<'v> {
+    pub state: &'v PathState,
+    pub graph: Arc<Graph>,
+    pub progress: PathProgress,
+    /// Topologically sorted target atoms.
+    pub targets: Vec<String>,
+    /// Target atoms and their transitive atomic prerequisites, each after its prerequisites.
+    pub reachable: Vec<String>,
+    /// Atoms of the stored subpath.
+    pub subpath: Vec<String>,
+    /// Cards of live quizzes that are due now, from earliest to latest.
+    pub due: Vec<DueCard>,
+}
+
+/// Card of a live quiz that is due for review.
+#[derive(Debug, Clone)]
+pub struct DueCard {
+    pub quiz_id: String,
+    pub atom_id: String,
+    pub due: DateTime<Utc>,
+}
+
+impl<'v> PathPlan<'v> {
+    /// Return the plan of the path that `view` selected.
+    pub fn of(view: &'v View) -> Result<Self> {
+        Self::new(view.path()?, view.graph()?, Utc::now())
+    }
+
+    /// Return the plan of path `state` over `graph` at time `now`.
+    pub fn new(state: &'v PathState, graph: Arc<Graph>, now: DateTime<Utc>) -> Result<Self> {
+        let targets = state.row.resolve_targets(&graph)?;
+        let due = state
+            .due(now)
+            .into_iter()
+            .filter_map(|(quiz_id, due)| {
+                let (atom, _) = graph.quiz(&quiz_id).ok()?;
+                Some(DueCard {
+                    atom_id: atom.id.clone(),
+                    quiz_id,
+                    due,
+                })
+            })
+            .collect();
+        Ok(Self {
+            progress: state.progress(),
+            reachable: graph.prerequisite_order(&targets),
+            subpath: subpath::resolved(&state.row, &graph)?,
+            targets,
+            due,
+            graph,
+            state,
+        })
+    }
+
+    /// Return the highest-priority action of this path in `mode`.
+    pub fn next_action(&self, mode: NextMode) -> Action {
+        if mode != NextMode::New
+            && let Some(card) = self.due.first()
+        {
+            return Action::PresentQuiz {
+                quiz_id: card.quiz_id.clone(),
+                atom_id: card.atom_id.clone(),
+            };
+        }
+        if mode == NextMode::Due {
+            return Action::NoReviewsDue;
+        }
+        self.teaching_order()
+            .iter()
+            .find_map(|atom| atom_action(self.graph.by_id.get(atom)?, &self.progress))
+            .unwrap_or(Action::Done)
+    }
+
+    /// Return the atoms of this path with untaught lessons, in teaching order.
+    pub fn upcoming(&self) -> Vec<String> {
+        let mut order = self.teaching_order();
+        order.retain(|atom| !self.progress.lesson_taught(atom));
+        order
+    }
+
+    /// Return `true` if the atom `atom_id` is complete on this path.
+    pub fn is_complete(&self, atom_id: &str) -> bool {
+        is_atom_complete(&self.graph, &self.progress, atom_id)
+    }
+
+    /// Return the atoms of this path in the order that the scheduler teaches them.
+    ///
+    /// `bottom_up` lists the transitive atomic prerequisites of each target atom before the atom. `top_down` lists the subpath and then the targets.
+    fn teaching_order(&self) -> Vec<String> {
+        match self.state.row.strategy {
+            Strategy::BottomUp => self.reachable.clone(),
+            Strategy::TopDown => {
+                let g = &self.graph;
+                let mut visited = HashSet::new();
+                self.subpath
+                    .iter()
+                    .chain(&self.targets)
+                    .filter(|id| g.by_id.get(*id).is_some_and(|c| c.children_ids.is_empty()))
+                    .filter(|id| visited.insert(*id))
+                    .cloned()
+                    .collect()
+            }
+        }
+    }
+}
+
+/// Select the next action for `path_id`, append its presentation event, and return its envelope with the next step in the syntax of `surface`.
 pub async fn compute_next(
     db: &Db,
     path_id: Option<&str>,
-    graph_dir: Option<&Path>,
     mode: NextMode,
+    surface: Surface,
 ) -> Result<Envelope> {
-    db.transact(&Want::path(path_id), |view, changes| {
-        let ps = view.path()?;
-        let p = &ps.file;
-        let g = view.graph(graph_dir)?;
-        let progress = ps.progress();
-        let due = ps.due(Utc::now());
-        let subpath = subpath::resolved(p, &g)?;
-        let targets = p.resolve_targets(&g)?;
-
-        let action = next_action(&g, p, &targets, &progress, &due, &subpath, mode);
+    db.transact(&ViewRequest::path(path_id), |view, changes| {
+        let plan = PathPlan::of(view)?;
+        let p = &plan.state.row;
+        let action = plan.next_action(mode);
         // Build the envelope before appending presentation events so history reflects prior attempts.
-        let envelope = Envelope::build(ps, &g, action.clone());
+        let envelope = Envelope::build(plan.state, &plan.graph, action.clone(), surface);
 
         match &action {
-            Action::PresentQuiz { quiz_id, atom_id } => changes.append(
-                view,
-                &event_log::quiz_presented(p.id.clone(), atom_id.clone(), quiz_id.clone()),
-            )?,
+            Action::PresentQuiz { quiz_id, atom_id } => {
+                let presented = EventKind::QuizPresented {
+                    atom: atom_id.clone(),
+                    quiz: quiz_id.clone(),
+                };
+                changes.append(view, &Event::now(&p.id, presented))?;
+            }
             Action::PresentLesson { atom_id } => {
-                changes.append(
-                    view,
-                    &event_log::lesson_taught(p.id.clone(), atom_id.clone()),
-                )?;
+                let taught = EventKind::LessonTaught {
+                    atom: atom_id.clone(),
+                };
+                changes.append(view, &Event::now(&p.id, taught))?;
             }
             _ => {}
         }
 
         if p.strategy == Strategy::TopDown
-            && !subpath.is_empty()
-            && subpath.iter().all(|a| is_atom_complete(&g, &progress, a))
+            && !plan.subpath.is_empty()
+            && plan.subpath.iter().all(|a| plan.is_complete(a))
         {
-            path::set_subpath(changes, &p.id, &[]);
+            changes.replace_path(&PathRow {
+                subpath: Vec::new(),
+                ..p.clone()
+            });
         }
         Ok(envelope)
     })
@@ -117,157 +214,70 @@ pub enum Action {
         atom_id: String,
         difficulty: Difficulty,
     },
+    /// Zero quiz cards are due, in [`NextMode::Due`].
+    NoReviewsDue,
     Done,
 }
 
 impl Action {
-    /// Return the atom ID associated with this action, or `None` for [`Action::Done`].
+    /// Return the name of this action in the `action` field of an envelope.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Action::PresentQuiz { .. } => "present_quiz",
+            Action::CreateLesson { .. } => "create_lesson",
+            Action::PresentLesson { .. } => "present_lesson",
+            Action::CreateQuiz { .. } => "create_quiz",
+            Action::NoReviewsDue => "no_reviews_due",
+            Action::Done => "done",
+        }
+    }
+
+    /// Return the atom ID for this action, or `None` for `NoReviewsDue` and `Done`.
     pub fn atom_id(&self) -> Option<&str> {
         match self {
             Action::CreateLesson { atom_id }
             | Action::PresentLesson { atom_id }
             | Action::CreateQuiz { atom_id, .. }
             | Action::PresentQuiz { atom_id, .. } => Some(atom_id),
-            Action::Done => None,
+            Action::NoReviewsDue | Action::Done => None,
         }
     }
 }
 
-/// Compute the highest-priority action for `p` filtered by `mode`.
-pub fn next_action(
-    g: &Graph,
-    p: &PathFile,
-    targets: &[String],
-    progress: &PathProgress,
-    due_quizzes: &[(String, DateTime<Utc>)],
-    subpath: &[String],
-    mode: NextMode,
-) -> Action {
-    if mode != NextMode::New
-        && let Some((quiz_id, atom_id)) = first_due_card(g, due_quizzes)
-    {
-        return Action::PresentQuiz { quiz_id, atom_id };
-    }
-    if mode == NextMode::Due {
-        return Action::Done;
-    }
-
-    match p.strategy {
-        Strategy::BottomUp => {
-            let mut visited = HashSet::new();
-            for target in targets {
-                if let Some(action) = next_atom_action(g, progress, target, &mut visited) {
-                    return action;
-                }
-            }
-            Action::Done
-        }
-        Strategy::TopDown => {
-            for atom in subpath.iter().chain(targets) {
-                if let Some(action) = atom_action(g, progress, atom) {
-                    return action;
-                }
-            }
-            Action::Done
-        }
-    }
-}
-
-fn next_atom_action(
-    g: &Graph,
-    progress: &PathProgress,
-    id: &str,
-    visited: &mut HashSet<String>,
-) -> Option<Action> {
-    if !visited.insert(id.to_string()) {
-        return None;
-    }
-    let c = g.by_id.get(id)?;
-
-    for prereq in &c.prerequisites {
-        if let Some(action) = next_atom_action(g, progress, prereq, visited) {
-            return Some(action);
-        }
-    }
-
-    if !c.children_ids.is_empty() {
-        for child_id in &c.children_ids {
-            if let Some(action) = next_atom_action(g, progress, child_id, visited) {
-                return Some(action);
-            }
-        }
-        return None;
-    }
-
-    atom_action(g, progress, id)
-}
-
-fn atom_action(g: &Graph, progress: &PathProgress, id: &str) -> Option<Action> {
-    let c = g.by_id.get(id)?;
+/// Return the next action that atom `c` needs on a path with `progress`, or `None` if the atom is complete.
+pub fn atom_action(c: &FlatConcept, progress: &PathProgress) -> Option<Action> {
+    let atom_id = c.id.clone();
     if c.lesson.is_none() {
-        return Some(Action::CreateLesson {
-            atom_id: id.to_string(),
-        });
+        return Some(Action::CreateLesson { atom_id });
     }
-    if !progress.lesson_taught(id) {
-        return Some(Action::PresentLesson {
-            atom_id: id.to_string(),
-        });
+    if !progress.lesson_taught(&c.id) {
+        return Some(Action::PresentLesson { atom_id });
     }
-    for diff in DIFFICULTIES {
-        match c.quizzes.iter().find(|q| q.difficulty == diff) {
-            None => {
-                return Some(Action::CreateQuiz {
-                    atom_id: id.to_string(),
-                    difficulty: diff,
-                });
-            }
-            Some(quiz) => {
-                if !progress.quiz_answered_correctly(&quiz.id) {
-                    return Some(Action::PresentQuiz {
+    Difficulty::ALL
+        .iter()
+        .find_map(|&difficulty| match progress.quiz_slot(c, difficulty) {
+            QuizSlot::Missing => Some(Action::CreateQuiz {
+                atom_id: atom_id.clone(),
+                difficulty,
+            }),
+            QuizSlot::Authored => {
+                c.quizzes
+                    .iter()
+                    .find(|q| q.difficulty == difficulty)
+                    .map(|quiz| Action::PresentQuiz {
                         quiz_id: quiz.id.clone(),
-                        atom_id: id.to_string(),
-                    });
-                }
+                        atom_id: atom_id.clone(),
+                    })
             }
-        }
-    }
-    None
+            QuizSlot::Correct => None,
+        })
 }
 
-/// Return `true` if `events` contains a `LessonTaught` or `LessonAuthored` event for `atom_id`.
-pub fn lesson_taught_in_path(events: &[Event], atom_id: &str) -> bool {
-    events.iter().any(|e| {
-        matches!(e.kind, EventKind::LessonTaught | EventKind::LessonAuthored)
-            && e.atom.as_deref() == Some(atom_id)
-    })
-}
-
-fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<(String, String)> {
-    for (quiz_id, _) in due_quizzes {
-        let atom_id = atom_from_quiz_id(quiz_id)?;
-        let atom = g.by_id.get(&atom_id)?;
-        if atom.quizzes.iter().any(|q| &q.id == quiz_id) {
-            return Some((quiz_id.clone(), atom_id));
-        }
-    }
-    None
-}
-
-/// Return `true` if `atom_id` has a stored lesson and passed quizzes for all 3 difficulties.
+/// Return `true` if `atom_id` is in `g` and is complete on a path with `progress`.
 pub fn is_atom_complete(g: &Graph, progress: &PathProgress, atom_id: &str) -> bool {
-    let Some(c) = g.by_id.get(atom_id) else {
-        return false;
-    };
-    if c.lesson.is_none() {
-        return false;
-    }
-    DIFFICULTIES.iter().all(|diff| {
-        c.quizzes
-            .iter()
-            .find(|q| q.difficulty == *diff)
-            .is_some_and(|q| progress.quiz_answered_correctly(&q.id))
-    })
+    g.by_id
+        .get(atom_id)
+        .is_some_and(|c| atom_action(c, progress).is_none())
 }
 
 /// Presentation and answer history for a quiz card.
@@ -285,7 +295,7 @@ pub struct QuizHistory {
 
 /// Compute presentation and answer statistics for `quiz_id` in `ps`.
 pub fn quiz_history(ps: &PathState, quiz_id: &str) -> QuizHistory {
-    let Some(c) = ps.cards.get(quiz_id) else {
+    let Some(c) = ps.projection.cards.get(quiz_id) else {
         return QuizHistory::default();
     };
     let correct = c.reps - c.lapses;
@@ -309,7 +319,8 @@ fn percent(numerator: u32, denominator: u32) -> Option<u32> {
 
 /// Compute lesson presentation statistics for `atom_id` in `ps`.
 pub fn lesson_history(ps: &PathState, atom_id: &str) -> LessonHistory {
-    ps.taught
+    ps.projection
+        .taught
         .get(atom_id)
         .map_or_else(LessonHistory::default, |t| LessonHistory {
             repetitions: t.count,
@@ -321,11 +332,20 @@ pub fn lesson_history(ps: &PathState, atom_id: &str) -> LessonHistory {
 #[derive(Serialize)]
 pub struct Envelope {
     schema_version: u32,
-    action: String,
+    #[serde(serialize_with = "serialize_action_name")]
+    action: Action,
     path: String,
+    /// Command or tool call that performs the action.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_step: Option<String>,
     payload: Payload,
-    #[serde(skip)]
-    next: Action,
+}
+
+fn serialize_action_name<S: serde::Serializer>(
+    action: &Action,
+    s: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    s.serialize_str(action.name())
 }
 
 #[derive(Serialize)]
@@ -335,14 +355,13 @@ enum Payload {
     PresentLesson(PresentLessonPayload),
     CreateLesson(CreateLessonPayload),
     CreateQuiz(CreateQuizPayload),
-    Done(DonePayload),
+    Message(MessagePayload),
 }
 
 #[derive(Serialize)]
 struct CreateLessonPayload {
     atom: AtomBrief,
     prerequisites: Vec<PrereqBrief>,
-    next_step: String,
 }
 
 #[derive(Serialize)]
@@ -350,7 +369,6 @@ struct PresentLessonPayload {
     atom: AtomBrief,
     reason: &'static str,
     history: LessonHistory,
-    next_step: String,
 }
 
 #[derive(Serialize, Default, Debug)]
@@ -366,7 +384,6 @@ struct CreateQuizPayload {
     target_difficulty: Difficulty,
     existing_quizzes: Vec<ExistingQuizBrief>,
     prerequisites: Vec<PrereqBrief>,
-    next_step: String,
 }
 
 #[derive(Serialize)]
@@ -374,7 +391,6 @@ struct PresentQuizPayload {
     atom: AtomBrief,
     quiz: QuizFull,
     history: QuizHistory,
-    next_step: String,
 }
 
 #[derive(Serialize)]
@@ -415,113 +431,68 @@ struct QuizFull {
 }
 
 #[derive(Serialize)]
-struct DonePayload {
-    message: String,
+struct MessagePayload {
+    message: &'static str,
+}
+
+impl AtomBrief {
+    fn of(c: &FlatConcept) -> Self {
+        Self {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            description: c.description.clone(),
+            lesson: c.lesson.clone(),
+        }
+    }
 }
 
 impl Envelope {
     /// Return the scheduled [`Action`] for this envelope.
     pub fn action(&self) -> &Action {
-        &self.next
+        &self.action
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn build(ps: &PathState, g: &Graph, action: Action) -> Self {
-        let p = &ps.file;
-        let next = action.clone();
-        match action {
-            Action::PresentLesson { atom_id } => {
-                let c = g.by_id.get(&atom_id).expect("atom exists in graph");
-                let atom = AtomBrief {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    description: c.description.clone(),
-                    lesson: c.lesson.clone(),
-                };
-                let history = lesson_history(ps, &atom_id);
-                Envelope {
-                    next,
-                    schema_version: 1,
-                    action: "present_lesson".to_string(),
-                    path: p.id.clone(),
-                    payload: Payload::PresentLesson(PresentLessonPayload {
-                        atom,
-                        reason: "not_taught",
-                        history,
-                        next_step: "mt path next".to_string(),
-                    }),
-                }
-            }
+    fn build(ps: &PathState, g: &Graph, action: Action, surface: Surface) -> Self {
+        let concept = |id: &str| g.by_id.get(id).expect("atom exists in graph");
+        let payload = match &action {
+            Action::PresentLesson { atom_id } => Payload::PresentLesson(PresentLessonPayload {
+                atom: AtomBrief::of(concept(atom_id)),
+                reason: "not_taught",
+                history: lesson_history(ps, atom_id),
+            }),
             Action::PresentQuiz { quiz_id, atom_id } => {
-                let c = g.by_id.get(&atom_id).expect("atom exists in graph");
+                let c = concept(atom_id);
                 let q = c
                     .quizzes
                     .iter()
-                    .find(|x| x.id == quiz_id)
+                    .find(|x| x.id == *quiz_id)
                     .expect("quiz exists in graph");
-                let atom = AtomBrief {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    description: c.description.clone(),
-                    lesson: c.lesson.clone(),
-                };
-                let quiz = QuizFull {
-                    id: q.id.clone(),
-                    difficulty: q.difficulty,
-                    kind: q.kind.unwrap_or_default(),
-                    question: q.question.clone(),
-                    answer: q.answer.clone(),
-                    rubric: q.rubric.clone(),
-                };
-                let history = quiz_history(ps, &quiz_id);
-                Envelope {
-                    next,
-                    schema_version: 1,
-                    action: "present_quiz".to_string(),
-                    path: p.id.clone(),
-                    payload: Payload::PresentQuiz(PresentQuizPayload {
-                        atom,
-                        quiz,
-                        history,
-                        next_step: format!(
-                            "mt quiz answer {quiz_id} --rating {{again|hard|good|easy}}"
-                        ),
-                    }),
-                }
+                Payload::PresentQuiz(PresentQuizPayload {
+                    atom: AtomBrief::of(c),
+                    quiz: QuizFull {
+                        id: q.id.clone(),
+                        difficulty: q.difficulty,
+                        kind: q.kind.unwrap_or_default(),
+                        question: q.question.clone(),
+                        answer: q.answer.clone(),
+                        rubric: q.rubric.clone(),
+                    },
+                    history: quiz_history(ps, quiz_id),
+                })
             }
             Action::CreateLesson { atom_id } => {
-                let c = g.by_id.get(&atom_id).expect("atom exists in graph");
-                let atom = AtomBrief {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    description: c.description.clone(),
-                    lesson: None,
-                };
-                let prerequisites = collect_prereqs(g, c);
-                Envelope {
-                    next,
-                    schema_version: 1,
-                    action: "create_lesson".to_string(),
-                    path: p.id.clone(),
-                    payload: Payload::CreateLesson(CreateLessonPayload {
-                        atom,
-                        prerequisites,
-                        next_step: format!("mt lesson upsert {atom_id} --body TEXT"),
-                    }),
-                }
+                let c = concept(atom_id);
+                Payload::CreateLesson(CreateLessonPayload {
+                    atom: AtomBrief::of(c),
+                    prerequisites: collect_prereqs(g, c),
+                })
             }
             Action::CreateQuiz {
                 atom_id,
                 difficulty,
             } => {
-                let c = g.by_id.get(&atom_id).expect("atom exists in graph");
-                let atom = AtomBrief {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    description: c.description.clone(),
-                    lesson: c.lesson.clone(),
-                };
-                let existing_quizzes: Vec<ExistingQuizBrief> = c
+                let c = concept(atom_id);
+                let existing_quizzes = c
                     .quizzes
                     .iter()
                     .map(|q| ExistingQuizBrief {
@@ -530,36 +501,56 @@ impl Envelope {
                         question: q.question.clone(),
                     })
                     .collect();
-                let prerequisites = collect_prereqs(g, c);
-                let next_step = format!(
-                    "mt quiz create {atom_id} --difficulty {difficulty} \
-                     --question TEXT --answer TEXT [--rubric TEXT]"
-                );
-                Envelope {
-                    next,
-                    schema_version: 1,
-                    action: "create_quiz".to_string(),
-                    path: p.id.clone(),
-                    payload: Payload::CreateQuiz(CreateQuizPayload {
-                        atom,
-                        target_difficulty: difficulty,
-                        existing_quizzes,
-                        prerequisites,
-                        next_step,
-                    }),
-                }
+                Payload::CreateQuiz(CreateQuizPayload {
+                    atom: AtomBrief::of(c),
+                    target_difficulty: *difficulty,
+                    existing_quizzes,
+                    prerequisites: collect_prereqs(g, c),
+                })
             }
-            Action::Done => Envelope {
-                next,
-                schema_version: 1,
-                action: "done".to_string(),
-                path: p.id.clone(),
-                payload: Payload::Done(DonePayload {
-                    message: "Path complete.".into(),
-                }),
-            },
+            Action::NoReviewsDue => Payload::Message(MessagePayload {
+                message: "Zero reviews are due.",
+            }),
+            Action::Done => Payload::Message(MessagePayload {
+                message: "Path complete.",
+            }),
+        };
+        Envelope {
+            schema_version: 1,
+            next_step: next_step(&action, &ps.row.id).map(|s| s.render(surface)),
+            path: ps.row.id.clone(),
+            action,
+            payload,
         }
     }
+}
+
+/// Return the step that performs `action` on path `path_id`, or `None` for [`Action::Done`].
+pub fn next_step(action: &Action, path_id: &str) -> Option<Step> {
+    let path = Value::known(path_id);
+    let step = match action {
+        Action::PresentLesson { .. } | Action::NoReviewsDue => {
+            Step::new(AgentCommand::GetNext, path)
+        }
+        Action::PresentQuiz { quiz_id, .. } => Step::new(AgentCommand::AnswerQuiz, path)
+            .arg(Field::QuizId, Value::known(quiz_id))
+            .arg(Field::Rating, Value::Choice(Rating::NAMES))
+            .arg(Field::UserAnswer, Value::Text("verbatim reply")),
+        Action::CreateLesson { atom_id } => Step::new(AgentCommand::UpsertLesson, path)
+            .arg(Field::Atom, Value::known(atom_id))
+            .arg(Field::Body, Value::Text("lesson")),
+        Action::CreateQuiz {
+            atom_id,
+            difficulty,
+        } => Step::new(AgentCommand::CreateQuiz, path)
+            .arg(Field::Atom, Value::known(atom_id))
+            .arg(Field::Difficulty, Value::known(difficulty.as_str()))
+            .arg(Field::Question, Value::Text("question"))
+            .arg(Field::Answer, Value::Text("answer"))
+            .optional(Field::Rubric, Value::Text("rubric")),
+        Action::Done => return None,
+    };
+    Some(step)
 }
 
 fn collect_prereqs(g: &Graph, c: &FlatConcept) -> Vec<PrereqBrief> {

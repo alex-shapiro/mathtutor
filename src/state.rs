@@ -1,21 +1,17 @@
-//! Learning path progress summary (`mt path state`).
+//! Learning path progress summary for `mt path state`.
 
-use std::collections::HashSet;
 use std::io::{self, Write};
-use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::Result;
 use crate::db::Db;
 use crate::graph::{FlatConcept, Graph};
-use crate::path::PathFile;
-use crate::progress::PathProgress;
-use crate::scheduler;
-use crate::subpath;
+use crate::progress::{PathCompletion, PathProgress, ReachProgress, TargetProgress};
+use crate::scheduler::{self, PathPlan};
 use crate::types::Strategy;
-use crate::view::{PathState, Want};
+use crate::view::{PathState, ViewRequest};
+use crate::{Error, Result};
 
 /// Progress summary for a learning path.
 #[derive(Debug, Serialize)]
@@ -37,22 +33,6 @@ pub struct StateSummary {
     pub next: Option<AtomRef>,
 }
 
-/// Completion counts for explicit path target atoms.
-#[derive(Debug, Serialize)]
-pub struct TargetProgress {
-    pub total: usize,
-    pub learned: usize,
-    pub learned_pct: usize,
-}
-
-/// Completion counts across reachable atoms in a bottom-up path.
-#[derive(Debug, Serialize)]
-pub struct ReachProgress {
-    pub total: usize,
-    pub taught: usize,
-    pub learned: usize,
-}
-
 /// Identifier and display name of an atom.
 #[derive(Debug, Serialize)]
 pub struct AtomRef {
@@ -60,18 +40,10 @@ pub struct AtomRef {
     pub name: String,
 }
 
-/// Print the progress summary for a learning path (`mt path state`).
-///
-/// # Panics
-/// Panics if writing to stdout fails.
-pub async fn cmd_path_state(
-    db: &Db,
-    explicit_id: Option<&str>,
-    graph_dir: Option<&Path>,
-) -> Result<()> {
-    let s = compute_state(db, explicit_id, graph_dir).await?;
-    write_state(&mut io::stdout(), &s).expect("write to stdout");
-    Ok(())
+/// Print the progress summary for a learning path for `mt path state`.
+pub async fn cmd_path_state(db: &Db, explicit_id: Option<&str>) -> Result<()> {
+    let s = compute_state(db, explicit_id).await?;
+    write_state(&mut io::stdout().lock(), &s).map_err(Error::Stdout)
 }
 
 /// Format `s` as human-readable text to `w`.
@@ -99,7 +71,7 @@ pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
     if let Some(reach) = &s.reachable {
         writeln!(
             w,
-            "{:13}{} atoms ({} with lesson, {} learned)",
+            "{:13}{} atoms ({} taught, {} learned)",
             "reachable:", reach.total, reach.taught, reach.learned
         )?;
     }
@@ -118,49 +90,29 @@ pub fn write_state<W: Write>(w: &mut W, s: &StateSummary) -> io::Result<()> {
     Ok(())
 }
 
-/// Compute the progress summary for `explicit_id` (or the latest path).
-pub async fn compute_state(
-    db: &Db,
-    explicit_id: Option<&str>,
-    graph_dir: Option<&Path>,
-) -> Result<StateSummary> {
-    let view = db.snapshot(&Want::path(explicit_id)).await?;
-    let ps = view.path()?;
-    let p = ps.file.clone();
-    let g = view.graph(graph_dir)?;
-    let progress = ps.progress();
-    let due = ps.due(Utc::now());
+/// Compute the progress summary for `explicit_id` or the latest path.
+pub async fn compute_state(db: &Db, explicit_id: Option<&str>) -> Result<StateSummary> {
+    let view = db.snapshot(&ViewRequest::path(explicit_id)).await?;
+    let plan = PathPlan::of(&view)?;
+    let (ps, g, progress) = (plan.state, &plan.graph, &plan.progress);
+    let p = ps.row.clone();
+    let completion = PathCompletion::of(g, &plan.targets, &plan.reachable, progress);
 
-    let subpath_ids = subpath::resolved(&p, &g)?;
-    let target_atoms = p.resolve_targets(&g)?;
-
-    let reachable = g.reachable_atoms(&target_atoms);
-    let complete = complete_set(&g, &reachable, &progress);
-    let (targets, reach) = counters(&target_atoms, &reachable, &complete, &progress);
-
-    let updated_at = p.updated_at;
-    let next = scheduler::next_action(
-        &g,
-        &p,
-        &target_atoms,
-        &progress,
-        &due,
-        &subpath_ids,
-        scheduler::NextMode::Default,
-    )
-    .atom_id()
-    .and_then(|id| atom_ref(&g, id));
-    let most_recent =
-        most_recent_completed_target(ps, &g, &target_atoms, &complete).map(atom_ref_of);
+    let next = plan
+        .next_action(scheduler::NextMode::Default)
+        .atom_id()
+        .and_then(|id| atom_ref(g, id));
+    let most_recent = most_recent_completed_target(ps, g, progress, &plan.targets).map(atom_ref_of);
 
     let reachable = match p.strategy {
-        Strategy::BottomUp => Some(reach),
+        Strategy::BottomUp => Some(completion.reachable),
         Strategy::TopDown => None,
     };
-    let subpath = subpath_ids
+    let subpath = plan
+        .subpath
         .iter()
-        .filter(|a| !scheduler::is_atom_complete(&g, &progress, a))
-        .filter_map(|a| atom_ref(&g, a))
+        .filter(|a| !plan.is_complete(a))
+        .filter_map(|a| atom_ref(g, a))
         .collect();
 
     Ok(StateSummary {
@@ -168,84 +120,30 @@ pub async fn compute_state(
         goal: p.goal,
         strategy: p.strategy,
         created_at: p.created_at,
-        updated_at,
-        targets,
+        updated_at: ps.updated_at,
+        targets: completion.targets,
         reachable,
         subpath,
-        past_due: due.len(),
+        past_due: plan.due.len(),
         most_recent,
         next,
     })
 }
 
-/// Compute target and reachable completion counters for `p`.
-pub fn compute_progress(
-    g: &Graph,
-    p: &PathFile,
-    progress: &PathProgress,
-) -> Result<(TargetProgress, ReachProgress)> {
-    let targets = p.resolve_targets(g)?;
-    let reachable = g.reachable_atoms(&targets);
-    let complete = complete_set(g, &reachable, progress);
-    Ok(counters(&targets, &reachable, &complete, progress))
-}
-
-fn complete_set(
-    g: &Graph,
-    reachable: &HashSet<String>,
-    progress: &PathProgress,
-) -> HashSet<String> {
-    reachable
-        .iter()
-        .filter(|a| scheduler::is_atom_complete(g, progress, a))
-        .cloned()
-        .collect()
-}
-
-fn counters(
-    targets: &[String],
-    reachable: &HashSet<String>,
-    complete: &HashSet<String>,
-    progress: &PathProgress,
-) -> (TargetProgress, ReachProgress) {
-    let total = targets.len();
-    let learned = targets
-        .iter()
-        .filter(|a| complete.contains(a.as_str()))
-        .count();
-    let learned_pct = (learned * 100).checked_div(total).unwrap_or(0);
-    let reach_taught = reachable
-        .iter()
-        .filter(|a| progress.lesson_taught(a))
-        .count();
-    (
-        TargetProgress {
-            total,
-            learned,
-            learned_pct,
-        },
-        ReachProgress {
-            total: reachable.len(),
-            taught: reach_taught,
-            learned: complete.len(),
-        },
-    )
-}
-
 fn most_recent_completed_target<'a>(
     ps: &PathState,
     g: &'a Graph,
+    progress: &PathProgress,
     targets: &[String],
-    complete: &HashSet<String>,
 ) -> Option<&'a FlatConcept> {
     targets
         .iter()
-        .filter(|a| complete.contains(a.as_str()))
+        .filter(|a| scheduler::is_atom_complete(g, progress, a))
         .filter_map(|a| g.by_id.get(a.as_str()))
         .max_by_key(|c| {
             c.quizzes
                 .iter()
-                .filter_map(|q| ps.cards.get(&q.id)?.first_correct_at)
+                .filter_map(|q| ps.projection.cards.get(&q.id)?.first_correct_at)
                 .max()
         })
 }

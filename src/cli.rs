@@ -4,11 +4,16 @@ use std::path::PathBuf;
 
 use argh::FromArgs;
 
+use crate::surface::{AgentCommand, Recovery};
 use crate::types;
 
 /// Manage math lessons and spaced-repetition quizzes over a curriculum graph.
 #[derive(FromArgs, Debug)]
 pub struct Mt {
+    /// curriculum directory to use instead of the embedded curriculum, defaulting to `$MT_GRAPH`
+    #[argh(option)]
+    pub graph: Option<PathBuf>,
+
     #[argh(subcommand)]
     pub cmd: Cmd,
 }
@@ -24,6 +29,55 @@ pub enum Cmd {
     ImportTurso(ImportTursoCmd),
     #[cfg(feature = "mcp")]
     Mcp(McpCmd),
+}
+
+impl Cmd {
+    /// Return the agent command of this command, or `None` for an operator command.
+    pub fn agent_command(&self) -> Option<AgentCommand> {
+        let tool = match self {
+            Cmd::Path(p) => match &p.op {
+                PathOp::List(_) => AgentCommand::GetPaths,
+                PathOp::New(_) => AgentCommand::NewPath,
+                PathOp::State(_) => AgentCommand::GetState,
+                PathOp::Next(_) => AgentCommand::GetNext,
+                PathOp::Strategy(_) => AgentCommand::SetStrategy,
+                PathOp::Subpath(s) => match s.op {
+                    SubpathOp::Set(_) => AgentCommand::SubpathSet,
+                    SubpathOp::Clear(_) => AgentCommand::SubpathClear,
+                },
+                PathOp::Syllabus(_) => AgentCommand::GetSyllabus,
+                PathOp::Tree(_) => AgentCommand::GetTree,
+            },
+            Cmd::Graph(g) => match g.op {
+                GraphOp::Show(_) => AgentCommand::GetItem,
+                GraphOp::List(_) => AgentCommand::GetChildren,
+                GraphOp::Check(_) | GraphOp::Dump(_) => return None,
+            },
+            Cmd::Lesson(l) => match l.op {
+                LessonOp::Upsert(_) => AgentCommand::UpsertLesson,
+            },
+            Cmd::Quiz(q) => match q.op {
+                QuizOp::Create(_) => AgentCommand::CreateQuiz,
+                QuizOp::Update(_) => AgentCommand::UpdateQuiz,
+                QuizOp::Delete(_) => AgentCommand::DeleteQuiz,
+                QuizOp::Answer(_) => AgentCommand::AnswerQuiz,
+            },
+            Cmd::Instruct(_) | Cmd::ImportTurso(_) => return None,
+            #[cfg(feature = "mcp")]
+            Cmd::Mcp(_) => return None,
+        };
+        Some(tool)
+    }
+
+    /// Return the safe next step after this command fails with an unknown outcome.
+    pub fn recovery(&self) -> Recovery {
+        match self {
+            Cmd::ImportTurso(_) => Recovery::RunImportAgain,
+            _ => self
+                .agent_command()
+                .map_or(Recovery::Repeat, AgentCommand::recovery),
+        }
+    }
 }
 
 /// Manage learning paths.
@@ -50,11 +104,7 @@ pub enum PathOp {
 /// List all learning paths with goal, creation time, and progress.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "list")]
-pub struct PathListCmd {
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
-}
+pub struct PathListCmd {}
 
 /// Create a learning path.
 #[derive(FromArgs, Debug)]
@@ -64,37 +114,29 @@ pub struct PathNewCmd {
     #[argh(positional)]
     pub goal: String,
 
-    /// target atom or cluster IDs (comma-separated or repeated)
+    /// target atom or cluster IDs, at least 1, comma-separated or repeated
     #[argh(option)]
     pub targets: Vec<String>,
 
-    /// initial traversal strategy: `bottom-up` (default) or `top-down`
+    /// initial traversal strategy: `bottom_up` by default, or `top_down`
     #[argh(option, default = "types::Strategy::BottomUp")]
     pub strategy: types::Strategy,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Show the status summary for a learning path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "state")]
 pub struct PathStateCmd {
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Get the next scheduled action for a learning path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "next")]
 pub struct PathNextCmd {
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
@@ -102,54 +144,46 @@ pub struct PathNextCmd {
     #[argh(switch)]
     pub new: bool,
 
-    /// return only the earliest due review card, or `done` if zero cards are due
+    /// return only the earliest due review card, or `no_reviews_due` if zero cards are due
     #[argh(switch)]
     pub due: bool,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// List upcoming untaught lesson topics for a path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "syllabus")]
 pub struct PathSyllabusCmd {
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// maximum number of upcoming atoms to return (default: 10)
+    /// maximum number of upcoming atoms to return, defaulting to 10
     #[argh(option, short = 'n', default = "10")]
     pub n: usize,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Show the prerequisite tree and completion status for a path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "tree")]
 pub struct PathTreeCmd {
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
+    /// maximum number of levels below each area, unlimited by default
     #[argh(option)]
-    pub graph: Option<PathBuf>,
+    pub depth: Option<u32>,
 }
 
 /// Change the traversal strategy for a learning path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "strategy")]
 pub struct PathStrategyCmd {
-    /// traversal strategy: `bottom-up` or `top-down`
+    /// traversal strategy: `bottom_up` or `top_down`
     #[argh(positional)]
     pub strategy: types::Strategy,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
@@ -173,24 +207,20 @@ pub enum SubpathOp {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "set")]
 pub struct PathSubpathSetCmd {
-    /// atom IDs in teaching order ending with a target atom (comma-separated or repeated)
+    /// atom IDs in teaching order ending with a target atom, comma-separated or repeated
     #[argh(option)]
     pub atoms: Vec<String>,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Clear the active subpath for a learning path.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "clear")]
 pub struct PathSubpathClearCmd {
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 }
@@ -223,17 +253,13 @@ pub struct GraphShowCmd {
     /// path ID used to include per-atom completion status
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// List areas or child nodes in the curriculum.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "list")]
 pub struct GraphListCmd {
-    /// parent node ID (omit to list all areas)
+    /// parent node ID, or omit to list all areas
     #[argh(positional)]
     pub id: Option<String>,
 
@@ -241,16 +267,16 @@ pub struct GraphListCmd {
     #[argh(option, short = 'p')]
     pub path: Option<String>,
 
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
+    /// also list every descendant of the node
+    #[argh(switch)]
+    pub recursive: bool,
 }
 
 /// Validate the curriculum graph.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "check")]
 pub struct GraphCheckCmd {
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
+    /// curriculum directory to validate, defaulting to the curriculum of `--graph`
     #[argh(option, short = 'p')]
     pub path: Option<PathBuf>,
 }
@@ -286,13 +312,9 @@ pub struct LessonUpsertCmd {
     #[argh(option)]
     pub body: String,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Manage quizzes in the user overlay.
@@ -336,17 +358,13 @@ pub struct QuizCreateCmd {
     #[argh(option)]
     pub rubric: Option<String>,
 
-    /// quiz format: `free_text` (default) or `multiple_choice`
+    /// quiz format: `free_text` by default, or `multiple_choice`
     #[argh(option, long = "type", default = "types::QuizType::FreeText")]
     pub quiz_type: types::QuizType,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Update fields on an existing quiz while preserving its ID and FSRS state.
@@ -377,13 +395,9 @@ pub struct QuizUpdateCmd {
     #[argh(option, long = "type")]
     pub quiz_type: Option<types::QuizType>,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Tombstone a quiz so that it is excluded from the merged curriculum.
@@ -394,13 +408,9 @@ pub struct QuizDeleteCmd {
     #[argh(positional)]
     pub quiz: String,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Record a graded quiz response.
@@ -419,13 +429,9 @@ pub struct QuizAnswerCmd {
     #[argh(option, long = "user-answer")]
     pub user_answer: Option<String>,
 
-    /// path ID (default: most recent path)
+    /// path ID, defaulting to the most recent path
     #[argh(option, short = 'p')]
     pub path: Option<String>,
-
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
-    #[argh(option)]
-    pub graph: Option<PathBuf>,
 }
 
 /// Print the embedded agent playbook.
@@ -433,11 +439,11 @@ pub struct QuizAnswerCmd {
 #[argh(subcommand, name = "instruct")]
 pub struct InstructCmd {}
 
-/// Import paths, overlay records, and events from a libSQL (Turso) database into Baserunna.
+/// Import paths, overlay records, and events from a libSQL database into Baserunna.
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "import-turso")]
 pub struct ImportTursoCmd {
-    /// libSQL database URL (default: `$TURSO_URL`)
+    /// libSQL database URL, defaulting to `$TURSO_URL`
     #[argh(option)]
     pub url: Option<String>,
 }
@@ -447,25 +453,25 @@ pub struct ImportTursoCmd {
 #[derive(FromArgs, Debug)]
 #[argh(subcommand, name = "mcp")]
 pub struct McpCmd {
-    /// bind address (default: `127.0.0.1:8080`)
+    /// bind address, defaulting to `127.0.0.1:8080`
     #[argh(option, default = "default_mcp_addr()")]
     pub addr: String,
 
-    /// static bearer token for API authentication (overrides `$MT_API_KEY`)
+    /// static bearer token for API authentication, overriding `$MT_API_KEY`
     #[argh(option)]
     pub api_key: Option<String>,
 
-    /// administrator password for OAuth 2.1 login (overrides `$MT_ADMIN_PASSWORD`)
+    /// administrator password for OAuth 2.1 login, overriding `$MT_ADMIN_PASSWORD`
     #[argh(option)]
     pub admin_password: Option<String>,
 
-    /// public base URL advertised in OAuth metadata (overrides `$MT_PUBLIC_URL`)
+    /// public base URL advertised in OAuth metadata, overriding `$MT_PUBLIC_URL`
     #[argh(option)]
     pub public_url: Option<String>,
 
-    /// curriculum graph directory override (default: embedded or `$MT_GRAPH`)
+    /// header that a trusted proxy sets to the client address, such as `Fly-Client-IP`, overriding `$MT_CLIENT_IP_HEADER` and defaulting to the TCP peer address
     #[argh(option)]
-    pub graph: Option<PathBuf>,
+    pub client_ip_header: Option<String>,
 
     #[argh(subcommand)]
     pub op: Option<McpOp>,
@@ -489,7 +495,7 @@ fn default_mcp_addr() -> String {
     "127.0.0.1:8080".into()
 }
 
-/// Splits comma-separated and repeated CLI flag values into a flat list of trimmed strings.
+/// Split comma-separated and repeated CLI flag values into a flat list of trimmed strings.
 pub fn flatten_ids(raw: &[String]) -> Vec<String> {
     raw.iter()
         .flat_map(|s| s.split(','))
@@ -497,4 +503,62 @@ pub fn flatten_ids(raw: &[String]) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(String::from)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_parser_maps_each_agent_command_to_its_tool() {
+        let samples: &[&[&str]] = &[
+            &["path", "list"],
+            &["path", "new", "goal", "--targets", "a"],
+            &["path", "strategy", "top_down"],
+            &["path", "subpath", "set", "--atoms", "a"],
+            &["path", "subpath", "clear"],
+            &["path", "next"],
+            &["path", "state"],
+            &["path", "tree"],
+            &["path", "syllabus"],
+            &["graph", "show", "a"],
+            &["graph", "list"],
+            &["lesson", "upsert", "a", "--body", "b"],
+            &[
+                "quiz",
+                "create",
+                "a",
+                "--difficulty",
+                "easy",
+                "--question",
+                "q",
+                "--answer",
+                "a",
+            ],
+            &["quiz", "update", "a.q1"],
+            &["quiz", "delete", "a.q1"],
+            &["quiz", "answer", "a.q1", "--rating", "good"],
+        ];
+        let tools: Vec<AgentCommand> = samples
+            .iter()
+            .map(|args| {
+                let cmd = Mt::from_args(&["mt"], args).expect("valid args").cmd;
+                let tool = cmd.agent_command().expect("an agent command");
+                assert!(args.join(" ").starts_with(tool.cli()), "{tool:?}: {args:?}");
+                assert_eq!(cmd.recovery(), tool.recovery());
+                tool
+            })
+            .collect();
+        assert_eq!(tools, AgentCommand::ALL);
+    }
+
+    #[test]
+    fn operator_commands_return_none_for_agent_command() {
+        for args in [&["import-turso"][..], &["graph", "dump"], &["instruct"]] {
+            let cmd = Mt::from_args(&["mt"], args).expect("valid args").cmd;
+            assert_eq!(cmd.agent_command(), None);
+        }
+        let import = Mt::from_args(&["mt"], &["import-turso"]).unwrap().cmd;
+        assert_eq!(import.recovery(), Recovery::RunImportAgain);
+    }
 }

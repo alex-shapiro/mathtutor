@@ -6,7 +6,7 @@
 # MT_ADMIN_PASSWORD
 # MT_API_KEY
 # BASERUNNA_TOKEN
-# BASERUNNA_DB (optional, default mathtutor)
+# BASERUNNA_DB: optional; defaults to mathtutor
 
 app = 'mathtutor'
 primary_region = 'ewr'
@@ -14,7 +14,9 @@ primary_region = 'ewr'
 [build]
 
 [env]
+BASERUNNA_URL = 'https://baserunna.fly.dev'
 MT_PUBLIC_URL = 'https://mathtutor.fly.dev'
+MT_CLIENT_IP_HEADER = 'Fly-Client-IP'
 
 [http_service]
 internal_port = 8080
@@ -30,6 +32,17 @@ timeout = '5s'
 grace_period = '10s'
 method = 'GET'
 path = '/health'
+
+# Reports a database that the server cannot use, such as after a revoked key, an open
+# import, or a schema change. A failed check stops `fly deploy` but does not stop routing.
+[checks.database]
+type = 'http'
+port = 8080
+method = 'GET'
+path = '/ready'
+interval = '60s'
+timeout = '10s'
+grace_period = '30s'
 
 [[vm]]
 cpu_kind = 'shared'

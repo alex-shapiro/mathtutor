@@ -1,19 +1,18 @@
-//! Streamable HTTP MCP server (`mt mcp`).
+//! Streamable HTTP MCP server for `mt mcp`.
 
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use axum::{
-    Router,
+    Json, Router,
     body::Body,
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::{self, Request, StatusCode, header::AUTHORIZATION},
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::get,
 };
-use chrono::{DateTime, Utc};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{router::prompt::PromptRouter, tool::ToolRouter, wrapper::Parameters},
@@ -26,51 +25,46 @@ use rmcp::{
     service::RequestContext,
     tool, tool_handler, tool_router,
     transport::streamable_http_server::{
-        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        StreamableHttpServerConfig, StreamableHttpService, session::never::NeverSessionManager,
     },
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse};
+use tower_http::trace::DefaultOnResponse;
 use url::Url;
 
 use crate::Error;
 use crate::db::{Db, DbConfig};
-use crate::graph::{Graph, natural_id_cmp};
-use crate::progress::PathProgress;
-use crate::types::{Difficulty, QuizType, Rating, Strategy};
-use crate::view::{PathSel, Want};
-use crate::{answer, discover, graph, path, scheduler, state, store, subpath, syllabus, tree};
+use crate::error::ErrorKind;
+use crate::overlay::{QuizDraft, QuizPatch};
+use crate::surface::{AgentCommand, Surface};
+use crate::types::{Rating, Strategy};
+use crate::{answer, discover, path, scheduler, state, store, subpath, syllabus, tree};
 
 // Keep distinct from `Result` because rmcp macros expand to bare `Result<_, ErrorData>`.
 type CrateResult<T> = std::result::Result<T, Error>;
 
 pub mod oauth;
+mod throttle;
 
-const PLAYBOOK: &str = include_str!("playbook.md");
+pub use throttle::ClientAddrSource;
 
 #[derive(Clone)]
 pub struct MathTutorServer {
     db: Db,
-    graph_dir: Option<Arc<PathBuf>>,
     tool_router: ToolRouter<Self>,
     prompt_router: PromptRouter<Self>,
 }
 
 impl MathTutorServer {
-    pub fn new(db: Db, graph_dir: Option<PathBuf>) -> Self {
+    pub fn new(db: Db) -> Self {
         Self {
             db,
-            graph_dir: graph_dir.map(Arc::new),
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
-    }
-
-    fn graph_path(&self) -> Option<&std::path::Path> {
-        self.graph_dir.as_deref().map(AsRef::as_ref)
     }
 }
 
@@ -78,9 +72,9 @@ impl MathTutorServer {
 pub struct NewPathArgs {
     /// Learning goal text.
     pub goal: String,
-    /// Target atom or cluster IDs.
+    /// Target atom or cluster IDs, at least 1.
     pub targets: Vec<String>,
-    /// Initial traversal strategy (`bottom_up` or `top_down`).
+    /// Initial traversal strategy: `bottom_up` or `top_down`.
     #[serde(default)]
     pub strategy: Strategy,
 }
@@ -93,7 +87,7 @@ pub struct PathOnlyArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct SetStrategyArgs {
     pub path_id: String,
-    /// Traversal strategy (`bottom_up` or `top_down`).
+    /// Traversal strategy: `bottom_up` or `top_down`.
     pub strategy: Strategy,
 }
 
@@ -107,7 +101,7 @@ pub struct SubpathSetArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct GetNextArgs {
     pub path_id: String,
-    /// Action filter (`default`, `new`, or `due`).
+    /// Action filter: `default`, `new`, or `due`.
     #[serde(default)]
     pub mode: scheduler::NextMode,
 }
@@ -123,7 +117,7 @@ pub struct GetTreeArgs {
 #[derive(Deserialize, JsonSchema)]
 pub struct GetSyllabusArgs {
     pub path_id: String,
-    /// Maximum number of upcoming atoms to return (default 10).
+    /// Maximum number of upcoming atoms to return. Defaults to 10.
     #[serde(default = "default_syllabus_n")]
     pub n: usize,
 }
@@ -157,32 +151,21 @@ pub struct UpsertLessonArgs {
     pub path_id: String,
 }
 
+/// Arguments of the `create_quiz` tool.
 #[derive(Deserialize, JsonSchema)]
 pub struct CreateQuizArgs {
     pub atom: String,
-    pub question: String,
-    pub answer: String,
-    #[serde(default)]
-    pub rubric: Option<String>,
-    pub difficulty: Difficulty,
-    #[serde(default)]
-    pub kind: Option<QuizType>,
+    #[serde(flatten)]
+    pub quiz: QuizDraft,
     pub path_id: String,
 }
 
+/// Arguments of the `update_quiz` tool.
 #[derive(Deserialize, JsonSchema)]
 pub struct UpdateQuizArgs {
     pub quiz_id: String,
-    #[serde(default)]
-    pub question: Option<String>,
-    #[serde(default)]
-    pub answer: Option<String>,
-    #[serde(default)]
-    pub rubric: Option<String>,
-    #[serde(default)]
-    pub difficulty: Option<Difficulty>,
-    #[serde(default)]
-    pub kind: Option<QuizType>,
+    #[serde(flatten)]
+    pub patch: QuizPatch,
     pub path_id: String,
 }
 
@@ -192,11 +175,13 @@ pub struct DeleteQuizArgs {
     pub path_id: String,
 }
 
+/// Arguments of the `answer_quiz` tool.
 #[derive(Deserialize, JsonSchema)]
 pub struct AnswerQuizArgs {
     pub quiz_id: String,
+    /// Verbatim reply of the user.
     #[serde(default)]
-    pub answer: Option<String>,
+    pub user_answer: Option<String>,
     pub rating: Rating,
     pub path_id: String,
 }
@@ -206,9 +191,8 @@ impl MathTutorServer {
     #[tool(description = "List all learning paths for this user.")]
     async fn get_paths(&self) -> std::result::Result<CallToolResult, McpError> {
         encode(
-            list_paths(&self.db)
-                .await
-                .map(|paths| json!({ "paths": paths })),
+            AgentCommand::GetPaths,
+            path::compute_path_list(&self.db).await,
         )
     }
 
@@ -217,24 +201,23 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<NewPathArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = path::cmd_path_new(
-            &self.db,
-            &args.goal,
-            &args.targets,
-            args.strategy,
-            self.graph_path(),
+        let result = path::cmd_path_new(&self.db, &args.goal, &args.targets, args.strategy).await;
+        encode(
+            AgentCommand::NewPath,
+            result.map(|id| json!({ "path_id": id })),
         )
-        .await;
-        encode(result.map(|id| json!({ "path_id": id })))
     }
 
-    #[tool(description = "Switch a path traversal strategy (bottom_up or top_down).")]
+    #[tool(description = "Switch a path traversal strategy between bottom_up and top_down.")]
     async fn set_strategy(
         &self,
         Parameters(args): Parameters<SetStrategyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let result = path::cmd_path_strategy(&self.db, Some(&args.path_id), args.strategy).await;
-        encode(result.map(|id| json!({ "path_id": id, "strategy": args.strategy })))
+        encode(
+            AgentCommand::SetStrategy,
+            result.map(|id| json!({ "path_id": id, "strategy": args.strategy })),
+        )
     }
 
     #[tool(description = "Set the ordered atom subpath for a top-down path ending in a target.")]
@@ -242,14 +225,11 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<SubpathSetArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = subpath::cmd_subpath_set(
-            &self.db,
-            Some(&args.path_id),
-            &args.atoms,
-            self.graph_path(),
+        let result = subpath::cmd_subpath_set(&self.db, Some(&args.path_id), &args.atoms).await;
+        encode(
+            AgentCommand::SubpathSet,
+            result.map(|id| json!({ "path_id": id })),
         )
-        .await;
-        encode(result.map(|id| json!({ "path_id": id })))
     }
 
     #[tool(description = "Clear the subpath for a path.")]
@@ -258,7 +238,10 @@ impl MathTutorServer {
         Parameters(args): Parameters<PathOnlyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let result = subpath::cmd_subpath_clear(&self.db, Some(&args.path_id)).await;
-        encode(result.map(|id| json!({ "path_id": id })))
+        encode(
+            AgentCommand::SubpathClear,
+            result.map(|id| json!({ "path_id": id })),
+        )
     }
 
     #[tool(description = "Get the next lesson or quiz in the path.")]
@@ -267,9 +250,8 @@ impl MathTutorServer {
         Parameters(args): Parameters<GetNextArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         let result =
-            scheduler::compute_next(&self.db, Some(&args.path_id), self.graph_path(), args.mode)
-                .await;
-        encode(result)
+            scheduler::compute_next(&self.db, Some(&args.path_id), args.mode, Surface::Mcp).await;
+        encode(AgentCommand::GetNext, result)
     }
 
     #[tool(description = "Return progress summary for a path.")]
@@ -277,7 +259,10 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<PathOnlyArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        encode(state::compute_state(&self.db, Some(&args.path_id), self.graph_path()).await)
+        encode(
+            AgentCommand::GetState,
+            state::compute_state(&self.db, Some(&args.path_id)).await,
+        )
     }
 
     #[tool(description = "Return the prerequisite tree and atom status for a path.")]
@@ -285,7 +270,10 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetTreeArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        encode(compute_tree(&self.db, &args.path_id, args.depth, self.graph_path()).await)
+        encode(
+            AgentCommand::GetTree,
+            tree::compute_tree(&self.db, Some(&args.path_id), args.depth).await,
+        )
     }
 
     #[tool(description = "Preview upcoming lesson topics.")]
@@ -294,24 +282,23 @@ impl MathTutorServer {
         Parameters(args): Parameters<GetSyllabusArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
         encode(
-            syllabus::compute_syllabus(&self.db, Some(&args.path_id), args.n, self.graph_path())
-                .await,
+            AgentCommand::GetSyllabus,
+            syllabus::compute_syllabus(&self.db, Some(&args.path_id), args.n).await,
         )
     }
 
-    #[tool(description = "Return details for a curriculum node (atom or cluster).")]
+    #[tool(description = "Return details for an atom or cluster in the curriculum.")]
     async fn get_item(
         &self,
         Parameters(args): Parameters<GetItemArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
+        let lookup = discover::Lookup::Db {
+            db: &self.db,
+            path: args.path_id.as_deref(),
+        };
         encode(
-            compute_item(
-                &self.db,
-                &args.id,
-                args.path_id.as_deref(),
-                self.graph_path(),
-            )
-            .await,
+            AgentCommand::GetItem,
+            discover::compute_item(lookup, &args.id).await,
         )
     }
 
@@ -320,15 +307,14 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<GetChildrenArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
+        let lookup = discover::Lookup::Db {
+            db: &self.db,
+            path: args.path_id.as_deref(),
+        };
         encode(
-            compute_children(
-                &self.db,
-                args.id.as_deref(),
-                args.path_id.as_deref(),
-                args.recursive.unwrap_or(false),
-                self.graph_path(),
-            )
-            .await,
+            AgentCommand::GetChildren,
+            discover::compute_children(lookup, args.id.as_deref(), args.recursive.unwrap_or(false))
+                .await,
         )
     }
 
@@ -337,15 +323,12 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<UpsertLessonArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = store::cmd_lesson_upsert(
-            &self.db,
-            &args.atom,
-            args.body,
-            Some(&args.path_id),
-            self.graph_path(),
+        let result =
+            store::cmd_lesson_upsert(&self.db, &args.atom, args.body, Some(&args.path_id)).await;
+        encode(
+            AgentCommand::UpsertLesson,
+            result.map(|()| json!({ "atom_id": args.atom })),
         )
-        .await;
-        encode(result.map(|()| json!({ "atom_id": args.atom })))
     }
 
     #[tool(description = "Create a quiz.")]
@@ -353,19 +336,12 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<CreateQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = store::cmd_quiz_create(
-            &self.db,
-            &args.atom,
-            args.difficulty,
-            args.question,
-            args.answer,
-            args.rubric,
-            args.kind.unwrap_or_default(),
-            Some(&args.path_id),
-            self.graph_path(),
+        let result =
+            store::cmd_quiz_create(&self.db, &args.atom, args.quiz, Some(&args.path_id)).await;
+        encode(
+            AgentCommand::CreateQuiz,
+            result.map(|quiz_id| json!({ "quiz_id": quiz_id })),
         )
-        .await;
-        encode(result.map(|quiz_id| json!({ "quiz_id": quiz_id })))
     }
 
     #[tool(description = "Update fields of an existing quiz while preserving ID and FSRS history.")]
@@ -373,19 +349,12 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<UpdateQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = store::cmd_quiz_update(
-            &self.db,
-            &args.quiz_id,
-            args.question,
-            args.answer,
-            args.rubric,
-            args.difficulty,
-            args.kind,
-            Some(&args.path_id),
-            self.graph_path(),
+        let result =
+            store::cmd_quiz_update(&self.db, &args.quiz_id, &args.patch, Some(&args.path_id)).await;
+        encode(
+            AgentCommand::UpdateQuiz,
+            result.map(|()| json!({ "quiz_id": args.quiz_id })),
         )
-        .await;
-        encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
     }
 
     #[tool(description = "Delete a quiz from the curriculum overlay.")]
@@ -393,14 +362,11 @@ impl MathTutorServer {
         &self,
         Parameters(args): Parameters<DeleteQuizArgs>,
     ) -> std::result::Result<CallToolResult, McpError> {
-        let result = store::cmd_quiz_delete(
-            &self.db,
-            &args.quiz_id,
-            Some(&args.path_id),
-            self.graph_path(),
+        let result = store::cmd_quiz_delete(&self.db, &args.quiz_id, Some(&args.path_id)).await;
+        encode(
+            AgentCommand::DeleteQuiz,
+            result.map(|()| json!({ "quiz_id": args.quiz_id })),
         )
-        .await;
-        encode(result.map(|()| json!({ "quiz_id": args.quiz_id })))
     }
 
     #[tool(description = "Record a quiz answer and FSRS rating.")]
@@ -412,12 +378,14 @@ impl MathTutorServer {
             &self.db,
             &args.quiz_id,
             args.rating,
-            args.answer,
+            args.user_answer,
             Some(&args.path_id),
-            self.graph_path(),
         )
         .await;
-        encode(result.map(|()| json!({ "quiz_id": args.quiz_id, "rating": args.rating })))
+        encode(
+            AgentCommand::AnswerQuiz,
+            result.map(|()| json!({ "quiz_id": args.quiz_id, "rating": args.rating })),
+        )
     }
 }
 
@@ -430,7 +398,7 @@ impl MathTutorServer {
     async fn playbook(&self) -> std::result::Result<GetPromptResult, McpError> {
         Ok(GetPromptResult::new(vec![PromptMessage::new_text(
             PromptMessageRole::Assistant,
-            PLAYBOOK,
+            crate::instruct::playbook(Surface::Mcp),
         )])
         .with_description("Math Tutor agent operator playbook"))
     }
@@ -448,7 +416,10 @@ impl ServerHandler for MathTutorServer {
             .build();
         ServerInfo::new(caps)
             .with_protocol_version(ProtocolVersion::V_2025_06_18)
-            .with_server_info(Implementation::from_build_env())
+            .with_server_info(Implementation::new(
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION"),
+            ))
             .with_instructions(
                 "Math Tutor MCP server. Call the `mathtutor-playbook` prompt for the \
                  full operator playbook before invoking tools.",
@@ -456,280 +427,12 @@ impl ServerHandler for MathTutorServer {
     }
 }
 
-#[derive(Serialize)]
-struct PathSummary {
-    id: String,
-    goal: String,
-    strategy: Strategy,
-    created_at: DateTime<Utc>,
-    targets: Vec<String>,
-}
-
-async fn list_paths(db: &Db) -> CrateResult<Vec<PathSummary>> {
-    let want = Want {
-        path: PathSel::None,
-        overlay: false,
-        all_paths: true,
-    };
-    let view = db.snapshot(&want).await?;
-    Ok(view
-        .paths
-        .into_iter()
-        .map(|p| PathSummary {
-            id: p.file.id,
-            goal: p.file.goal,
-            strategy: p.file.strategy,
-            created_at: p.file.created_at,
-            targets: p.file.targets,
-        })
-        .collect())
-}
-
-#[derive(Serialize)]
-struct ItemView {
-    item: discover::ShowView,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<AtomStatus>,
-}
-
-#[derive(Serialize)]
-struct AtomStatus {
-    lesson_taught: bool,
-    complete: bool,
-}
-
-async fn compute_item(
-    db: &Db,
-    id: &str,
-    path_id: Option<&str>,
-    graph_dir: Option<&std::path::Path>,
-) -> CrateResult<ItemView> {
-    let (g, progress) = discover::graph_for(db, path_id, graph_dir).await?;
-    let item = discover::show_view(&g, id)?;
-    let status = progress.and_then(|p| status_for(&g, id, &p));
-    Ok(ItemView { item, status })
-}
-
-#[derive(Serialize)]
-struct ChildrenView {
-    view: discover::ListView,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    descendants: Vec<ChildStatus>,
-}
-
-#[derive(Serialize)]
-struct ChildStatus {
-    id: String,
-    name: String,
-    is_atom: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<AtomStatus>,
-}
-
-async fn compute_children(
-    db: &Db,
-    id: Option<&str>,
-    path_id: Option<&str>,
-    recursive: bool,
-    graph_dir: Option<&std::path::Path>,
-) -> CrateResult<ChildrenView> {
-    let (g, progress) = discover::graph_for(db, path_id, graph_dir).await?;
-    let manifest = graph::load_manifest_default(graph_dir)?;
-    let view = discover::list_view(&g, &manifest, id)?;
-    let descendants = if recursive {
-        let roots = match id {
-            Some(s) => vec![s.to_string()],
-            None => manifest.areas.iter().map(|a| a.prefix.clone()).collect(),
-        };
-        gather_descendants(&g, &roots, progress.as_ref())
-    } else {
-        Vec::new()
-    };
-    Ok(ChildrenView { view, descendants })
-}
-
-fn gather_descendants(
-    g: &Graph,
-    roots: &[String],
-    progress: Option<&PathProgress>,
-) -> Vec<ChildStatus> {
-    let mut out = Vec::new();
-    let mut stack: Vec<String> = roots.to_vec();
-    while let Some(id) = stack.pop() {
-        let Some(c) = g.by_id.get(&id) else { continue };
-        for child in &c.children_ids {
-            stack.push(child.clone());
-        }
-        out.push(ChildStatus {
-            id: c.id.clone(),
-            name: c.name.clone(),
-            is_atom: c.children_ids.is_empty(),
-            status: progress.and_then(|p| status_for(g, &id, p)),
-        });
-    }
-    out.sort_by(|a, b| a.id.cmp(&b.id));
-    out
-}
-
-fn status_for(g: &Graph, id: &str, progress: &PathProgress) -> Option<AtomStatus> {
-    let c = g.by_id.get(id)?;
-    if !c.children_ids.is_empty() {
-        return None;
-    }
-    Some(AtomStatus {
-        lesson_taught: progress.lesson_taught(id),
-        complete: scheduler::is_atom_complete(g, progress, id),
-    })
-}
-
-#[derive(Serialize)]
-struct TreeView {
-    path: String,
-    goal: String,
-    targets: TreeProgress,
-    reachable: ReachProgress,
-    nodes: Vec<TreeNode>,
-}
-
-#[derive(Serialize)]
-struct TreeProgress {
-    total: usize,
-    learned: usize,
-    learned_pct: usize,
-}
-
-#[derive(Serialize)]
-struct ReachProgress {
-    total: usize,
-    taught: usize,
-    learned: usize,
-}
-
-#[derive(Serialize)]
-struct TreeNode {
-    id: String,
-    name: String,
-    is_atom: bool,
-    is_target: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    status: Option<AtomStatus>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    children: Vec<TreeNode>,
-}
-
-async fn compute_tree(
-    db: &Db,
-    path_id: &str,
-    depth: Option<u32>,
-    graph_dir: Option<&std::path::Path>,
-) -> CrateResult<TreeView> {
-    let view = db.snapshot(&Want::path(Some(path_id))).await?;
-    let ps = view.path()?;
-    let p = ps.file.clone();
-    let g = view.graph(graph_dir)?;
-    let manifest = graph::load_manifest_default(graph_dir)?;
-    let progress = ps.progress();
-    let target_atoms = p.resolve_targets(&g)?;
-
-    let reachable = g.reachable_atoms(&target_atoms);
-    let spine = tree::build_spine(&g, &reachable);
-
-    let targets_total = target_atoms.len();
-    let targets_learned = target_atoms
-        .iter()
-        .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
-        .count();
-    let targets_pct = (targets_learned * 100)
-        .checked_div(targets_total)
-        .unwrap_or(0);
-    let reach_total = reachable.len();
-    let reach_taught = reachable
-        .iter()
-        .filter(|a| progress.lesson_taught(a))
-        .count();
-    let reach_learned = reachable
-        .iter()
-        .filter(|a| scheduler::is_atom_complete(&g, &progress, a))
-        .count();
-
-    let target_set: std::collections::HashSet<&str> =
-        target_atoms.iter().map(String::as_str).collect();
-
-    let mut nodes = Vec::new();
-    for area in &manifest.areas {
-        let mut top: Vec<TreeNode> = g
-            .by_id
-            .values()
-            .filter(|c| {
-                let parts: Vec<&str> = c.id.split('.').collect();
-                parts.len() == 2 && parts[0] == area.prefix && spine.contains(&c.id)
-            })
-            .map(|c| build_tree_node(&g, &progress, &spine, &target_set, c, depth, 1))
-            .collect();
-        top.sort_by(|a, b| natural_id_cmp(&a.id, &b.id));
-        nodes.extend(top);
-    }
-
-    Ok(TreeView {
-        path: p.id,
-        goal: p.goal,
-        targets: TreeProgress {
-            total: targets_total,
-            learned: targets_learned,
-            learned_pct: targets_pct,
-        },
-        reachable: ReachProgress {
-            total: reach_total,
-            taught: reach_taught,
-            learned: reach_learned,
-        },
-        nodes,
-    })
-}
-
-fn build_tree_node(
-    g: &Graph,
-    progress: &PathProgress,
-    spine: &std::collections::HashSet<String>,
-    targets: &std::collections::HashSet<&str>,
-    c: &graph::FlatConcept,
-    max_depth: Option<u32>,
-    depth: u32,
-) -> TreeNode {
-    let is_atom = c.children_ids.is_empty();
-    let status = if is_atom {
-        Some(AtomStatus {
-            lesson_taught: progress.lesson_taught(&c.id),
-            complete: scheduler::is_atom_complete(g, progress, &c.id),
-        })
-    } else {
-        None
-    };
-    let children = if max_depth.is_some_and(|md| depth >= md) {
-        Vec::new()
-    } else {
-        let mut kids: Vec<TreeNode> = c
-            .children_ids
-            .iter()
-            .filter_map(|cid| g.by_id.get(cid))
-            .filter(|kc| spine.contains(&kc.id))
-            .map(|kc| build_tree_node(g, progress, spine, targets, kc, max_depth, depth + 1))
-            .collect();
-        kids.sort_by(|a, b| natural_id_cmp(&a.id, &b.id));
-        kids
-    };
-    TreeNode {
-        id: c.id.clone(),
-        name: c.name.clone(),
-        is_atom,
-        is_target: targets.contains(c.id.as_str()),
-        status,
-        children,
-    }
-}
-
+/// Encode `result` of `tool` as a tool result, and add the safe next step to an error with an unknown outcome.
 // Wrap non-object JSON payloads because MCP requires `structuredContent` to be a JSON object.
-fn encode<T: Serialize>(result: CrateResult<T>) -> std::result::Result<CallToolResult, McpError> {
+fn encode<T: Serialize>(
+    tool: AgentCommand,
+    result: CrateResult<T>,
+) -> std::result::Result<CallToolResult, McpError> {
     match result {
         Ok(value) => {
             let json = serde_json::to_value(value)
@@ -742,43 +445,12 @@ fn encode<T: Serialize>(result: CrateResult<T>) -> std::result::Result<CallToolR
             Ok(CallToolResult::structured(object))
         }
         Err(e) => {
-            let body = json!({ "error": format!("{e}"), "kind": error_kind(&e) });
+            let mut body = json!({ "error": e.message(Surface::Mcp), "kind": e.kind().name() });
+            if e.outcome_is_unknown() {
+                body["next_step"] = json!(tool.recovery().step(Surface::Mcp));
+            }
             Ok(CallToolResult::structured_error(body))
         }
-    }
-}
-
-fn error_kind(e: &Error) -> &'static str {
-    match e {
-        Error::UnknownId(_) => "unknown_id",
-        Error::EmptyCluster(_) => "empty_cluster",
-        Error::Cycle => "cycle",
-        Error::NotAtom(_) => "not_atom",
-        Error::AtomNotFound(_) => "atom_not_found",
-        Error::NoPath => "no_path",
-        Error::NoLesson(_) => "no_lesson",
-        Error::InvalidRating(_) => "invalid_rating",
-        Error::InvalidDifficulty(_) => "invalid_difficulty",
-        Error::InvalidQuizType(_) => "invalid_quiz_type",
-        Error::InvalidStrategy(_) => "invalid_strategy",
-        Error::SubpathNotTopDown => "subpath_not_top_down",
-        Error::SubpathEmpty => "subpath_empty",
-        Error::SubpathTailNotTarget(_) => "subpath_tail_not_target",
-        Error::SubpathDuplicateAtom(_) => "subpath_duplicate_atom",
-        Error::CardsCorrupt(_) => "cards_corrupt",
-        Error::NoHome => "no_home",
-        Error::FileIo { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => "io",
-        Error::Api(_) | Error::Http(_) | Error::MissingToken => "database",
-        Error::BadResponse(_) | Error::BadRow(_) | Error::BadEvent(_) => "corrupt",
-        Error::Json(_) => "json",
-        Error::Fsrs(_) => "fsrs",
-        Error::ConflictingFlags(_, _) => "conflicting_flags",
-        Error::MissingTursoUrl | Error::Turso(_) | Error::ImportMismatch(_) => "import",
-        Error::MissingAuth
-        | Error::BadBindAddr { .. }
-        | Error::BadPublicUrl { .. }
-        | Error::Bind { .. }
-        | Error::Serve(_) => "server",
     }
 }
 
@@ -791,49 +463,87 @@ pub struct AuthConfig {
     pub admin_password: Option<String>,
     /// Public issuer URL from `MT_PUBLIC_URL` or `--public-url`.
     pub public_url: Option<String>,
+    /// Source of the client address that limits sign-in attempts and client registrations.
+    pub client_addrs: ClientAddrSource,
 }
+
+/// Smallest number of characters in `MT_API_KEY`.
+const MIN_API_KEY_LEN: usize = 32;
 
 impl AuthConfig {
     fn validate(&self) -> CrateResult<()> {
         if self.api_key.is_none() && self.admin_password.is_none() {
             return Err(Error::MissingAuth);
         }
+        if self
+            .api_key
+            .as_ref()
+            .is_some_and(|k| k.chars().count() < MIN_API_KEY_LEN)
+        {
+            return Err(Error::WeakApiKey {
+                min: MIN_API_KEY_LEN,
+            });
+        }
         Ok(())
     }
 }
 
+/// Return the name of every MCP tool.
+#[cfg(test)]
+pub(crate) fn tool_names() -> Vec<String> {
+    tool_fields().into_keys().collect()
+}
+
+/// Return the input field names of each MCP tool, keyed by tool name.
+#[cfg(test)]
+pub(crate) fn tool_fields() -> std::collections::HashMap<String, std::collections::HashSet<String>>
+{
+    MathTutorServer::tool_router()
+        .list_all()
+        .into_iter()
+        .map(|t| {
+            let fields = t
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .map(|p| p.keys().cloned().collect())
+                .unwrap_or_default();
+            (t.name.into_owned(), fields)
+        })
+        .collect()
+}
+
 pub fn print_tools() -> CrateResult<()> {
     let tools = MathTutorServer::tool_router().list_all();
-    println!("{}", serde_json::to_string_pretty(&tools)?);
-    Ok(())
+    crate::print_stdout(&format!("{}\n", serde_json::to_string_pretty(&tools)?))
 }
 
 /// Run the MCP server on `addr` until SIGINT or SIGTERM.
-pub async fn run(
-    addr: &str,
-    auth: AuthConfig,
-    cfg: DbConfig,
-    graph_dir: Option<PathBuf>,
-) -> CrateResult<()> {
+pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()> {
     auth.validate()?;
 
-    let db = Db::open(&cfg).await?;
+    let cfg = DbConfig {
+        cache_dir: None,
+        ..cfg
+    };
+    let db = Db::connect(&cfg)?;
+    let auth_db = db.with_auth_tables();
     let shutdown = CancellationToken::new();
 
     let mcp_config = StreamableHttpServerConfig::default()
+        .with_stateful_mode(false)
         .with_sse_keep_alive(Some(Duration::from_secs(15)))
         .with_cancellation_token(shutdown.child_token())
         .disable_allowed_hosts();
 
     let factory = {
         let db = db.clone();
-        let graph_dir = graph_dir.clone();
-        move || Ok(MathTutorServer::new(db.clone(), graph_dir.clone()))
+        move || Ok(MathTutorServer::new(db.clone()))
     };
 
     let mcp_service = StreamableHttpService::new(
         factory,
-        Arc::new(LocalSessionManager::default()),
+        Arc::new(NeverSessionManager::default()),
         mcp_config,
     );
 
@@ -843,21 +553,24 @@ pub async fn run(
 
     let public_url = resolve_public_url(auth.public_url.as_deref(), socket_addr)?;
 
-    let auth_state = AuthState::new(&auth, &public_url, db.clone());
-    // Run body logging after auth so unauthenticated requests are not buffered.
+    let limits = throttle::AddrLimits::new(&auth_db, auth.client_addrs.clone());
+    let auth_state = AuthState::new(&auth, &public_url, auth_db.clone(), limits.clone());
     let mut app = Router::new()
         .nest_service("/mcp", mcp_service)
-        .route_layer(middleware::from_fn(log_request_body))
         .route_layer(middleware::from_fn_with_state(auth_state, auth_middleware))
-        .route("/health", get(health));
+        .route("/health", get(health))
+        .route("/ready", get(ready).with_state(Readiness::new(db.clone())));
 
     if let Some(password) = auth.admin_password.as_deref() {
-        let oauth_state = oauth::OAuthState::new(db.clone(), password, public_url.clone());
+        let oauth_state =
+            oauth::OAuthState::new(auth_db, password, public_url.clone(), limits.clone());
         app = app.merge(oauth::router(oauth_state));
     }
 
     let trace = tower_http::trace::TraceLayer::new_for_http()
-        .make_span_with(DefaultMakeSpan::new().level(tracing::Level::INFO))
+        .make_span_with(|req: &Request<Body>| {
+            tracing::info_span!("request", method = %req.method(), path = %req.uri().path())
+        })
         .on_response(DefaultOnResponse::new().level(tracing::Level::INFO));
 
     let app = app.layer(trace);
@@ -878,6 +591,7 @@ pub async fn run(
         }
     };
 
+    let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal)
         .await
@@ -898,26 +612,42 @@ fn resolve_public_url(explicit: Option<&str>, socket: std::net::SocketAddr) -> C
 #[derive(Clone)]
 struct AuthState {
     api_key: Option<Arc<str>>,
-    db: Option<Db>,
+    access_tokens: Option<oauth::AccessTokens>,
+    limits: throttle::AddrLimits,
     www_authenticate: Arc<str>,
 }
 
 impl AuthState {
-    fn new(auth: &AuthConfig, public_url: &Url, db: Db) -> Self {
+    fn new(auth: &AuthConfig, public_url: &Url, db: Db, limits: throttle::AddrLimits) -> Self {
         let api_key = auth
             .api_key
             .as_deref()
             .map(|s| Arc::<str>::from(s.to_string().into_boxed_str()));
-        let db = auth.admin_password.as_deref().map(|_| db);
+        let access_tokens = auth
+            .admin_password
+            .as_deref()
+            .map(|_| oauth::AccessTokens::new(db));
         let issuer = public_url.as_str().trim_end_matches('/');
         let www_authenticate = format!(
             r#"Bearer realm="mt mcp", resource_metadata="{issuer}/.well-known/oauth-protected-resource""#
         );
         Self {
             api_key,
-            db,
+            access_tokens,
+            limits,
             www_authenticate: Arc::from(www_authenticate.into_boxed_str()),
         }
+    }
+
+    /// Return the `401` response that points the client to the OAuth metadata.
+    fn challenge(&self) -> Response {
+        let mut resp = Response::new(Body::empty());
+        *resp.status_mut() = StatusCode::UNAUTHORIZED;
+        if let Ok(value) = http::HeaderValue::from_str(self.www_authenticate.as_ref()) {
+            resp.headers_mut()
+                .insert(http::header::WWW_AUTHENTICATE, value);
+        }
+        resp
     }
 }
 
@@ -926,8 +656,10 @@ struct TokenQuery {
     token: Option<String>,
 }
 
+/// Admit a request with `MT_API_KEY` in the `Authorization` header or the `token` query parameter, or with a valid access token in the header, and delay the bearer tokens of a client address after too many rejected tokens.
 async fn auth_middleware(
     State(state): State<AuthState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     Query(q): Query<TokenQuery>,
     req: Request<Body>,
     next: Next,
@@ -938,73 +670,169 @@ async fn auth_middleware(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(str::to_string);
-    let provided = from_header.or(q.token);
-
-    if let Some(token) = provided {
-        if let Some(expected) = state.api_key.as_deref()
-            && constant_time_eq(token.as_bytes(), expected.as_bytes())
-        {
-            return next.run(req).await;
+    let (token, in_query) = match (from_header, q.token) {
+        (Some(token), _) => (token, false),
+        (None, Some(token)) => (token, true),
+        (None, None) => return state.challenge(),
+    };
+    if let Some(expected) = state.api_key.as_deref()
+        && oauth::constant_time_eq(token.as_bytes(), expected.as_bytes())
+    {
+        return next.run(req).await;
+    }
+    let access_tokens = state.access_tokens.as_ref().filter(|_| !in_query);
+    if let Some(access_tokens) = access_tokens
+        && access_tokens.is_cached(&token)
+    {
+        return next.run(req).await;
+    }
+    let addr = state.limits.client_addr(peer, req.headers());
+    if let Some(wait) = state.limits.bearer_wait(addr) {
+        return too_many_requests(wait);
+    }
+    let Some(access_tokens) = access_tokens.filter(|_| oauth::has_issued_form(&token)) else {
+        tracing::warn!(%addr, "bearer token rejected");
+        state.limits.record_bearer_failure(addr);
+        return state.challenge();
+    };
+    match access_tokens.is_valid(&token).await {
+        Ok(true) => next.run(req).await,
+        Ok(false) => {
+            tracing::warn!(%addr, "access token rejected");
+            state.limits.record_bearer_failure(addr);
+            state.challenge()
         }
-        if let Some(db) = state.db.as_ref()
-            && let Ok(Some(_client_id)) = oauth::validate_access_token(db, &token).await
-        {
-            return next.run(req).await;
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot validate access token");
+            token_check_unavailable()
         }
     }
+}
 
+/// Return the `429` response for a client address that must wait `wait`.
+fn too_many_requests(wait: chrono::Duration) -> Response {
     let mut resp = Response::new(Body::empty());
-    *resp.status_mut() = StatusCode::UNAUTHORIZED;
-    if let Ok(value) = http::HeaderValue::from_str(state.www_authenticate.as_ref()) {
-        resp.headers_mut()
-            .insert(http::header::WWW_AUTHENTICATE, value);
-    }
+    *resp.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+    resp.headers_mut().insert(
+        http::header::RETRY_AFTER,
+        http::HeaderValue::from(throttle::retry_after_secs(wait)),
+    );
     resp
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    use subtle::ConstantTimeEq;
-    a.ct_eq(b).into()
-}
-
-const MAX_LOGGED_BODY: usize = 1 << 20;
-
-async fn log_request_body(req: Request<Body>, next: Next) -> Response {
-    if !tracing::enabled!(tracing::Level::DEBUG) {
-        return next.run(req).await;
-    }
-    let too_big = req
-        .headers()
-        .get(http::header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse::<usize>().ok())
-        .is_some_and(|n| n > MAX_LOGGED_BODY);
-    if too_big {
-        tracing::debug!("mcp request body too large to log");
-        return next.run(req).await;
-    }
-    let (parts, body) = req.into_parts();
-    let bytes = match axum::body::to_bytes(body, MAX_LOGGED_BODY).await {
-        Ok(b) => b,
-        Err(e) => {
-            // Return 400 because the request body stream has already been consumed.
-            tracing::warn!(error = %e, "mcp request body buffering failed");
-            let mut resp = Response::new(Body::empty());
-            *resp.status_mut() = StatusCode::BAD_REQUEST;
-            return resp;
-        }
-    };
-    if let Ok(s) = std::str::from_utf8(&bytes) {
-        tracing::debug!(body = %s, "mcp request body");
-    } else {
-        tracing::debug!(bytes = bytes.len(), "mcp request body (non-utf8)");
-    }
-    next.run(Request::from_parts(parts, Body::from(bytes)))
-        .await
+fn token_check_unavailable() -> Response {
+    let mut resp = Response::new(Body::empty());
+    *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+    resp.headers_mut().insert(
+        http::header::RETRY_AFTER,
+        http::HeaderValue::from_static("5"),
+    );
+    resp
 }
 
 async fn health() -> &'static str {
     "ok"
+}
+
+/// Time that the server reuses the result of a readiness check, so that `/ready` sends at most 1 Baserunna request in each interval.
+const READY_CHECK_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Longest time that a readiness check waits for the database before it reports a failure.
+const READY_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Readiness check of the database, with the result of the last check.
+#[derive(Clone)]
+struct Readiness {
+    db: Db,
+    last: Arc<std::sync::Mutex<Option<ReadyCheck>>>,
+    /// A request runs a check now.
+    checking: Arc<AtomicBool>,
+}
+
+/// Result of a readiness check.
+#[derive(Clone, Copy)]
+struct ReadyCheck {
+    at: Instant,
+    /// Kind of the error if the database was not usable.
+    failure: Option<ErrorKind>,
+}
+
+impl Readiness {
+    fn new(db: Db) -> Self {
+        Self {
+            db,
+            last: Arc::default(),
+            checking: Arc::default(),
+        }
+    }
+
+    /// Return the kind of the error if the database is not usable, from the last check if it is recent or if another request runs a check now.
+    async fn failure(&self) -> Option<ErrorKind> {
+        let last = *self.lock();
+        if let Some(check) = last.filter(|c| c.at.elapsed() < READY_CHECK_INTERVAL) {
+            return check.failure;
+        }
+        let claim = CheckClaim::take(&self.checking);
+        if claim.is_none()
+            && let Some(check) = last
+        {
+            return check.failure;
+        }
+        let failure = match tokio::time::timeout(READY_CHECK_TIMEOUT, self.db.check_usable()).await
+        {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => {
+                tracing::warn!(error = %e, "readiness check failed");
+                Some(e.kind())
+            }
+            Err(_) => {
+                tracing::warn!("readiness check timed out");
+                Some(ErrorKind::Database)
+            }
+        };
+        *self.lock() = Some(ReadyCheck {
+            at: Instant::now(),
+            failure,
+        });
+        failure
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<ReadyCheck>> {
+        self.last
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Claim of the active readiness check, released if the check finishes or its request stops.
+struct CheckClaim<'a>(&'a AtomicBool);
+
+impl<'a> CheckClaim<'a> {
+    /// Claim `checking`, or return `None` if another request holds it.
+    fn take(checking: &'a AtomicBool) -> Option<Self> {
+        checking
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self(checking))
+    }
+}
+
+impl Drop for CheckClaim<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Return `200` if the tools can use the database, or `503` with the error kind.
+async fn ready(State(readiness): State<Readiness>) -> Response {
+    match readiness.failure().await {
+        None => (StatusCode::OK, "ready").into_response(),
+        Some(kind) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "ready": false, "kind": kind.name() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn wait_for_shutdown() {
@@ -1027,5 +855,104 @@ async fn wait_for_shutdown() {
     #[cfg(not(unix))]
     {
         ctrl_c.await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use baserunna_client::TransportError;
+
+    fn lost_commit() -> Error {
+        Error::Baserunna(baserunna_client::Error::Transport(TransportError::Unknown(
+            "reset".into(),
+        )))
+    }
+
+    #[test]
+    fn every_mcp_tool_is_an_agent_command() {
+        let mut served = tool_names();
+        served.sort();
+        let mut commands: Vec<String> = AgentCommand::ALL
+            .iter()
+            .map(|t| t.mcp().to_string())
+            .collect();
+        commands.sort();
+        assert_eq!(served, commands);
+    }
+
+    #[test]
+    fn unknown_outcome_error_includes_the_safe_next_call() {
+        let result = encode::<()>(AgentCommand::AnswerQuiz, Err(lost_commit())).unwrap();
+        let body = result.structured_content.expect("structured error");
+        assert_eq!(body["kind"], json!("outcome_unknown"));
+        assert_eq!(
+            body["next_step"],
+            json!(crate::surface::Recovery::GetNext.step(Surface::Mcp))
+        );
+    }
+
+    #[test]
+    fn every_mcp_step_matches_the_input_schema_of_its_tool() {
+        let tools = MathTutorServer::tool_router().list_all();
+        for step in crate::instruct::filled_steps() {
+            let shown = step.render(Surface::Mcp);
+            let tool = tools
+                .iter()
+                .find(|t| t.name == step.agent_command().mcp())
+                .unwrap_or_else(|| panic!("{shown}: unknown tool"));
+            let properties = tool.input_schema["properties"].as_object().unwrap();
+            let args = step.mcp_args();
+            for (name, value) in &args {
+                let property = properties
+                    .get(name)
+                    .unwrap_or_else(|| panic!("{shown}: unknown field {name}"));
+                if let Some(options) = property.get("enum") {
+                    let options = options.as_array().unwrap();
+                    assert!(options.contains(value), "{shown}: {name} = {value}");
+                }
+            }
+            for name in tool.input_schema["required"].as_array().unwrap() {
+                let name = name.as_str().unwrap();
+                assert!(args.contains_key(name), "{shown}: missing {name}");
+            }
+        }
+    }
+
+    #[test]
+    fn fly_config_sets_the_baserunna_server_url() {
+        let fly = include_str!("../../fly.toml");
+        let env = fly
+            .split("[env]")
+            .nth(1)
+            .unwrap()
+            .split("\n[")
+            .next()
+            .unwrap();
+        assert!(
+            env.lines()
+                .any(|l| l.starts_with("BASERUNNA_URL = 'https://")),
+            "{env}"
+        );
+    }
+
+    #[test]
+    fn a_short_api_key_stops_the_server() {
+        let auth = |key: &str| AuthConfig {
+            api_key: Some(key.into()),
+            ..AuthConfig::default()
+        };
+        let e = auth("short").validate().unwrap_err();
+        assert!(matches!(e, Error::WeakApiKey { min: 32 }), "{e:?}");
+        assert!(e.to_string().contains("MT_API_KEY"), "{e}");
+        assert_eq!(e.exit_code(), 2);
+        auth(&"k".repeat(MIN_API_KEY_LEN)).validate().unwrap();
+    }
+
+    #[test]
+    fn known_outcome_error_omits_next_step() {
+        let result = encode::<()>(AgentCommand::AnswerQuiz, Err(Error::NoPath(None))).unwrap();
+        let body = result.structured_content.expect("structured error");
+        assert!(body.get("next_step").is_none());
     }
 }

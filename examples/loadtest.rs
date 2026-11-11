@@ -11,17 +11,121 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mathtutor::db::{Db, DbConfig, RequestKind, Sample};
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
+
+use mathtutor::db::client::api::{self, Endpoint as _, Histogram, Metrics};
+use mathtutor::db::client::bytes::Bytes;
+use mathtutor::db::client::{BoxFuture, Route, Transport, TransportError, http};
+use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{self, EventKind};
-use mathtutor::graph::{Graph, Quiz};
+use mathtutor::graph::Quiz;
 use mathtutor::overlay;
+use mathtutor::overlay::QuizDraft;
 use mathtutor::scheduler::Action;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
-use mathtutor::view::Want;
+use mathtutor::view::ViewRequest;
 use mathtutor::{answer, cards, path, scheduler, state, store, syllabus};
-use serde::Deserialize;
 
-fn env<T: std::str::FromStr>(k: &str, default: T) -> T {
+/// Baserunna request kind, derived from its endpoint.
+type RequestKind = &'static str;
+
+fn request_kind(method: &http::Method, route: &str) -> RequestKind {
+    match route {
+        r if r == api::Txn::ROUTE => "txn",
+        r if r == api::BeginTxn::ROUTE => "begin",
+        r if r == api::TxnOps::ROUTE => "ops",
+        r if r == api::CommitTxn::ROUTE => "commit",
+        r if r == api::AbortTxn::ROUTE && method == http::Method::DELETE => "abort",
+        r if r == api::GetCommit::ROUTE => "status",
+        r if r == api::CreateDb::ROUTE || r == api::CreateTable::ROUTE => "create",
+        _ => "other",
+    }
+}
+
+/// Measured request to the server.
+#[derive(Debug, Clone)]
+struct Sample {
+    kind: RequestKind,
+    status: u16,
+    elapsed: Duration,
+    server: Option<ServerTiming>,
+    sent_bytes: usize,
+    received_bytes: usize,
+}
+
+/// Durations from a `Server-Timing` response header.
+#[derive(Debug, Clone, Copy, Default)]
+struct ServerTiming {
+    total: Duration,
+    store: Duration,
+    store_calls: u32,
+    commit: Duration,
+    wait: Duration,
+}
+
+impl ServerTiming {
+    fn parse(v: &str) -> Self {
+        let mut t = Self::default();
+        for metric in v.split(',') {
+            let mut parts = metric.trim().split(';');
+            let name = parts.next().unwrap_or_default();
+            let (mut dur, mut desc) = (Duration::ZERO, 0);
+            for p in parts {
+                if let Some(ms) = p.strip_prefix("dur=").and_then(|d| d.parse::<f64>().ok()) {
+                    dur = Duration::from_secs_f64(ms / 1000.0);
+                } else if let Some(n) = p.strip_prefix("desc=").and_then(|d| d.parse().ok()) {
+                    desc = n;
+                }
+            }
+            match name {
+                "total" => t.total = dur,
+                "store" => (t.store, t.store_calls) = (dur, desc),
+                "commit" => t.commit = dur,
+                "wait" => t.wait = dur,
+                _ => {}
+            }
+        }
+        t
+    }
+}
+
+/// Transport that reports each response to an observer.
+struct Observed<T> {
+    inner: T,
+    observe: Arc<dyn Fn(Sample) + Send + Sync>,
+}
+
+impl<T: Transport> Transport for Observed<T> {
+    fn send(
+        &self,
+        req: http::Request<Bytes>,
+    ) -> BoxFuture<'_, Result<http::Response<Bytes>, TransportError>> {
+        Box::pin(async move {
+            let route = req.extensions().get::<Route>().map_or("", |r| r.0);
+            let kind = request_kind(req.method(), route);
+            let sent_bytes = req.body().len();
+            let started = Instant::now();
+            let resp = self.inner.send(req).await?;
+            let server = resp
+                .headers()
+                .get("server-timing")
+                .and_then(|v| v.to_str().ok())
+                .map(ServerTiming::parse);
+            (self.observe)(Sample {
+                kind,
+                status: resp.status().as_u16(),
+                elapsed: started.elapsed(),
+                server,
+                sent_bytes,
+                received_bytes: resp.body().len(),
+            });
+            Ok(resp)
+        })
+    }
+}
+
+fn env_or<T: std::str::FromStr>(k: &str, default: T) -> T {
     std::env::var(k)
         .ok()
         .and_then(|v| v.parse().ok())
@@ -71,7 +175,7 @@ struct Requests {
     statuses: BTreeMap<u16, u64>,
 }
 
-fn pct(v: &mut [Duration], p: f64) -> f64 {
+fn percentile_ms(v: &mut [Duration], p: f64) -> f64 {
     if v.is_empty() {
         return 0.0;
     }
@@ -142,13 +246,13 @@ impl Stats {
             println!(
                 "{kind:<8} {:>7} {:>9.1} {:>9.1} {:>9.1} {:>9.1} {:>9.1} {:>9.1} {:>9.1} {:>8.0} {:>8.0}  {:?}",
                 r.elapsed.len(),
-                pct(&mut r.elapsed, 0.5),
-                pct(&mut r.elapsed, 0.99),
-                pct(&mut r.server, 0.5),
-                pct(&mut r.server, 0.99),
-                pct(&mut r.store, 0.5),
-                pct(&mut r.commit, 0.5),
-                pct(&mut r.network, 0.5),
+                percentile_ms(&mut r.elapsed, 0.5),
+                percentile_ms(&mut r.elapsed, 0.99),
+                percentile_ms(&mut r.server, 0.5),
+                percentile_ms(&mut r.server, 0.99),
+                percentile_ms(&mut r.store, 0.5),
+                percentile_ms(&mut r.commit, 0.5),
+                percentile_ms(&mut r.network, 0.5),
                 r.sent as f64 / 1024.0,
                 r.received as f64 / 1024.0,
                 r.statuses,
@@ -157,43 +261,10 @@ impl Stats {
     }
 }
 
-#[derive(Deserialize)]
-struct Metrics {
-    node: String,
-    cpu: Cpu,
-    store: BTreeMap<String, Histogram>,
-    commits: Commits,
-    lag: Histogram,
-    routes: BTreeMap<String, Histogram>,
-}
-
-#[derive(Deserialize)]
-struct Cpu {
-    process_ms: Option<f64>,
-    steal_ms: Option<f64>,
-}
-
-#[derive(Deserialize)]
-struct Histogram {
-    count: u64,
-    mean_ms: Option<f64>,
-    p50_ms: Option<f64>,
-    p90_ms: Option<f64>,
-    p99_ms: Option<f64>,
-    max_ms: Option<f64>,
-    errors: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct Commits {
-    #[serde(flatten)]
-    latency: Histogram,
-    txns_per_batch: f64,
-    max_txns_per_batch: u64,
-}
-
 fn print_server(m: &Metrics, before: Option<&Metrics>, secs: f64) {
-    let delta = |f: fn(&Cpu) -> Option<f64>| Some((f(&m.cpu)? - f(&before?.cpu)?) / (secs * 10.0));
+    let delta = |f: fn(&api::Cpu) -> Option<u64>| {
+        Some((f(&m.cpu)? as f64 - f(&before?.cpu)? as f64) / (secs * 10.0))
+    };
     if let (Some(cpu), Some(steal)) = (delta(|c| c.process_ms), delta(|c| c.steal_ms)) {
         println!("\nserver cpu: process {cpu:.0}% of a core, host steal {steal:.0}%");
     }
@@ -231,22 +302,7 @@ fn print_server(m: &Metrics, before: Option<&Metrics>, secs: f64) {
     }
 }
 
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n.max(1)
-    }
-}
-
-fn text(rng: &mut Rng, bytes: usize) -> String {
+fn sample_text(rng: &mut StdRng, bytes: usize) -> String {
     const WORDS: [&str; 12] = [
         "vector",
         "space",
@@ -256,14 +312,14 @@ fn text(rng: &mut Rng, bytes: usize) -> String {
         "kernel",
         "image",
         "rank",
-        "$x^2$",
+        "x^2",
         "proof",
         "therefore",
         "lemma",
     ];
     let mut s = String::with_capacity(bytes + 16);
     while s.len() < bytes {
-        s.push_str(WORDS[rng.below(WORDS.len() as u64) as usize]);
+        s.push_str(WORDS[rng.random_range(0..WORDS.len())]);
         s.push(' ');
     }
     s
@@ -277,21 +333,20 @@ struct Learner {
     ledger: Ledger,
     path: Option<String>,
     shared: Option<Arc<Mutex<Option<String>>>>,
-    rng: Rng,
+    rng: StdRng,
     targets: Arc<Vec<String>>,
     lesson_bytes: usize,
 }
 
 impl Learner {
     async fn new_path(&mut self) -> Result<(), String> {
-        let n = self.targets.len() as u64;
-        let target = self.targets[self.rng.below(n) as usize].clone();
-        let strategy = if self.rng.below(4) == 0 {
+        let target = self.targets[self.rng.random_range(0..self.targets.len())].clone();
+        let strategy = if self.rng.random_range(0..4) == 0 {
             Strategy::TopDown
         } else {
             Strategy::BottomUp
         };
-        let id = path::cmd_path_new(&self.db, "load test", &[target], strategy, None)
+        let id = path::cmd_path_new(&self.db, "load test", &[target], strategy)
             .await
             .map_err(|e| e.to_string())?;
         if let Some(shared) = &self.shared {
@@ -312,43 +367,45 @@ impl Learner {
             out.push(("path new", t.elapsed(), r));
             return;
         };
-        let roll = self.rng.below(100);
+        let roll = self.rng.random_range(0..100);
         let t = Instant::now();
         if roll < 4 {
-            let r = state::compute_state(&self.db, Some(&p), None)
-                .await
-                .map(drop);
+            let r = state::compute_state(&self.db, Some(&p)).await.map(drop);
             out.push(("path state", t.elapsed(), r.map_err(|e| e.to_string())));
             return;
         }
         if roll < 6 {
-            let r = syllabus::compute_syllabus(&self.db, Some(&p), 10, None)
+            let r = syllabus::compute_syllabus(&self.db, Some(&p), 10)
                 .await
                 .map(drop);
             out.push(("path syllabus", t.elapsed(), r.map_err(|e| e.to_string())));
             return;
         }
         if roll < 7 {
-            let r = path::list_summaries(&self.db, None).await.map(drop);
+            let r = path::compute_path_list(&self.db).await.map(drop);
             out.push(("path list", t.elapsed(), r.map_err(|e| e.to_string())));
             return;
         }
-        let envelope =
-            match scheduler::compute_next(&self.db, Some(&p), None, scheduler::NextMode::Default)
-                .await
-            {
-                Ok(e) => e,
-                Err(e) => {
-                    out.push(("path next", t.elapsed(), Err(e.to_string())));
-                    return;
-                }
-            };
+        let envelope = match scheduler::compute_next(
+            &self.db,
+            Some(&p),
+            scheduler::NextMode::Default,
+            mathtutor::surface::Surface::Cli,
+        )
+        .await
+        {
+            Ok(e) => e,
+            Err(e) => {
+                out.push(("path next", t.elapsed(), Err(e.to_string())));
+                return;
+            }
+        };
         out.push(("path next", t.elapsed(), Ok(())));
         let t = Instant::now();
         match envelope.action() {
             Action::CreateLesson { atom_id } => {
-                let body = text(&mut self.rng, self.lesson_bytes);
-                let r = store::cmd_lesson_upsert(&self.db, atom_id, body, Some(&p), None).await;
+                let body = sample_text(&mut self.rng, self.lesson_bytes);
+                let r = store::cmd_lesson_upsert(&self.db, atom_id, body, Some(&p)).await;
                 out.push(("lesson upsert", t.elapsed(), r.map_err(|e| e.to_string())));
             }
             Action::CreateQuiz {
@@ -358,28 +415,28 @@ impl Learner {
                 let r = store::cmd_quiz_create(
                     &self.db,
                     atom_id,
-                    *difficulty,
-                    text(&mut self.rng, 250),
-                    text(&mut self.rng, 300),
-                    Some(text(&mut self.rng, 200)),
-                    QuizType::FreeText,
+                    QuizDraft {
+                        difficulty: *difficulty,
+                        question: sample_text(&mut self.rng, 250),
+                        answer: sample_text(&mut self.rng, 300),
+                        rubric: Some(sample_text(&mut self.rng, 200)),
+                        kind: QuizType::FreeText,
+                    },
                     Some(&p),
-                    None,
                 )
                 .await
                 .map(drop);
                 out.push(("quiz create", t.elapsed(), r.map_err(|e| e.to_string())));
             }
             Action::PresentQuiz { quiz_id, .. } => {
-                let rating = match self.rng.below(100) {
+                let rating = match self.rng.random_range(0..100) {
                     0..15 => Rating::Again,
                     15..30 => Rating::Hard,
                     30..80 => Rating::Good,
                     _ => Rating::Easy,
                 };
-                let answer = Some(text(&mut self.rng, 200));
-                let r = answer::cmd_quiz_answer(&self.db, quiz_id, rating, answer, Some(&p), None)
-                    .await;
+                let answer = Some(sample_text(&mut self.rng, 200));
+                let r = answer::cmd_quiz_answer(&self.db, quiz_id, rating, answer, Some(&p)).await;
                 let mut ledger = self.ledger.lock().unwrap();
                 let entry = ledger.entry((self.db_name.clone(), p.clone())).or_default();
                 if r.is_ok() {
@@ -390,7 +447,7 @@ impl Learner {
                 drop(ledger);
                 out.push(("quiz answer", t.elapsed(), r.map_err(|e| e.to_string())));
             }
-            Action::Done => {
+            Action::NoReviewsDue | Action::Done => {
                 if let Some(shared) = &self.shared {
                     let mut current = shared.lock().unwrap();
                     if current.as_deref() == Some(p.as_str()) {
@@ -405,7 +462,9 @@ impl Learner {
 }
 
 fn targets() -> Vec<String> {
-    let g = Graph::load_embedded().expect("graph");
+    let g = mathtutor::graph::Curriculum::embedded()
+        .graph()
+        .expect("graph");
     let mut out: Vec<String> = g
         .by_id
         .values()
@@ -418,17 +477,17 @@ fn targets() -> Vec<String> {
 
 async fn seed(db: &Db, atoms: usize, lesson_bytes: usize) {
     const BATCH: usize = 100;
-    let have = db
-        .snapshot(&Want::overlay())
+    let view = db
+        .snapshot(&ViewRequest::overlay())
         .await
-        .expect("snapshot")
-        .overlay
-        .atoms
-        .len();
+        .expect("snapshot");
+    let have = view.overlay().expect("overlay").atoms.len();
     if have >= atoms {
         return;
     }
-    let g = Graph::load_embedded().expect("graph");
+    let g = mathtutor::graph::Curriculum::embedded()
+        .graph()
+        .expect("graph");
     let mut ids: Vec<&String> = g
         .by_id
         .iter()
@@ -436,29 +495,29 @@ async fn seed(db: &Db, atoms: usize, lesson_bytes: usize) {
         .map(|(id, _)| id)
         .collect();
     ids.sort();
-    let mut rng = Rng(7);
+    let mut rng = StdRng::seed_from_u64(7);
     let started = Instant::now();
     for chunk in ids[..atoms.min(ids.len())].chunks(BATCH) {
         let lessons: Vec<(String, String)> = chunk
             .iter()
-            .map(|id| ((*id).clone(), text(&mut rng, lesson_bytes)))
+            .map(|id| ((*id).clone(), sample_text(&mut rng, lesson_bytes)))
             .collect();
-        db.transact(&Want::overlay(), |_, changes| {
+        db.transact(&ViewRequest::overlay(), |view, changes| {
             for (id, body) in &lessons {
-                overlay::upsert_lesson(changes, id, body);
+                overlay::upsert_lesson(changes, view, id, body)?;
                 for (i, d) in [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard]
                     .into_iter()
                     .enumerate()
                 {
                     let q = Quiz {
-                        id: format!("{id}.q{}", i + 1),
+                        id: format!("{id}.u{}", i + 1),
                         difficulty: d,
                         kind: None,
                         question: "q ".repeat(120),
                         answer: "a ".repeat(150),
                         rubric: Some("r ".repeat(100)),
                     };
-                    overlay::add_quiz(changes, id, &q);
+                    overlay::add_quiz(changes, view, id, &q)?;
                 }
             }
             Ok(())
@@ -485,7 +544,7 @@ async fn verify(base: &DbConfig, ledger: &Ledger) {
         let events = event_log::load(&db, path_id).await.expect("load events");
         let logged = events
             .iter()
-            .filter(|e| e.kind == EventKind::QuizAnswered)
+            .filter(|e| matches!(e.kind, EventKind::QuizAnswered { .. }))
             .count() as u64;
         if logged < *ok || logged > ok + failed {
             bad += 1;
@@ -493,13 +552,13 @@ async fn verify(base: &DbConfig, ledger: &Ledger) {
                 "VERIFY {db_name}/{path_id}: {logged} answers logged, {ok} acknowledged, {failed} failed"
             );
         }
-        let (replayed, _) = cards::fold_history(path_id, &events).expect("fold");
+        let replayed = cards::Projection::from_events(&events).expect("project events");
         let view = db
-            .snapshot(&Want::path(Some(path_id)))
+            .snapshot(&ViewRequest::path(Some(path_id)))
             .await
             .expect("snapshot");
-        let stored = &view.path().expect("path").cards;
-        for c in &replayed {
+        let stored = &view.path().expect("path").projection.cards;
+        for c in replayed.cards.values() {
             let s = stored
                 .get(&c.quiz_id)
                 .map(|s| (s.reps, s.lapses, s.presented));
@@ -523,28 +582,28 @@ async fn verify(base: &DbConfig, ledger: &Ledger) {
 #[tokio::main]
 async fn main() {
     let base = DbConfig::from_env().expect("BASERUNNA_TOKEN");
-    let prefix: String = env("LT_PREFIX", "lt-".to_string());
-    let steps: Vec<usize> = env("LT_STEPS", "1,4,16".to_string())
+    let prefix: String = env_or("LT_PREFIX", "lt-".to_string());
+    let steps: Vec<usize> = env_or("LT_STEPS", "1,4,16".to_string())
         .split(',')
         .map(|s| s.trim().parse().expect("LT_STEPS"))
         .collect();
-    let secs: u64 = env("LT_SECS", 20);
-    let think = Duration::from_millis(env("LT_THINK_MS", 0));
-    let lesson_bytes: usize = env("LT_LESSON", 1500);
-    let seed_atoms: usize = env("LT_SEED", 0);
+    let secs: u64 = env_or("LT_SECS", 20);
+    let think = Duration::from_millis(env_or("LT_THINK_MS", 0));
+    let lesson_bytes: usize = env_or("LT_LESSON", 1500);
+    let seed_atoms: usize = env_or("LT_SEED", 0);
     let targets = Arc::new(targets());
     let stats = Arc::new(Mutex::new(Stats::default()));
 
-    let observer = {
+    let observer: Arc<dyn Fn(Sample) + Send + Sync> = {
         let stats = stats.clone();
         Arc::new(move |x: Sample| stats.lock().unwrap().observe(&x))
     };
 
-    let share: String = env("LT_SHARE", String::new());
+    let share: String = env_or("LT_SHARE", String::new());
     let shared_path = (share == "path").then(|| Arc::new(Mutex::new(None)));
     let max = steps.iter().copied().max().unwrap_or(1);
     println!(
-        "opening {max} learners on {} (sharing: {})",
+        "opening {max} learners on {}, sharing {}",
         base.url,
         if share.is_empty() { "nothing" } else { &share }
     );
@@ -562,10 +621,16 @@ async fn main() {
             ..base.clone()
         };
         let db_name = db;
-        let db = Db::open(&cfg)
+        Db::connect(&cfg)
+            .expect("connect")
+            .create_if_missing()
             .await
-            .expect("open")
-            .observed(observer.clone());
+            .expect("create database");
+        let transport = Observed {
+            inner: cfg.transport().expect("transport"),
+            observe: observer.clone(),
+        };
+        let db = Db::with_transport(&cfg, transport);
         if seed_atoms > 0 {
             seed(&db, seed_atoms, lesson_bytes).await;
         }
@@ -575,30 +640,24 @@ async fn main() {
             ledger: ledger.clone(),
             path: None,
             shared: shared_path.clone(),
-            rng: Rng(0x9E37_79B9_7F4A_7C15 ^ ((i as u64 + 1) * 0x2545_F491_4F6C_DD1D)),
+            rng: StdRng::seed_from_u64(i as u64),
             targets: targets.clone(),
             lesson_bytes,
         })));
     }
 
-    let metrics: bool = env("LT_METRICS", 1u8) == 1;
-    let http = reqwest::Client::new();
-    let metrics_url = format!("{}/v1/admin/metrics", base.url.trim_end_matches('/'));
+    let metrics: bool = env_or("LT_METRICS", 1u8) == 1;
+    let admin =
+        baserunna_client::Client::new(base.transport().expect("transport")).with_token(&base.token);
     let server_metrics = |reset: bool| {
-        let (http, url, token) = (http.clone(), metrics_url.clone(), base.token.clone());
+        let admin = admin.clone();
         async move {
-            let method = if reset {
-                reqwest::Method::DELETE
+            let m = if reset {
+                admin.reset_metrics().await
             } else {
-                reqwest::Method::GET
+                admin.metrics().await
             };
-            let r = http
-                .request(method, url)
-                .bearer_auth(token)
-                .send()
-                .await
-                .ok()?;
-            r.json::<Metrics>().await.ok()
+            m.inspect_err(|e| println!("server metrics: {e}")).ok()
         }
     };
     for &n in &steps {
@@ -646,4 +705,35 @@ async fn main() {
         }
     }
     verify(&base, &ledger).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_reads_every_server_timing_metric() {
+        let t = ServerTiming::parse(
+            "total;dur=80.5, store;dur=75.2;desc=2, commit;dur=74.9, wait;dur=1.5",
+        );
+        assert_eq!(t.total, Duration::from_micros(80_500));
+        assert_eq!((t.store, t.store_calls), (Duration::from_micros(75_200), 2));
+        assert_eq!(t.commit, Duration::from_micros(74_900));
+        assert_eq!(t.wait, Duration::from_micros(1_500));
+    }
+
+    #[test]
+    fn request_kind_matches_endpoint_route() {
+        let post = http::Method::POST;
+        assert_eq!(request_kind(&post, api::CommitTxn::ROUTE), "commit");
+        assert_eq!(
+            request_kind(&http::Method::DELETE, api::AbortTxn::ROUTE),
+            "abort"
+        );
+        assert_eq!(request_kind(&post, api::Txn::ROUTE), "txn");
+        assert_eq!(
+            request_kind(&http::Method::GET, api::GetCommit::ROUTE),
+            "status"
+        );
+    }
 }

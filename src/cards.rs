@@ -1,15 +1,14 @@
 //! FSRS spaced-repetition card state derived from path events.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
 
-use crate::db::{self, Db, Op};
 use crate::event_log::{Event, EventKind};
-use crate::schema::{self, CardRecord, TaughtRow};
+use crate::progress::PathProgress;
+use crate::schema::{CardRow, TaughtRow};
 use crate::types::Rating;
-use crate::view::Taught;
 use crate::{Error, Result};
 
 const DESIRED_RETENTION: f32 = 0.9;
@@ -26,8 +25,9 @@ pub struct CardState {
     pub difficulty: f32,
 }
 
+/// Review state and answer history of a quiz on a path.
 #[derive(Debug, Clone)]
-pub struct CardRow {
+pub struct Card {
     pub path_id: String,
     pub quiz_id: String,
     pub state: Option<CardState>,
@@ -39,7 +39,7 @@ pub struct CardRow {
     pub recent: Vec<Rating>,
 }
 
-impl CardRow {
+impl Card {
     pub fn new(path_id: &str, quiz_id: &str) -> Self {
         Self {
             path_id: path_id.to_string(),
@@ -55,7 +55,7 @@ impl CardRow {
     }
 }
 
-/// Computes the next FSRS card state for `rating` at `ts`, with a minimum interval of 60 seconds.
+/// Compute the next FSRS card state for `rating` at `ts`, with a minimum interval of 60 seconds.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -95,13 +95,89 @@ pub fn apply_answer(
     })
 }
 
-pub fn apply_event(c: &mut CardRow, e: &Event) -> Result<()> {
-    match (e.kind, e.payload.rating) {
-        (EventKind::QuizPresented, _) => {
+/// `cards` and `taught` rows of a path that its events produce.
+#[derive(Debug, Clone, Default)]
+pub struct Projection {
+    /// Card of each presented or answered quiz, keyed by quiz ID.
+    pub cards: HashMap<String, Card>,
+    /// Lesson presentations of each taught or authored atom, keyed by atom ID.
+    pub taught: HashMap<String, Taught>,
+}
+
+impl Projection {
+    /// Return the rows that `events` produce.
+    pub fn from_events(events: &[Event]) -> Result<Self> {
+        let mut out = Self::default();
+        for e in events {
+            out.apply(e, None)?;
+        }
+        Ok(out)
+    }
+
+    /// Apply event `e` to the row that it changes, and start a row that this projection lacks from `base`.
+    pub fn apply(&mut self, e: &Event, base: Option<&Projection>) -> Result<()> {
+        match &e.kind {
+            EventKind::LessonTaught { atom } | EventKind::LessonAuthored { atom } => {
+                let t = self.taught.entry(atom.clone()).or_insert_with(|| {
+                    base.and_then(|b| b.taught.get(atom).cloned())
+                        .unwrap_or_default()
+                });
+                if matches!(e.kind, EventKind::LessonTaught { .. }) {
+                    t.count += 1;
+                    t.last_at = Some(e.ts);
+                }
+            }
+            EventKind::QuizPresented { quiz, .. } | EventKind::QuizAnswered { quiz, .. } => {
+                let c = self.cards.entry(quiz.clone()).or_insert_with(|| {
+                    base.and_then(|b| b.cards.get(quiz).cloned())
+                        .unwrap_or_else(|| Card::new(&e.path, quiz))
+                });
+                apply_card_event(c, e)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Return the taught atoms and the passed quizzes of these rows.
+    pub fn progress(&self) -> PathProgress {
+        PathProgress {
+            taught_atoms: self.taught.keys().cloned().collect(),
+            correct_quizzes: self
+                .cards
+                .values()
+                .filter(|c| c.reps > c.lapses)
+                .map(|c| c.quiz_id.clone())
+                .collect(),
+        }
+    }
+}
+
+/// Presentation count and last presentation timestamp for a lesson on a path.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Taught {
+    pub count: u32,
+    pub last_at: Option<DateTime<Utc>>,
+}
+
+impl Taught {
+    pub fn into_row(self, path_id: &str, atom_id: String) -> TaughtRow {
+        TaughtRow {
+            path_id: path_id.to_string(),
+            atom_id,
+            count: self.count,
+            last_at: self.last_at,
+        }
+    }
+}
+
+fn apply_card_event(c: &mut Card, e: &Event) -> Result<()> {
+    match &e.kind {
+        EventKind::QuizPresented { .. } => {
             c.presented += 1;
             c.last_presented_at = Some(e.ts);
         }
-        (EventKind::QuizAnswered, Some(rating)) => {
+        &EventKind::QuizAnswered { rating, .. } => {
             c.state = Some(apply_answer(c.state.as_ref(), rating, e.ts)?);
             c.reps += 1;
             if rating == Rating::Again {
@@ -117,8 +193,8 @@ pub fn apply_event(c: &mut CardRow, e: &Event) -> Result<()> {
     Ok(())
 }
 
-impl From<&CardRow> for CardRecord {
-    fn from(c: &CardRow) -> Self {
+impl From<&Card> for CardRow {
+    fn from(c: &Card) -> Self {
         Self {
             path_id: c.path_id.clone(),
             quiz_id: c.quiz_id.clone(),
@@ -136,10 +212,10 @@ impl From<&CardRow> for CardRecord {
     }
 }
 
-impl TryFrom<CardRecord> for CardRow {
+impl TryFrom<CardRow> for Card {
     type Error = Error;
 
-    fn try_from(r: CardRecord) -> Result<Self> {
+    fn try_from(r: CardRow) -> Result<Self> {
         let bad =
             |what: &str| Error::CardsCorrupt(format!("{what} in {}/{}", r.path_id, r.quiz_id));
         let state = match (r.stability, r.difficulty, r.due_at, r.last_reviewed_at) {
@@ -167,64 +243,4 @@ impl TryFrom<CardRecord> for CardRow {
             recent: r.recent,
         })
     }
-}
-
-/// Rebuilds the `cards` and `taught` rows for `path_id` from its event stream in a single transaction.
-pub async fn recompute(db: &Db, path_id: &str) -> Result<()> {
-    db::retry(|| recompute_once(db, path_id)).await
-}
-
-async fn recompute_once(db: &Db, path_id: &str) -> Result<()> {
-    let mut op = Op::read_stream(schema::events_stream(path_id), 0);
-    let (txn, mut results) = db.begin(std::slice::from_ref(&op)).await?;
-    let mut events = Vec::new();
-    loop {
-        let page = results.swap_remove(0);
-        let next = op.next_page(&page);
-        events.extend(page.records::<Event>()?);
-        let Some(next) = next else { break };
-        results = txn.ops(std::slice::from_ref(&next)).await?;
-        op = next;
-    }
-    let (cards, taught) = fold_history(path_id, &events)?;
-    let mut ops = vec![
-        Op::delete_rows::<CardRecord>(&[path_id]),
-        Op::delete_rows::<TaughtRow>(&[path_id]),
-    ];
-    ops.extend(cards.iter().map(|c| Op::upsert(&CardRecord::from(c))));
-    ops.extend(
-        taught
-            .into_iter()
-            .map(|(atom_id, t)| Op::upsert(&t.into_row(path_id, atom_id))),
-    );
-    txn.commit(&ops).await
-}
-
-pub fn fold_history(
-    path_id: &str,
-    events: &[Event],
-) -> Result<(Vec<CardRow>, BTreeMap<String, Taught>)> {
-    let mut cards: HashMap<String, CardRow> = HashMap::new();
-    let mut taught: BTreeMap<String, Taught> = BTreeMap::new();
-    for e in events {
-        match (e.kind, e.quiz.as_deref(), e.atom.as_deref()) {
-            (EventKind::QuizPresented | EventKind::QuizAnswered, Some(quiz), _) => {
-                let c = cards
-                    .entry(quiz.to_string())
-                    .or_insert_with(|| CardRow::new(path_id, quiz));
-                apply_event(c, e)?;
-            }
-            (EventKind::LessonTaught | EventKind::LessonAuthored, _, Some(atom)) => {
-                let t = taught.entry(atom.to_string()).or_default();
-                if e.kind == EventKind::LessonTaught {
-                    t.count += 1;
-                    t.last_at = Some(e.ts);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut cards: Vec<CardRow> = cards.into_values().collect();
-    cards.sort_by(|a, b| a.quiz_id.cmp(&b.quiz_id));
-    Ok((cards, taught))
 }

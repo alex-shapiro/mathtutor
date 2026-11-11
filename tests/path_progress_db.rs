@@ -1,6 +1,6 @@
 //! Integration tests for `PathState::progress`.
 
-use mathtutor::event_log::{self, Event};
+use mathtutor::event_log::{Event, EventKind};
 use mathtutor::progress::PathProgress;
 use mathtutor::types::{Rating, Strategy};
 
@@ -13,12 +13,14 @@ async fn progress(db: &mathtutor::db::Db, path_id: &str) -> PathProgress {
 }
 
 fn answered(path: &str, atom: &str, rating: Rating) -> Event {
-    event_log::quiz_answered(
-        path.into(),
-        Some(atom.into()),
-        format!("{atom}.q1"),
-        rating,
-        None,
+    Event::now(
+        path,
+        EventKind::QuizAnswered {
+            atom: Some(atom.into()),
+            quiz: format!("{atom}.q1"),
+            rating,
+            user_answer: None,
+        },
     )
 }
 
@@ -35,7 +37,12 @@ async fn lesson_taught_event_lands_in_taught_atoms() {
     let db = common::fresh_db(PATH_ID).await;
     common::append(
         &db,
-        &[event_log::lesson_taught(PATH_ID.into(), "atom.a".into())],
+        &[Event::now(
+            PATH_ID,
+            EventKind::LessonTaught {
+                atom: "atom.a".into(),
+            },
+        )],
     )
     .await;
 
@@ -49,7 +56,12 @@ async fn lesson_authored_event_also_counts_as_taught() {
     let db = common::fresh_db(PATH_ID).await;
     common::append(
         &db,
-        &[event_log::lesson_authored(PATH_ID.into(), "atom.a".into())],
+        &[Event::now(
+            PATH_ID,
+            EventKind::LessonAuthored {
+                atom: "atom.a".into(),
+            },
+        )],
     )
     .await;
 
@@ -76,7 +88,7 @@ async fn only_again_answers_do_not_count_as_correct() {
 }
 
 #[tokio::test]
-async fn earlier_correct_answer_survives_later_again() {
+async fn earlier_correct_answer_persists_after_later_again() {
     let db = common::fresh_db(PATH_ID).await;
     common::append(&db, &[answered(PATH_ID, "atom.a", Rating::Good)]).await;
     common::append(&db, &[answered(PATH_ID, "atom.a", Rating::Again)]).await;
@@ -92,7 +104,12 @@ async fn loads_only_rows_for_the_named_path() {
     common::append(
         &db,
         &[
-            event_log::lesson_taught("p_other".into(), "atom.other".into()),
+            Event::now(
+                "p_other",
+                EventKind::LessonTaught {
+                    atom: "atom.other".into(),
+                },
+            ),
             answered("p_other", "atom.other", Rating::Good),
         ],
     )
@@ -105,4 +122,73 @@ async fn loads_only_rows_for_the_named_path() {
     let other = progress(&db, "p_other").await;
     assert!(other.lesson_taught("atom.other"));
     assert!(other.quiz_answered_correctly("atom.other.q1"));
+}
+
+#[tokio::test]
+async fn path_list_reports_target_progress_of_each_path() {
+    let db = common::empty_db().await;
+    let id = mathtutor::path::cmd_path_new(&db, "g", &["fnd.1.1.2".into()], Strategy::BottomUp)
+        .await
+        .unwrap();
+    let list = mathtutor::path::compute_path_list(&db).await.unwrap();
+    assert_eq!(list.paths.len(), 1);
+    let summary = &list.paths[0];
+    assert_eq!(summary.id, id);
+    assert_eq!(
+        (
+            summary.targets.total,
+            summary.targets.learned,
+            summary.targets.learned_pct
+        ),
+        (1, 0, 0)
+    );
+}
+
+#[tokio::test]
+async fn path_list_reports_targets_that_the_curriculum_cannot_expand() {
+    let db = common::empty_db().await;
+    common::seed_path(&db, "p_known", &["fnd.1.1.2"], Strategy::BottomUp).await;
+    common::seed_path(&db, "p_mixed", &["fnd.1.1.1", "zz.9.9"], Strategy::BottomUp).await;
+    let list = mathtutor::path::compute_path_list(&db).await.unwrap();
+    let summary = |id: &str| list.paths.iter().find(|p| p.id == id).expect("listed path");
+
+    let known = summary("p_known");
+    assert_eq!(known.targets.total, 1);
+    assert_eq!(known.unresolved_targets, Vec::<String>::new());
+    let mixed = summary("p_mixed");
+    assert_eq!(mixed.targets.total, 1);
+    assert_eq!(mixed.unresolved_targets, vec!["zz.9.9".to_string()]);
+}
+
+#[tokio::test]
+async fn path_list_shows_the_time_of_the_latest_activity_of_each_path() {
+    let db = common::empty_db().await;
+    let first =
+        mathtutor::path::cmd_path_new(&db, "first", &["fnd.1.1.1".into()], Strategy::BottomUp)
+            .await
+            .unwrap();
+    let second =
+        mathtutor::path::cmd_path_new(&db, "second", &["fnd.1.1.1".into()], Strategy::BottomUp)
+            .await
+            .unwrap();
+    mathtutor::scheduler::compute_next(
+        &db,
+        Some(&first),
+        mathtutor::scheduler::NextMode::Default,
+        mathtutor::surface::Surface::Cli,
+    )
+    .await
+    .unwrap();
+
+    let list = mathtutor::path::compute_path_list(&db).await.unwrap();
+    let updated = |id: &str| {
+        list.paths
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.updated_at)
+            .unwrap()
+    };
+    assert!(updated(&first) > updated(&second), "{list:?}");
+    let shown = serde_json::to_value(&list).unwrap();
+    assert!(shown["paths"][0].get("updated_at").is_some(), "{shown}");
 }

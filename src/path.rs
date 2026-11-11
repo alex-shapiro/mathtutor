@@ -1,113 +1,97 @@
 //! Learning path records and path management commands.
 
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
-use crate::db::{Db, Op, ts};
-use crate::event_log;
+use crate::db::Db;
 use crate::graph::{Graph, natural_id_cmp};
-use crate::schema::PathUpdate;
+use crate::progress::TargetProgress;
 use crate::types::Strategy;
-use crate::view::{Changes, PathSel, View, Want};
+use crate::view::ViewRequest;
 use crate::{Error, Result};
 
-/// Stored metadata and configuration for a learning path.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PathFile {
-    pub id: String,
-    pub goal: String,
-    #[serde(with = "ts")]
-    pub created_at: DateTime<Utc>,
-    #[serde(skip)]
-    pub updated_at: DateTime<Utc>,
-    pub targets: Vec<String>,
-    pub strategy: Strategy,
-    pub subpath: Vec<String>,
-}
+pub use crate::schema::PathRow;
 
-impl PathFile {
+impl PathRow {
+    /// Return a new path toward `targets`, or fail if `targets` is empty or `g` cannot expand a target.
+    ///
+    /// The path stores each cluster target as given, without its atoms.
+    pub fn create(g: &Graph, goal: &str, targets: &[String], strategy: Strategy) -> Result<Self> {
+        if targets.is_empty() {
+            return Err(Error::NoTargets);
+        }
+        g.expand_to_atoms(targets)?;
+        let now = Utc::now();
+        Ok(Self {
+            id: generate_path_id(now),
+            goal: goal.to_string(),
+            created_at: now,
+            targets: dedup_preserving_order(targets),
+            strategy,
+            subpath: Vec::new(),
+        })
+    }
+
     /// Expand stored targets into a topologically sorted list of atom IDs.
     pub fn resolve_targets(&self, g: &Graph) -> Result<Vec<String>> {
         let atoms = g.expand_to_atoms(&self.targets)?;
         topo_sort(g, &atoms)
     }
+
+    /// Expand each stored target that `g` can expand, and keep the IDs of the other targets.
+    pub fn resolve_each_target(&self, g: &Graph) -> Result<ResolvedTargets> {
+        let mut atoms: Vec<String> = Vec::new();
+        let mut unresolved = Vec::new();
+        for target in &self.targets {
+            match g.expand_to_atoms(std::slice::from_ref(target)) {
+                Ok(expanded) => atoms.extend(expanded),
+                Err(_) => unresolved.push(target.clone()),
+            }
+        }
+        let atoms = dedup_preserving_order(&atoms);
+        Ok(ResolvedTargets {
+            atoms: topo_sort(g, &atoms)?,
+            unresolved,
+        })
+    }
 }
 
-/// Resolve the local Math Tutor home directory from `MATHTUTOR_HOME` or `$HOME/.mathtutor`.
-pub fn mt_home() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("MATHTUTOR_HOME") {
-        return Ok(PathBuf::from(p));
-    }
-    let home = std::env::var("HOME").map_err(|_| Error::NoHome)?;
-    Ok(PathBuf::from(home).join(".mathtutor"))
+/// Target atoms of a path, with the stored target IDs that the curriculum cannot expand.
+pub struct ResolvedTargets {
+    /// Topologically sorted atoms of the targets that the curriculum can expand.
+    pub atoms: Vec<String>,
+    /// Stored target IDs that the curriculum does not contain or that have zero atoms.
+    pub unresolved: Vec<String>,
 }
 
 /// Generate a unique path ID from `now` and a random 4-character suffix.
 pub fn generate_path_id(now: DateTime<Utc>) -> String {
-    use std::hash::{BuildHasher, RandomState};
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let mut n = RandomState::new().hash_one(now);
     let suffix: String = (0..4)
-        .map(|_| {
-            let c = ALPHABET[(n % 36) as usize] as char;
-            n /= 36;
-            c
-        })
+        .map(|_| char::from(ALPHABET[rand::random_range(0..ALPHABET.len())]))
         .collect();
     format!("p_{}_{suffix}", now.format("%Y_%m_%d_%H%M%S"))
 }
 
-/// Insert `p` and append its `path_created` event.
-pub fn insert(view: &View, changes: &mut Changes, p: &PathFile) -> Result<()> {
-    changes.op(Op::insert(p));
-    let mut created = event_log::path_created(p.id.clone());
-    created.ts = p.created_at;
-    changes.append(view, &created)
-}
-
-/// Replace the stored subpath for `path_id`.
-pub fn set_subpath(changes: &mut Changes, path_id: &str, atoms: &[String]) {
-    let set = PathUpdate {
-        subpath: Some(atoms),
-        ..PathUpdate::default()
-    };
-    changes.op(Op::update::<PathFile>(&[path_id], &set));
-}
-
-/// Create a new learning path and return its ID.
+/// Create a new learning path toward `targets` and return its ID.
 pub async fn cmd_path_new(
     db: &Db,
     goal: &str,
-    ids: &[String],
+    targets: &[String],
     strategy: Strategy,
-    graph_dir: Option<&Path>,
 ) -> Result<String> {
-    let g = Graph::load_default(graph_dir)?;
-    // Validate that each target expands to at least 1 atom while storing cluster IDs unexpanded.
-    g.expand_to_atoms(ids)?;
-    let targets = dedup_preserving_order(ids);
-
-    let now = Utc::now();
-    let p = PathFile {
-        id: generate_path_id(now),
-        goal: goal.to_string(),
-        created_at: now,
-        updated_at: now,
-        targets,
-        strategy,
-        subpath: Vec::new(),
-    };
-    let want = Want {
-        path: PathSel::None,
-        overlay: false,
-        all_paths: false,
-    };
-    db.transact(&want, |view, changes| insert(view, changes, &p))
-        .await?;
+    let p = PathRow::create(&*db.curriculum().graph()?, goal, targets, strategy)?;
+    store_new_path(db, &p).await?;
     Ok(p.id)
+}
+
+/// Store the new path `p` and its creation event.
+pub async fn store_new_path(db: &Db, p: &PathRow) -> Result<()> {
+    db.transact(&ViewRequest::nothing(), |view, changes| {
+        changes.create_path(view, p)
+    })
+    .await
 }
 
 /// Update the traversal strategy for a learning path and return its ID.
@@ -116,79 +100,68 @@ pub async fn cmd_path_strategy(
     explicit_id: Option<&str>,
     strategy: Strategy,
 ) -> Result<String> {
-    let want = Want {
-        path: PathSel::from(explicit_id),
-        overlay: false,
-        all_paths: false,
-    };
+    let want = ViewRequest::path(explicit_id).without_overlay();
     db.transact(&want, |view, changes| {
-        let id = view.path()?.file.id.clone();
-        let set = PathUpdate {
-            strategy: Some(strategy),
-            ..PathUpdate::default()
+        let p = PathRow {
+            strategy,
+            ..view.path()?.row.clone()
         };
-        changes.op(Op::update::<PathFile>(&[&id], &set));
-        Ok(id)
+        changes.replace_path(&p);
+        Ok(p.id)
     })
     .await
 }
 
-/// Summary of progress for a learning path.
+/// Goal and target progress of a learning path.
 #[derive(Debug, serde::Serialize)]
 pub struct PathSummary {
     pub id: String,
     pub goal: String,
     pub strategy: Strategy,
     pub created_at: chrono::DateTime<Utc>,
-    pub targets: usize,
-    pub learned: usize,
-    pub learned_pct: usize,
+    /// Time of the latest write to the path.
+    pub updated_at: chrono::DateTime<Utc>,
+    /// Progress over the targets that the curriculum of this release can expand.
+    pub targets: TargetProgress,
+    /// Stored target IDs that the curriculum of this release cannot expand, such as a renamed atom.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unresolved_targets: Vec<String>,
 }
 
-#[derive(serde::Serialize)]
-struct PathListView {
-    paths: Vec<PathSummary>,
+/// Learning paths of the user, ordered by creation time.
+#[derive(Debug, serde::Serialize)]
+pub struct PathListView {
+    pub paths: Vec<PathSummary>,
 }
 
-/// Print all learning path summaries as AYML (`mt path list`).
-pub async fn cmd_path_list(db: &Db, graph_dir: Option<&Path>) -> Result<()> {
-    let summaries = list_summaries(db, graph_dir).await?;
-    let view = PathListView { paths: summaries };
-    let text = ayml::to_string(&view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
-    print!("{text}");
-    Ok(())
+/// Print all learning path summaries as AYML for `mt path list`.
+pub async fn cmd_path_list(db: &Db) -> Result<()> {
+    crate::print_ayml(&compute_path_list(db).await?)
 }
 
-/// Compute progress summaries for all learning paths ordered by creation time.
-pub async fn list_summaries(db: &Db, graph_dir: Option<&Path>) -> Result<Vec<PathSummary>> {
-    let want = Want {
-        path: PathSel::None,
-        overlay: true,
-        all_paths: true,
-    };
-    let view = db.snapshot(&want).await?;
-    let g = view.graph(graph_dir)?;
-    view.paths
-        .iter()
+/// Compute the progress summary of every learning path.
+///
+/// A path with targets that the curriculum cannot expand reports those target IDs instead of failing the list.
+pub async fn compute_path_list(db: &Db) -> Result<PathListView> {
+    let view = db.snapshot(&ViewRequest::all_paths()).await?;
+    let g = view.graph()?;
+    let paths = view
+        .paths()
+        .into_iter()
         .map(|p| {
-            let progress = p.progress();
-            let atoms = p.file.resolve_targets(&g)?;
-            let targets = atoms.len();
-            let learned = atoms
-                .iter()
-                .filter(|a| crate::scheduler::is_atom_complete(&g, &progress, a))
-                .count();
+            let resolved = p.row.resolve_each_target(&g)?;
             Ok(PathSummary {
-                id: p.file.id.clone(),
-                goal: p.file.goal.clone(),
-                strategy: p.file.strategy,
-                created_at: p.file.created_at,
-                targets,
-                learned,
-                learned_pct: (learned * 100).checked_div(targets).unwrap_or(0),
+                id: p.row.id.clone(),
+                goal: p.row.goal.clone(),
+                strategy: p.row.strategy,
+                created_at: p.row.created_at,
+                updated_at: p.updated_at,
+                targets: TargetProgress::of(&g, &resolved.atoms, &p.progress()),
+                unresolved_targets: resolved.unresolved,
             })
         })
-        .collect()
+        .collect::<Result<_>>()?;
+    Ok(PathListView { paths })
 }
 
 fn dedup_preserving_order(ids: &[String]) -> Vec<String> {
@@ -205,12 +178,10 @@ fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>> {
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
 
     for atom in atoms {
-        if let Some(c) = g.by_id.get(atom) {
-            for p in &c.prerequisites {
-                if atom_set.contains(p.as_str()) {
-                    adj.entry(p.as_str()).or_default().push(atom.as_str());
-                    *indegree.get_mut(atom.as_str()).unwrap() += 1;
-                }
+        for p in g.atomic_prerequisites(atom) {
+            if let Some(&p) = atom_set.get(p.as_str()) {
+                adj.entry(p).or_default().push(atom.as_str());
+                *indegree.get_mut(atom.as_str()).unwrap() += 1;
             }
         }
     }
@@ -263,7 +234,25 @@ impl Eq for NaturalOrd<'_> {}
 
 #[cfg(test)]
 mod tests {
-    use super::topo_sort;
+    use super::{generate_path_id, topo_sort};
+    use std::collections::HashSet;
+
+    #[test]
+    fn path_ids_share_the_time_and_differ_in_a_random_suffix() {
+        let now = chrono::Utc::now();
+        let prefix = format!("p_{}_", now.format("%Y_%m_%d_%H%M%S"));
+        let ids: HashSet<String> = (0..20).map(|_| generate_path_id(now)).collect();
+        assert!(ids.len() > 1, "{ids:?}");
+        for id in &ids {
+            let suffix = id.strip_prefix(&prefix).expect("time prefix");
+            assert_eq!(suffix.len(), 4);
+            assert!(
+                suffix
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            );
+        }
+    }
     use crate::graph::{FlatConcept, Graph};
     use std::collections::HashMap;
 
@@ -283,7 +272,7 @@ mod tests {
                 ((*id).to_string(), c)
             })
             .collect::<HashMap<_, _>>();
-        Graph { by_id }
+        Graph::of_concepts(by_id.into_values())
     }
 
     #[test]

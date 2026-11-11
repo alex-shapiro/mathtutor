@@ -1,16 +1,15 @@
-//! Unit tests for `scheduler::next_action` and `scheduler::is_atom_complete`.
+//! Unit tests for `PathPlan::next_action` and `scheduler::is_atom_complete`.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 
-use mathtutor::progress::PathProgress;
+use mathtutor::graph::Graph;
+use mathtutor::progress::{PathProgress, QuizSlot};
 use mathtutor::scheduler::{self, Action};
 use mathtutor::types::{Difficulty, Rating};
 
 mod common;
 
-use common::{atom, cluster, graph_of, path_with, quiz, taught};
-
-const NO_DUE: &[(String, DateTime<Utc>)] = &[];
+use common::{atom, cluster, path_with, quiz, taught};
 
 fn assert_create_lesson(action: &Action, expected_atom: &str) {
     match action {
@@ -50,84 +49,52 @@ fn assert_present_lesson(action: &Action, expected_atom: &str) {
 }
 
 #[test]
-fn create_lesson_when_atom_has_none() {
-    let g = graph_of(vec![atom("a", &[], None, vec![])]);
+fn create_lesson_if_atom_lacks_lesson() {
+    let g = Graph::of_concepts(vec![atom("a", &[], None, vec![])]);
     let p = path_with(&["a"]);
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "a",
     );
 }
 
 #[test]
-fn present_lesson_when_stored_but_not_taught_in_path() {
-    let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
+fn present_lesson_if_stored_but_untaught_in_path() {
+    let g = Graph::of_concepts(vec![atom("a", &[], Some("body"), vec![])]);
     let p = path_with(&["a"]);
     assert_present_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "a",
     );
 }
 
 #[test]
 fn lesson_authored_event_satisfies_taught_check() {
-    let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
+    let g = Graph::of_concepts(vec![atom("a", &[], Some("body"), vec![])]);
     let p = path_with(&["a"]);
     let events = vec![common::lesson_authored("a")];
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         Difficulty::Easy,
     );
 }
 
 #[test]
-fn create_easy_quiz_when_lesson_stored_and_taught() {
-    let g = graph_of(vec![atom("a", &[], Some("body"), vec![])]);
+fn create_easy_quiz_if_lesson_stored_and_taught() {
+    let g = Graph::of_concepts(vec![atom("a", &[], Some("body"), vec![])]);
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         Difficulty::Easy,
     );
 }
 
 #[test]
-fn present_easy_quiz_when_authored_but_unanswered() {
-    let g = graph_of(vec![atom(
+fn present_easy_quiz_if_authored_but_unanswered() {
+    let g = Graph::of_concepts(vec![atom(
         "a",
         &[],
         Some("body"),
@@ -136,15 +103,7 @@ fn present_easy_quiz_when_authored_but_unanswered() {
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
     assert_present_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         "a.q1",
     );
@@ -152,7 +111,7 @@ fn present_easy_quiz_when_authored_but_unanswered() {
 
 #[test]
 fn keep_presenting_easy_after_again_rating() {
-    let g = graph_of(vec![atom(
+    let g = Graph::of_concepts(vec![atom(
         "a",
         &[],
         Some("body"),
@@ -161,15 +120,7 @@ fn keep_presenting_easy_after_again_rating() {
     let p = path_with(&["a"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Again)];
     assert_present_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         "a.q1",
     );
@@ -177,7 +128,7 @@ fn keep_presenting_easy_after_again_rating() {
 
 #[test]
 fn advance_to_medium_after_hard_rating() {
-    let g = graph_of(vec![atom(
+    let g = Graph::of_concepts(vec![atom(
         "a",
         &[],
         Some("body"),
@@ -186,15 +137,7 @@ fn advance_to_medium_after_hard_rating() {
     let p = path_with(&["a"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Hard)];
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         Difficulty::Medium,
     );
@@ -202,7 +145,7 @@ fn advance_to_medium_after_hard_rating() {
 
 #[test]
 fn advance_to_medium_after_easy_correct() {
-    let g = graph_of(vec![atom(
+    let g = Graph::of_concepts(vec![atom(
         "a",
         &[],
         Some("body"),
@@ -211,15 +154,7 @@ fn advance_to_medium_after_easy_correct() {
     let p = path_with(&["a"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Good)];
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         Difficulty::Medium,
     );
@@ -227,7 +162,7 @@ fn advance_to_medium_after_easy_correct() {
 
 #[test]
 fn advance_to_hard_after_easy_and_medium_correct() {
-    let g = graph_of(vec![atom(
+    let g = Graph::of_concepts(vec![atom(
         "a",
         &[],
         Some("body"),
@@ -243,15 +178,7 @@ fn advance_to_hard_after_easy_and_medium_correct() {
         common::answered("a.q2", Rating::Good),
     ];
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "a",
         Difficulty::Hard,
     );
@@ -259,7 +186,7 @@ fn advance_to_hard_after_easy_and_medium_correct() {
 
 #[test]
 fn done_after_all_three_correct_on_only_target() {
-    let g = graph_of(vec![atom(
+    let g = Graph::of_concepts(vec![atom(
         "a",
         &[],
         Some("body"),
@@ -277,22 +204,14 @@ fn done_after_all_three_correct_on_only_target() {
         common::answered("a.q3", Rating::Easy),
     ];
     assert!(matches!(
-        scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default
-        ),
+        common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         Action::Done
     ));
 }
 
 #[test]
 fn advance_to_next_target_lesson_after_first_complete() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         atom(
             "a",
             &[],
@@ -313,64 +232,40 @@ fn advance_to_next_target_lesson_after_first_complete() {
         common::answered("a.q3", Rating::Good),
     ];
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "b",
     );
 }
 
 #[test]
 fn does_not_advance_after_only_lesson_stored() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         atom("a", &[], Some("body"), vec![]),
         atom("b", &[], None, vec![]),
     ]);
     let p = path_with(&["a", "b"]);
     assert_present_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "a",
     );
 }
 
 #[test]
 fn descends_into_prereq_before_target() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         atom("pre", &[], None, vec![]),
         atom("target", &["pre"], Some("body"), vec![]),
     ]);
     let p = path_with(&["target"]);
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "pre",
     );
 }
 
 #[test]
 fn finishes_prereq_quizzes_before_target_lesson() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         atom(
             "pre",
             &[],
@@ -382,15 +277,7 @@ fn finishes_prereq_quizzes_before_target_lesson() {
     let p = path_with(&["target"]);
     let events = vec![taught("pre")];
     assert_present_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "pre",
         "pre.q1",
     );
@@ -398,29 +285,21 @@ fn finishes_prereq_quizzes_before_target_lesson() {
 
 #[test]
 fn cluster_target_descends_to_first_atom() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         cluster("c", &["c.1", "c.2"]),
         atom("c.1", &[], None, vec![]),
         atom("c.2", &[], None, vec![]),
     ]);
     let p = path_with(&["c"]);
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "c.1",
     );
 }
 
 #[test]
 fn cluster_prereq_descends_before_target() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         cluster("pre", &["pre.1", "pre.2"]),
         atom("pre.1", &[], None, vec![]),
         atom("pre.2", &[], None, vec![]),
@@ -428,22 +307,14 @@ fn cluster_prereq_descends_before_target() {
     ]);
     let p = path_with(&["target"]);
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &[], scheduler::NextMode::Default),
         "pre.1",
     );
 }
 
 #[test]
-fn cluster_prereq_advances_to_target_when_complete() {
-    let g = graph_of(vec![
+fn cluster_prereq_advances_to_target_once_complete() {
+    let g = Graph::of_concepts(vec![
         cluster("pre", &["pre.1"]),
         common::complete_atom("pre.1", &[]),
         atom("target", &["pre"], None, vec![]),
@@ -451,22 +322,14 @@ fn cluster_prereq_advances_to_target_when_complete() {
     let p = path_with(&["target"]);
     let events = common::complete_events("pre.1");
     assert_create_lesson(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Default,
-        ),
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
         "target",
     );
 }
 
 #[test]
 fn is_atom_complete_false_without_lesson() {
-    let g = graph_of(vec![atom("a", &[], None, vec![])]);
+    let g = Graph::of_concepts(vec![atom("a", &[], None, vec![])]);
     assert!(!scheduler::is_atom_complete(
         &g,
         &PathProgress::default(),
@@ -476,7 +339,7 @@ fn is_atom_complete_false_without_lesson() {
 
 #[test]
 fn is_atom_complete_false_with_only_two_correct() {
-    let g = graph_of(vec![atom(
+    let g = Graph::of_concepts(vec![atom(
         "a",
         &[],
         Some("body"),
@@ -499,7 +362,7 @@ fn is_atom_complete_false_with_only_two_correct() {
 
 #[test]
 fn is_atom_complete_true_with_all_three_correct() {
-    let g = graph_of(vec![atom(
+    let g = Graph::of_concepts(vec![atom(
         "a",
         &[],
         Some("body"),
@@ -510,6 +373,7 @@ fn is_atom_complete_true_with_all_three_correct() {
         ],
     )]);
     let events = vec![
+        taught("a"),
         common::answered("a.q1", Rating::Good),
         common::answered("a.q2", Rating::Easy),
         common::answered("a.q3", Rating::Good),
@@ -521,29 +385,68 @@ fn is_atom_complete_true_with_all_three_correct() {
     ));
 }
 
-fn due_card(quiz_id: &str) -> Vec<(String, DateTime<Utc>)> {
-    vec![(quiz_id.into(), Utc::now())]
+#[test]
+fn passed_quizzes_do_not_complete_an_atom_whose_lesson_is_untaught() {
+    let g = Graph::of_concepts(vec![common::complete_atom("a", &[])]);
+    let p = path_with(&["a"]);
+    let events = vec![
+        common::answered("a.q1", Rating::Good),
+        common::answered("a.q2", Rating::Good),
+        common::answered("a.q3", Rating::Good),
+    ];
+    let progress = common::progress_of(&events);
+
+    assert!(!scheduler::is_atom_complete(&g, &progress, "a"));
+    assert_present_lesson(
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
+        "a",
+    );
+}
+
+#[test]
+fn a_passed_second_quiz_of_a_difficulty_completes_the_slot() {
+    let mut a = common::complete_atom("a", &[]);
+    a.quizzes.insert(1, quiz("a.q4", Difficulty::Easy));
+    let g = Graph::of_concepts(vec![a]);
+    let p = path_with(&["a"]);
+    let events = vec![taught("a"), common::answered("a.q4", Rating::Good)];
+    let progress = common::progress_of(&events);
+
+    assert_eq!(
+        progress.quiz_slot(&g.by_id["a"], Difficulty::Easy),
+        QuizSlot::Correct
+    );
+    assert_present_quiz(
+        &common::next_action(&g, &p, &events, scheduler::NextMode::Default),
+        "a",
+        "a.q2",
+    );
+
+    let mut events = events;
+    events.push(common::answered("a.q2", Rating::Good));
+    events.push(common::answered("a.q3", Rating::Good));
+    assert!(scheduler::is_atom_complete(
+        &g,
+        &common::progress_of(&events),
+        "a"
+    ));
+}
+
+/// Return a time at which every card that the tests answer is due.
+fn later() -> DateTime<Utc> {
+    Utc::now() + Duration::days(3650)
 }
 
 #[test]
 fn new_mode_skips_due_card_and_returns_walker_action() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         atom("a", &[], Some("body"), vec![quiz("a.q1", Difficulty::Easy)]),
         atom("b", &[], None, vec![]),
     ]);
     let p = path_with(&["a", "b"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Good)];
-    let due = due_card("a.q1");
     assert_create_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            &due,
-            &[],
-            scheduler::NextMode::New,
-        ),
+        &common::next_action_at(&g, &p, &events, later(), scheduler::NextMode::New),
         "a",
         Difficulty::Medium,
     );
@@ -551,7 +454,7 @@ fn new_mode_skips_due_card_and_returns_walker_action() {
 
 #[test]
 fn due_mode_returns_earliest_due_card() {
-    let g = graph_of(vec![atom(
+    let g = Graph::of_concepts(vec![atom(
         "a",
         &[],
         Some("body"),
@@ -559,37 +462,20 @@ fn due_mode_returns_earliest_due_card() {
     )]);
     let p = path_with(&["a"]);
     let events = vec![taught("a"), common::answered("a.q1", Rating::Good)];
-    let due = due_card("a.q1");
     assert_present_quiz(
-        &scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            &due,
-            &[],
-            scheduler::NextMode::Due,
-        ),
+        &common::next_action_at(&g, &p, &events, later(), scheduler::NextMode::Due),
         "a",
         "a.q1",
     );
 }
 
 #[test]
-fn due_mode_returns_done_when_no_card_is_due() {
-    let g = graph_of(vec![atom("a", &[], None, vec![])]);
+fn due_mode_reports_zero_due_reviews_on_an_incomplete_path() {
+    let g = Graph::of_concepts(vec![atom("a", &[], None, vec![])]);
     let p = path_with(&["a"]);
     assert!(matches!(
-        scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &PathProgress::default(),
-            NO_DUE,
-            &[],
-            scheduler::NextMode::Due,
-        ),
-        Action::Done
+        common::next_action(&g, &p, &[], scheduler::NextMode::Due),
+        Action::NoReviewsDue
     ));
 }
 
@@ -614,8 +500,8 @@ fn from_flags_rejects_both_new_and_due() {
 }
 
 #[test]
-fn new_mode_returns_done_when_walker_has_nothing_left() {
-    let g = graph_of(vec![atom(
+fn new_mode_returns_done_if_all_targets_are_complete() {
+    let g = Graph::of_concepts(vec![atom(
         "a",
         &[],
         Some("body"),
@@ -632,17 +518,30 @@ fn new_mode_returns_done_when_walker_has_nothing_left() {
         common::answered("a.q2", Rating::Good),
         common::answered("a.q3", Rating::Good),
     ];
-    let due = due_card("a.q1");
     assert!(matches!(
-        scheduler::next_action(
-            &g,
-            &p,
-            &p.targets,
-            &common::progress_of(&events),
-            &due,
-            &[],
-            scheduler::NextMode::New,
-        ),
+        common::next_action_at(&g, &p, &events, later(), scheduler::NextMode::New),
         Action::Done
     ));
+}
+
+#[test]
+fn due_card_of_a_removed_atom_does_not_hide_later_due_cards() {
+    let g = Graph::of_concepts(vec![atom(
+        "a",
+        &[],
+        Some("body"),
+        vec![quiz("a.q1", Difficulty::Easy)],
+    )]);
+    let p = path_with(&["a"]);
+    let events = vec![
+        common::at(
+            Utc::now() - Duration::days(1),
+            common::answered("removed.q1", Rating::Good),
+        ),
+        common::answered("a.q1", Rating::Good),
+    ];
+
+    let action = common::next_action_at(&g, &p, &events, later(), scheduler::NextMode::Due);
+
+    assert_present_quiz(&action, "a", "a.q1");
 }
