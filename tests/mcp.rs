@@ -1691,6 +1691,45 @@ async fn the_sign_in_delay_and_an_open_form_survive_a_restart_with_a_new_databas
 }
 
 #[tokio::test]
+async fn a_server_accepts_a_form_that_another_server_signed_with_a_new_key() {
+    use mathtutor::db::Op;
+    use mathtutor::schema::OAuthKey;
+
+    let cfg = common::fresh_config();
+    let auth = AuthConfig {
+        admin_password: Some(ADMIN_PASSWORD.into()),
+        ..AuthConfig::default()
+    };
+    let first = spawn_server_on(cfg.clone(), auth.clone()).await;
+    let reg = register_client(&first, "Two machines").await;
+    let pkce = PkcePair::new();
+    let form = async |server: &ServerHandle| {
+        let auth_url = authorize_url(server, &reg.client_id, &pkce.challenge, None, None);
+        let res = oauth_client().get(&auth_url).send().await.unwrap();
+        res.text().await.unwrap()
+    };
+    form(&first).await;
+    let new_key = OAuthKey {
+        name: "csrf".into(),
+        key: "bmV3IGtleQ".into(),
+    };
+    baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db)
+        .write(&[Op::delete_row::<OAuthKey>("csrf"), Op::insert(&new_key)])
+        .await
+        .unwrap();
+    let second = spawn_server_on(cfg, auth).await;
+    let signed_by_second = form(&second).await;
+
+    let res = submit_login(&first, &signed_by_second, ADMIN_PASSWORD).await;
+
+    assert_eq!(res.status(), 303);
+    first.stop().await;
+    second.stop().await;
+}
+
+#[tokio::test]
 async fn an_expired_sign_in_form_shows_a_new_form() {
     let server = spawn_oauth_server().await;
     let reg = register_client(&server, "Stale").await;

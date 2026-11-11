@@ -48,7 +48,8 @@ pub struct OAuthState {
     db: Db,
     admin_password: Arc<[u8]>,
     public_url: Arc<Url>,
-    csrf_key: Arc<tokio::sync::OnceCell<CsrfKey>>,
+    /// Key that signs the CSRF tokens, as this server last read it from the database.
+    csrf_key: Arc<std::sync::Mutex<Option<Arc<CsrfKey>>>>,
     limits: AddrLimits,
 }
 
@@ -66,15 +67,44 @@ impl OAuthState {
         }
     }
 
-    /// Return the key that signs the CSRF tokens of the sign-in form, and store a new random key if the database holds none.
-    async fn csrf_key(&self) -> Result<&CsrfKey, OAuthError> {
+    /// Return the key that signs the CSRF tokens of the sign-in form.
+    async fn csrf_key(&self) -> Result<Arc<CsrfKey>, OAuthError> {
+        let cached = self.cached_csrf_key().clone();
+        match cached {
+            Some(key) => Ok(key),
+            None => self.read_csrf_key().await,
+        }
+    }
+
+    /// Read the key that signs the CSRF tokens from the database, store a new random key if the database holds none, and cache the key.
+    async fn read_csrf_key(&self) -> Result<Arc<CsrfKey>, OAuthError> {
+        let key = run_txn!(&self.db, |txn| load_or_create_key(&mut txn, CSRF_KEY_NAME)
+            .await)?;
+        let key = Arc::new(CsrfKey(key.into_bytes()));
+        *self.cached_csrf_key() = Some(key.clone());
+        Ok(key)
+    }
+
+    fn cached_csrf_key(&self) -> std::sync::MutexGuard<'_, Option<Arc<CsrfKey>>> {
         self.csrf_key
-            .get_or_try_init(|| async {
-                let key = run_txn!(&self.db, |txn| load_or_create_key(&mut txn, CSRF_KEY_NAME)
-                    .await)?;
-                Ok::<_, OAuthError>(CsrfKey(key.into_bytes()))
-            })
-            .await
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Return `true` if `token` is a valid CSRF token for `q`, with the key that signs a new token.
+    ///
+    /// Before a rejection, the server reads the key again, because a replacement of the authorization tables on another machine stores a new key.
+    async fn check_csrf(
+        &self,
+        q: &AuthorizeQuery,
+        token: &str,
+    ) -> Result<(bool, Arc<CsrfKey>), OAuthError> {
+        let key = self.csrf_key().await?;
+        if csrf_verify(&key, q, token) {
+            return Ok((true, key));
+        }
+        let key = self.read_csrf_key().await?;
+        Ok((csrf_verify(&key, q, token), key))
     }
 
     /// Return the public issuer URL.
@@ -276,7 +306,8 @@ async fn authorize_get(
     Query(q): Query<AuthorizeQuery>,
 ) -> Result<Html<String>, OAuthError> {
     let client = validate_authorize_request(&s, &q).await?;
-    let csrf = csrf_mint(s.csrf_key().await?, &q);
+    let csrf_key = s.csrf_key().await?;
+    let csrf = csrf_mint(&csrf_key, &q);
     Ok(Html(render_login_form(&client, &q, &csrf, None)))
 }
 
@@ -296,8 +327,9 @@ async fn authorize_post(
 ) -> Result<Response, OAuthError> {
     let q = f.query;
     let client = validate_authorize_request(&s, &q).await?;
-    let csrf_key = s.csrf_key().await?;
-    if !csrf_verify(csrf_key, &q, &f.csrf) {
+    let (csrf_valid, csrf_key) = s.check_csrf(&q, &f.csrf).await?;
+    let csrf_key = &*csrf_key;
+    if !csrf_valid {
         tracing::warn!(client_id = %client.client_id, "csrf token rejected on authorize POST");
         let message = "This sign-in form expired. Enter the password again.";
         let html = render_login_form(&client, &q, &csrf_mint(csrf_key, &q), Some(message));
