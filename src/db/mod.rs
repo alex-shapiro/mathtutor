@@ -368,6 +368,7 @@ impl Txn {
     }
 
     /// Execute `op` in the transaction.
+    #[cfg(feature = "mcp")]
     pub(crate) async fn run_one(&mut self, op: Op) -> Result<OpResult> {
         let mut results = self.run(std::slice::from_ref(&op)).await?;
         results
