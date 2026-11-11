@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::db::client::Entry;
+use crate::db::client::Expect;
 use crate::db::client::api::{ColumnType, ErrorCode, ListTablesQuery, NewColumn, NewTable, Table};
 use crate::db::{Op, Row, client, ts};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
@@ -437,7 +438,7 @@ pub(crate) async fn state(db: &client::Db, set: TableSet) -> Result<DbState> {
     }
 }
 
-/// Create every missing table of `set` and record the schema version of the set.
+/// Create every missing table of `set` and record the schema version of the set, unless the database already records a state for it.
 ///
 /// Fails with [`Error::ForeignTable`] if the database holds a table that no table set defines, and with [`Error::TableMismatch`] if a table exists with other columns.
 pub(crate) async fn create_tables(db: &client::Db, set: TableSet) -> Result<()> {
@@ -451,8 +452,14 @@ pub(crate) async fn create_tables(db: &client::Db, set: TableSet) -> Result<()> 
             });
         }
     }
-    db.write(&[state_write_op(set, None)]).await?;
-    Ok(())
+    let absent = Op::Check {
+        key: set.state_key().into(),
+        expect: Expect::Absent,
+    };
+    match db.write(&[absent, state_write_op(set, None)]).await {
+        Err(e) if e.code() != Some(ErrorCode::PreconditionFailed) => Err(e.into()),
+        _ => Ok(()),
+    }
 }
 
 /// Fail with [`Error::ForeignTable`] if `db` holds a table that no table set defines, such as a table of another application.

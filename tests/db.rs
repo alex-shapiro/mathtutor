@@ -205,6 +205,55 @@ async fn commands_refuse_a_database_that_holds_the_tables_of_another_application
     assert_eq!(table_names(&cfg).await, ["notes"]);
 }
 
+/// Transport that stores an open import marker just before the request that creates the last learner table.
+struct ImportRaceTransport {
+    inner: HttpTransport,
+    raw: baserunna_client::Db,
+}
+
+impl Transport for ImportRaceTransport {
+    fn send(
+        &self,
+        req: http::Request<Bytes>,
+    ) -> BoxFuture<'_, Result<http::Response<Bytes>, TransportError>> {
+        Box::pin(async move {
+            let last = TableSet::Learner.tables().pop().unwrap().name;
+            let body: serde_json::Value = serde_json::from_slice(req.body()).unwrap_or_default();
+            if req.uri().path().ends_with("/tables") && body["name"] == last.as_str() {
+                let marker = format!(
+                    r#"{{"schema":"{}","import":"open"}}"#,
+                    TableSet::Learner.version()
+                );
+                self.raw
+                    .write(&[Op::put("mathtutor_state", marker)])
+                    .await
+                    .unwrap();
+            }
+            self.inner.send(req).await
+        })
+    }
+}
+
+#[tokio::test]
+async fn table_creation_keeps_an_import_marker_that_an_import_stored_meanwhile() {
+    let cfg = common::fresh_config();
+    let raw = raw_db(&cfg);
+    raw.ensure().await.unwrap();
+    let db = Db::with_transport(
+        &cfg,
+        ImportRaceTransport {
+            inner: cfg.transport().unwrap(),
+            raw,
+        },
+    );
+
+    db.create_if_missing().await.unwrap();
+
+    assert_eq!(table_names(&cfg).await, TABLES);
+    let e = Db::connect(&cfg).unwrap().check_usable().await.unwrap_err();
+    assert!(matches!(e, Error::ImportInProgress), "{e:?}");
+}
+
 #[tokio::test]
 async fn learner_commands_ignore_the_authorization_schema_version() {
     let cfg = common::fresh_config();
