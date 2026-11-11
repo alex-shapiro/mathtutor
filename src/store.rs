@@ -10,6 +10,8 @@ use crate::view::Want;
 use crate::{Error, Result};
 
 /// Store a lesson body for `atom_id` in the overlay and log its authoring and presentation events.
+///
+/// A body equal to the stored lesson changes nothing, so the command is safe to repeat.
 pub async fn cmd_lesson_upsert(
     db: &Db,
     atom_id: &str,
@@ -19,7 +21,11 @@ pub async fn cmd_lesson_upsert(
     db.transact(&Want::path(path_id), |view, changes| {
         let id = view.path()?.file.id.clone();
         let g = view.graph()?;
-        let amended = g.atom(atom_id)?.lesson.is_some();
+        let stored = g.atom(atom_id)?.lesson.as_deref();
+        if stored == Some(body.as_str()) {
+            return Ok(());
+        }
+        let amended = stored.is_some();
 
         overlay::upsert_lesson(changes, atom_id, &body);
         let change = if amended {
