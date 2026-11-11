@@ -175,6 +175,17 @@ async fn a_handle_checks_the_database_state_in_every_request() {
     let want = Want::path(Some(PATH_ID));
     db.snapshot(&want).await.unwrap();
     let raw = raw_db(&cfg);
+    let state = raw.read_one(Op::get("mathtutor_state")).await.unwrap();
+    let state = state
+        .entry()
+        .unwrap()
+        .unwrap()
+        .value
+        .data()
+        .cloned()
+        .unwrap();
+    let mut open_import: serde_json::Value = serde_json::from_slice(&state).unwrap();
+    open_import["import"] = "open".into();
 
     raw.write(&[Op::put("mathtutor_state", r#"{"schema":"99"}"#)])
         .await
@@ -185,12 +196,9 @@ async fn a_handle_checks_the_database_state_in_every_request() {
         "{e:?}"
     );
 
-    raw.write(&[Op::put(
-        "mathtutor_state",
-        r#"{"schema":"2","import":"open"}"#,
-    )])
-    .await
-    .unwrap();
+    raw.write(&[Op::put("mathtutor_state", open_import.to_string())])
+        .await
+        .unwrap();
     let e = db.snapshot(&want).await.unwrap_err();
     assert!(matches!(e, Error::ImportInProgress), "{e:?}");
 

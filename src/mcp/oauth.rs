@@ -27,6 +27,9 @@ const ACCESS_TOKEN_TTL: Duration = Duration::hours(1);
 const REFRESH_TOKEN_TTL: Duration = Duration::days(30);
 const CSRF_TTL: Duration = Duration::minutes(15);
 
+/// Scope that gives access to the MCP tools, and the only scope that this server grants.
+const MCP_SCOPE: &str = "mcp";
+
 /// Shared OAuth state for the Axum router.
 #[derive(Clone)]
 pub struct OAuthState {
@@ -219,6 +222,7 @@ async fn authorize_post(
 ) -> Result<Response, OAuthError> {
     let q = f.query;
     let client = validate_authorize_request(&s, &q).await?;
+    let scope = granted_scope(q.scope.as_deref())?;
     if !csrf_verify(&s.csrf_key, &q, &f.csrf) {
         tracing::warn!(client_id = %client.client_id, "csrf token rejected on authorize POST");
         return Err(OAuthError::invalid_request("invalid or expired csrf token"));
@@ -235,7 +239,7 @@ async fn authorize_post(
         code_hash: secret_hash(&secret),
         client_id: client.client_id.clone(),
         redirect_uri: q.redirect_uri.clone(),
-        scope: q.scope.clone(),
+        scope,
         code_challenge: q.code_challenge.clone(),
         code_challenge_method: "S256".into(),
         resource: q.resource.clone(),
@@ -273,6 +277,7 @@ async fn validate_authorize_request(
     if q.code_challenge.is_empty() {
         return Err(OAuthError::invalid_request("code_challenge is required"));
     }
+    granted_scope(q.scope.as_deref())?;
     let client = load_client(&s.db, &q.client_id).await?;
     if !client.redirect_uris.iter().any(|u| u == &q.redirect_uri) {
         return Err(OAuthError::invalid_request(
@@ -305,8 +310,7 @@ struct TokenResponse {
     token_type: &'static str,
     expires_in: i64,
     refresh_token: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    scope: Option<String>,
+    scope: String,
 }
 
 async fn token(
@@ -369,12 +373,12 @@ struct IssuedTokens {
     access: String,
     refresh: String,
     client_id: String,
-    scope: Option<String>,
+    scope: String,
 }
 
 impl IssuedTokens {
     /// Mint new tokens for `client_id` with `scope`.
-    fn new(client_id: &str, scope: Option<String>) -> Self {
+    fn new(client_id: &str, scope: String) -> Self {
         Self {
             access: random_token(),
             refresh: random_token(),
@@ -455,25 +459,40 @@ async fn rotate_refresh(
     Ok(tokens)
 }
 
-/// Return the scope of a refreshed grant: `requested`, or `granted` if the request omits a scope.
+/// Return the scope that an authorization request grants, which is [`MCP_SCOPE`] if the request omits a scope.
 ///
-/// RFC 6749 section 6 forbids a requested scope that exceeds the granted scope.
-fn refreshed_scope(
-    granted: Option<String>,
-    requested: Option<&str>,
-) -> Result<Option<String>, OAuthError> {
-    let Some(requested) = requested else {
-        return Ok(granted);
-    };
-    let granted_scopes: Vec<&str> = granted.iter().flat_map(|g| g.split_whitespace()).collect();
-    if requested
-        .split_whitespace()
-        .all(|s| granted_scopes.contains(&s))
-    {
-        Ok(Some(requested.to_string()))
+/// RFC 6749 section 3.3 lets the server apply a default scope if the client omits one.
+fn granted_scope(requested: Option<&str>) -> Result<String, OAuthError> {
+    let mut requested = requested.into_iter().flat_map(str::split_whitespace);
+    if requested.all(|s| s == MCP_SCOPE) {
+        Ok(MCP_SCOPE.to_string())
     } else {
         Err(OAuthError::InvalidScope)
     }
+}
+
+/// Return the scope of a refreshed grant: `requested`, or `granted` if the request omits a scope.
+///
+/// RFC 6749 section 6 forbids a requested scope that exceeds the granted scope.
+fn refreshed_scope(granted: String, requested: Option<&str>) -> Result<String, OAuthError> {
+    let requested: Vec<&str> = requested
+        .into_iter()
+        .flat_map(str::split_whitespace)
+        .collect();
+    if requested.is_empty() {
+        return Ok(granted);
+    }
+    let granted_scopes: Vec<&str> = granted.split_whitespace().collect();
+    if requested.iter().all(|s| granted_scopes.contains(s)) {
+        Ok(requested.join(" "))
+    } else {
+        Err(OAuthError::InvalidScope)
+    }
+}
+
+/// Return `true` if `scope` gives access to the MCP tools.
+fn includes_mcp(scope: &str) -> bool {
+    scope.split_whitespace().any(|s| s == MCP_SCOPE)
 }
 
 fn std_ttl(ttl: Duration) -> std::time::Duration {
@@ -485,7 +504,7 @@ fn redeem(
     client_id: &str,
     redirect_uri: &str,
     verifier: &str,
-) -> Result<Option<String>, OAuthError> {
+) -> Result<String, OAuthError> {
     let Some(row) = row else {
         tracing::warn!(%client_id, "auth code unknown or already used");
         return Err(OAuthError::InvalidGrant);
@@ -529,14 +548,14 @@ fn check_refresh(
     Ok(row)
 }
 
-/// Return the `client_id` for a non-expired access token, or `None` if unknown or expired.
+/// Return the `client_id` for an access token that gives access to the MCP tools, or `None` if the token is unknown, expired, or has another scope.
 pub async fn validate_access_token(db: &Db, token: &str) -> Result<Option<String>, crate::Error> {
     let stored: Option<OAuthAccessToken> = db
         .read_one(Op::get_row::<OAuthAccessToken>(secret_hash(token)))
         .await?
         .row()?;
     Ok(stored
-        .filter(|t| t.expires_at >= Utc::now())
+        .filter(|t| t.expires_at >= Utc::now() && includes_mcp(&t.scope))
         .map(|t| t.client_id))
 }
 
@@ -554,9 +573,19 @@ fn render_login_form(q: &AuthorizeQuery, csrf: &str, error: Option<&str>) -> Str
             .replace('>', "&gt;")
             .replace('"', "&quot;")
     }
-    let scope = q.scope.as_deref().unwrap_or("");
-    let resource = q.resource.as_deref().unwrap_or("");
-    let state = q.state.as_deref().unwrap_or("");
+    let optional_inputs: String = [
+        ("state", &q.state),
+        ("scope", &q.scope),
+        ("resource", &q.resource),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| {
+        let value = esc(value.as_deref()?);
+        Some(format!(
+            "<input type=\"hidden\" name=\"{name}\" value=\"{value}\">\n"
+        ))
+    })
+    .collect();
     let error_html = error.map_or(String::new(), |msg| {
         format!(r#"<p style="color:#b00020">{}</p>"#, esc(msg))
     });
@@ -580,10 +609,7 @@ button {{ margin-top: 1rem; padding: 0.5rem 1rem; font-size: 1rem; }}
 <input type="hidden" name="redirect_uri" value="{redirect_uri}">
 <input type="hidden" name="code_challenge" value="{code_challenge}">
 <input type="hidden" name="code_challenge_method" value="{ccm}">
-<input type="hidden" name="state" value="{state}">
-<input type="hidden" name="scope" value="{scope}">
-<input type="hidden" name="resource" value="{resource}">
-<input type="hidden" name="csrf" value="{csrf}">
+{optional_inputs}<input type="hidden" name="csrf" value="{csrf}">
 <label for="password">Password</label>
 <input id="password" type="password" name="password" autocomplete="current-password" autofocus required>
 <button type="submit">Sign in</button>
@@ -594,9 +620,6 @@ button {{ margin-top: 1rem; padding: 0.5rem 1rem; font-size: 1rem; }}
         redirect_uri = esc(&q.redirect_uri),
         code_challenge = esc(&q.code_challenge),
         ccm = esc(&q.code_challenge_method),
-        state = esc(state),
-        scope = esc(scope),
-        resource = esc(resource),
         csrf = esc(csrf),
     )
 }
@@ -720,7 +743,7 @@ impl IntoResponse for OAuthError {
             OAuthError::InvalidScope => (
                 StatusCode::BAD_REQUEST,
                 "invalid_scope",
-                "the requested scope exceeds the scope of the grant".to_string(),
+                "the requested scope is unknown or exceeds the scope of the grant".to_string(),
             ),
             OAuthError::UnsupportedResponseType => (
                 StatusCode::BAD_REQUEST,
@@ -756,20 +779,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn authorization_grants_the_mcp_scope_by_default() {
+        assert_eq!(granted_scope(None).unwrap(), MCP_SCOPE);
+        assert_eq!(granted_scope(Some("")).unwrap(), MCP_SCOPE);
+        assert_eq!(granted_scope(Some("mcp")).unwrap(), MCP_SCOPE);
+        assert!(matches!(
+            granted_scope(Some("mcp admin")),
+            Err(OAuthError::InvalidScope)
+        ));
+    }
+
+    #[test]
     fn refresh_keeps_or_narrows_the_granted_scope() {
-        let granted = || Some("mcp read".to_string());
+        let granted = || "mcp read".to_string();
         assert_eq!(refreshed_scope(granted(), None).unwrap(), granted());
-        assert_eq!(
-            refreshed_scope(granted(), Some("read")).unwrap().as_deref(),
-            Some("read")
-        );
+        assert_eq!(refreshed_scope(granted(), Some(" ")).unwrap(), granted());
+        assert_eq!(refreshed_scope(granted(), Some("read")).unwrap(), "read");
         assert!(matches!(
             refreshed_scope(granted(), Some("mcp write")),
             Err(OAuthError::InvalidScope)
         ));
-        assert!(matches!(
-            refreshed_scope(None, Some("mcp")),
-            Err(OAuthError::InvalidScope)
-        ));
+    }
+
+    #[test]
+    fn only_a_token_with_the_mcp_scope_reaches_the_tools() {
+        assert!(includes_mcp("mcp"));
+        assert!(includes_mcp("read mcp"));
+        assert!(!includes_mcp(""));
+        assert!(!includes_mcp("read"));
     }
 }

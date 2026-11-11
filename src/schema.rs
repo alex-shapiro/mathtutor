@@ -9,7 +9,7 @@ use crate::db::{Op, Row, client, ts};
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{Error, Result};
 
-pub(crate) const VERSION: &str = "2";
+pub(crate) const VERSION: &str = "3";
 
 /// Key that records the schema version of the tables and the progress of `mt import-turso`.
 pub(crate) const STATE_KEY: &str = "mathtutor_state";
@@ -253,7 +253,7 @@ row_table! {
         pub code_hash: String,
         pub client_id: String,
         pub redirect_uri: String,
-        pub scope: Option<String>,
+        pub scope: String,
         pub code_challenge: String,
         pub code_challenge_method: String,
         pub resource: Option<String>,
@@ -268,7 +268,7 @@ row_table! {
         /// Hex SHA-256 digest of the access token.
         pub token_hash: String,
         pub client_id: String,
-        pub scope: Option<String>,
+        pub scope: String,
         #[serde(with = "ts")]
         pub expires_at: DateTime<Utc>,
     }
@@ -280,7 +280,7 @@ row_table! {
         /// Hex SHA-256 digest of the refresh token.
         pub token_hash: String,
         pub client_id: String,
-        pub scope: Option<String>,
+        pub scope: String,
         #[serde(with = "ts")]
         pub expires_at: DateTime<Utc>,
     }

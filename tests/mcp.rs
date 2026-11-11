@@ -747,25 +747,7 @@ async fn full_authorization_code_flow_yields_a_working_access_token() {
         .text()
         .await
         .unwrap();
-    let csrf = extract_csrf(&form_html).expect("csrf token");
-
-    let res = oauth_client_no_redirect()
-        .post(server.url("/oauth/authorize"))
-        .form(&[
-            ("response_type", "code"),
-            ("client_id", reg.client_id.as_str()),
-            ("redirect_uri", "http://localhost/cb"),
-            ("code_challenge", pkce.challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("state", state),
-            ("scope", "mcp"),
-            ("resource", ""),
-            ("csrf", csrf.as_str()),
-            ("password", ADMIN_PASSWORD),
-        ])
-        .send()
-        .await
-        .unwrap();
+    let res = submit_login(&server, &form_html, ADMIN_PASSWORD).await;
     assert_eq!(res.status(), 303, "/authorize POST redirects on success");
     let location = res
         .headers()
@@ -810,25 +792,7 @@ async fn wrong_password_re_renders_form_without_issuing_code() {
         .text()
         .await
         .unwrap();
-    let csrf = extract_csrf(&form_html).expect("csrf");
-
-    let res = oauth_client_no_redirect()
-        .post(server.url("/oauth/authorize"))
-        .form(&[
-            ("response_type", "code"),
-            ("client_id", reg.client_id.as_str()),
-            ("redirect_uri", "http://localhost/cb"),
-            ("code_challenge", pkce.challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("state", ""),
-            ("scope", ""),
-            ("resource", ""),
-            ("csrf", csrf.as_str()),
-            ("password", "not the password"),
-        ])
-        .send()
-        .await
-        .unwrap();
+    let res = submit_login(&server, &form_html, "not the password").await;
     assert_eq!(res.status(), 401);
     let body = res.text().await.unwrap();
     assert!(body.contains("Incorrect password"));
@@ -909,6 +873,78 @@ async fn refresh_token_rotates_and_returns_a_fresh_access_token() {
     server.stop().await;
 }
 
+async fn refresh_raw(
+    server: &ServerHandle,
+    client_id: &str,
+    refresh_token: &str,
+    scope: Option<&str>,
+) -> reqwest::Response {
+    let mut form = vec![
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+        ("client_id", client_id),
+    ];
+    form.extend(scope.map(|s| ("scope", s)));
+    oauth_client_no_redirect()
+        .post(server.url("/oauth/token"))
+        .form(&form)
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn sign_in_without_scope_or_state_grants_mcp_and_adds_no_state() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "No Scope").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(&server, &reg.client_id, &pkce.challenge, None, None);
+    let form_html = oauth_client()
+        .get(&auth_url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let names: Vec<String> = hidden_fields(&form_html)
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    for absent in ["state", "scope", "resource"] {
+        assert!(!names.iter().any(|n| n == absent), "{absent} in {names:?}");
+    }
+
+    let res = submit_login(&server, &form_html, ADMIN_PASSWORD).await;
+    assert_eq!(res.status(), 303);
+    let location = res.headers()["location"].to_str().unwrap().to_string();
+    let (code, state) = parse_redirect_query(&location);
+    assert_eq!(state, None, "the redirect adds a state: {location}");
+
+    let res = exchange_code_raw(&server, &reg.client_id, &code, &pkce.verifier).await;
+    assert_eq!(res.status(), 200);
+    let tokens: Value = res.json().await.unwrap();
+    assert_eq!(tokens["scope"], "mcp");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn refresh_that_names_mcp_keeps_a_grant_without_a_requested_scope() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Scope").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let first = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+
+    let res = refresh_raw(&server, &reg.client_id, &first.refresh_token, Some("mcp")).await;
+    assert_eq!(res.status(), 200);
+    let refreshed: Value = res.json().await.unwrap();
+    assert_eq!(refreshed["scope"], "mcp");
+    let access = refreshed["access_token"].as_str().unwrap();
+    handshake_with_token(&server, access).await;
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn refresh_rejects_a_scope_broader_than_the_grant() {
     let server = spawn_oauth_server().await;
@@ -917,21 +953,75 @@ async fn refresh_rejects_a_scope_broader_than_the_grant() {
     let code = full_authorize(&server, &reg.client_id, &pkce).await;
     let first = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
 
-    let broader = oauth_client_no_redirect()
-        .post(server.url("/oauth/token"))
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("refresh_token", first.refresh_token.as_str()),
-            ("client_id", reg.client_id.as_str()),
-            ("scope", "mcp"),
-        ])
-        .send()
-        .await
-        .unwrap();
-
+    let broader = refresh_raw(
+        &server,
+        &reg.client_id,
+        &first.refresh_token,
+        Some("mcp admin"),
+    )
+    .await;
     assert_eq!(broader.status(), 400);
     let body: Value = broader.json().await.unwrap();
     assert_eq!(body["error"], "invalid_scope");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn authorize_rejects_an_unknown_scope() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Unknown Scope").await;
+    let pkce = PkcePair::new();
+    let auth_url = authorize_url(
+        &server,
+        &reg.client_id,
+        &pkce.challenge,
+        None,
+        Some("admin"),
+    );
+    let res = oauth_client().get(&auth_url).send().await.unwrap();
+    assert_eq!(res.status(), 400);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["error"], "invalid_scope");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn access_token_without_the_mcp_scope_is_rejected() {
+    use mathtutor::db::Op;
+    use mathtutor::mcp::oauth::secret_hash;
+    use mathtutor::schema::OAuthAccessToken;
+
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    let raw = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db);
+    let token = "token-with-another-scope";
+    let row = OAuthAccessToken {
+        token_hash: secret_hash(token),
+        client_id: "c".into(),
+        scope: "read".into(),
+        expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+    };
+    raw.write(&[Op::insert(&row)]).await.unwrap();
+
+    let res = client()
+        .post(server.url("/mcp"))
+        .header(AUTHORIZATION, format!("Bearer {token}"))
+        .header(ACCEPT, "application/json, text/event-stream")
+        .header(CONTENT_TYPE, "application/json")
+        .body(initialize_body())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 401);
     server.stop().await;
 }
 
@@ -1063,11 +1153,38 @@ impl PkcePair {
     }
 }
 
-fn extract_csrf(html: &str) -> Option<String> {
-    let needle = r#"name="csrf" value=""#;
-    let start = html.find(needle)? + needle.len();
-    let end = start + html[start..].find('"')?;
-    Some(html[start..end].to_string())
+/// Return the name and value of every hidden input of the login form `html`.
+fn hidden_fields(html: &str) -> Vec<(String, String)> {
+    let unescape = |v: &str| {
+        v.replace("&quot;", "\"")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
+    };
+    html.split("<input type=\"hidden\" ")
+        .skip(1)
+        .map(|input| {
+            let attr = |name: &str| {
+                let needle = format!("{name}=\"");
+                let start = input.find(&needle).expect("attribute") + needle.len();
+                let end = start + input[start..].find('"').expect("closing quote");
+                unescape(&input[start..end])
+            };
+            (attr("name"), attr("value"))
+        })
+        .collect()
+}
+
+/// Post the hidden inputs of the login form `html` with `password`, as a browser does.
+async fn submit_login(server: &ServerHandle, html: &str, password: &str) -> reqwest::Response {
+    let mut fields = hidden_fields(html);
+    fields.push(("password".into(), password.into()));
+    oauth_client_no_redirect()
+        .post(server.url("/oauth/authorize"))
+        .form(&fields)
+        .send()
+        .await
+        .unwrap()
 }
 
 fn authorize_url(
@@ -1105,24 +1222,7 @@ async fn full_authorize(server: &ServerHandle, client_id: &str, pkce: &PkcePair)
         .text()
         .await
         .unwrap();
-    let csrf = extract_csrf(&form_html).expect("csrf");
-    let res = oauth_client_no_redirect()
-        .post(server.url("/oauth/authorize"))
-        .form(&[
-            ("response_type", "code"),
-            ("client_id", client_id),
-            ("redirect_uri", "http://localhost/cb"),
-            ("code_challenge", pkce.challenge.as_str()),
-            ("code_challenge_method", "S256"),
-            ("state", ""),
-            ("scope", ""),
-            ("resource", ""),
-            ("csrf", csrf.as_str()),
-            ("password", ADMIN_PASSWORD),
-        ])
-        .send()
-        .await
-        .unwrap();
+    let res = submit_login(server, &form_html, ADMIN_PASSWORD).await;
     assert_eq!(res.status(), 303);
     let location = res
         .headers()
