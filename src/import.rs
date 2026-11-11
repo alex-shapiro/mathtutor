@@ -697,10 +697,8 @@ fn verify_overlay(stored: &Overlay, changes: &[RowChange]) -> Result<Vec<String>
 
 /// Write path `p`, its `events`, and the `cards` and `taught` rows that the events produce in one transaction, or return `false` if the path exists.
 async fn import_path(db: &Db, p: &PathRow, events: &[Event]) -> Result<bool> {
-    let existing = db
-        .snapshot(&ViewRequest::path(Some(&p.id)).without_overlay())
-        .await?;
-    if existing.path().is_ok() {
+    let existing = db.read_one(Op::get_row::<PathRow>(&p.id)).await?;
+    if existing.row::<PathRow>()?.is_some() {
         return Ok(false);
     }
     db.transact(&ViewRequest::nothing(), |view, changes| {
