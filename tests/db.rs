@@ -262,6 +262,35 @@ async fn most_recent_path_follows_logged_events() {
 }
 
 #[tokio::test]
+async fn most_recent_path_follows_commit_order_instead_of_the_activity_time() {
+    let db = common::empty_db().await;
+    let ahead = PathFile {
+        id: "p_clock_ahead".into(),
+        ..common::path_with(&[])
+    };
+    let created = Event::now(&ahead.id, EventKind::PathCreated {});
+    let future = mathtutor::db::ts::parse("2099-01-01T00:00:00.000Z").unwrap();
+    db.transact(&Want::nothing(), |view, changes| {
+        changes.create_path_with_history(view, &ahead, std::slice::from_ref(&created), future)
+    })
+    .await
+    .unwrap();
+    common::seed_path(&db, "p_later", &[], Strategy::BottomUp).await;
+
+    let view = db.snapshot(&Want::path(None)).await.unwrap();
+
+    assert_eq!(view.path().unwrap().file.id, "p_later");
+    let all = db.snapshot(&Want::all_paths()).await.unwrap();
+    let shown = all
+        .paths()
+        .iter()
+        .find(|p| p.file.id == ahead.id)
+        .unwrap()
+        .updated_at;
+    assert_eq!(shown, future, "the activity time stays for display");
+}
+
+#[tokio::test]
 async fn opening_an_existing_database_preserves_data() {
     let cfg = common::fresh_config();
     let db = common::create_db(&cfg).await;

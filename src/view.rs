@@ -268,6 +268,8 @@ impl Changes {
     }
 
     /// Insert path `p` with the events of its `history`, and record `active_at` as the time of its latest activity.
+    ///
+    /// The path becomes the most recent path, whatever the value of `active_at`.
     pub fn create_path_with_history(
         &mut self,
         view: &View,
@@ -513,16 +515,19 @@ impl Db {
         }
     }
 
+    /// Return the ID of the path whose activity key the latest commit wrote.
+    ///
+    /// The server assigns the version of each commit, so a writer clock that runs ahead cannot keep its path the most recent.
     async fn most_recent_path_id(&self) -> Result<Option<String>> {
-        let mut latest: Option<(DateTime<Utc>, String)> = None;
+        let mut latest: Option<(Option<u64>, String)> = None;
         for page in self.read_pages(Op::scan(ACTIVITY_PREFIX)).await? {
             for e in page.scan_page()?.entries {
-                let (id, at) = parse_activity(&e)?;
+                let (id, _) = parse_activity(&e)?;
                 if latest
                     .as_ref()
-                    .is_none_or(|l| (at, id) > (l.0, l.1.as_str()))
+                    .is_none_or(|l| (e.version, id) > (l.0, l.1.as_str()))
                 {
-                    latest = Some((at, id.to_string()));
+                    latest = Some((e.version, id.to_string()));
                 }
             }
         }

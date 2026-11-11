@@ -443,6 +443,21 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
     assert!(b.projection.cards.is_empty() && b.projection.taught.is_empty());
 }
 
+#[tokio::test]
+async fn import_makes_the_path_with_the_latest_event_the_most_recent() {
+    let db = common::empty_db().await;
+    let mut events = events();
+    events.push(taught("p_a", 50, "fnd.2.1.1"));
+    let mut tables = legacy();
+    tables.set("events", EVENT_COLUMNS, rows_of_events(&events));
+
+    let r = import(tables, &db).await.expect("import");
+
+    assert!(r.mismatches.is_empty(), "{:?}", r.mismatches);
+    let view = db.snapshot(&Want::path(None)).await.unwrap();
+    assert_eq!(view.path().unwrap().file.id, "p_a");
+}
+
 fn tables_with_wrong_card() -> Tables {
     let mut cards = legacy_cards();
     cards[0].reps += 1;

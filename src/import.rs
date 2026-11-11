@@ -583,8 +583,11 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
     for clients in legacy.oauth_clients.chunks(IMPORT_WRITE_BATCH) {
         db.upsert_oauth(clients).await?;
     }
-    for p in &legacy.paths {
-        let events = legacy.events.get(&p.id).map_or(&[][..], Vec::as_slice);
+    let history = |p: &PathFile| legacy.events.get(&p.id).map_or(&[][..], Vec::as_slice);
+    let mut paths: Vec<&PathFile> = legacy.paths.iter().collect();
+    paths.sort_by_key(|p| latest_activity(p, history(p)));
+    for p in paths {
+        let events = history(p);
         if import_path(db, p, events).await? {
             report.paths += 1;
             report.events += events.len();
@@ -645,12 +648,16 @@ async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
     if existing.path().is_ok() {
         return Ok(false);
     }
-    let latest = events.iter().map(|e| e.ts).max().unwrap_or(p.created_at);
     db.transact(&Want::nothing(), |view, changes| {
-        changes.create_path_with_history(view, p, events, latest)
+        changes.create_path_with_history(view, p, events, latest_activity(p, events))
     })
     .await?;
     Ok(true)
+}
+
+/// Return the time of the latest event of path `p`, or its creation time if `events` is empty.
+fn latest_activity(p: &PathFile, events: &[Event]) -> DateTime<Utc> {
+    events.iter().map(|e| e.ts).max().unwrap_or(p.created_at)
 }
 
 /// Compare the stored state of `path` with its legacy `events` and cards, and return the differences and the number of stored events.
