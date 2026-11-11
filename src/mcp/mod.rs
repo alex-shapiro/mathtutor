@@ -45,8 +45,6 @@ type CrateResult<T> = std::result::Result<T, Error>;
 
 pub mod oauth;
 
-const PLAYBOOK: &str = include_str!("playbook.md");
-
 #[derive(Clone)]
 pub struct MathTutorServer {
     db: Db,
@@ -386,7 +384,7 @@ impl MathTutorServer {
     async fn playbook(&self) -> std::result::Result<GetPromptResult, McpError> {
         Ok(GetPromptResult::new(vec![PromptMessage::new_text(
             PromptMessageRole::Assistant,
-            PLAYBOOK,
+            crate::instruct::playbook(Surface::Mcp),
         )])
         .with_description("Math Tutor agent operator playbook"))
     }
@@ -509,6 +507,16 @@ impl AuthConfig {
         }
         Ok(())
     }
+}
+
+/// Return the name of every MCP tool.
+#[cfg(test)]
+pub(crate) fn tool_names() -> Vec<String> {
+    MathTutorServer::tool_router()
+        .list_all()
+        .into_iter()
+        .map(|t| t.name.into_owned())
+        .collect()
 }
 
 pub fn print_tools() -> CrateResult<()> {
