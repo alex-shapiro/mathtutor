@@ -857,6 +857,32 @@ async fn refresh_token_rotates_and_returns_a_fresh_access_token() {
 }
 
 #[tokio::test]
+async fn refresh_rejects_a_scope_broader_than_the_grant() {
+    let server = spawn_oauth_server().await;
+    let reg = register_client(&server, "Scope").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let first = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+
+    let broader = oauth_client_no_redirect()
+        .post(server.url("/oauth/token"))
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", first.refresh_token.as_str()),
+            ("client_id", reg.client_id.as_str()),
+            ("scope", "mcp"),
+        ])
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(broader.status(), 400);
+    let body: Value = broader.json().await.unwrap();
+    assert_eq!(body["error"], "invalid_scope");
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn stored_codes_and_tokens_are_keyed_by_the_hash_of_the_secret() {
     use mathtutor::db::{Op, Row};
     use mathtutor::mcp::oauth::secret_hash;

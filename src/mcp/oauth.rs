@@ -448,10 +448,32 @@ async fn rotate_refresh(
         .await?
         .row()?;
     let stored = check_refresh(row, req.client_id.as_deref())?;
-    let tokens = IssuedTokens::new(&stored.client_id, req.scope.clone().or(stored.scope));
+    let scope = refreshed_scope(stored.scope, req.scope.as_deref())?;
+    let tokens = IssuedTokens::new(&stored.client_id, scope);
     txn.write([Op::delete_row::<OAuthRefreshToken>(secret_hash(provided))]);
     txn.write(tokens.insert_ops());
     Ok(tokens)
+}
+
+/// Return the scope of a refreshed grant: `requested`, or `granted` if the request omits a scope.
+///
+/// RFC 6749 section 6 forbids a requested scope that exceeds the granted scope.
+fn refreshed_scope(
+    granted: Option<String>,
+    requested: Option<&str>,
+) -> Result<Option<String>, OAuthError> {
+    let Some(requested) = requested else {
+        return Ok(granted);
+    };
+    let granted_scopes: Vec<&str> = granted.iter().flat_map(|g| g.split_whitespace()).collect();
+    if requested
+        .split_whitespace()
+        .all(|s| granted_scopes.contains(&s))
+    {
+        Ok(Some(requested.to_string()))
+    } else {
+        Err(OAuthError::InvalidScope)
+    }
 }
 
 fn std_ttl(ttl: Duration) -> std::time::Duration {
@@ -653,6 +675,8 @@ pub enum OAuthError {
     InvalidRequest(String),
     #[error("invalid_grant")]
     InvalidGrant,
+    #[error("invalid_scope")]
+    InvalidScope,
     #[error("unsupported_response_type")]
     UnsupportedResponseType,
     #[error("unsupported_grant_type: {0}")]
@@ -693,6 +717,11 @@ impl IntoResponse for OAuthError {
                 "invalid_grant",
                 "authorization grant is invalid, expired, revoked, or does not match".to_string(),
             ),
+            OAuthError::InvalidScope => (
+                StatusCode::BAD_REQUEST,
+                "invalid_scope",
+                "the requested scope exceeds the scope of the grant".to_string(),
+            ),
             OAuthError::UnsupportedResponseType => (
                 StatusCode::BAD_REQUEST,
                 "unsupported_response_type",
@@ -719,5 +748,28 @@ impl IntoResponse for OAuthError {
             "error_description": description,
         });
         (status, headers, Json(body)).into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_keeps_or_narrows_the_granted_scope() {
+        let granted = || Some("mcp read".to_string());
+        assert_eq!(refreshed_scope(granted(), None).unwrap(), granted());
+        assert_eq!(
+            refreshed_scope(granted(), Some("read")).unwrap().as_deref(),
+            Some("read")
+        );
+        assert!(matches!(
+            refreshed_scope(granted(), Some("mcp write")),
+            Err(OAuthError::InvalidScope)
+        ));
+        assert!(matches!(
+            refreshed_scope(None, Some("mcp")),
+            Err(OAuthError::InvalidScope)
+        ));
     }
 }

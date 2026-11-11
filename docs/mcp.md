@@ -45,6 +45,7 @@ Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticat
 - **Entropy:** 256-bit random tokens encoded with base64url.
 - **Expirations:** Single-use authorization codes expire in 60 seconds. Access tokens expire in 1 hour. Refresh tokens expire in 30 days and rotate on each refresh.
 - **PKCE:** `S256` code challenge is mandatory.
+- **Scope:** A refresh request can keep or narrow the scope of its grant. A broader scope fails with `invalid_scope`.
 - **Tables:** `oauth_clients`, `oauth_codes`, `oauth_access_tokens`, and `oauth_refresh_tokens` are stored in the Baserunna database using native row TTLs for expiration. Code and token rows are keyed by the SHA-256 digest of the secret, so the database does not hold usable bearer secrets.
 
 ## Deployment
