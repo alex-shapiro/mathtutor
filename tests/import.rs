@@ -697,7 +697,7 @@ async fn import_reports_a_libsql_path_that_lands_after_its_first_read() {
 #[tokio::test]
 async fn import_copies_oauth_clients_so_connectors_stay_registered() {
     let cfg = common::fresh_config();
-    let db = Db::open(&cfg).await.unwrap();
+    let db = common::create_db(&cfg).await;
     let mut tables = legacy();
     tables.set(
         "oauth_clients",

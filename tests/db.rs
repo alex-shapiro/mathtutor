@@ -43,16 +43,50 @@ async fn table_names(cfg: &DbConfig) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn open_creates_database_and_every_table() {
+async fn create_if_missing_creates_the_database_and_every_table_once() {
     let cfg = common::fresh_config();
-    Db::open(&cfg).await.expect("open");
+    let db = Db::connect(&cfg).unwrap();
+    assert!(db.create_if_missing().await.unwrap(), "first call creates");
     assert_eq!(table_names(&cfg).await, TABLES);
+    assert!(
+        !db.create_if_missing().await.unwrap(),
+        "second call finds it"
+    );
+    Db::open(&cfg).await.expect("open after creation");
+}
+
+#[tokio::test]
+async fn open_rejects_a_missing_database_without_creating_it() {
+    let cfg = common::fresh_config();
+
+    let e = Db::open(&cfg).await.unwrap_err();
+
+    let message = e.to_string();
+    assert!(matches!(e, Error::DatabaseNotFound { .. }), "{e:?}");
+    assert!(message.contains(&format!("'{}'", cfg.db)), "{message}");
+    assert!(message.contains(&cfg.url), "{message}");
+    assert!(message.contains("BASERUNNA_DB"), "{message}");
+    assert_eq!(e.exit_code(), 2);
+    let client = Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
+    let info = client.db(&cfg.db).info().await;
+    assert!(info.is_err(), "open must not create the database: {info:?}");
+}
+
+#[tokio::test]
+async fn open_rejects_a_database_without_math_tutor_tables() {
+    let cfg = common::fresh_config();
+    let client = Client::new(cfg.transport().unwrap()).with_token(&cfg.token);
+    client.db(&cfg.db).ensure().await.unwrap();
+
+    let e = Db::open(&cfg).await.unwrap_err();
+
+    assert!(matches!(e, Error::DatabaseNotFound { .. }), "{e:?}");
 }
 
 #[tokio::test]
 async fn most_recent_path_follows_logged_events() {
     let cfg = common::fresh_config();
-    let db = Db::open(&cfg).await.unwrap();
+    let db = common::create_db(&cfg).await;
     common::seed_path(&db, "p_a", &["fnd.1.1.1"], Strategy::BottomUp).await;
     common::seed_path(&db, "p_b", &["fnd.1.1.1"], Strategy::BottomUp).await;
     let recent = |db: &Db| {
@@ -86,16 +120,16 @@ async fn most_recent_path_follows_logged_events() {
 }
 
 #[tokio::test]
-async fn reopening_is_a_no_op_that_preserves_data() {
+async fn opening_an_existing_database_preserves_data() {
     let cfg = common::fresh_config();
-    let db = Db::open(&cfg).await.expect("first open");
+    let db = common::create_db(&cfg).await;
     common::seed_path(&db, PATH_ID, &["fnd.2"], Strategy::TopDown).await;
     common::write(&db, PATH_ID, |_, changes| {
         overlay::upsert_lesson(changes, ATOM, "kept");
     })
     .await;
 
-    let db = Db::open(&cfg).await.expect("second open");
+    let db = Db::open(&cfg).await.expect("open");
     assert_eq!(table_names(&cfg).await, TABLES);
     let ps = common::path_state(&db, PATH_ID).await;
     assert_eq!(ps.file.goal, "test goal");
@@ -312,7 +346,7 @@ fn counting_db(cfg: &DbConfig) -> (Db, Arc<AtomicUsize>) {
 #[tokio::test]
 async fn cached_overlay_is_reused_until_another_client_writes() {
     let cfg = common::fresh_config();
-    let writer = Db::open(&cfg).await.unwrap();
+    let writer = common::create_db(&cfg).await;
     common::seed_path(&writer, PATH_ID, &[], Strategy::BottomUp).await;
     let body = "x".repeat(20_000);
     common::write(&writer, PATH_ID, |_, c| {
@@ -365,7 +399,7 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
 #[tokio::test]
 async fn quiz_ids_stay_unique_under_concurrent_authoring() {
     let cfg = common::fresh_config();
-    let db = Db::open(&cfg).await.unwrap();
+    let db = common::create_db(&cfg).await;
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
     store::cmd_lesson_upsert(&db, "fnd.1.1.1", "body".into(), Some(PATH_ID), None)
         .await
@@ -406,7 +440,7 @@ async fn quiz_ids_stay_unique_under_concurrent_authoring() {
 #[tokio::test]
 async fn own_overlay_writes_keep_the_cache_valid() {
     let cfg = common::fresh_config();
-    Db::open(&cfg).await.unwrap();
+    common::create_db(&cfg).await;
     let (db, received) = counting_db(&cfg);
     common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
     let body = "y".repeat(20_000);
@@ -597,7 +631,7 @@ async fn recreating_database_invalidates_overlay_cache() {
         ..common::fresh_config()
     };
     let upsert_lesson = async |cfg: &DbConfig, body: &str| {
-        let db = Db::open(cfg).await.unwrap();
+        let db = common::create_db(cfg).await;
         common::seed_path(&db, PATH_ID, &[], Strategy::BottomUp).await;
         store::cmd_lesson_upsert(&db, "fnd.1.1.1", body.into(), Some(PATH_ID), None)
             .await
@@ -631,7 +665,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         cache_dir: Some(dir.path().to_path_buf()),
         ..common::fresh_config()
     };
-    let first = Db::open(&cfg).await.unwrap();
+    let first = common::create_db(&cfg).await;
     common::seed_path(&first, PATH_ID, &[], Strategy::BottomUp).await;
     let body = "z".repeat(20_000);
     store::cmd_lesson_upsert(&first, "fnd.1.1.1", body.clone(), Some(PATH_ID), None)

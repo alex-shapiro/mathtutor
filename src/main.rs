@@ -92,6 +92,7 @@ async fn real_main() -> ExitCode {
     }
 
     let db = match db::DbConfig::from_env() {
+        Ok(cfg) if creates_database(&cli.cmd) => create_db(&cfg).await,
         Ok(cfg) => db::Db::open(&cfg).await,
         Err(e) => Err(e),
     };
@@ -109,6 +110,24 @@ async fn real_main() -> ExitCode {
             report_failure(&e)
         }
     }
+}
+
+/// Return `true` if `cmd` starts a learner database and can create it.
+fn creates_database(cmd: &Cmd) -> bool {
+    match cmd {
+        Cmd::ImportTurso(_) => true,
+        Cmd::Path(p) => matches!(p.op, PathOp::New(_)),
+        _ => false,
+    }
+}
+
+/// Connect to the database, create it if it does not exist, and report a creation on stderr.
+async fn create_db(cfg: &db::DbConfig) -> Result<db::Db> {
+    let db = db::Db::connect(cfg)?;
+    if db.create_if_missing().await? {
+        eprintln!("created database '{}' at {}", db.name(), db.url());
+    }
+    Ok(db)
 }
 
 /// Run a graph lookup without `--path` so it does not open a database connection.

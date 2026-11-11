@@ -10,7 +10,7 @@ use crate::path::PathFile;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{Error, Result};
 
-const VERSION: &str = "1";
+pub(crate) const VERSION: &str = "1";
 const VERSION_KEY: &str = "schema_version";
 
 /// Key that records the progress of `mt import-turso` on this database.
@@ -357,19 +357,45 @@ pub fn tables() -> Vec<NewTable> {
     ]
 }
 
-/// Ensure that the database and all required tables exist.
-pub async fn ensure(db: &client::Db) -> Result<()> {
-    let current = match db.read_one(Op::get(VERSION_KEY)).await {
-        Ok(r) => r.entry()?.and_then(|e| e.value.data().cloned()),
-        Err(e) if e.code() == Some(ErrorCode::NotFound) => {
-            db.ensure().await?;
-            None
+/// Schema state of a database, read from [`VERSION_KEY`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SchemaState {
+    /// The database does not exist.
+    NoDatabase,
+    /// The database exists without Math Tutor tables.
+    NoTables,
+    Current,
+    /// The database stores a schema version that this release does not use.
+    Other(String),
+}
+
+impl SchemaState {
+    /// Decode the schema state from the entry stored at [`VERSION_KEY`].
+    pub(crate) fn from_entry(entry: Option<&Entry>) -> Self {
+        match entry.and_then(|e| e.value.data()) {
+            None => Self::NoTables,
+            Some(v) if v.as_ref() == VERSION.as_bytes() => Self::Current,
+            Some(v) => Self::Other(String::from_utf8_lossy(v).into_owned()),
         }
-        Err(e) => return Err(e.into()),
-    };
-    if current.as_deref() == Some(VERSION.as_bytes()) {
-        return Ok(());
     }
+}
+
+/// Return the operation that reads the schema version.
+pub(crate) fn version_op() -> Op {
+    Op::get(VERSION_KEY)
+}
+
+/// Read the schema state of `db`.
+pub(crate) async fn state(db: &client::Db) -> Result<SchemaState> {
+    match db.read_one(version_op()).await {
+        Ok(r) => Ok(SchemaState::from_entry(r.entry()?.as_ref())),
+        Err(e) if e.code() == Some(ErrorCode::NotFound) => Ok(SchemaState::NoDatabase),
+        Err(e) => Err(Error::from(e).into_not_applied()),
+    }
+}
+
+/// Create every table and record the schema version.
+pub(crate) async fn create_tables(db: &client::Db) -> Result<()> {
     for t in tables() {
         db.create_table(&t).await?;
     }

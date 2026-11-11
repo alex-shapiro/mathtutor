@@ -772,7 +772,10 @@ fn error_kind(e: &Error) -> &'static str {
         | Error::BadRow(_)
         | Error::BadEvent(_) => "corrupt",
         e if e.outcome_is_unknown() => "outcome_unknown",
-        Error::Baserunna(_) | Error::MissingToken => "database",
+        Error::Baserunna(_)
+        | Error::MissingToken
+        | Error::DatabaseNotFound { .. }
+        | Error::SchemaMismatch { .. } => "database",
         Error::Json(_) => "json",
         Error::Fsrs(_) => "fsrs",
         Error::ConflictingFlags(_, _) => "conflicting_flags",
@@ -826,7 +829,10 @@ pub async fn run(
 ) -> CrateResult<()> {
     auth.validate()?;
 
-    let db = Db::open(&cfg).await?;
+    let db = Db::connect(&cfg)?;
+    if db.create_if_missing().await? {
+        tracing::info!(db = db.name(), url = db.url(), "created database");
+    }
     let shutdown = CancellationToken::new();
 
     let mcp_config = StreamableHttpServerConfig::default()

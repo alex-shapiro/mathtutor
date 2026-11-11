@@ -53,6 +53,20 @@ pub enum Error {
     #[error("BASERUNNA_TOKEN not set; create an API key on the Baserunna server")]
     MissingToken,
 
+    #[error(
+        "database '{db}' at {url} does not exist or does not hold Math Tutor data; check BASERUNNA_DB, or run `mt path new` to start a new database"
+    )]
+    DatabaseNotFound { db: String, url: String },
+
+    #[error(
+        "database '{db}' stores schema version '{found}', but this mt release uses version '{expected}'"
+    )]
+    SchemaMismatch {
+        db: String,
+        found: String,
+        expected: &'static str,
+    },
+
     #[error("malformed row: {0}")]
     BadRow(String),
 
@@ -154,6 +168,7 @@ impl Error {
             | Error::SubpathDuplicateAtom(_)
             | Error::ConflictingFlags(_, _)
             | Error::MissingToken
+            | Error::DatabaseNotFound { .. }
             | Error::MissingTursoUrl
             | Error::MissingAuth
             | Error::BadBindAddr(_)
@@ -166,6 +181,7 @@ impl Error {
             | Error::NoLesson(_)
             | Error::Fsrs(_)
             | Error::Baserunna(_)
+            | Error::SchemaMismatch { .. }
             | Error::Http(_)
             | Error::BadRow(_)
             | Error::BadEvent(_)

@@ -99,9 +99,16 @@ pub fn fresh_config() -> DbConfig {
     }
 }
 
-/// Open an empty test database.
+/// Create the database of `cfg` with every table and return its handle.
+pub async fn create_db(cfg: &DbConfig) -> Db {
+    let db = Db::connect(cfg).expect("connect");
+    db.create_if_missing().await.expect("create database");
+    db
+}
+
+/// Create an empty test database.
 pub async fn empty_db() -> Db {
-    Db::open(&fresh_config()).await.expect("open")
+    create_db(&fresh_config()).await
 }
 
 /// Open a test database initialized with a bottom-up path `path_id`.

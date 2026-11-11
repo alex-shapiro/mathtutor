@@ -8,6 +8,7 @@ use std::time::Duration;
 
 pub use baserunna_client::{self as client, Op, OpResult, Row, Transport};
 
+use crate::schema::{self, SchemaState};
 use crate::{Error, Result};
 
 pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
@@ -50,6 +51,7 @@ impl DbConfig {
 #[derive(Clone)]
 pub struct Db {
     pub(crate) client: client::Db,
+    url: Arc<str>,
     pub(crate) overlay_cache: Arc<Mutex<Option<crate::view::CachedOverlay>>>,
     pub(crate) cache_file: Option<PathBuf>,
     pub(crate) allow_open_import: bool,
@@ -64,19 +66,67 @@ impl std::fmt::Debug for Db {
 }
 
 impl Db {
-    /// Connect to the database and create the database and tables if they do not exist.
+    /// Connect to an existing database, or fail with [`Error::DatabaseNotFound`] if it does not exist.
     pub async fn open(cfg: &DbConfig) -> Result<Self> {
         let db = Self::connect(cfg)?;
-        crate::schema::ensure(&db.client)
-            .await
-            .map_err(Error::into_not_applied)?;
-        Ok(db)
+        match schema::state(&db.client).await? {
+            SchemaState::Current => Ok(db),
+            other => Err(db.schema_error(other)),
+        }
+    }
+
+    /// Create the database and its tables if they do not exist, and return `true` if this call created the database.
+    pub async fn create_if_missing(&self) -> Result<bool> {
+        let state = schema::state(&self.client).await?;
+        let created = state == SchemaState::NoDatabase;
+        match state {
+            SchemaState::Current => return Ok(false),
+            SchemaState::Other(_) => return Err(self.schema_error(state)),
+            SchemaState::NoDatabase => self.client.ensure().await?,
+            SchemaState::NoTables => {}
+        }
+        schema::create_tables(&self.client).await?;
+        Ok(created)
+    }
+
+    /// Return the error that reports `state` for a database that is not ready.
+    fn schema_error(&self, state: SchemaState) -> Error {
+        match state {
+            SchemaState::Other(found) => Error::SchemaMismatch {
+                db: self.name().to_string(),
+                found,
+                expected: schema::VERSION,
+            },
+            _ => Error::DatabaseNotFound {
+                db: self.name().to_string(),
+                url: self.url.to_string(),
+            },
+        }
+    }
+
+    /// Return the name of this database.
+    pub fn name(&self) -> &str {
+        self.client.name()
+    }
+
+    /// Return the URL of the Baserunna server.
+    pub fn url(&self) -> &str {
+        &self.url
     }
 
     /// Return a handle that can use the database while an import is open.
     pub(crate) fn for_import(&self) -> Self {
         Self {
             allow_open_import: true,
+            ..self.clone()
+        }
+    }
+
+    /// Return a handle that reads the overlay from the database instead of a cache.
+    pub(crate) fn without_overlay_cache(&self) -> Self {
+        Self {
+            overlay_cache: Arc::default(),
+            cache_file: None,
             ..self.clone()
         }
     }
@@ -114,6 +164,7 @@ impl Db {
         let client = client::Client::new(transport).with_token(&cfg.token);
         Self {
             client: client.db(&cfg.db),
+            url: Arc::from(cfg.url.as_str()),
             overlay_cache: Arc::new(Mutex::new(cached)),
             cache_file,
             allow_open_import: false,

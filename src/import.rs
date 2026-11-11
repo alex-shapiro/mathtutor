@@ -1,7 +1,6 @@
 //! Migration from a libSQL database to Baserunna for `mt import-turso`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
@@ -564,12 +563,11 @@ async fn verify_overlay(db: &Db, edits: &[Edit]) -> Result<Vec<String>> {
     for e in edits {
         legacy.apply(e);
     }
-    let uncached = Db {
-        overlay_cache: Arc::default(),
-        cache_file: None,
-        ..db.clone()
-    };
-    let stored = uncached.snapshot(&Want::overlay()).await?.overlay;
+    let stored = db
+        .without_overlay_cache()
+        .snapshot(&Want::overlay())
+        .await?
+        .overlay;
     let atoms: BTreeSet<&String> = legacy.atoms.keys().chain(stored.atoms.keys()).collect();
     let mut out = Vec::new();
     for atom in atoms {

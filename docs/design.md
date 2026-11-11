@@ -202,7 +202,7 @@ atoms:
 
 The curriculum graph is embedded into the binary at build time from `curriculum/graph/`. Use `--graph DIR` or `MT_GRAPH` to load an external curriculum directory instead.
 
-User state is stored in a Baserunna database configured via `BASERUNNA_DB`, `BASERUNNA_URL`, and `BASERUNNA_TOKEN`. `BASERUNNA_DB` defaults to `mathtutor`, and `BASERUNNA_URL` defaults to `https://baserunna.fly.dev`.
+User state is stored in a Baserunna database configured via `BASERUNNA_DB`, `BASERUNNA_URL`, and `BASERUNNA_TOKEN`. `BASERUNNA_DB` defaults to `mathtutor`, and `BASERUNNA_URL` defaults to `https://baserunna.fly.dev`. Only `mt path new`, `mt import-turso`, and `mt mcp` create a missing database, and each reports the creation. Other commands fail with exit code `2` if the database does not exist, so a wrong `BASERUNNA_DB` cannot start a second learner history.
 
 | Data                 | Storage type             | Purpose                                                   |
 | -------------------- | ------------------------ | --------------------------------------------------------- |
