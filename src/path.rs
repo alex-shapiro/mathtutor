@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 
 use crate::db::Db;
 use crate::graph::{Graph, natural_id_cmp};
-use crate::progress::{PathCompletion, TargetProgress};
+use crate::progress::TargetProgress;
 use crate::types::Strategy;
 use crate::view::Want;
 use crate::{Error, Result};
@@ -33,15 +33,9 @@ pub fn mt_home() -> Result<PathBuf> {
 
 /// Generate a unique path ID from `now` and a random 4-character suffix.
 pub fn generate_path_id(now: DateTime<Utc>) -> String {
-    use std::hash::{BuildHasher, RandomState};
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let mut n = RandomState::new().hash_one(now);
     let suffix: String = (0..4)
-        .map(|_| {
-            let c = ALPHABET[(n % 36) as usize] as char;
-            n /= 36;
-            c
-        })
+        .map(|_| char::from(ALPHABET[rand::random_range(0..ALPHABET.len())]))
         .collect();
     format!("p_{}_{suffix}", now.format("%Y_%m_%d_%H%M%S"))
 }
@@ -130,7 +124,7 @@ pub async fn compute_path_list(db: &Db) -> Result<PathListView> {
                 goal: p.file.goal.clone(),
                 strategy: p.file.strategy,
                 created_at: p.file.created_at,
-                targets: PathCompletion::of(&g, &atoms, &p.progress()).targets,
+                targets: TargetProgress::of(&g, &atoms, &p.progress()),
             })
         })
         .collect::<Result<_>>()?;
@@ -209,7 +203,25 @@ impl Eq for NaturalOrd<'_> {}
 
 #[cfg(test)]
 mod tests {
-    use super::topo_sort;
+    use super::{generate_path_id, topo_sort};
+    use std::collections::HashSet;
+
+    #[test]
+    fn path_ids_share_the_time_and_differ_in_a_random_suffix() {
+        let now = chrono::Utc::now();
+        let prefix = format!("p_{}_", now.format("%Y_%m_%d_%H%M%S"));
+        let ids: HashSet<String> = (0..20).map(|_| generate_path_id(now)).collect();
+        assert!(ids.len() > 1, "{ids:?}");
+        for id in &ids {
+            let suffix = id.strip_prefix(&prefix).expect("time prefix");
+            assert_eq!(suffix.len(), 4);
+            assert!(
+                suffix
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            );
+        }
+    }
     use crate::graph::{FlatConcept, Graph};
     use std::collections::HashMap;
 

@@ -32,6 +32,22 @@ pub struct TargetProgress {
     pub learned_pct: usize,
 }
 
+impl TargetProgress {
+    /// Count the completed atoms of `target_atoms` in `g`.
+    pub fn of(g: &Graph, target_atoms: &[String], progress: &PathProgress) -> Self {
+        let total = target_atoms.len();
+        let learned = target_atoms
+            .iter()
+            .filter(|a| scheduler::is_atom_complete(g, progress, a))
+            .count();
+        Self {
+            total,
+            learned,
+            learned_pct: (learned * 100).checked_div(total).unwrap_or(0),
+        }
+    }
+}
+
 /// Completion counts across the atoms that the targets of a path reach.
 #[derive(Debug, Serialize)]
 pub struct ReachProgress {
@@ -51,15 +67,9 @@ impl PathCompletion {
     /// Count the completion of `target_atoms` and the atoms that they reach in `g`.
     pub fn of(g: &Graph, target_atoms: &[String], progress: &PathProgress) -> Self {
         let complete = |a: &String| scheduler::is_atom_complete(g, progress, a);
-        let total = target_atoms.len();
-        let learned = target_atoms.iter().filter(|a| complete(a)).count();
         let reachable = g.reachable_atoms(target_atoms);
         Self {
-            targets: TargetProgress {
-                total,
-                learned,
-                learned_pct: (learned * 100).checked_div(total).unwrap_or(0),
-            },
+            targets: TargetProgress::of(g, target_atoms, progress),
             reachable: ReachProgress {
                 total: reachable.len(),
                 taught: reachable

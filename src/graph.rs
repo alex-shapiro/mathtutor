@@ -453,12 +453,12 @@ impl Graph {
     }
 
     pub fn quiz(&self, quiz_id: &str) -> Result<(&FlatConcept, &Quiz)> {
-        let atom_id = crate::answer::atom_from_quiz_id(quiz_id)
-            .ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
+        let atom_id =
+            atom_from_quiz_id(quiz_id).ok_or_else(|| Error::UnknownId(quiz_id.to_string()))?;
         let atom = self
             .by_id
-            .get(&atom_id)
-            .ok_or_else(|| Error::AtomNotFound(atom_id))?;
+            .get(atom_id)
+            .ok_or_else(|| Error::AtomNotFound(atom_id.to_string()))?;
         let q = atom
             .quizzes
             .iter()
@@ -490,6 +490,11 @@ impl Graph {
 }
 
 /// Compare dot-separated concept IDs segment by segment, ordering numeric segments by integer value.
+/// Return the atom ID prefix of a quiz ID, such as `fnd.1.1.1` for `fnd.1.1.1.q3`.
+pub fn atom_from_quiz_id(quiz_id: &str) -> Option<&str> {
+    quiz_id.rfind(".q").map(|pos| &quiz_id[..pos])
+}
+
 pub fn natural_id_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let (mut sa, mut sb) = (a.split('.'), b.split('.'));
@@ -648,22 +653,18 @@ pub fn run_check(source: &CurriculumSource) -> Result<CheckReport> {
         let area_slug = entry.slug.clone();
         let concepts = raw.into_concepts();
 
-        let mut area_clusters = 0;
-        let mut area_atoms = 0;
+        let mut check = AreaCheck {
+            prefix: &prefix,
+            slug: &area_slug,
+            id_to_area: &mut id_to_area,
+            report: &mut report,
+            clusters: 0,
+            atoms: 0,
+        };
         for root in &concepts {
-            walk_validate(
-                root,
-                None,
-                &prefix,
-                &area_slug,
-                1,
-                &mut id_to_area,
-                &mut report,
-                &mut area_clusters,
-                &mut area_atoms,
-            );
+            check.visit(root, None, 1);
         }
-
+        let (area_clusters, area_atoms) = (check.clusters, check.atoms);
         report.clusters += area_clusters;
         report.atoms += area_atoms;
 
@@ -741,90 +742,73 @@ fn collect_orphan_atoms(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn walk_validate(
-    n: &Concept,
-    parent_id: Option<&str>,
-    prefix: &str,
-    area_slug: &str,
-    depth: usize,
-    id_to_area: &mut BTreeMap<String, String>,
-    report: &mut CheckReport,
-    clusters: &mut usize,
-    atoms: &mut usize,
-) {
-    if n.is_atom() {
-        *atoms += 1;
-    } else {
-        *clusters += 1;
-    }
-    if depth > report.max_depth {
-        report.max_depth = depth;
-    }
+/// Validation of the concept tree of a single area.
+struct AreaCheck<'a> {
+    prefix: &'a str,
+    slug: &'a str,
+    id_to_area: &'a mut BTreeMap<String, String>,
+    report: &'a mut CheckReport,
+    clusters: usize,
+    atoms: usize,
+}
 
-    let parts: Vec<&str> = n.id.split('.').collect();
-    if parts.is_empty() || parts[0] != prefix {
-        report.issues.push(CheckIssue {
-            area: Some(area_slug.to_string()),
-            node: Some(n.id.clone()),
-            message: format!("id does not start with area prefix '{prefix}'"),
+impl AreaCheck<'_> {
+    fn issue(&mut self, node: &str, message: String) {
+        self.report.issues.push(CheckIssue {
+            area: Some(self.slug.to_string()),
+            node: Some(node.to_string()),
+            message,
         });
     }
-    for seg in parts.iter().skip(1) {
-        let valid = !seg.is_empty()
-            && seg.chars().all(|c| c.is_ascii_digit())
-            && !(seg.len() > 1 && seg.starts_with('0'))
-            && *seg != "0";
-        if !valid {
-            report.issues.push(CheckIssue {
-                area: Some(area_slug.to_string()),
-                node: Some(n.id.clone()),
-                message: format!(
-                    "id segment '{seg}' is not a positive integer without leading zeros"
-                ),
-            });
-        }
-    }
 
-    if let Some(p) = parent_id {
-        let expected_prefix = format!("{p}.");
-        if let Some(suffix) = n.id.strip_prefix(&expected_prefix) {
-            if suffix.contains('.') {
-                report.issues.push(CheckIssue {
-                    area: Some(area_slug.to_string()),
-                    node: Some(n.id.clone()),
-                    message: format!("id should extend parent '{p}' by a single segment"),
-                });
-            }
+    /// Count `n` and its descendants, record their areas, and report each malformed or duplicate ID.
+    fn visit(&mut self, n: &Concept, parent_id: Option<&str>, depth: usize) {
+        if n.is_atom() {
+            self.atoms += 1;
         } else {
-            report.issues.push(CheckIssue {
-                area: Some(area_slug.to_string()),
-                node: Some(n.id.clone()),
-                message: format!("id does not extend parent '{p}'"),
-            });
+            self.clusters += 1;
         }
-    }
+        self.report.max_depth = self.report.max_depth.max(depth);
 
-    if let Some(prev_area) = id_to_area.insert(n.id.clone(), area_slug.to_string()) {
-        report.issues.push(CheckIssue {
-            area: Some(area_slug.to_string()),
-            node: Some(n.id.clone()),
-            message: format!("duplicate id (also in area '{prev_area}')"),
-        });
-    }
+        let parts: Vec<&str> = n.id.split('.').collect();
+        if parts.is_empty() || parts[0] != self.prefix {
+            let prefix = self.prefix;
+            self.issue(
+                &n.id,
+                format!("id does not start with area prefix '{prefix}'"),
+            );
+        }
+        for seg in parts.iter().skip(1) {
+            let valid = !seg.is_empty()
+                && seg.chars().all(|c| c.is_ascii_digit())
+                && !(seg.len() > 1 && seg.starts_with('0'))
+                && *seg != "0";
+            if !valid {
+                self.issue(
+                    &n.id,
+                    format!("id segment '{seg}' is not a positive integer without leading zeros"),
+                );
+            }
+        }
 
-    for child in &n.children {
-        walk_validate(
-            child,
-            Some(&n.id),
-            prefix,
-            area_slug,
-            depth + 1,
-            id_to_area,
-            report,
-            clusters,
-            atoms,
-        );
+        if let Some(p) = parent_id {
+            match n.id.strip_prefix(&format!("{p}.")) {
+                Some(suffix) if suffix.contains('.') => self.issue(
+                    &n.id,
+                    format!("id should extend parent '{p}' by a single segment"),
+                ),
+                Some(_) => {}
+                None => self.issue(&n.id, format!("id does not extend parent '{p}'")),
+            }
+        }
+
+        if let Some(prev_area) = self.id_to_area.insert(n.id.clone(), self.slug.to_string()) {
+            self.issue(&n.id, format!("duplicate id (also in area '{prev_area}')"));
+        }
+
+        for child in &n.children {
+            self.visit(child, Some(&n.id), depth + 1);
+        }
     }
 }
 
@@ -965,7 +949,13 @@ impl CheckReport {
 
 #[cfg(test)]
 mod tests {
-    use super::natural_id_cmp;
+    use super::{atom_from_quiz_id, natural_id_cmp};
+
+    #[test]
+    fn atom_from_quiz_id_strips_q_suffix() {
+        assert_eq!(atom_from_quiz_id("fnd.1.1.1.q3"), Some("fnd.1.1.1"));
+        assert_eq!(atom_from_quiz_id("no-dot-q-here"), None);
+    }
 
     #[test]
     fn natural_id_cmp_orders_numeric_segments_by_value() {

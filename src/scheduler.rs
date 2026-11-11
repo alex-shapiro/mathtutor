@@ -5,10 +5,9 @@ use std::collections::HashSet;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::answer::atom_from_quiz_id;
 use crate::db::Db;
 use crate::event_log::{Event, EventKind};
-use crate::graph::{FlatConcept, Graph};
+use crate::graph::{self, FlatConcept, Graph};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::subpath;
@@ -244,12 +243,12 @@ fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<
 
 /// Return the atom ID of `quiz_id` if the merged curriculum contains the quiz.
 pub fn atom_of_live_quiz(g: &Graph, quiz_id: &str) -> Option<String> {
-    let atom_id = atom_from_quiz_id(quiz_id)?;
-    let atom = g.by_id.get(&atom_id)?;
+    let atom_id = graph::atom_from_quiz_id(quiz_id)?;
+    let atom = g.by_id.get(atom_id)?;
     atom.quizzes
         .iter()
         .any(|q| q.id == quiz_id)
-        .then_some(atom_id)
+        .then(|| atom_id.to_string())
 }
 
 /// Return `true` if `atom_id` has a stored lesson and passed quizzes for all 3 difficulties.

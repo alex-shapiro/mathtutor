@@ -7,12 +7,11 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 
-use crate::answer::atom_from_quiz_id;
 use crate::cards::{self, CardState};
 use crate::db::client::api::PAGE_MAX;
 use crate::db::{Db, Op, Txn, run_txn, ts};
 use crate::event_log::{self, Event};
-use crate::graph::Quiz;
+use crate::graph::{self, Quiz};
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
 use crate::schema::{
@@ -515,7 +514,7 @@ fn overlay_edits(
     let removed = removed.into_iter().map(|r| Edit::Remove {
         atom_id: r
             .atom_id
-            .or_else(|| atom_from_quiz_id(&r.quiz_id))
+            .or_else(|| graph::atom_from_quiz_id(&r.quiz_id).map(str::to_string))
             .unwrap_or_else(|| r.quiz_id.clone()),
         quiz_id: r.quiz_id,
     });
