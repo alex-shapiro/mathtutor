@@ -138,7 +138,7 @@ pub async fn compute_state(
     let complete = complete_set(&g, &reachable, &progress);
     let (targets, reach) = counters(&target_atoms, &reachable, &complete, &progress);
 
-    let updated_at = p.updated_at;
+    let updated_at = ps.updated_at;
     let next = scheduler::next_action(
         &g,
         &p,

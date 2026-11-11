@@ -49,7 +49,6 @@ fn path_with(targets: &[&str]) -> PathFile {
         id: PATH_ID.into(),
         goal: "test".into(),
         created_at: Utc::now(),
-        updated_at: Utc::now(),
         targets: targets.iter().map(|s| (*s).to_string()).collect(),
         strategy: mathtutor::types::Strategy::BottomUp,
         subpath: Vec::new(),

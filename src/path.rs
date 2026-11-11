@@ -11,7 +11,7 @@ use crate::event_log;
 use crate::graph::{Graph, natural_id_cmp};
 use crate::schema::PathUpdate;
 use crate::types::Strategy;
-use crate::view::{Changes, PathSel, View, Want};
+use crate::view::{Changes, View, Want};
 use crate::{Error, Result};
 
 /// Stored metadata and configuration for a learning path.
@@ -21,8 +21,6 @@ pub struct PathFile {
     pub goal: String,
     #[serde(with = "ts")]
     pub created_at: DateTime<Utc>,
-    #[serde(skip)]
-    pub updated_at: DateTime<Utc>,
     pub targets: Vec<String>,
     pub strategy: Strategy,
     pub subpath: Vec<String>,
@@ -95,17 +93,11 @@ pub async fn cmd_path_new(
         id: generate_path_id(now),
         goal: goal.to_string(),
         created_at: now,
-        updated_at: now,
         targets,
         strategy,
         subpath: Vec::new(),
     };
-    let want = Want {
-        path: PathSel::None,
-        overlay: false,
-        all_paths: false,
-    };
-    db.transact(&want, |view, changes| insert(view, changes, &p))
+    db.transact(&Want::nothing(), |view, changes| insert(view, changes, &p))
         .await?;
     Ok(p.id)
 }
@@ -116,11 +108,7 @@ pub async fn cmd_path_strategy(
     explicit_id: Option<&str>,
     strategy: Strategy,
 ) -> Result<String> {
-    let want = Want {
-        path: PathSel::from(explicit_id),
-        overlay: false,
-        all_paths: false,
-    };
+    let want = Want::path(explicit_id).without_overlay();
     db.transact(&want, |view, changes| {
         let id = view.path()?.file.id.clone();
         let set = PathUpdate {
@@ -161,15 +149,10 @@ pub async fn cmd_path_list(db: &Db, graph_dir: Option<&Path>) -> Result<()> {
 
 /// Compute progress summaries for all learning paths ordered by creation time.
 pub async fn list_summaries(db: &Db, graph_dir: Option<&Path>) -> Result<Vec<PathSummary>> {
-    let want = Want {
-        path: PathSel::None,
-        overlay: true,
-        all_paths: true,
-    };
-    let view = db.snapshot(&want).await?;
+    let view = db.snapshot(&Want::all_paths()).await?;
     let g = view.graph(graph_dir)?;
-    view.paths
-        .iter()
+    view.paths()
+        .into_iter()
         .map(|p| {
             let progress = p.progress();
             let atoms = p.file.resolve_targets(&g)?;

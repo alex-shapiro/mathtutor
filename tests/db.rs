@@ -149,8 +149,8 @@ async fn most_recent_path_follows_logged_events() {
                 .snapshot(&mathtutor::view::Want::path(None))
                 .await
                 .unwrap();
-            let p = view.path().unwrap().file.clone();
-            (p.id, p.updated_at)
+            let p = view.path().unwrap();
+            (p.file.id.clone(), p.updated_at)
         }
     };
     assert_eq!(recent(&db).await.0, "p_b", "the last created path");

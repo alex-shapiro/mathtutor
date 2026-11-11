@@ -41,7 +41,7 @@ use crate::db::{Db, DbConfig};
 use crate::graph::{Graph, natural_id_cmp};
 use crate::progress::PathProgress;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
-use crate::view::{PathSel, Want};
+use crate::view::Want;
 use crate::{answer, discover, graph, path, scheduler, state, store, subpath, syllabus, tree};
 
 // Keep distinct from `Result` because rmcp macros expand to bare `Result<_, ErrorData>`.
@@ -466,21 +466,16 @@ struct PathSummary {
 }
 
 async fn list_paths(db: &Db) -> CrateResult<Vec<PathSummary>> {
-    let want = Want {
-        path: PathSel::None,
-        overlay: false,
-        all_paths: true,
-    };
-    let view = db.snapshot(&want).await?;
+    let view = db.snapshot(&Want::all_paths().without_overlay()).await?;
     Ok(view
-        .paths
+        .paths()
         .into_iter()
         .map(|p| PathSummary {
-            id: p.file.id,
-            goal: p.file.goal,
+            id: p.file.id.clone(),
+            goal: p.file.goal.clone(),
             strategy: p.file.strategy,
             created_at: p.file.created_at,
-            targets: p.file.targets,
+            targets: p.file.targets.clone(),
         })
         .collect())
 }

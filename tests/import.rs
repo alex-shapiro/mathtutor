@@ -17,7 +17,7 @@ use mathtutor::import::{self, Turso};
 use mathtutor::overlay;
 use mathtutor::schema::OAuthClient;
 use mathtutor::types::{Rating, Strategy};
-use mathtutor::view::{PathSel, Want};
+use mathtutor::view::Want;
 use serde::{Deserialize, Serialize};
 
 mod common;
@@ -388,14 +388,9 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
     );
     assert!(r.mismatches.is_empty(), "{:?}", r.mismatches);
 
-    let want = Want {
-        path: PathSel::None,
-        overlay: true,
-        all_paths: true,
-    };
-    let view = db.snapshot(&want).await.unwrap();
-    let [a, b, c] = &view.paths[..] else {
-        panic!("{} paths", view.paths.len());
+    let view = db.snapshot(&Want::all_paths()).await.unwrap();
+    let [a, b, c] = view.paths()[..] else {
+        panic!("{} paths", view.paths().len());
     };
     assert_eq!((a.file.id.as_str(), a.file.goal.as_str()), ("p_a", "first"));
     assert_eq!(a.file.strategy, Strategy::TopDown);
@@ -403,7 +398,7 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
     assert_eq!(a.file.subpath, ["fnd.1.1.1", "fnd.2.1.1"]);
     assert_eq!(a.file.created_at, at(0));
     assert_eq!(
-        a.file.updated_at,
+        a.updated_at,
         at(9),
         "activity is the latest event, not the import"
     );
@@ -413,8 +408,8 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
     );
     assert_eq!(b.file.targets, ["fnd.1"]);
     assert_eq!(b.file.subpath, Vec::<String>::new());
-    assert_eq!(b.file.updated_at, at(30));
-    assert_eq!((c.file.id.as_str(), c.file.updated_at), ("p_c", at(40)));
+    assert_eq!(b.updated_at, at(30));
+    assert_eq!((c.file.id.as_str(), c.updated_at), ("p_c", at(40)));
 
     let stored = event_log::load(&db, "p_a").await.unwrap();
     let expected: Vec<Event> = events().into_iter().filter(|e| e.path == "p_a").collect();
@@ -755,13 +750,8 @@ async fn import_rejects_database_at_another_migration() {
         matches!(&e, Error::Turso(m) if m.contains("migration 3")),
         "{e}"
     );
-    let want = Want {
-        path: PathSel::None,
-        overlay: true,
-        all_paths: true,
-    };
-    let view = db.snapshot(&want).await.unwrap();
-    assert!(view.paths.is_empty() && view.overlay.atoms.is_empty());
+    let view = db.snapshot(&Want::all_paths()).await.unwrap();
+    assert!(view.paths().is_empty() && view.overlay.atoms.is_empty());
 }
 
 #[tokio::test]

@@ -18,7 +18,7 @@ use mathtutor::overlay::Overlay;
 use mathtutor::path::{self, PathFile};
 use mathtutor::progress::PathProgress;
 use mathtutor::types::{Difficulty, Rating, Strategy};
-use mathtutor::view::{Changes, PathSel, PathState, View, Want};
+use mathtutor::view::{Changes, PathState, View, Want};
 
 pub const PATH_ID: &str = "p_test";
 
@@ -127,19 +127,15 @@ pub async fn seed_path(db: &Db, path_id: &str, targets: &[&str], strategy: Strat
         id: path_id.into(),
         goal: "test goal".into(),
         created_at: created,
-        updated_at: created,
         targets: targets.iter().map(|s| (*s).to_string()).collect(),
         strategy,
         subpath: Vec::new(),
     };
-    let want = Want {
-        path: PathSel::None,
-        overlay: false,
-        all_paths: false,
-    };
-    db.transact(&want, |view, changes| path::insert(view, changes, &p))
-        .await
-        .expect("seed path");
+    db.transact(&Want::nothing(), |view, changes| {
+        path::insert(view, changes, &p)
+    })
+    .await
+    .expect("seed path");
 }
 
 /// Commit mutations from `f` against `path_id`.
@@ -256,7 +252,6 @@ pub fn path_with_strategy(targets: &[&str], strategy: Strategy) -> PathFile {
         id: PATH_ID.into(),
         goal: "test".into(),
         created_at: Utc::now(),
-        updated_at: Utc::now(),
         targets: targets.iter().map(|s| (*s).to_string()).collect(),
         strategy,
         subpath: Vec::new(),

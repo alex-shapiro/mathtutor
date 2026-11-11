@@ -7,7 +7,7 @@ use crate::db::Db;
 use crate::graph::Graph;
 use crate::path::{self, PathFile};
 use crate::types::Strategy;
-use crate::view::{PathSel, Want};
+use crate::view::Want;
 use crate::{Error, Result};
 
 /// Expand the stored subpath of `p` into an ordered list of atom IDs.
@@ -53,15 +53,13 @@ pub async fn cmd_subpath_set(
 
 /// Clear the stored subpath for a learning path for `mt path subpath clear`.
 pub async fn cmd_subpath_clear(db: &Db, explicit_id: Option<&str>) -> Result<String> {
-    let want = Want {
-        path: PathSel::from(explicit_id),
-        overlay: false,
-        all_paths: false,
-    };
-    db.transact(&want, |view, changes| {
-        let id = view.path()?.file.id.clone();
-        path::set_subpath(changes, &id, &[]);
-        Ok(id)
-    })
+    db.transact(
+        &Want::path(explicit_id).without_overlay(),
+        |view, changes| {
+            let id = view.path()?.file.id.clone();
+            path::set_subpath(changes, &id, &[]);
+            Ok(id)
+        },
+    )
     .await
 }

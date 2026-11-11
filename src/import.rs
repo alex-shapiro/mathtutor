@@ -360,7 +360,6 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
             id: p.id,
             goal: p.goal,
             created_at: p.created_at,
-            updated_at: p.created_at,
             strategy: p.strategy,
         })
         .collect();

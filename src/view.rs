@@ -68,33 +68,26 @@ fn write_cached_overlay(path: &Path, version: &str, overlay: &Overlay) {
 
 /// Target path selector for a [`Want`] query.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PathSel {
+enum PathSel {
     None,
     Id(String),
     Recent,
 }
 
-impl PathSel {
-    /// Return [`PathSel::Id`] if `explicit` is `Some`, or [`PathSel::Recent`] if `None`.
-    pub fn from(explicit: Option<&str>) -> Self {
-        explicit.map_or(Self::Recent, |id| Self::Id(id.to_string()))
-    }
-}
-
 /// Specification of data to load into a [`View`].
 #[derive(Debug, Clone)]
 pub struct Want {
-    pub path: PathSel,
-    pub overlay: bool,
-    pub all_paths: bool,
+    path: PathSel,
+    overlay: bool,
+    all_paths: bool,
 }
 
 impl Want {
-    /// Request the curriculum overlay and the selected path state.
-    pub fn path(explicit: Option<&str>) -> Self {
+    /// Request only the database and import checks.
+    pub fn nothing() -> Self {
         Self {
-            path: PathSel::from(explicit),
-            overlay: true,
+            path: PathSel::None,
+            overlay: false,
             all_paths: false,
         }
     }
@@ -102,9 +95,34 @@ impl Want {
     /// Request only the curriculum overlay.
     pub fn overlay() -> Self {
         Self {
-            path: PathSel::None,
             overlay: true,
-            all_paths: false,
+            ..Self::nothing()
+        }
+    }
+
+    /// Request the curriculum overlay and the state of path `explicit`, or of the most recent path if `explicit` is `None`.
+    pub fn path(explicit: Option<&str>) -> Self {
+        let path = explicit.map_or(PathSel::Recent, |id| PathSel::Id(id.to_string()));
+        Self {
+            path,
+            ..Self::overlay()
+        }
+    }
+
+    /// Request the curriculum overlay and the state of every path.
+    pub fn all_paths() -> Self {
+        Self {
+            all_paths: true,
+            ..Self::overlay()
+        }
+    }
+
+    /// Remove the curriculum overlay from this request.
+    #[must_use]
+    pub fn without_overlay(self) -> Self {
+        Self {
+            overlay: false,
+            ..self
         }
     }
 }
@@ -113,6 +131,8 @@ impl Want {
 #[derive(Debug, Clone)]
 pub struct PathState {
     pub file: PathFile,
+    /// Time of the latest write for the path, or its creation time if the path has no recorded write.
+    pub updated_at: DateTime<Utc>,
     pub cards: HashMap<String, CardRow>,
     pub taught: HashMap<String, Taught>,
 }
@@ -166,8 +186,10 @@ impl PathState {
 #[derive(Debug, Default)]
 pub struct View {
     pub overlay: Arc<Overlay>,
-    path: Option<PathState>,
-    pub paths: Vec<PathState>,
+    /// State of each loaded path, keyed by path ID.
+    paths: HashMap<String, PathState>,
+    /// ID of the path that [`Want::path`] selected.
+    selected: Option<String>,
 }
 
 impl View {
@@ -203,7 +225,17 @@ impl View {
 
     /// Return the selected [`PathState`], or [`Error::NoPath`] if not found.
     pub fn path(&self) -> Result<&PathState> {
-        self.path.as_ref().ok_or(Error::NoPath)
+        self.selected
+            .as_ref()
+            .and_then(|id| self.paths.get(id))
+            .ok_or(Error::NoPath)
+    }
+
+    /// Return every loaded path, ordered by creation time.
+    pub fn paths(&self) -> Vec<&PathState> {
+        let mut paths: Vec<&PathState> = self.paths.values().collect();
+        paths.sort_by(|a, b| (a.file.created_at, &a.file.id).cmp(&(b.file.created_at, &b.file.id)));
+        paths
     }
 }
 
@@ -241,11 +273,7 @@ impl Changes {
 
     /// Append `e` to its path event stream and update derived `cards` and `taught` rows.
     pub fn append(&mut self, view: &View, e: &Event) -> Result<()> {
-        let base = view
-            .path
-            .as_ref()
-            .filter(|p| p.file.id == e.path)
-            .or_else(|| view.paths.iter().find(|p| p.file.id == e.path));
+        let base = view.paths.get(&e.path);
         match cards::projection_target(e)? {
             ProjectionTarget::Taught { atom_id } => {
                 let key = (e.path.clone(), atom_id.to_string());
@@ -545,26 +573,23 @@ fn overlay_version(r: Option<OpResult>) -> Result<String> {
     })
 }
 
-#[derive(Debug)]
-enum PathRow {
-    Unread,
-    Missing,
-    Found(PathFile),
-}
-
+/// Accumulator that receives the result of a planned read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Slot {
     OverlayVersion,
+    /// A single `paths` row.
+    Path,
+    /// A page of `paths` rows.
     Paths,
-    AllCards,
-    AllTaught,
-    Activity,
-    PathActivity,
-    PathRow,
     Cards,
     Taught,
+    /// A single activity key.
+    Activity,
+    /// A page of activity keys.
+    ActivityScan,
 }
 
+/// Reads that load a [`View`], accumulated across pages.
 struct Plan {
     view: View,
     /// Overlay to use if the stored version matches.
@@ -572,21 +597,10 @@ struct Plan {
     /// The stored overlay version differs from the version of `overlay`.
     overlay_stale: bool,
     pending: Vec<(Slot, Op)>,
-    activity: HashMap<String, DateTime<Utc>>,
-    path_row: PathRow,
+    paths: Vec<PathFile>,
     cards: Vec<CardRecord>,
     taught: Vec<TaughtRow>,
-    paths: Vec<PathFile>,
-    all_cards: Vec<CardRecord>,
-    all_taught: Vec<TaughtRow>,
-}
-
-fn path_reads(id: &str) -> [(Slot, Op); 3] {
-    [
-        (Slot::PathRow, Op::get_row::<PathFile>(id)),
-        (Slot::Cards, Op::query::<CardRecord>(id)),
-        (Slot::Taught, Op::query::<TaughtRow>(id)),
-    ]
+    activity: HashMap<String, DateTime<Utc>>,
 }
 
 /// Return the key and value of `e` as UTF-8.
@@ -614,27 +628,32 @@ impl Plan {
             pending.push((Slot::OverlayVersion, Op::get(OVERLAY_VERSION_KEY)));
         }
         if want.all_paths {
-            pending.push((Slot::Paths, Op::query_all::<PathFile>()));
-            pending.push((Slot::AllCards, Op::query_all::<CardRecord>()));
-            pending.push((Slot::AllTaught, Op::query_all::<TaughtRow>()));
-            pending.push((Slot::Activity, Op::scan(ACTIVITY_PREFIX)));
-        }
-        if let Some(id) = path_id {
-            pending.push((Slot::PathActivity, Op::get(activity_key(id))));
-            pending.extend(path_reads(id));
+            pending.extend([
+                (Slot::Paths, Op::query_all::<PathFile>()),
+                (Slot::Cards, Op::query_all::<CardRecord>()),
+                (Slot::Taught, Op::query_all::<TaughtRow>()),
+                (Slot::ActivityScan, Op::scan(ACTIVITY_PREFIX)),
+            ]);
+        } else if let Some(id) = path_id {
+            pending.extend([
+                (Slot::Path, Op::get_row::<PathFile>(id)),
+                (Slot::Cards, Op::query::<CardRecord>(id)),
+                (Slot::Taught, Op::query::<TaughtRow>(id)),
+                (Slot::Activity, Op::get(activity_key(id))),
+            ]);
         }
         Self {
-            view: View::default(),
+            view: View {
+                selected: path_id.map(str::to_string),
+                ..View::default()
+            },
             overlay,
             overlay_stale: false,
             pending,
-            activity: HashMap::new(),
-            path_row: PathRow::Unread,
+            paths: Vec::new(),
             cards: Vec::new(),
             taught: Vec::new(),
-            paths: Vec::new(),
-            all_cards: Vec::new(),
-            all_taught: Vec::new(),
+            activity: HashMap::new(),
         }
     }
 
@@ -642,6 +661,7 @@ impl Plan {
         self.pending.iter().map(|(_, op)| op.clone()).collect()
     }
 
+    /// Accumulate `results` of the pending reads, and return the reads of the next pages.
     fn absorb(&mut self, results: Vec<OpResult>) -> Result<Option<Vec<Op>>> {
         let pending = std::mem::take(&mut self.pending);
         for ((slot, op), r) in pending.into_iter().zip(results) {
@@ -658,22 +678,18 @@ impl Plan {
                         _ => self.overlay_stale = true,
                     }
                 }
+                Slot::Path => self.paths.extend(r.row()?),
                 Slot::Paths => self.paths.extend(r.rows()?),
-                Slot::AllCards => self.all_cards.extend(r.rows()?),
-                Slot::AllTaught => self.all_taught.extend(r.rows()?),
                 Slot::Cards => self.cards.extend(r.rows()?),
                 Slot::Taught => self.taught.extend(r.rows()?),
-                Slot::PathRow => {
-                    self.path_row = r.row()?.map_or(PathRow::Missing, PathRow::Found);
-                }
                 Slot::Activity => {
-                    for e in r.scan_page()?.entries {
+                    if let Some(e) = r.entry()? {
                         let (id, at) = parse_activity(&e)?;
                         self.activity.insert(id.to_string(), at);
                     }
                 }
-                Slot::PathActivity => {
-                    if let Some(e) = r.entry()? {
+                Slot::ActivityScan => {
+                    for e in r.scan_page()?.entries {
                         let (id, at) = parse_activity(&e)?;
                         self.activity.insert(id.to_string(), at);
                     }
@@ -687,64 +703,41 @@ impl Plan {
         Ok(None)
     }
 
+    /// Group the accumulated rows into path states.
     fn finish(&mut self) -> Result<()> {
         use std::mem::take;
-        if let PathRow::Found(file) = std::mem::replace(&mut self.path_row, PathRow::Unread) {
-            let (cards, taught) = (take(&mut self.cards), take(&mut self.taught));
-            self.view.path = Some(self.path_state(file, cards, taught)?);
-        }
-        let mut cards: HashMap<String, Vec<CardRecord>> = HashMap::new();
-        for c in take(&mut self.all_cards) {
-            cards.entry(c.path_id.clone()).or_default().push(c);
-        }
-        let mut taught: HashMap<String, Vec<TaughtRow>> = HashMap::new();
-        for t in take(&mut self.all_taught) {
-            taught.entry(t.path_id.clone()).or_default().push(t);
-        }
-        let mut paths = take(&mut self.paths);
-        paths.sort_by(|a, b| {
-            a.created_at
-                .cmp(&b.created_at)
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        self.view.paths = paths
+        let mut paths: HashMap<String, PathState> = take(&mut self.paths)
             .into_iter()
             .map(|file| {
-                let c = cards.remove(&file.id).unwrap_or_default();
-                let t = taught.remove(&file.id).unwrap_or_default();
-                self.path_state(file, c, t)
+                let updated_at = self
+                    .activity
+                    .get(&file.id)
+                    .copied()
+                    .unwrap_or(file.created_at);
+                let state = PathState {
+                    updated_at,
+                    file,
+                    cards: HashMap::new(),
+                    taught: HashMap::new(),
+                };
+                (state.file.id.clone(), state)
             })
-            .collect::<Result<_>>()?;
+            .collect();
+        for r in take(&mut self.cards) {
+            if let Some(p) = paths.get_mut(&r.path_id) {
+                p.cards.insert(r.quiz_id.clone(), CardRow::try_from(r)?);
+            }
+        }
+        for t in take(&mut self.taught) {
+            if let Some(p) = paths.get_mut(&t.path_id) {
+                let taught = Taught {
+                    count: t.count,
+                    last_at: t.last_at,
+                };
+                p.taught.insert(t.atom_id, taught);
+            }
+        }
+        self.view.paths = paths;
         Ok(())
-    }
-
-    fn path_state(
-        &self,
-        mut file: PathFile,
-        cards: Vec<CardRecord>,
-        taught: Vec<TaughtRow>,
-    ) -> Result<PathState> {
-        file.updated_at = self
-            .activity
-            .get(&file.id)
-            .copied()
-            .unwrap_or(file.created_at);
-        Ok(PathState {
-            file,
-            cards: cards
-                .into_iter()
-                .map(|r| Ok((r.quiz_id.clone(), CardRow::try_from(r)?)))
-                .collect::<Result<_>>()?,
-            taught: taught
-                .into_iter()
-                .map(|t| {
-                    let taught = Taught {
-                        count: t.count,
-                        last_at: t.last_at,
-                    };
-                    (t.atom_id, taught)
-                })
-                .collect(),
-        })
     }
 }
