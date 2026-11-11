@@ -225,6 +225,19 @@ Each write command executes as a serializable transaction that reads a snapshot 
 
 The import reads a consistent snapshot and writes the overlay and the OAuth clients. It writes each path in a single transaction with its events and the `cards` and `taught` rows that the events produce. It then reads the source again and checks that the import stored a row for each source row. It also compares each stored path, event, answered card, and overlay entry with the decoded source. The decoding rejects a source field that the import cannot store. While an import is open, reads and writes of learner state are blocked. An import with mismatches stays open so that it can be resumed. If mismatches remain, delete the database and run the import again. Once an import completes with zero mismatches, subsequent runs are rejected to preserve newer data.
 
+### Baserunna keys
+
+A Baserunna API key can have two limits: a single database and read-only access. Keys have no role of their own. A key acts with the role of the user who created it. A key limited to a database cannot create or delete a database. A key without that limit can delete every database that its user owns. Keys do not expire, and only a console session can create or delete them.
+
+Use this setup so that a leaked key cannot delete the learner history:
+
+1. Create a temporary key without a database limit. Use it for the first `mt path new` or `mt import-turso`, which creates the database.
+2. Create a key limited to the database for the MCP server, and set it as `BASERUNNA_TOKEN` of the server.
+3. Create a separate key limited to the database for each device. To retire a device, or after a leak, delete only its key.
+4. Delete the temporary key.
+
+Do not make these keys read-only, because every command that teaches writes events. A key limited to the database can still drop tables and delete or trim the event streams, because Baserunna gives these actions to every writer. Baserunna also has no backup. `TODO.md` tracks both problems.
+
 ## User overlay
 
 User-authored lessons and quizzes are stored in the database overlay and shared across all paths:

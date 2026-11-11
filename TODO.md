@@ -7,13 +7,14 @@ Follow-up tasks for the Baserunna migration.
 - [x] **Configure Baserunna in CI.** Tests run an in-process node built from the same Baserunna revision as the client.
 - [x] **Import existing Turso data.** Implemented in `mt import-turso`.
 - [ ] **Migrate the Fly.io app.** Follow these steps to cut over without losing local replica writes:
-  1. Create the Baserunna database and set `BASERUNNA_TOKEN`. Set `BASERUNNA_DB` if the database name is not `mathtutor`.
+  1. Create a temporary Baserunna key without a database limit and set it as `BASERUNNA_TOKEN` for the imports. Only such a key can create the target database, and it can also delete every database of its user, so keep it off the server and the devices. Set `BASERUNNA_DB` if the database name is not `mathtutor`.
   2. Run `mt import-turso` with `TURSO_URL` and `TURSO_AUTH_TOKEN` against a scratch database to verify zero mismatches on real libSQL data.
   3. Stop every old Fly machine with a graceful signal and confirm that its log has zero sync failures.
   4. On each client device, run an old `mt` command to flush the local replica, confirm that it syncs, and retire the old binary.
   5. Revoke all existing libSQL tokens so that restarted Fly machines cannot write to Turso, then create a fresh token for the import.
   6. Run `mt import-turso` against the production database and confirm zero mismatches. If mismatches remain, delete the target database with an unscoped Baserunna key, fix the cause, and repeat the import.
-  7. Dispatch `.github/workflows/deploy-mcp.yml`, unset `TURSO_URL` and `TURSO_AUTH_TOKEN`, and restore the `push` trigger in the workflow. Keep the Turso database until the new deployment is verified.
+  7. Create a key limited to the production database for the server and a separate limited key for each device. Set the server key as the `BASERUNNA_TOKEN` secret of the Fly app, and delete the temporary key of step 1. See "Baserunna keys" in `docs/design.md`.
+  8. Dispatch `.github/workflows/deploy-mcp.yml`, unset `TURSO_URL` and `TURSO_AUTH_TOKEN`, and restore the `push` trigger in the workflow. Keep the Turso database until the new deployment is verified.
 - [x] **Point the Baserunna dependencies at `main`** after the `mathtutor-client` branch of Baserunna is merged.
 
 ## Open product decisions
@@ -119,6 +120,8 @@ Reverting to Turso after Baserunna accepts new writes loses those writes.
 - **Rely on the operator:** Keeps the runbook shorter.
 
 ## Later
+
+- [ ] **Protect learner history from a leaked key.** This is a preexisting limit of Baserunna. Every key that can write learner state can also drop the tables and delete or trim the event streams, because Baserunna gives these actions to the writer role and has no per-key role. A key limited to the database cannot delete the database, but it can destroy its contents. Baserunna has no backup or point-in-time restore. Ask Baserunna for a role that writes rows and appends to streams without schema or stream deletion, and add a backup (see "Database backup and rollback").
 
 - [ ] **Support concurrent authoring in a shared database.** Authoring commands replace the global `overlay_version` token. This replacement invalidates the overlay cache for other sessions and causes transaction conflicts during concurrent edits. Use the Baserunna change feed and per-atom version keys to update caches incrementally and reduce write conflicts.
 - [ ] **Read a multi-page snapshot at a single version.** `Db::snapshot` reads each page in a separate request. A table with more than 1,000 rows can span versions across pages. Read all pages in a single read-only transaction, or pin the snapshot version from the first page.
