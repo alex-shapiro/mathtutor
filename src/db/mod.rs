@@ -334,9 +334,14 @@ impl Db {
         }
     }
 
-    /// Fail unless the database exists and every table set that this handle checks is current and open to it.
+    /// Fail unless the database exists and the first request of this handle can use it, without a change to the database.
+    ///
+    /// Tables that the next request creates or replaces count as usable.
     pub async fn check_usable(&self) -> Result<()> {
-        self.read(&[]).await.map(|_| ())
+        match self.read_once(&[]).await {
+            Err(e) if Self::needs_table_setup(&e) => Ok(()),
+            result => result.map(|_| ()),
+        }
     }
 
     /// Read `op` at the latest version after the database and import checks.

@@ -794,6 +794,31 @@ async fn ready_reports_a_usable_database_without_auth() {
 }
 
 #[tokio::test]
+async fn ready_reports_a_database_without_tables_as_ready_and_creates_no_table() {
+    let cfg = common::fresh_config();
+    let raw = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db);
+    raw.ensure().await.unwrap();
+    let auth = AuthConfig {
+        api_key: Some(API_KEY.into()),
+        ..AuthConfig::default()
+    };
+    let server = spawn_server_without_setup(cfg.clone(), auth).await;
+
+    let res = client().get(server.url("/ready")).send().await.unwrap();
+
+    assert_eq!(res.status(), 200);
+    let tables = raw
+        .list_tables(baserunna_client::api::ListTablesQuery::default())
+        .await
+        .unwrap()
+        .tables;
+    assert!(tables.is_empty(), "{tables:?}");
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn ready_fails_while_health_passes_if_the_database_is_gone() {
     let cfg = common::fresh_config();
     let server = spawn_server_on(
