@@ -19,7 +19,7 @@ use subtle::ConstantTimeEq;
 use tower_http::cors::{Any, CorsLayer};
 use url::Url;
 
-use crate::db::{Db, Op, Txn};
+use crate::db::{Db, Op, Txn, run_txn};
 use crate::schema::{OAuthAccessToken, OAuthClient, OAuthCode, OAuthCodeUse, OAuthRefreshToken};
 
 const AUTHORIZATION_CODE_TTL: Duration = Duration::seconds(60);
@@ -137,7 +137,7 @@ async fn register(
         redirect_uris: req.redirect_uris,
         created_at: Utc::now(),
     };
-    s.db.client.write(&[Op::insert(&client)]).await?;
+    s.db.write([Op::insert(&client)]).await?;
 
     tracing::info!(
         client_id = %client.client_id,
@@ -259,8 +259,7 @@ async fn authorize_post(
         expires_at: Utc::now() + AUTHORIZATION_CODE_TTL,
         used_at: None,
     };
-    s.db.client
-        .write(&[Op::insert_expiring(&code, std_ttl(AUTHORIZATION_CODE_TTL))])
+    s.db.write([Op::insert_expiring(&code, std_ttl(AUTHORIZATION_CODE_TTL))])
         .await?;
 
     tracing::info!(client_id = %client.client_id, "authorization code issued");
@@ -361,23 +360,11 @@ async fn token_authorization_code(
         .ok_or_else(|| OAuthError::invalid_request("client_id is required"))?;
 
     // Consume the authorization code and issue tokens atomically to prevent replay.
-    let mut retry = s.db.client.retry();
-    let (access, refresh, stored_scope) = loop {
-        let mut txn = s.db.begin();
-        let r = exchange_code(&mut txn, code, client_id, redirect_uri, verifier).await;
-        if let Some(r) = retry.finish(txn.inner, r).await? {
-            break r?;
-        }
-    };
+    let tokens = run_txn!(&s.db, |txn| {
+        exchange_code(&mut txn, code, client_id, redirect_uri, verifier).await
+    })?;
     tracing::info!(%client_id, "access + refresh tokens issued (auth_code)");
-
-    Ok(Json(TokenResponse {
-        access_token: access,
-        token_type: "Bearer",
-        expires_in: ACCESS_TOKEN_TTL.num_seconds(),
-        refresh_token: refresh,
-        scope: stored_scope,
-    }))
+    Ok(Json(tokens.into()))
 }
 
 async fn token_refresh(
@@ -390,75 +377,99 @@ async fn token_refresh(
         .ok_or_else(|| OAuthError::invalid_request("refresh_token is required"))?;
 
     // Delete the presented refresh token and insert a new pair in the same transaction.
-    let mut retry = s.db.client.retry();
-    let (access, refresh, client_id, scope) = loop {
-        let mut txn = s.db.begin();
-        let r = rotate_refresh(&mut txn, provided, &req).await;
-        if let Some(r) = retry.finish(txn.inner, r).await? {
-            break r?;
-        }
-    };
-    tracing::info!(%client_id, "tokens rotated (refresh_token)");
-
-    Ok(Json(TokenResponse {
-        access_token: access,
-        token_type: "Bearer",
-        expires_in: ACCESS_TOKEN_TTL.num_seconds(),
-        refresh_token: refresh,
-        scope,
-    }))
+    let tokens = run_txn!(&s.db, |txn| rotate_refresh(&mut txn, provided, &req).await)?;
+    tracing::info!(client_id = %tokens.client_id, "tokens rotated (refresh_token)");
+    Ok(Json(tokens.into()))
 }
 
-/// Mark authorization `code` used and queue new tokens, or return the grant error.
+/// Access and refresh tokens that a grant issues to a client.
+struct IssuedTokens {
+    access: String,
+    refresh: String,
+    client_id: String,
+    scope: Option<String>,
+}
+
+impl IssuedTokens {
+    /// Mint new tokens for `client_id` with `scope`.
+    fn new(client_id: &str, scope: Option<String>) -> Self {
+        Self {
+            access: random_token(),
+            refresh: random_token(),
+            client_id: client_id.to_string(),
+            scope,
+        }
+    }
+
+    /// Return the operations that store these tokens.
+    fn insert_ops(&self) -> [Op; 2] {
+        let now = Utc::now();
+        let access = OAuthAccessToken {
+            token: self.access.clone(),
+            client_id: self.client_id.clone(),
+            scope: self.scope.clone(),
+            expires_at: now + ACCESS_TOKEN_TTL,
+        };
+        let refresh = OAuthRefreshToken {
+            token: self.refresh.clone(),
+            client_id: self.client_id.clone(),
+            scope: self.scope.clone(),
+            expires_at: now + REFRESH_TOKEN_TTL,
+        };
+        [
+            Op::insert_expiring(&access, std_ttl(ACCESS_TOKEN_TTL)),
+            Op::insert_expiring(&refresh, std_ttl(REFRESH_TOKEN_TTL)),
+        ]
+    }
+}
+
+impl From<IssuedTokens> for TokenResponse {
+    fn from(t: IssuedTokens) -> Self {
+        Self {
+            access_token: t.access,
+            token_type: "Bearer",
+            expires_in: ACCESS_TOKEN_TTL.num_seconds(),
+            refresh_token: t.refresh,
+            scope: t.scope,
+        }
+    }
+}
+
+/// Mark authorization `code` used and queue new tokens.
 async fn exchange_code(
     txn: &mut Txn,
     code: &str,
     client_id: &str,
     redirect_uri: &str,
     verifier: &str,
-) -> crate::Result<Result<(String, String, Option<String>), OAuthError>> {
+) -> Result<IssuedTokens, OAuthError> {
     let row = txn.run_one(Op::get_row::<OAuthCode>(code)).await?.row()?;
-    let scope = match redeem(row, client_id, redirect_uri, verifier) {
-        Ok(scope) => scope,
-        Err(e) => return Ok(Err(e)),
-    };
-    let (access, refresh) = (random_token(), random_token());
+    let scope = redeem(row, client_id, redirect_uri, verifier)?;
+    let tokens = IssuedTokens::new(client_id, scope);
     let used = OAuthCodeUse {
         used_at: Utc::now(),
     };
     txn.write([Op::update::<OAuthCode>(code, &used)]);
-    txn.write(token_ops(&access, &refresh, client_id, scope.as_deref()));
-    Ok(Ok((access, refresh, scope)))
+    txn.write(tokens.insert_ops());
+    Ok(tokens)
 }
 
-/// Replace refresh token `provided` with new tokens, or return the grant error.
+/// Replace refresh token `provided` with new tokens.
 async fn rotate_refresh(
     txn: &mut Txn,
     provided: &str,
     req: &TokenRequest,
-) -> crate::Result<RotatedTokens> {
+) -> Result<IssuedTokens, OAuthError> {
     let row = txn
         .run_one(Op::get_row::<OAuthRefreshToken>(provided))
         .await?
         .row()?;
-    let stored = match check_refresh(row, req.client_id.as_deref()) {
-        Ok(stored) => stored,
-        Err(e) => return Ok(Err(e)),
-    };
-    let scope = req.scope.clone().or(stored.scope);
-    let (access, refresh) = (random_token(), random_token());
+    let stored = check_refresh(row, req.client_id.as_deref())?;
+    let tokens = IssuedTokens::new(&stored.client_id, req.scope.clone().or(stored.scope));
     txn.write([Op::delete_row::<OAuthRefreshToken>(provided)]);
-    txn.write(token_ops(
-        &access,
-        &refresh,
-        &stored.client_id,
-        scope.as_deref(),
-    ));
-    Ok(Ok((access, refresh, stored.client_id, scope)))
+    txn.write(tokens.insert_ops());
+    Ok(tokens)
 }
-
-/// New access and refresh tokens with their client and scope, or the grant error.
-type RotatedTokens = Result<(String, String, String, Option<String>), OAuthError>;
 
 fn std_ttl(ttl: Duration) -> std::time::Duration {
     ttl.to_std().expect("token lifetimes are positive")
@@ -514,26 +525,6 @@ fn check_refresh(
         return Err(OAuthError::invalid_grant());
     }
     Ok(row)
-}
-
-fn token_ops(access: &str, refresh: &str, client_id: &str, scope: Option<&str>) -> [Op; 2] {
-    let now = Utc::now();
-    let access = OAuthAccessToken {
-        token: access.into(),
-        client_id: client_id.into(),
-        scope: scope.map(Into::into),
-        expires_at: now + ACCESS_TOKEN_TTL,
-    };
-    let refresh = OAuthRefreshToken {
-        token: refresh.into(),
-        client_id: client_id.into(),
-        scope: scope.map(Into::into),
-        expires_at: now + REFRESH_TOKEN_TTL,
-    };
-    [
-        Op::insert_expiring(&access, std_ttl(ACCESS_TOKEN_TTL)),
-        Op::insert_expiring(&refresh, std_ttl(REFRESH_TOKEN_TTL)),
-    ]
 }
 
 /// Return the `client_id` for a non-expired access token, or `None` if unknown or expired.
@@ -701,6 +692,15 @@ impl OAuthError {
 impl From<crate::db::client::Error> for OAuthError {
     fn from(e: crate::db::client::Error) -> Self {
         OAuthError::Internal(e.into())
+    }
+}
+
+impl crate::db::client::TxnError for OAuthError {
+    fn client_error(&self) -> Option<&crate::db::client::Error> {
+        match self {
+            OAuthError::Internal(e) => e.client_error(),
+            _ => None,
+        }
     }
 }
 

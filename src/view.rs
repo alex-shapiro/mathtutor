@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 
 use crate::cards::{self, CardRow, ProjectionTarget};
 use crate::db::client::Entry;
-use crate::db::{Db, Op, OpResult, Txn, ts};
+use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
 use crate::event_log::Event;
 use crate::graph::Graph;
 use crate::overlay::{Edit, Overlay};
@@ -348,23 +348,14 @@ impl Db {
         } else {
             None
         };
-        let mut retry = self.client.retry();
         let (out, overlay_write) = loop {
-            let mut txn = self.begin();
-            let r = match self
-                .attempt(&mut txn, want, path_id.as_deref(), overlay.clone(), &mut f)
-                .await
-            {
-                Ok(Attempt::OverlayChanged) => {
-                    drop(txn);
-                    overlay = Some(self.load_overlay().await?);
-                    continue;
-                }
-                Ok(Attempt::Ready(ready)) => Ok(ready),
-                Err(e) => Err(e),
-            };
-            if let Some(r) = retry.finish(txn.inner, r).await? {
-                break r;
+            let attempt = run_txn!(self, |txn| {
+                self.attempt(&mut txn, want, path_id.as_deref(), overlay.clone(), &mut f)
+                    .await
+            })?;
+            match attempt {
+                Attempt::Ready(ready) => break ready,
+                Attempt::OverlayChanged => overlay = Some(self.load_overlay().await?),
             }
         };
         if let Some(write) = overlay_write {

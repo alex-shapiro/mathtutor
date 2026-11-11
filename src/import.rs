@@ -10,7 +10,7 @@ use serde_json::{Map, Value as Json};
 use crate::answer::atom_from_quiz_id;
 use crate::cards::{self, CardState};
 use crate::db::client::api::PAGE_MAX;
-use crate::db::{Db, Op, Txn, ts};
+use crate::db::{Db, Op, Txn, run_txn, ts};
 use crate::event_log::{self, Event, EventKind, EventPayload};
 use crate::graph::Quiz;
 use crate::overlay::{Edit, Overlay};
@@ -469,14 +469,7 @@ pub struct Report {
 
 /// Mark `db` as an import target, or fail if an import would overwrite newer data.
 async fn claim_import_target(db: &Db) -> Result<()> {
-    let mut retry = db.client.retry();
-    loop {
-        let mut txn = db.begin();
-        let r = claim_import_target_in(&mut txn).await;
-        if retry.finish(txn.inner, r).await?.is_some() {
-            return Ok(());
-        }
-    }
+    run_txn!(db, |txn| claim_import_target_in(&mut txn).await)
 }
 
 async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
@@ -522,8 +515,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         .await?;
     }
     for clients in legacy.oauth_clients.chunks(IMPORT_WRITE_BATCH) {
-        let ops: Vec<Op> = clients.iter().map(Op::upsert).collect();
-        db.client.write(&ops).await?;
+        db.write(clients.iter().map(Op::upsert)).await?;
     }
     for p in &legacy.paths {
         let events = legacy.events.get(&p.id).map_or(&[][..], Vec::as_slice);
@@ -549,9 +541,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
             .extend(verify_path(db, p, events, cards).await?);
     }
     if report.mismatches.is_empty() {
-        db.client
-            .write(&[ImportMarker::Complete.write_op()])
-            .await?;
+        db.write([ImportMarker::Complete.write_op()]).await?;
     }
     Ok(report)
 }
@@ -597,7 +587,7 @@ async fn import_path(db: &Db, p: &PathFile, events: &[Event]) -> Result<bool> {
             .chunks(PAGE_MAX)
             .map(|c| Op::append(stream.clone(), c)),
     );
-    db.client.write(&ops).await?;
+    db.write(ops).await?;
     Ok(true)
 }
 

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use chrono::{DateTime, Duration, Utc};
 use fsrs::{FSRS, MemoryState};
 
-use crate::db::{Db, Op, Txn};
+use crate::db::{Db, Op, Txn, run_txn};
 use crate::event_log::{Event, EventKind};
 use crate::schema::{self, CardRecord, TaughtRow};
 use crate::types::Rating;
@@ -205,14 +205,7 @@ impl TryFrom<CardRecord> for CardRow {
 
 /// Rebuild the `cards` and `taught` rows for `path_id` from its event stream.
 pub async fn recompute(db: &Db, path_id: &str) -> Result<()> {
-    let mut retry = db.client.retry();
-    loop {
-        let mut txn = db.begin();
-        let r = recompute_in(&mut txn, path_id).await;
-        if retry.finish(txn.inner, r).await?.is_some() {
-            return Ok(());
-        }
-    }
+    run_txn!(db, |txn| recompute_in(&mut txn, path_id).await)
 }
 
 async fn recompute_in(txn: &mut Txn, path_id: &str) -> Result<()> {

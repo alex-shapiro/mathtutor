@@ -53,7 +53,7 @@ impl DbConfig {
 /// Handle to the learner database, with the overlay cached across transactions.
 #[derive(Clone)]
 pub struct Db {
-    pub(crate) client: client::Db,
+    client: client::Db,
     url: Arc<str>,
     pub(crate) overlay_cache: Arc<Mutex<Option<crate::view::CachedOverlay>>>,
     pub(crate) cache_file: Option<PathBuf>,
@@ -216,12 +216,28 @@ impl Db {
             .ok_or_else(|| Error::BadRow("read returned no result".into()))
     }
 
+    /// Commit `ops` after the database and import checks.
+    pub(crate) async fn write(&self, ops: impl IntoIterator<Item = Op>) -> Result<()> {
+        let ops: Vec<Op> = ops.into_iter().collect();
+        run_txn!(self, |txn| {
+            txn.write(ops.iter().cloned());
+            Ok::<_, Error>(())
+        })
+    }
+
     /// Begin a transaction whose first request runs the database and import checks.
     pub(crate) fn begin(&self) -> Txn {
         Txn {
             inner: self.client.begin(),
             gate: Some(self.gate()),
             db: self.clone(),
+        }
+    }
+
+    /// Return the retry state of a [`run_txn`] loop.
+    pub(crate) fn retry(&self) -> Retry {
+        Retry {
+            inner: self.client.retry(),
         }
     }
 
@@ -256,9 +272,52 @@ impl Db {
     }
 }
 
+/// Run `$attempt` with `$txn` bound to a new transaction of `$db` and commit its writes, restarting it after a conflict.
+///
+/// Evaluates to the result of the committed attempt. A macro lets `$attempt` borrow local state mutably inside a `Send` future, which an async closure parameter cannot do.
+macro_rules! run_txn {
+    ($db:expr, |$txn:ident| $attempt:expr) => {{
+        let db: &$crate::db::Db = $db;
+        let mut retry = db.retry();
+        loop {
+            let mut $txn = db.begin();
+            let result = $attempt;
+            match retry.finish($txn, result).await {
+                Ok(Some(out)) => break Ok(out),
+                Ok(None) => {}
+                Err(e) => break Err(e),
+            }
+        }
+    }};
+}
+pub(crate) use run_txn;
+
+/// Retry state of a [`run_txn`] loop.
+pub(crate) struct Retry {
+    inner: client::Retry,
+}
+
+impl Retry {
+    /// Commit `txn` if `result` is `Ok`, or abort it, and return `None` if the attempt must restart.
+    pub(crate) async fn finish<T, E>(
+        &mut self,
+        mut txn: Txn,
+        result: std::result::Result<T, E>,
+    ) -> std::result::Result<Option<T>, E>
+    where
+        E: client::TxnError + From<Error>,
+    {
+        let result = match result {
+            Ok(out) => txn.check_gate().await.map(|()| out).map_err(E::from),
+            Err(e) => Err(e),
+        };
+        self.inner.finish(txn.inner, result).await
+    }
+}
+
 /// Serializable transaction whose first request runs the database and import checks.
 pub(crate) struct Txn {
-    pub(crate) inner: client::Txn,
+    inner: client::Txn,
     gate: Option<Gate>,
     db: Db,
 }
@@ -273,6 +332,14 @@ impl Txn {
             Ok(results) => self.db.pass_gate(&gate, results),
             Err(e) => Err(self.db.gate_failure(&gate, e).await),
         }
+    }
+
+    /// Run the database and import checks if no request of this transaction has run them.
+    async fn check_gate(&mut self) -> Result<()> {
+        if self.gate.is_some() {
+            self.run(&[]).await?;
+        }
+        Ok(())
     }
 
     /// Execute `op` in the transaction.
