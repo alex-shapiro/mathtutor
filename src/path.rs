@@ -4,25 +4,14 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
-use crate::db::{Db, ts};
+use crate::db::Db;
 use crate::graph::{Graph, natural_id_cmp};
 use crate::types::Strategy;
 use crate::view::Want;
 use crate::{Error, Result};
 
-/// Stored metadata and configuration for a learning path.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PathFile {
-    pub id: String,
-    pub goal: String,
-    #[serde(with = "ts")]
-    pub created_at: DateTime<Utc>,
-    pub targets: Vec<String>,
-    pub strategy: Strategy,
-    pub subpath: Vec<String>,
-}
+pub use crate::schema::PathFile;
 
 impl PathFile {
     /// Expand stored targets into a topologically sorted list of atom IDs.
