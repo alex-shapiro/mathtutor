@@ -52,10 +52,20 @@ pub struct PathPlan<'v> {
     pub progress: PathProgress,
     /// Topologically sorted target atoms.
     pub targets: Vec<String>,
+    /// Target atoms and their transitive atomic prerequisites, each after its prerequisites.
+    pub reachable: Vec<String>,
     /// Atoms of the stored subpath.
     pub subpath: Vec<String>,
-    /// Cards due now, from earliest to latest.
-    pub due: Vec<(String, DateTime<Utc>)>,
+    /// Cards of live quizzes that are due now, from earliest to latest.
+    pub due: Vec<DueCard>,
+}
+
+/// Card of a live quiz that is due for review.
+#[derive(Debug, Clone)]
+pub struct DueCard {
+    pub quiz_id: String,
+    pub atom_id: String,
+    pub due: DateTime<Utc>,
 }
 
 impl<'v> PathPlan<'v> {
@@ -66,11 +76,25 @@ impl<'v> PathPlan<'v> {
 
     /// Return the plan of path `state` over `graph` at time `now`.
     pub fn new(state: &'v PathState, graph: Arc<Graph>, now: DateTime<Utc>) -> Result<Self> {
+        let targets = state.file.resolve_targets(&graph)?;
+        let due = state
+            .due(now)
+            .into_iter()
+            .filter_map(|(quiz_id, due)| {
+                let (atom, _) = graph.quiz(&quiz_id).ok()?;
+                Some(DueCard {
+                    atom_id: atom.id.clone(),
+                    quiz_id,
+                    due,
+                })
+            })
+            .collect();
         Ok(Self {
             progress: state.progress(),
-            targets: state.file.resolve_targets(&graph)?,
+            reachable: graph.prerequisite_order(&targets),
             subpath: subpath::resolved(&state.file, &graph)?,
-            due: state.due(now),
+            targets,
+            due,
             graph,
             state,
         })
@@ -79,9 +103,12 @@ impl<'v> PathPlan<'v> {
     /// Return the highest-priority action of this path in `mode`.
     pub fn next_action(&self, mode: NextMode) -> Action {
         if mode != NextMode::New
-            && let Some((quiz_id, atom_id)) = first_due_card(&self.graph, &self.due)
+            && let Some(card) = self.due.first()
         {
-            return Action::PresentQuiz { quiz_id, atom_id };
+            return Action::PresentQuiz {
+                quiz_id: card.quiz_id.clone(),
+                atom_id: card.atom_id.clone(),
+            };
         }
         if mode == NextMode::Due {
             return Action::NoReviewsDue;
@@ -108,25 +135,20 @@ impl<'v> PathPlan<'v> {
     ///
     /// `bottom_up` lists the transitive atomic prerequisites of each target atom before the atom. `top_down` lists the subpath and then the targets.
     fn teaching_order(&self) -> Vec<String> {
-        let g = &self.graph;
-        let mut visited = HashSet::new();
-        let mut out = Vec::new();
         match self.state.file.strategy {
-            Strategy::BottomUp => {
-                for target in &self.targets {
-                    visit_bottom_up(g, target, &mut visited, &mut out);
-                }
-            }
+            Strategy::BottomUp => self.reachable.clone(),
             Strategy::TopDown => {
-                for id in self.subpath.iter().chain(&self.targets) {
-                    let is_atom = g.by_id.get(id).is_some_and(|c| c.children_ids.is_empty());
-                    if is_atom && visited.insert(id.clone()) {
-                        out.push(id.clone());
-                    }
-                }
+                let g = &self.graph;
+                let mut visited = HashSet::new();
+                self.subpath
+                    .iter()
+                    .chain(&self.targets)
+                    .filter(|id| g.by_id.get(*id).is_some_and(|c| c.children_ids.is_empty()))
+                    .filter(|id| visited.insert(*id))
+                    .cloned()
+                    .collect()
             }
         }
-        out
     }
 }
 
@@ -222,16 +244,6 @@ impl Action {
     }
 }
 
-fn visit_bottom_up(g: &Graph, atom: &str, visited: &mut HashSet<String>, out: &mut Vec<String>) {
-    if !visited.insert(atom.to_string()) {
-        return;
-    }
-    for prereq in g.atomic_prerequisites(atom) {
-        visit_bottom_up(g, &prereq, visited, out);
-    }
-    out.push(atom.to_string());
-}
-
 /// Return the next action that atom `c` needs on a path with `progress`, or `None` if the atom is complete.
 pub fn atom_action(c: &FlatConcept, progress: &PathProgress) -> Option<Action> {
     let atom_id = c.id.clone();
@@ -259,17 +271,6 @@ pub fn atom_action(c: &FlatConcept, progress: &PathProgress) -> Option<Action> {
             }
             QuizSlot::Correct => None,
         })
-}
-
-fn first_due_card(g: &Graph, due_quizzes: &[(String, DateTime<Utc>)]) -> Option<(String, String)> {
-    due_quizzes.iter().find_map(|(quiz_id, _)| {
-        atom_of_live_quiz(g, quiz_id).map(|atom_id| (quiz_id.clone(), atom_id))
-    })
-}
-
-/// Return the atom ID of `quiz_id` if the merged curriculum contains the quiz.
-pub fn atom_of_live_quiz(g: &Graph, quiz_id: &str) -> Option<String> {
-    g.quiz(quiz_id).ok().map(|(atom, _)| atom.id.clone())
 }
 
 /// Return `true` if `atom_id` is in `g` and needs no further action on a path with `progress`.

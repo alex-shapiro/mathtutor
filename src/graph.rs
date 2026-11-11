@@ -436,19 +436,29 @@ impl Graph {
         atoms
     }
 
-    /// Return all atomic descendants of `targets` and their transitive atomic prerequisites.
-    pub fn reachable_atoms(&self, targets: &[String]) -> HashSet<String> {
-        let mut out: HashSet<String> = HashSet::new();
-        let mut stack: Vec<String> = targets
-            .iter()
-            .flat_map(|t| self.atomic_descendants(t))
-            .collect();
-        while let Some(atom) = stack.pop() {
-            if out.insert(atom.clone()) {
-                stack.extend(self.atomic_prerequisites(&atom));
-            }
+    /// Return `atoms` and their transitive atomic prerequisites, each after its prerequisites and in the order of `atoms`.
+    pub fn prerequisite_order(&self, atoms: &[String]) -> Vec<String> {
+        let mut visited = HashSet::new();
+        let mut order = Vec::new();
+        for atom in atoms {
+            self.visit_prerequisites_first(atom, &mut visited, &mut order);
         }
-        out
+        order
+    }
+
+    fn visit_prerequisites_first(
+        &self,
+        atom: &str,
+        visited: &mut HashSet<String>,
+        order: &mut Vec<String>,
+    ) {
+        if !visited.insert(atom.to_string()) {
+            return;
+        }
+        for prereq in self.atomic_prerequisites(atom) {
+            self.visit_prerequisites_first(&prereq, visited, order);
+        }
+        order.push(atom.to_string());
     }
 
     /// Expand atom and cluster IDs into a deduplicated list of atomic descendant IDs in first-seen order.

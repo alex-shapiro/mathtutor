@@ -13,7 +13,8 @@ mod common;
 use common::{PATH_ID, complete_atom, complete_events, empty_atom, path_with, progress_of, taught};
 
 fn completion(g: &Graph, p: &PathFile, progress: &PathProgress) -> (TargetProgress, ReachProgress) {
-    let c = PathCompletion::of(g, &p.resolve_targets(g).unwrap(), progress);
+    let targets = p.resolve_targets(g).unwrap();
+    let c = PathCompletion::of(g, &targets, &g.prerequisite_order(&targets), progress);
     (c.targets, c.reachable)
 }
 

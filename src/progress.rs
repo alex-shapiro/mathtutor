@@ -133,10 +133,14 @@ pub struct PathCompletion {
 }
 
 impl PathCompletion {
-    /// Count the completion of `target_atoms` and the atoms that they reach in `g`.
-    pub fn of(g: &Graph, target_atoms: &[String], progress: &PathProgress) -> Self {
+    /// Count the completion of `target_atoms` and of the `reachable` atoms in `g`.
+    pub fn of(
+        g: &Graph,
+        target_atoms: &[String],
+        reachable: &[String],
+        progress: &PathProgress,
+    ) -> Self {
         let complete = |a: &String| scheduler::is_atom_complete(g, progress, a);
-        let reachable = g.reachable_atoms(target_atoms);
         Self {
             targets: TargetProgress::of(g, target_atoms, progress),
             reachable: ReachProgress {

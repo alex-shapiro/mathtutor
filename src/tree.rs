@@ -74,7 +74,7 @@ pub async fn compute_tree(
     let (p, g, progress) = (&plan.state.file, &plan.graph, &plan.progress);
     let target_atoms = &plan.targets;
     let subpath = &plan.subpath;
-    let completion = PathCompletion::of(g, target_atoms, progress);
+    let completion = PathCompletion::of(g, target_atoms, &plan.reachable, progress);
     let next = plan
         .next_action(scheduler::NextMode::Default)
         .atom_id()
@@ -83,7 +83,7 @@ pub async fn compute_tree(
     let builder = NodeBuilder {
         g,
         progress,
-        spine: build_spine(g, &g.reachable_atoms(target_atoms)),
+        spine: build_spine(g, &plan.reachable),
         targets: target_atoms.iter().map(String::as_str).collect(),
         subpath: subpath.iter().map(String::as_str).collect(),
         depth,

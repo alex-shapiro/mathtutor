@@ -72,11 +72,11 @@ fn reachable_includes_transitive_prereqs() {
         common::empty_atom("la.1.1", &[]),
         common::empty_atom("fnd.2.3.1", &[]),
     ]);
-    let reach = g.reachable_atoms(&["tx.1.1".to_string()]);
-    assert!(reach.contains("tx.1.1"));
-    assert!(reach.contains("la.2.2"));
-    assert!(reach.contains("la.1.1"));
-    assert!(reach.contains("fnd.2.3.1"));
+    let reach = g.prerequisite_order(&["tx.1.1".to_string()]);
+    assert!(reach.contains(&"tx.1.1".to_string()));
+    assert!(reach.contains(&"la.2.2".to_string()));
+    assert!(reach.contains(&"la.1.1".to_string()));
+    assert!(reach.contains(&"fnd.2.3.1".to_string()));
 }
 
 #[test]
@@ -87,11 +87,11 @@ fn reachable_expands_cluster_prereqs_to_their_atoms() {
         common::empty_atom("la.2.2.1", &[]),
         common::empty_atom("la.2.2.2", &[]),
     ]);
-    let reach = g.reachable_atoms(&["tx.1.1".to_string()]);
-    assert!(reach.contains("tx.1.1"));
-    assert!(reach.contains("la.2.2.1"));
-    assert!(reach.contains("la.2.2.2"));
-    assert!(!reach.contains("la.2.2"));
+    let reach = g.prerequisite_order(&["tx.1.1".to_string()]);
+    assert!(reach.contains(&"tx.1.1".to_string()));
+    assert!(reach.contains(&"la.2.2.1".to_string()));
+    assert!(reach.contains(&"la.2.2.2".to_string()));
+    assert!(!reach.contains(&"la.2.2".to_string()));
 }
 
 #[test]
@@ -102,8 +102,12 @@ fn reachable_handles_diamond_without_looping() {
         common::empty_atom("b", &["c"]),
         common::empty_atom("c", &[]),
     ]);
-    let reach = g.reachable_atoms(&["tx.1".to_string()]);
-    assert_eq!(reach.len(), 4);
+    let reach = g.prerequisite_order(&["tx.1".to_string()]);
+    assert_eq!(
+        reach,
+        ["c", "a", "b", "tx.1"],
+        "each atom follows its prerequisites"
+    );
 }
 
 #[test]

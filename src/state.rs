@@ -100,7 +100,7 @@ pub async fn compute_state(db: &Db, explicit_id: Option<&str>) -> Result<StateSu
     let plan = PathPlan::of(&view)?;
     let (ps, g, progress) = (plan.state, &plan.graph, &plan.progress);
     let p = ps.file.clone();
-    let completion = PathCompletion::of(g, &plan.targets, progress);
+    let completion = PathCompletion::of(g, &plan.targets, &plan.reachable, progress);
 
     let next = plan
         .next_action(scheduler::NextMode::Default)
@@ -128,11 +128,7 @@ pub async fn compute_state(db: &Db, explicit_id: Option<&str>) -> Result<StateSu
         targets: completion.targets,
         reachable,
         subpath,
-        past_due: plan
-            .due
-            .iter()
-            .filter(|(quiz_id, _)| scheduler::atom_of_live_quiz(g, quiz_id).is_some())
-            .count(),
+        past_due: plan.due.len(),
         most_recent,
         next,
     })
