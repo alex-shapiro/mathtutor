@@ -624,6 +624,11 @@ impl AccessTokens {
         }
     }
 
+    /// Return `true` if the memory of this server holds `token` as a valid access token.
+    pub fn is_cached(&self, token: &str) -> bool {
+        self.cached(&secret_hash(token), Utc::now())
+    }
+
     /// Return `true` if `token` is a known, unexpired access token with the `mcp` scope.
     pub async fn is_valid(&self, token: &str) -> Result<bool, crate::Error> {
         let hash = secret_hash(token);
@@ -748,10 +753,21 @@ button {{ margin-top: 1rem; padding: 0.5rem 1rem; font-size: 1rem; }}
     )
 }
 
+/// Number of random bytes in each issued code and token.
+const TOKEN_BYTES: usize = 32;
+
 fn random_token() -> String {
-    let mut buf = [0u8; 32];
+    let mut buf = [0u8; TOKEN_BYTES];
     rand::rng().fill_bytes(&mut buf);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+}
+
+/// Return `true` if `token` has the form of a token that [`random_token`] makes.
+pub(crate) fn has_issued_form(token: &str) -> bool {
+    token.len() == base64::encoded_len(TOKEN_BYTES, false).unwrap_or_default()
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 /// Return the hex SHA-256 digest that keys the stored row of an authorization code or token.
@@ -981,6 +997,14 @@ mod tests {
             "the token that expires first leaves"
         );
         assert!(tokens.cached("t0", now));
+    }
+
+    #[test]
+    fn only_a_token_with_the_issued_form_reaches_the_database() {
+        assert!(has_issued_form(&random_token()));
+        assert!(!has_issued_form("an-oauth-access-token"));
+        assert!(!has_issued_form(&format!("{}=", &random_token()[1..])));
+        assert!(!has_issued_form(&"a".repeat(44)));
     }
 
     #[test]

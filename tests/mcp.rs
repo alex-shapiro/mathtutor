@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
-const API_KEY: &str = "test-api-key";
+const API_KEY: &str = "test-api-key-0123456789abcdefghij";
 const ADMIN_PASSWORD: &str = "hunter2";
 
 struct ServerHandle {
@@ -167,7 +167,7 @@ async fn database_failure_during_token_check_returns_503_without_a_login_challen
 
     let resp = client()
         .post(server.url("/mcp"))
-        .bearer_auth("an-oauth-access-token")
+        .bearer_auth(ISSUED_FORM_TOKEN)
         .send()
         .await
         .unwrap();
@@ -175,6 +175,48 @@ async fn database_failure_during_token_check_returns_503_without_a_login_challen
     assert_eq!(resp.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
     assert!(resp.headers().contains_key("retry-after"));
     assert!(!resp.headers().contains_key("www-authenticate"));
+
+    let malformed = client()
+        .post(server.url("/mcp"))
+        .bearer_auth("an-oauth-access-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        malformed.status(),
+        401,
+        "a malformed token fails without a database request"
+    );
+    server.stop().await;
+}
+
+/// Token with the form of an issued access token that the server did not issue.
+const ISSUED_FORM_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+#[tokio::test]
+async fn failed_bearer_tokens_delay_the_next_request_from_the_address() {
+    let server = spawn_oauth_server().await;
+    let post = async |token: &str| {
+        client()
+            .post(server.url("/mcp"))
+            .bearer_auth(token)
+            .header(ACCEPT, "application/json, text/event-stream")
+            .header(CONTENT_TYPE, "application/json")
+            .body(initialize_body())
+            .send()
+            .await
+            .unwrap()
+    };
+    for token in [ISSUED_FORM_TOKEN, "wrong"].repeat(3).into_iter().take(5) {
+        assert_eq!(post(token).await.status(), 401);
+    }
+
+    let res = post(API_KEY).await;
+    assert_eq!(res.status(), 429, "the correct key must wait too");
+    assert_eq!(res.headers()["retry-after"], "1");
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(post(API_KEY).await.status(), 200, "the wait ends");
     server.stop().await;
 }
 

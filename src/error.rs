@@ -157,6 +157,11 @@ pub enum Error {
     #[error("missing MT_API_KEY or MT_ADMIN_PASSWORD")]
     MissingAuth,
 
+    #[error(
+        "MT_API_KEY has fewer than {min} characters; set a random key, such as the output of `openssl rand -base64 32`"
+    )]
+    WeakApiKey { min: usize },
+
     #[error("invalid bind address '{0}'")]
     BadBindAddr(String),
 
@@ -269,6 +274,7 @@ impl Error {
             | Error::TableMismatch { .. }
             | Error::MissingTursoUrl
             | Error::MissingAuth
+            | Error::WeakApiKey { .. }
             | Error::BadBindAddr(_)
             | Error::BadPublicUrl(_)
             | Error::BadClientIpHeader(_) => ErrorKind::Config,

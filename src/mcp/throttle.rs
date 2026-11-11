@@ -153,7 +153,15 @@ fn failure_delay(failures: u32) -> Duration {
 struct AddrLimit {
     rule: Rule,
     db: Db,
-    local: Mutex<HashMap<IpAddr, Count>>,
+    local: Mutex<LocalCounts>,
+}
+
+/// Memory state of an [`AddrLimit`], for at most [`MAX_TRACKED_ADDRS`] addresses each.
+#[derive(Default)]
+struct LocalCounts {
+    counts: HashMap<IpAddr, Count>,
+    /// End of the last wait that the stored count of each address returned.
+    stored_waits: HashMap<IpAddr, DateTime<Utc>>,
 }
 
 impl AddrLimit {
@@ -172,21 +180,51 @@ impl AddrLimit {
             return Ok(Some(wait));
         }
         let stored_key = self.stored_key(key);
-        run_txn!(&self.db, |txn| self
+        let wait = run_txn!(&self.db, |txn| self
             .count_stored(&mut txn, &stored_key, now)
-            .await)
+            .await)?;
+        if let Some(wait) = wait {
+            let mut local = self.lock();
+            if local.stored_waits.len() >= MAX_TRACKED_ADDRS {
+                local.stored_waits.retain(|_, end| *end > now);
+            }
+            if local.stored_waits.len() < MAX_TRACKED_ADDRS {
+                local.stored_waits.insert(key, now + wait);
+            }
+        }
+        Ok(wait)
+    }
+
+    /// Return the time that an event from `addr` at `now` must wait, as far as the memory of this server knows.
+    fn local_wait(&self, addr: IpAddr, now: DateTime<Utc>) -> Option<Duration> {
+        let key = addr_key(addr);
+        let local = self.lock();
+        let stored = local
+            .stored_waits
+            .get(&key)
+            .filter(|end| **end > now)
+            .map(|end| *end - now);
+        let counted = self
+            .rule
+            .next(self.rule.current(local.counts.get(&key).copied(), now), now)
+            .err();
+        stored.max(counted)
     }
 
     /// Forget the count of `addr`.
     async fn reset(&self, addr: IpAddr) -> Result<()> {
         let key = addr_key(addr);
-        self.lock().remove(&key);
+        {
+            let mut local = self.lock();
+            local.counts.remove(&key);
+            local.stored_waits.remove(&key);
+        }
         self.db
             .delete_oauth::<OAuthAddrCount>(&self.stored_key(key))
             .await
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<IpAddr, Count>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, LocalCounts> {
         self.local
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -197,9 +235,13 @@ impl AddrLimit {
         format!("{}/{key}", self.rule.name())
     }
 
-    /// Count an event from address key `key` in memory, for at most [`MAX_TRACKED_ADDRS`] addresses.
+    /// Count an event from address key `key` in memory, or return the time that the event must wait.
     fn count_locally(&self, key: IpAddr, now: DateTime<Utc>) -> std::result::Result<(), Duration> {
-        let mut counts = self.lock();
+        let mut local = self.lock();
+        if let Some(end) = local.stored_waits.get(&key).filter(|end| **end > now) {
+            return Err(*end - now);
+        }
+        let counts = &mut local.counts;
         let next = self
             .rule
             .next(self.rule.current(counts.get(&key).copied(), now), now)?;
@@ -273,6 +315,20 @@ impl AddrLimits {
     /// Count an attempt with a credential from `addr` as a failure until [`Self::record_success`], or return the time that `addr` must wait first.
     pub(crate) async fn try_credential(&self, addr: IpAddr) -> Result<Option<Duration>> {
         self.failures.try_count(addr, Utc::now()).await
+    }
+
+    /// Count a failed credential from `addr` only in memory, or return the time that `addr` must wait first.
+    ///
+    /// Use this for a credential that the server rejects without a database request.
+    pub(crate) fn try_local_credential(&self, addr: IpAddr) -> Option<Duration> {
+        self.failures
+            .count_locally(addr_key(addr), Utc::now())
+            .err()
+    }
+
+    /// Return the time that the next attempt with a credential from `addr` must wait, as far as the memory of this server knows.
+    pub(crate) fn credential_wait(&self, addr: IpAddr) -> Option<Duration> {
+        self.failures.local_wait(addr, Utc::now())
     }
 
     /// Forget the failures of `addr` after a correct credential.
@@ -373,7 +429,7 @@ mod tests {
             let addr = IpAddr::V4(u32::try_from(i).unwrap().into());
             limit.count_locally(addr, t0).unwrap();
         }
-        assert_eq!(limit.lock().len(), MAX_TRACKED_ADDRS);
+        assert_eq!(limit.lock().counts.len(), MAX_TRACKED_ADDRS);
     }
 
     #[test]

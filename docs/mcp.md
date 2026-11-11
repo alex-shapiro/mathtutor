@@ -24,10 +24,10 @@ The `mathtutor-playbook` MCP prompt returns the agent instructions for operating
 
 The server operates as a single-user, single-tenant instance backed by a single Baserunna database. Two authentication modes are supported on `/mcp`:
 
-1. **Static bearer token:** Configured via `MT_API_KEY` and passed in `Authorization: Bearer <token>` or `?token=<token>`.
+1. **Static bearer token:** Configured via `MT_API_KEY` and passed in `Authorization: Bearer <token>` or `?token=<token>`. The key must have at least 32 characters. Use a random key, such as the output of `openssl rand -base64 32`.
 2. **OAuth 2.1 access token:** Issued by the built-in authorization server if `MT_ADMIN_PASSWORD` is set, and passed in `Authorization: Bearer <token>`.
 
-Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticated requests receive `401 Unauthorized` with a `WWW-Authenticate` header pointing to `/.well-known/oauth-protected-resource`. The server keeps each valid access token in memory until it expires, so it reads a token from Baserunna once. The server has no revocation endpoint, so the cache does not extend the life of a token. If the server cannot read an access token from Baserunna, the request receives `503 Service Unavailable` with a `Retry-After` header.
+Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticated requests receive `401 Unauthorized` with a `WWW-Authenticate` header pointing to `/.well-known/oauth-protected-resource`. The server keeps each valid access token in memory until it expires, so it reads a token from Baserunna once. The server has no revocation endpoint, so the cache does not extend the life of a token. If the server cannot read an access token from Baserunna, the request receives `503 Service Unavailable` with a `Retry-After` header. A token without the form of an issued access token fails without a Baserunna request.
 
 ### Built-in OAuth 2.1 authorization server
 
@@ -52,10 +52,10 @@ Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticat
 
 ### Limits per client address
 
-- **Sign-in:** After 5 incorrect passwords from an address, each next attempt must wait. The wait starts at 1 second and doubles after each further failure, up to 15 minutes. Thus an address can try about 17 passwords in the first hour and 4 in each later hour. The server forgets the failures of an address after a correct password, or 1 hour after the last failure. A delayed attempt receives `429 Too Many Requests` with a `Retry-After` header, and the server does not check its password.
+- **Failed credentials:** Incorrect passwords and failed bearer tokens on `/mcp` count against one limit. After 5 failures from an address, each next attempt must wait. The wait starts at 1 second and doubles after each further failure, up to 15 minutes. Thus an address can try about 17 credentials in the first hour and 4 in each later hour. The server forgets the failures of an address after a correct password or access token, or 1 hour after the last failure. A delayed attempt receives `429 Too Many Requests` with a `Retry-After` header, and the server does not check its credential. A cached access token does not wait.
 - **Registration:** An address can register 10 clients per hour. More registrations receive `429 Too Many Requests` with a `Retry-After` header.
 - **Client address:** The server uses the TCP peer address. Behind a proxy, set `MT_CLIENT_IP_HEADER` or `--client-ip-header` to the header that the proxy sets to the client address. Use only a header that the proxy replaces, because a client can send any header. `fly.toml` sets `Fly-Client-IP`. All IPv6 addresses of one `/64` network share their limits.
-- **Storage:** The server stores the count of each address in `oauth_addr_counts`, so the limits stay the same after a restart and on every machine of the app. Each server also counts in memory, for at most 10,000 addresses, so a burst of requests reaches the database only for the attempts that the limits admit.
+- **Storage:** The server stores the count of each address in `oauth_addr_counts`, so the limits stay the same after a restart and on every machine of the app. Each server also counts in memory, for at most 10,000 addresses, so a burst of requests reaches the database only for the attempts that the limits admit. A failed token without the form of an access token counts only in memory.
 
 ## Deployment
 
@@ -69,4 +69,16 @@ flyctl secrets set MT_API_KEY='...'
 flyctl secrets set BASERUNNA_TOKEN='...'
 ```
 
-`BASERUNNA_URL` defaults to `https://baserunna.fly.dev` and `BASERUNNA_DB` defaults to `mathtutor`. Set `BASERUNNA_TOKEN` to a key that is limited to the database, so that a leak of the server secret cannot delete the database. The server does not create the database. It stops at startup if the database does not exist. See "Baserunna keys" in `docs/design.md`.
+`BASERUNNA_URL` defaults to `https://baserunna.fly.dev` and `BASERUNNA_DB` defaults to `mathtutor`. Set `BASERUNNA_TOKEN` to a key that is limited to the database, so that a leak of the server secret cannot delete the database.
+
+Give the server key its own rate limit below the limit of the Baserunna user. Baserunna lets each user send 500 requests per second on each node, through all of their keys together. Without a lower limit on the server key, a flood of requests to the server can use the full budget and slow or block the CLI on every device. The web console cannot set the limit of a key, so create the server key through the API with a session token:
+
+```sh
+curl -X POST "$BASERUNNA_URL/v1/auth/login" -H 'Content-Type: application/json' \
+  -d '{"email": "...", "password": "..."}'   # returns a session token
+curl -X POST "$BASERUNNA_URL/v1/api-keys" -H "Authorization: Bearer <session token>" \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "mt mcp", "db": "mathtutor", "rate_limit": 50}'
+```
+
+The `rate_limit` value is the number of requests per second on each Baserunna node. The server does not create the database. It stops at startup if the database does not exist. See "Baserunna keys" in `docs/design.md`.

@@ -6,7 +6,7 @@ use std::time::Duration;
 use axum::{
     Router,
     body::Body,
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::{self, Request, StatusCode, header::AUTHORIZATION},
     middleware::{self, Next},
     response::Response,
@@ -462,10 +462,22 @@ pub struct AuthConfig {
     pub client_addrs: ClientAddrSource,
 }
 
+/// Smallest number of characters in `MT_API_KEY`.
+const MIN_API_KEY_LEN: usize = 32;
+
 impl AuthConfig {
     fn validate(&self) -> CrateResult<()> {
         if self.api_key.is_none() && self.admin_password.is_none() {
             return Err(Error::MissingAuth);
+        }
+        if self
+            .api_key
+            .as_ref()
+            .is_some_and(|k| k.chars().count() < MIN_API_KEY_LEN)
+        {
+            return Err(Error::WeakApiKey {
+                min: MIN_API_KEY_LEN,
+            });
         }
         Ok(())
     }
@@ -521,7 +533,7 @@ pub async fn run(addr: &str, auth: AuthConfig, cfg: DbConfig) -> CrateResult<()>
     let public_url = resolve_public_url(auth.public_url.as_deref(), socket_addr)?;
 
     let limits = throttle::AddrLimits::new(&db, auth.client_addrs.clone());
-    let auth_state = AuthState::new(&auth, &public_url, db.clone());
+    let auth_state = AuthState::new(&auth, &public_url, db.clone(), limits.clone());
     // Run body logging after auth so unauthenticated requests are not buffered.
     let mut app = Router::new()
         .nest_service("/mcp", mcp_service)
@@ -586,11 +598,12 @@ fn resolve_public_url(explicit: Option<&str>, socket: std::net::SocketAddr) -> C
 struct AuthState {
     api_key: Option<Arc<str>>,
     access_tokens: Option<oauth::AccessTokens>,
+    limits: throttle::AddrLimits,
     www_authenticate: Arc<str>,
 }
 
 impl AuthState {
-    fn new(auth: &AuthConfig, public_url: &Url, db: Db) -> Self {
+    fn new(auth: &AuthConfig, public_url: &Url, db: Db, limits: throttle::AddrLimits) -> Self {
         let api_key = auth
             .api_key
             .as_deref()
@@ -606,8 +619,20 @@ impl AuthState {
         Self {
             api_key,
             access_tokens,
+            limits,
             www_authenticate: Arc::from(www_authenticate.into_boxed_str()),
         }
+    }
+
+    /// Return the `401` response that points the client to the OAuth metadata.
+    fn challenge(&self) -> Response {
+        let mut resp = Response::new(Body::empty());
+        *resp.status_mut() = StatusCode::UNAUTHORIZED;
+        if let Ok(value) = http::HeaderValue::from_str(self.www_authenticate.as_ref()) {
+            resp.headers_mut()
+                .insert(http::header::WWW_AUTHENTICATE, value);
+        }
+        resp
     }
 }
 
@@ -616,8 +641,10 @@ struct TokenQuery {
     token: Option<String>,
 }
 
+/// Admit a request with `MT_API_KEY` or a valid access token, and count each failed token against the limit of its client address.
 async fn auth_middleware(
     State(state): State<AuthState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     Query(q): Query<TokenQuery>,
     req: Request<Body>,
     next: Next,
@@ -628,32 +655,68 @@ async fn auth_middleware(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(str::to_string);
-    let provided = from_header.or(q.token);
-
-    if let Some(token) = provided {
-        if let Some(expected) = state.api_key.as_deref()
-            && oauth::constant_time_eq(token.as_bytes(), expected.as_bytes())
-        {
-            return next.run(req).await;
+    let Some(token) = from_header.or(q.token) else {
+        return state.challenge();
+    };
+    if let Some(access_tokens) = &state.access_tokens
+        && access_tokens.is_cached(&token)
+    {
+        return next.run(req).await;
+    }
+    let addr = state.limits.client_addr(peer, req.headers());
+    if let Some(wait) = state.limits.credential_wait(addr) {
+        return too_many_requests(wait);
+    }
+    if let Some(expected) = state.api_key.as_deref()
+        && oauth::constant_time_eq(token.as_bytes(), expected.as_bytes())
+    {
+        return next.run(req).await;
+    }
+    let Some(access_tokens) = state
+        .access_tokens
+        .as_ref()
+        .filter(|_| oauth::has_issued_form(&token))
+    else {
+        tracing::warn!(%addr, "bearer token rejected");
+        return match state.limits.try_local_credential(addr) {
+            Some(wait) => too_many_requests(wait),
+            None => state.challenge(),
+        };
+    };
+    match state.limits.try_credential(addr).await {
+        Ok(None) => {}
+        Ok(Some(wait)) => return too_many_requests(wait),
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot count a bearer token attempt");
+            return token_check_unavailable();
         }
-        if let Some(access_tokens) = state.access_tokens.as_ref() {
-            match access_tokens.is_valid(&token).await {
-                Ok(true) => return next.run(req).await,
-                Ok(false) => {}
-                Err(e) => {
-                    tracing::warn!(error = %e, "cannot validate access token");
-                    return token_check_unavailable();
-                }
+    }
+    match access_tokens.is_valid(&token).await {
+        Ok(true) => {
+            if let Err(e) = state.limits.record_success(addr).await {
+                tracing::warn!(error = %e, %addr, "cannot reset the failures of an address");
             }
+            next.run(req).await
+        }
+        Ok(false) => {
+            tracing::warn!(%addr, "access token rejected");
+            state.challenge()
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot validate access token");
+            token_check_unavailable()
         }
     }
+}
 
+/// Return the `429` response for a client address that must wait `wait`.
+fn too_many_requests(wait: chrono::Duration) -> Response {
     let mut resp = Response::new(Body::empty());
-    *resp.status_mut() = StatusCode::UNAUTHORIZED;
-    if let Ok(value) = http::HeaderValue::from_str(state.www_authenticate.as_ref()) {
-        resp.headers_mut()
-            .insert(http::header::WWW_AUTHENTICATE, value);
-    }
+    *resp.status_mut() = StatusCode::TOO_MANY_REQUESTS;
+    resp.headers_mut().insert(
+        http::header::RETRY_AFTER,
+        http::HeaderValue::from(throttle::retry_after_secs(wait)),
+    );
     resp
 }
 
@@ -777,6 +840,19 @@ mod tests {
                 assert!(args.contains_key(name), "{shown}: missing {name}");
             }
         }
+    }
+
+    #[test]
+    fn a_short_api_key_stops_the_server() {
+        let auth = |key: &str| AuthConfig {
+            api_key: Some(key.into()),
+            ..AuthConfig::default()
+        };
+        let e = auth("short").validate().unwrap_err();
+        assert!(matches!(e, Error::WeakApiKey { min: 32 }), "{e:?}");
+        assert!(e.to_string().contains("MT_API_KEY"), "{e}");
+        assert_eq!(e.exit_code(), 2);
+        auth(&"k".repeat(MIN_API_KEY_LEN)).validate().unwrap();
     }
 
     #[test]
