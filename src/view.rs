@@ -324,11 +324,16 @@ impl Changes {
         Ok(())
     }
 
-    fn into_ops(self, overlay_version: Option<&str>) -> Vec<Op> {
+    /// Return the write operations of this set, and its overlay edits with the new overlay version if it has edits.
+    fn into_ops(self) -> (Vec<Op>, Option<OverlayWrite>) {
         let mut ops = self.ops;
-        if let Some(version) = overlay_version {
-            ops.extend(self.overlay.iter().flat_map(Edit::ops));
-            ops.push(Op::put(OVERLAY_VERSION_KEY, version.to_string()));
+        let overlay_write = (!self.overlay.is_empty()).then(|| OverlayWrite {
+            version: new_overlay_version(),
+            edits: self.overlay,
+        });
+        if let Some(write) = &overlay_write {
+            ops.extend(write.edits.iter().flat_map(Edit::ops));
+            ops.push(Op::put(OVERLAY_VERSION_KEY, write.version.clone()));
         }
         for (path_id, projection) in self.projections {
             ops.extend(
@@ -355,7 +360,7 @@ impl Changes {
                     .map(|chunk| Op::append(stream.clone(), chunk)),
             );
         }
-        ops
+        (ops, overlay_write)
     }
 }
 
@@ -446,11 +451,8 @@ impl Db {
         if let PathSel::Id(explicit_id) = &want.path {
             changes.touch_path(explicit_id);
         }
-        let overlay_write = (!changes.overlay.is_empty()).then(|| OverlayWrite {
-            version: new_overlay_version(),
-            edits: changes.overlay.clone(),
-        });
-        txn.write(changes.into_ops(overlay_write.as_ref().map(|w| w.version.as_str())));
+        let (ops, overlay_write) = changes.into_ops();
+        txn.write(ops);
         Ok(Attempt::Ready((out, overlay_write)))
     }
 
