@@ -199,3 +199,29 @@ async fn cli_steps_store_free_text_unchanged() {
         vec![(q1.to_string(), reply.clone()), (q2.to_string(), reply)]
     );
 }
+
+#[tokio::test]
+async fn path_new_accepts_a_target_inside_another_target() {
+    let cfg = common::fresh_config();
+    common::create_db(&cfg).await;
+    let home = tempfile::TempDir::new().unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_mt"))
+            .args(args)
+            .env("BASERUNNA_URL", &cfg.url)
+            .env("BASERUNNA_TOKEN", &cfg.token)
+            .env("BASERUNNA_DB", &cfg.db)
+            .env("MATHTUTOR_HOME", home.path())
+            .env_remove("MT_GRAPH")
+            .output()
+            .expect("run mt")
+    };
+    for args in [
+        &["path", "new", "g", "--targets", "la.5,la.5.4"][..],
+        &["path", "next"],
+    ] {
+        let out = run(args);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "mt {args:?}: {stderr}");
+    }
+}

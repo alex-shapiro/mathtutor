@@ -319,3 +319,23 @@ async fn recursive_children_list_every_descendant_in_natural_order() {
     };
     assert!(flat.descendants.is_empty());
 }
+
+#[test]
+fn overlapping_targets_expand_once_each() {
+    let g = graph_of(vec![
+        cluster("c", &["c.1", "c.2"]),
+        cluster("c.1", &["c.1.a"]),
+        atom("c.1.a", &[], None, Vec::new()),
+        atom("c.2", &[], None, Vec::new()),
+        cluster("empty", &["missing"]),
+    ]);
+    let ids = |ids: &[&str]| ids.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        g.expand_to_atoms(&ids(&["c", "c.1", "c.1.a"])).unwrap(),
+        ids(&["c.1.a", "c.2"])
+    );
+    assert!(matches!(
+        g.expand_to_atoms(&ids(&["c", "empty"])),
+        Err(Error::EmptyCluster(id)) if id == "empty"
+    ));
+}

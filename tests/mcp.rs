@@ -1582,3 +1582,21 @@ async fn a_validated_access_token_needs_no_further_database_read() {
     assert_eq!(res.status(), 200, "the server reads the token from memory");
     server.stop().await;
 }
+
+#[tokio::test]
+async fn new_path_accepts_a_target_inside_another_target() {
+    let server = spawn_server().await;
+    let session = handshake(&server).await;
+    let created = call_tool(
+        &server,
+        &session,
+        "new_path",
+        json!({ "goal": "Overlap", "targets": ["la.5", "la.5.4"] }),
+    )
+    .await;
+    assert_ne!(created["isError"], json!(true), "{created}");
+    let path_id = created["structuredContent"]["path_id"].clone();
+    let next = call_tool(&server, &session, "get_next", json!({ "path_id": path_id })).await;
+    assert_ne!(next["isError"], json!(true), "{next}");
+    server.stop().await;
+}

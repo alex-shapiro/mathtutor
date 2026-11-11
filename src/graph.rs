@@ -399,26 +399,21 @@ impl Graph {
     }
 
     /// Expand atom and cluster IDs into a deduplicated list of atomic descendant IDs in first-seen order.
+    ///
+    /// Fails with [`Error::EmptyCluster`] for a cluster without atomic descendants, even if another ID covers the same atoms.
     pub fn expand_to_atoms(&self, ids: &[String]) -> Result<Vec<String>> {
         let mut seen: HashSet<String> = HashSet::new();
         let mut out: Vec<String> = Vec::new();
-
         for id in ids {
-            let before = out.len();
-            match self.by_id.get(id) {
-                Some(c) if c.children_ids.is_empty() => {
-                    if seen.insert(id.clone()) {
-                        out.push(id.clone());
-                    }
-                }
-                Some(_) => {
-                    self.collect_atomic_descendants(id, &mut seen, &mut out);
-                    if out.len() == before {
-                        return Err(Error::EmptyCluster(id.clone()));
-                    }
-                }
-                None => return Err(Error::UnknownId(id.clone())),
+            if !self.by_id.contains_key(id) {
+                return Err(Error::UnknownId(id.clone()));
             }
+            let mut atoms = Vec::new();
+            self.collect_atomic_descendants(id, &mut HashSet::new(), &mut atoms);
+            if atoms.is_empty() {
+                return Err(Error::EmptyCluster(id.clone()));
+            }
+            out.extend(atoms.into_iter().filter(|a| seen.insert(a.clone())));
         }
         Ok(out)
     }
