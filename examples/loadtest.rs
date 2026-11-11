@@ -490,13 +490,8 @@ fn targets() -> Vec<String> {
 
 async fn seed(db: &Db, atoms: usize, lesson_bytes: usize) {
     const BATCH: usize = 100;
-    let have = db
-        .snapshot(&Want::overlay())
-        .await
-        .expect("snapshot")
-        .overlay
-        .atoms
-        .len();
+    let view = db.snapshot(&Want::overlay()).await.expect("snapshot");
+    let have = view.overlay().expect("overlay").atoms.len();
     if have >= atoms {
         return;
     }

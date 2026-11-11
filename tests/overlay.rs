@@ -327,7 +327,7 @@ async fn overlay_is_global_across_paths() {
             .unwrap();
         assert_eq!(view.path().unwrap().file.id, id);
         let g = mathtutor::graph::Curriculum::embedded()
-            .merged(&view.overlay)
+            .merged(view.overlay().unwrap())
             .unwrap();
         assert_eq!(
             g.by_id.get(NO_LESSON_ATOM).unwrap().lesson.as_deref(),

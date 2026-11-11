@@ -602,7 +602,7 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         .await?;
     report
         .mismatches
-        .extend(verify_overlay(&stored.overlay, &source.overlay)?);
+        .extend(verify_overlay(stored.overlay()?, &source.overlay)?);
     let mut stored_events = 0;
     for p in &source.paths {
         let events = source.events.get(&p.id).map_or(&[][..], Vec::as_slice);
@@ -743,7 +743,7 @@ async fn verify_row_counts(
     source: &RowCounts,
 ) -> Result<Vec<String>> {
     let paths = stored.paths();
-    let atoms = stored.overlay.atoms.values();
+    let atoms = stored.overlay()?.atoms.values();
     let mut oauth_clients = 0;
     for page in db.read_pages(Op::query_all::<OAuthClient>()).await? {
         oauth_clients += page.rows::<OAuthClient>()?.len();

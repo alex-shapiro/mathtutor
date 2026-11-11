@@ -261,8 +261,8 @@ pub fn remove_quiz(changes: &mut Changes, atom_id: &str, quiz_id: &str) {
 
 /// Print the curriculum overlay as AYML (`mt graph dump`).
 pub async fn cmd_graph_dump(db: &Db) -> Result<()> {
-    let overlay = db.snapshot(&Want::overlay()).await?.overlay;
-    let text = ayml::to_string(&*overlay).map_err(|e| Error::AymlSerialize(e.to_string()))?;
+    let view = db.snapshot(&Want::overlay()).await?;
+    let text = ayml::to_string(view.overlay()?).map_err(|e| Error::AymlSerialize(e.to_string()))?;
     print!("{text}");
     Ok(())
 }

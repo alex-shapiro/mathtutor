@@ -417,7 +417,7 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
     let expected: Vec<Event> = events().into_iter().filter(|e| e.path == "p_a").collect();
     assert_eq!(stored, expected);
 
-    let authored = &view.overlay.atoms["fnd.9.9.9"];
+    let authored = &view.overlay().unwrap().atoms["fnd.9.9.9"];
     assert_eq!(authored.lesson.as_deref(), Some("body"));
     assert_eq!(authored.quizzes[0].id, "fnd.9.9.9.q1");
     assert!(
@@ -425,7 +425,7 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
         "a removed authored quiz stays removed"
     );
     assert!(
-        view.overlay.atoms["fnd.2.1.1"]
+        view.overlay().unwrap().atoms["fnd.2.1.1"]
             .removed
             .contains("fnd.2.1.1.q3")
     );
@@ -873,7 +873,7 @@ async fn import_rejects_database_at_another_migration() {
         "{e}"
     );
     let view = db.snapshot(&Want::all_paths()).await.unwrap();
-    assert!(view.paths().is_empty() && view.overlay.atoms.is_empty());
+    assert!(view.paths().is_empty() && view.overlay().unwrap().atoms.is_empty());
 }
 
 #[tokio::test]

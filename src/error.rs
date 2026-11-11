@@ -43,6 +43,11 @@ pub enum Error {
     )]
     PathNotLoaded(String),
 
+    #[error(
+        "the overlay is not loaded in this view; mt must load the overlay before it reads lessons or quizzes"
+    )]
+    OverlayNotLoaded,
+
     #[error("HOME not set; set MATHTUTOR_HOME or HOME")]
     NoHome,
 
@@ -271,7 +276,7 @@ impl Error {
             | Error::ImportInProgress => ErrorKind::Import,
             Error::Http(_) => ErrorKind::Http,
             Error::Bind { .. } | Error::Serve(_) => ErrorKind::Server,
-            Error::PathNotLoaded(_) => ErrorKind::Internal,
+            Error::PathNotLoaded(_) | Error::OverlayNotLoaded => ErrorKind::Internal,
         }
     }
 

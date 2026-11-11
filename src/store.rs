@@ -58,7 +58,7 @@ pub async fn cmd_quiz_create(
         if c.lesson.is_none() {
             return Err(Error::NoLesson(atom_id.to_string()));
         }
-        let tombstones = view.overlay.atoms.get(atom_id).map(|e| &e.removed);
+        let tombstones = view.overlay()?.atoms.get(atom_id).map(|e| &e.removed);
         let quiz = draft
             .clone()
             .into_quiz(next_quiz_id(atom_id, &c.quizzes, tombstones));
@@ -99,7 +99,7 @@ pub async fn cmd_quiz_delete(db: &Db, quiz_id: &str, path_id: Option<&str>) -> R
     db.transact(&Want::path(path_id), |view, changes| {
         let id = view.path()?.file.id.clone();
         if view
-            .overlay
+            .overlay()?
             .atoms
             .values()
             .any(|a| a.removed.contains(quiz_id))

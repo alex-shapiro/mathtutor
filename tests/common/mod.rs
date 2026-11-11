@@ -193,12 +193,8 @@ pub async fn append(db: &Db, events: &[Event]) {
 
 /// Load the stored overlay.
 pub async fn overlay(db: &Db) -> Overlay {
-    std::sync::Arc::unwrap_or_clone(
-        db.snapshot(&Want::overlay())
-            .await
-            .expect("snapshot")
-            .overlay,
-    )
+    let view = db.snapshot(&Want::overlay()).await.expect("snapshot");
+    view.overlay().expect("overlay").clone()
 }
 
 /// Load the stored state for `path_id`.

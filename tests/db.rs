@@ -642,7 +642,9 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
     };
     let first = read(&reader).await;
     assert_eq!(
-        first.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        first.overlay().unwrap().atoms["fnd.1.1.1"]
+            .lesson
+            .as_deref(),
         Some(body.as_str())
     );
     let cold = traffic.received.swap(0, Ordering::Relaxed);
@@ -653,7 +655,9 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
 
     let second = read(&reader).await;
     assert_eq!(
-        second.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        second.overlay().unwrap().atoms["fnd.1.1.1"]
+            .lesson
+            .as_deref(),
         Some(body.as_str())
     );
     let warm = traffic.received.swap(0, Ordering::Relaxed);
@@ -668,7 +672,9 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
     .await;
     let third = read(&reader).await;
     assert_eq!(
-        third.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        third.overlay().unwrap().atoms["fnd.1.1.1"]
+            .lesson
+            .as_deref(),
         Some("revised")
     );
 }
@@ -697,11 +703,11 @@ async fn write_with_a_cold_cache_reads_overlay_rows_outside_the_transaction() {
     }
     let view = db.snapshot(&Want::overlay()).await.unwrap();
     assert_eq!(
-        view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        view.overlay().unwrap().atoms["fnd.1.1.1"].lesson.as_deref(),
         Some("first")
     );
     assert_eq!(
-        view.overlay.atoms["fnd.1.1.2"].lesson.as_deref(),
+        view.overlay().unwrap().atoms["fnd.1.1.2"].lesson.as_deref(),
         Some("second")
     );
 }
@@ -718,7 +724,12 @@ async fn transaction_restarts_with_an_overlay_that_another_client_writes() {
     let mut seen = Vec::new();
 
     db.transact(&Want::path(Some(PATH_ID)), |view, _| {
-        seen.push(view.overlay.atoms["fnd.1.1.1"].lesson.clone().unwrap());
+        seen.push(
+            view.overlay().unwrap().atoms["fnd.1.1.1"]
+                .lesson
+                .clone()
+                .unwrap(),
+        );
         if seen.len() == 1 {
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
@@ -880,7 +891,7 @@ async fn own_overlay_writes_keep_the_cache_valid() {
         warm < 2_000,
         "the writer's cache stays valid ({warm} bytes)"
     );
-    let cached = view.overlay.atoms["fnd.1.1.1"].clone();
+    let cached = view.overlay().unwrap().atoms["fnd.1.1.1"].clone();
     let fresh = common::overlay(&db).await;
     let stored = common::overlay(&Db::connect(&cfg).unwrap()).await;
     assert_eq!(cached.lesson.as_deref(), Some(body.as_str()));
@@ -947,6 +958,20 @@ async fn write_for_a_path_makes_it_the_most_recent() {
         .await
         .unwrap();
     assert_eq!(view.path().unwrap().file.id, "p_a_older");
+}
+
+#[tokio::test]
+async fn a_view_without_the_overlay_has_no_merged_graph() {
+    let db = common::fresh_db(PATH_ID).await;
+
+    let view = db
+        .snapshot(&Want::path(Some(PATH_ID)).without_overlay())
+        .await
+        .unwrap();
+
+    assert!(matches!(view.graph(), Err(Error::OverlayNotLoaded)));
+    assert!(matches!(view.overlay(), Err(Error::OverlayNotLoaded)));
+    assert!(view.path().is_ok());
 }
 
 #[tokio::test]
@@ -1112,7 +1137,7 @@ async fn recreating_database_invalidates_overlay_cache() {
         .unwrap();
 
     assert_eq!(
-        view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        view.overlay().unwrap().atoms["fnd.1.1.1"].lesson.as_deref(),
         Some("new")
     );
 }
@@ -1143,7 +1168,7 @@ async fn a_handle_reads_the_cache_file_only_when_a_command_needs_the_overlay() {
     let view = second.snapshot(&Want::overlay()).await.unwrap();
 
     assert_eq!(
-        view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        view.overlay().unwrap().atoms["fnd.1.1.1"].lesson.as_deref(),
         Some(body.as_str())
     );
     let cold = traffic.received.load(Ordering::Relaxed);
@@ -1174,7 +1199,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         .await
         .unwrap();
     assert_eq!(
-        view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        view.overlay().unwrap().atoms["fnd.1.1.1"].lesson.as_deref(),
         Some(body.as_str())
     );
     let warm = traffic.received.swap(0, Ordering::Relaxed);
@@ -1194,7 +1219,7 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         .await
         .unwrap();
     assert_eq!(
-        view.overlay.atoms["fnd.1.1.1"].lesson.as_deref(),
+        view.overlay().unwrap().atoms["fnd.1.1.1"].lesson.as_deref(),
         Some("new")
     );
 }
