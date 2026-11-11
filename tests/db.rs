@@ -8,7 +8,7 @@ use baserunna_client::bytes::Bytes;
 use baserunna_client::{BoxFuture, Client, HttpTransport, Transport, TransportError, http};
 use chrono::{Duration, Utc};
 use mathtutor::db::{Db, DbConfig};
-use mathtutor::event_log::{self, Event, EventKind, EventPayload};
+use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::graph::Curriculum;
 use mathtutor::overlay::QuizDraft;
 use mathtutor::types::{Difficulty, QuizType, Rating, Strategy};
@@ -197,70 +197,47 @@ async fn opening_an_existing_database_preserves_data() {
 #[tokio::test]
 async fn events_round_trip_in_order_with_every_field() {
     let db = common::fresh_db(PATH_ID).await;
-    let t0 = Utc::now() - Duration::hours(1);
+    let t0 = mathtutor::db::ts::parse("2026-05-26T10:00:00.123Z").unwrap();
     let full = Event {
         ts: t0,
-        kind: EventKind::QuizAnswered,
         path: PATH_ID.into(),
-        atom: Some("a".into()),
-        quiz: Some("a.q1".into()),
-        payload: EventPayload {
-            rating: Some(Rating::Hard),
-            reason: Some("why \"quoted\" ✓".into()),
-            user_answer: Some("multi\nline".into()),
+        kind: EventKind::QuizAnswered {
+            atom: Some("a".into()),
+            quiz: "a.q1".into(),
+            rating: Rating::Hard,
+            user_answer: Some("why \"quoted\" ✓\nmulti\nline".into()),
         },
     };
-    let bare = event_log::lesson_taught(PATH_ID.into(), "b".into());
+    let bare = common::at(
+        t0,
+        Event::now(PATH_ID, EventKind::LessonTaught { atom: "b".into() }),
+    );
+    let removed = EventKind::QuizRemoved {
+        atom: "a".into(),
+        quiz: "a.q1".into(),
+    };
+    let removed = common::at(t0, Event::now(PATH_ID, removed));
     common::append(&db, &[full.clone(), bare.clone()]).await;
-    common::append(
-        &db,
-        &[event_log::quiz_removed(
-            PATH_ID.into(),
-            "a".into(),
-            "a.q1".into(),
-        )],
-    )
-    .await;
+    common::append(&db, std::slice::from_ref(&removed)).await;
 
     let events = event_log::load(&db, PATH_ID).await.unwrap();
-    let kinds: Vec<EventKind> = events.iter().map(|e| e.kind).collect();
-    assert_eq!(
-        kinds,
-        [
-            EventKind::PathCreated,
-            EventKind::QuizAnswered,
-            EventKind::LessonTaught,
-            EventKind::QuizRemoved
-        ]
-    );
-    let got = &events[1];
-    assert_eq!(got.ts.timestamp_millis(), t0.timestamp_millis());
-    assert_eq!(got.path, PATH_ID);
-    assert_eq!(got.atom.as_deref(), Some("a"));
-    assert_eq!(got.quiz.as_deref(), Some("a.q1"));
-    assert_eq!(got.payload.rating, Some(Rating::Hard));
-    assert_eq!(got.payload.reason.as_deref(), Some("why \"quoted\" ✓"));
-    assert_eq!(got.payload.user_answer.as_deref(), Some("multi\nline"));
-    let b = &events[2];
-    assert_eq!(b.atom.as_deref(), Some("b"));
-    assert!(b.quiz.is_none());
-    assert!(b.payload.is_empty());
+    assert_eq!(events[0].kind, EventKind::PathCreated {});
+    assert_eq!(events[1..], [full, bare, removed]);
 }
 
 #[tokio::test]
 async fn event_log_pages_across_multiple_reads() {
     let db = common::fresh_db(PATH_ID).await;
-    let ts = Utc::now();
+    let ts = mathtutor::db::ts::parse("2026-05-26T10:00:00.123Z").unwrap();
     let events: Vec<Event> = (0..1205)
-        .map(|i| common::presented_at(&format!("q{i}"), ts))
+        .map(|i| common::at(ts, common::presented(&format!("q{i}"))))
         .collect();
     for chunk in events.chunks(500) {
         common::append(&db, chunk).await;
     }
     let loaded = event_log::load(&db, PATH_ID).await.unwrap();
     assert_eq!(loaded.len(), 1206);
-    assert_eq!(loaded[1].quiz.as_deref(), Some("q0"));
-    assert_eq!(loaded[1205].quiz.as_deref(), Some("q1204"));
+    assert_eq!(loaded[1..], events);
 }
 
 #[tokio::test]
@@ -308,7 +285,7 @@ async fn concurrent_answers_are_recorded_once_each() {
         .await
         .unwrap()
         .iter()
-        .filter(|e| e.kind == EventKind::QuizAnswered)
+        .filter(|e| matches!(e.kind, EventKind::QuizAnswered { .. }))
         .count();
     assert_eq!(answered, 8);
 }
@@ -336,8 +313,8 @@ async fn append_rejects_a_path_outside_the_view_and_keeps_its_history() {
 #[tokio::test]
 async fn append_accepts_events_after_the_path_created_event_in_one_write() {
     let db = common::empty_db().await;
-    let created = event_log::path_created("p_new".into());
-    let taught = event_log::lesson_taught("p_new".into(), "a".into());
+    let created = Event::now("p_new", EventKind::PathCreated {});
+    let taught = Event::now("p_new", EventKind::LessonTaught { atom: "a".into() });
 
     db.transact(&Want::nothing(), |view, changes| {
         changes.append(view, &created)?;
@@ -357,20 +334,26 @@ async fn recompute_reproduces_incremental_rows_exactly() {
     common::append(
         &db,
         &[
-            common::taught_at("a", t0),
+            common::at(t0, common::taught("a")),
             common::lesson_authored("b"),
-            common::presented_at("a.q1", t0),
-            common::answered_at("a.q1", Rating::Again, t0),
+            common::at(t0, common::presented("a.q1")),
+            common::at(t0, common::answered("a.q1", Rating::Again)),
         ],
     )
     .await;
     common::append(
         &db,
         &[
-            common::taught_at("a", t0 + Duration::days(1)),
-            common::presented_at("a.q1", t0 + Duration::days(2)),
-            common::answered_at("a.q1", Rating::Good, t0 + Duration::days(2)),
-            common::answered_at("a.q2", Rating::Easy, t0 + Duration::days(3)),
+            common::at(t0 + Duration::days(1), common::taught("a")),
+            common::at(t0 + Duration::days(2), common::presented("a.q1")),
+            common::at(
+                t0 + Duration::days(2),
+                common::answered("a.q1", Rating::Good),
+            ),
+            common::at(
+                t0 + Duration::days(3),
+                common::answered("a.q2", Rating::Easy),
+            ),
         ],
     )
     .await;
@@ -827,16 +810,8 @@ async fn retried_command_keeps_the_most_recent_path_of_its_first_attempt() {
     let db = common::fresh_db("p_old").await;
     common::seed_path(&db, "p_new", &[], Strategy::BottomUp).await;
     let answered = |path: &str| Event {
-        ts: Utc::now(),
-        kind: EventKind::QuizAnswered,
         path: path.into(),
-        atom: Some("atom.x".into()),
-        quiz: Some("atom.x.q1".into()),
-        payload: EventPayload {
-            rating: Some(Rating::Good),
-            reason: None,
-            user_answer: None,
-        },
+        ..common::answered("atom.x.q1", Rating::Good)
     };
     let want_old = mathtutor::view::Want::path(Some("p_old"));
     db.transact(&want_old, |view, changes| {

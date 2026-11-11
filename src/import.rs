@@ -11,7 +11,7 @@ use crate::answer::atom_from_quiz_id;
 use crate::cards::{self, CardState};
 use crate::db::client::api::PAGE_MAX;
 use crate::db::{Db, Op, Txn, run_txn, ts};
-use crate::event_log::{self, Event, EventKind, EventPayload};
+use crate::event_log::{self, Event};
 use crate::graph::Quiz;
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
@@ -241,18 +241,60 @@ struct PathAtom {
 struct EventRow {
     #[serde(with = "ts")]
     ts: DateTime<Utc>,
-    kind: EventKind,
+    kind: String,
     path_id: String,
     atom_id: Option<String>,
     quiz_id: Option<String>,
     rating: Option<i64>,
+    /// JSON object with the fields of the event that have no column.
     payload: Option<String>,
 }
 
-#[derive(Deserialize, Default)]
-struct EventText {
-    reason: Option<String>,
-    user_answer: Option<String>,
+impl TryFrom<EventRow> for Event {
+    type Error = Error;
+
+    /// Decode every column and payload field of `r`, and reject a field that the kind of `r` does not record.
+    fn try_from(r: EventRow) -> Result<Self> {
+        let bad = |what: String| {
+            Error::BadRow(format!(
+                "libSQL events: {what} in {} event of {} at {}",
+                r.kind,
+                r.path_id,
+                ts::format(r.ts)
+            ))
+        };
+        let mut fields = Map::new();
+        fields.insert("kind".into(), Json::String(r.kind.clone()));
+        if let Some(atom) = &r.atom_id {
+            fields.insert("atom".into(), Json::String(atom.clone()));
+        }
+        if let Some(quiz) = &r.quiz_id {
+            fields.insert("quiz".into(), Json::String(quiz.clone()));
+        }
+        if let Some(rating) = r.rating {
+            fields.insert(
+                "rating".into(),
+                serde_json::to_value(Rating::try_from(rating)?)?,
+            );
+        }
+        if let Some(payload) = &r.payload {
+            let parsed = serde_json::from_str(payload).map_err(|e| bad(format!("payload {e}")))?;
+            let Json::Object(extra) = parsed else {
+                return Err(bad("a payload that is not an object".into()));
+            };
+            for (name, value) in extra {
+                if fields.insert(name.clone(), value).is_some() {
+                    return Err(bad(format!("payload field `{name}` that repeats a column")));
+                }
+            }
+        }
+        let kind = serde_json::from_value(Json::Object(fields)).map_err(|e| bad(e.to_string()))?;
+        Ok(Event {
+            ts: r.ts,
+            path: r.path_id,
+            kind,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -394,24 +436,9 @@ async fn read_legacy(turso: &Turso) -> Result<Legacy> {
 
 fn group_events(rows: Vec<EventRow>) -> Result<HashMap<String, Vec<Event>>> {
     let mut by_path: HashMap<String, Vec<Event>> = HashMap::new();
-    for e in rows {
-        let text: EventText = match &e.payload {
-            Some(p) => serde_json::from_str(p)
-                .map_err(|err| Error::BadRow(format!("libSQL events.payload: {err}")))?,
-            None => EventText::default(),
-        };
-        by_path.entry(e.path_id.clone()).or_default().push(Event {
-            ts: e.ts,
-            kind: e.kind,
-            path: e.path_id,
-            atom: e.atom_id,
-            quiz: e.quiz_id,
-            payload: EventPayload {
-                rating: e.rating.map(Rating::try_from).transpose()?,
-                reason: text.reason,
-                user_answer: text.user_answer,
-            },
-        });
+    for row in rows {
+        let e = Event::try_from(row)?;
+        by_path.entry(e.path.clone()).or_default().push(e);
     }
     Ok(by_path)
 }

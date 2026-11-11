@@ -57,9 +57,24 @@ async fn event_kinds(db: &Db, path_id: &str) -> Vec<EventKind> {
         .await
         .expect("load events")
         .iter()
-        .map(|e| e.kind)
-        .filter(|k| *k != EventKind::PathCreated)
+        .map(|e| e.kind.clone())
+        .filter(|k| *k != EventKind::PathCreated {})
         .collect()
+}
+
+fn authored(atom: &str) -> EventKind {
+    let atom = atom.into();
+    EventKind::LessonAuthored { atom }
+}
+
+fn amended(atom: &str) -> EventKind {
+    let atom = atom.into();
+    EventKind::LessonAmended { atom }
+}
+
+fn taught(atom: &str) -> EventKind {
+    let atom = atom.into();
+    EventKind::LessonTaught { atom }
 }
 
 #[tokio::test]
@@ -72,7 +87,7 @@ async fn first_store_on_lesson_less_atom_emits_authored_then_taught() {
 
     assert_eq!(
         event_kinds(&db, &path_id).await,
-        vec![EventKind::LessonAuthored, EventKind::LessonTaught],
+        [authored(NO_LESSON_ATOM), taught(NO_LESSON_ATOM)],
     );
 }
 
@@ -89,11 +104,11 @@ async fn second_store_on_same_atom_emits_amended_then_taught() {
 
     assert_eq!(
         event_kinds(&db, &path_id).await,
-        vec![
-            EventKind::LessonAuthored,
-            EventKind::LessonTaught,
-            EventKind::LessonAmended,
-            EventKind::LessonTaught,
+        [
+            authored(NO_LESSON_ATOM),
+            taught(NO_LESSON_ATOM),
+            amended(NO_LESSON_ATOM),
+            taught(NO_LESSON_ATOM),
         ],
     );
 }
@@ -138,7 +153,7 @@ async fn repeated_lesson_upsert_after_a_lost_response_counts_one_teaching() {
 
     assert_eq!(
         event_kinds(&seeded, common::PATH_ID).await,
-        vec![EventKind::LessonAuthored, EventKind::LessonTaught],
+        [authored(NO_LESSON_ATOM), taught(NO_LESSON_ATOM)],
     );
     let state = common::path_state(&seeded, common::PATH_ID).await;
     assert_eq!(state.taught[NO_LESSON_ATOM].count, 1);
@@ -198,6 +213,6 @@ async fn store_on_shipped_lesson_atom_emits_amended() {
 
     assert_eq!(
         event_kinds(&db, &path_id).await,
-        vec![EventKind::LessonAmended, EventKind::LessonTaught],
+        [amended(WITH_LESSON_ATOM), taught(WITH_LESSON_ATOM)],
     );
 }

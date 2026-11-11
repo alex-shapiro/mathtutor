@@ -12,7 +12,7 @@ use chrono::{DateTime, Duration, Utc};
 use mathtutor::Error;
 use mathtutor::cards::{self, CardRow};
 use mathtutor::db::{Db, Op, ts};
-use mathtutor::event_log::{self, Event, EventKind, EventPayload};
+use mathtutor::event_log::{self, Event, EventKind};
 use mathtutor::import::{self, Turso};
 use mathtutor::overlay;
 use mathtutor::schema::OAuthClient;
@@ -76,7 +76,7 @@ struct Col {
     name: String,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum CellValue {
     Null,
@@ -177,44 +177,43 @@ fn at(day: i64) -> DateTime<Utc> {
     ts::parse("2026-01-01T08:30:00.250Z").unwrap() + Duration::days(day)
 }
 
-fn event(path: &str, day: i64, kind: EventKind, atom: Option<&str>, quiz: Option<&str>) -> Event {
+fn event(path: &str, day: i64, kind: EventKind) -> Event {
     Event {
         ts: at(day),
-        kind,
         path: path.into(),
-        atom: atom.map(Into::into),
-        quiz: quiz.map(Into::into),
-        payload: EventPayload::default(),
+        kind,
     }
+}
+
+fn taught(path: &str, day: i64, atom: &str) -> Event {
+    let atom = atom.into();
+    event(path, day, EventKind::LessonTaught { atom })
 }
 
 fn answer(path: &str, day: i64, quiz: &str, rating: Rating, user_answer: Option<&str>) -> Event {
-    Event {
-        payload: EventPayload {
-            rating: Some(rating),
-            user_answer: user_answer.map(Into::into),
-            ..EventPayload::default()
-        },
-        ..event(path, day, EventKind::QuizAnswered, None, Some(quiz))
-    }
+    let answered = EventKind::QuizAnswered {
+        atom: None,
+        quiz: quiz.into(),
+        rating,
+        user_answer: user_answer.map(Into::into),
+    };
+    event(path, day, answered)
 }
 
 fn events() -> Vec<Event> {
+    let presented = EventKind::QuizPresented {
+        atom: "fnd.2.1.1".into(),
+        quiz: "fnd.2.1.1.q1".into(),
+    };
     vec![
-        event("p_a", 0, EventKind::PathCreated, None, None),
-        event("p_a", 0, EventKind::LessonTaught, Some("fnd.2.1.1"), None),
-        event(
-            "p_a",
-            0,
-            EventKind::QuizPresented,
-            Some("fnd.2.1.1"),
-            Some("fnd.2.1.1.q1"),
-        ),
+        event("p_a", 0, EventKind::PathCreated {}),
+        taught("p_a", 0, "fnd.2.1.1"),
+        event("p_a", 0, presented),
         answer("p_a", 0, "fnd.2.1.1.q1", Rating::Good, Some("42")),
         answer("p_a", 3, "fnd.2.1.1.q1", Rating::Again, None),
         answer("p_a", 4, "fnd.2.1.1.q2", Rating::Easy, None),
         answer("p_a", 9, "fnd.2.1.1.q1", Rating::Hard, None),
-        event("p_b", 30, EventKind::PathCreated, None, None),
+        event("p_b", 30, EventKind::PathCreated {}),
     ]
 }
 
@@ -226,21 +225,19 @@ fn rows_of_events(events: &[Event]) -> Vec<Vec<CellValue>> {
     events
         .iter()
         .map(|e| {
-            let kind = serde_json::to_value(e.kind).unwrap();
-            let payload = e
-                .payload
-                .user_answer
-                .as_ref()
-                .map(|a| format!(r#"{{"user_answer":"{a}"}}"#));
+            let fields = serde_json::to_value(&e.kind).unwrap();
+            let text = |name: &str| fields.get(name).and_then(|v| v.as_str());
+            let rating = fields
+                .get("rating")
+                .map(|r| serde_json::from_value::<Rating>(r.clone()).unwrap());
+            let payload = text("user_answer").map(|a| format!(r#"{{"user_answer":"{a}"}}"#));
             vec![
                 text_val(&ts::format(e.ts)),
-                text_val(kind.as_str().unwrap()),
+                text_val(text("kind").unwrap()),
                 text_val(&e.path),
-                opt_text_val(e.atom.as_deref()),
-                opt_text_val(e.quiz.as_deref()),
-                e.payload
-                    .rating
-                    .map_or(CellValue::Null, |r| int_val(i64::from(r))),
+                opt_text_val(text("atom")),
+                opt_text_val(text("quiz")),
+                rating.map_or(CellValue::Null, |r| int_val(i64::from(r))),
                 opt_text_val(payload.as_deref()),
             ]
         })
@@ -413,15 +410,7 @@ async fn import_copies_paths_events_and_overlay_and_rebuilds_matching_cards() {
 
     let stored = event_log::load(&db, "p_a").await.unwrap();
     let expected: Vec<Event> = events().into_iter().filter(|e| e.path == "p_a").collect();
-    assert_eq!(stored.len(), expected.len());
-    for (s, e) in stored.iter().zip(&expected) {
-        assert_eq!(
-            (s.ts, s.kind, &s.atom, &s.quiz),
-            (e.ts, e.kind, &e.atom, &e.quiz)
-        );
-        assert_eq!(s.payload.rating, e.payload.rating);
-        assert_eq!(s.payload.user_answer, e.payload.user_answer);
-    }
+    assert_eq!(stored, expected);
 
     let authored = &view.overlay.atoms["fnd.9.9.9"];
     assert_eq!(authored.lesson.as_deref(), Some("body"));
@@ -572,12 +561,15 @@ async fn import_reports_an_event_whose_contents_differ_from_libsql() {
     let db = common::empty_db().await;
     import(tables_with_wrong_card(), &db).await.expect("first");
     let mut changed_events = events();
-    let answered = changed_events
-        .iter_mut()
-        .find(|e| e.payload.user_answer.is_some())
-        .expect("an event with an answer");
-    answered.payload.user_answer = Some("a different answer".into());
-    let path = answered.path.clone();
+    let answered = changed_events.iter_mut().find_map(|e| match &mut e.kind {
+        EventKind::QuizAnswered {
+            user_answer: Some(text),
+            ..
+        } => Some((e.path.clone(), text)),
+        _ => None,
+    });
+    let (path, text) = answered.expect("an event with an answer");
+    *text = "a different answer".into();
     let mut changed = legacy();
     changed.set("events", EVENT_COLUMNS, rows_of_events(&changed_events));
 
@@ -596,7 +588,7 @@ async fn import_reports_an_event_whose_contents_differ_from_libsql() {
 async fn import_reports_a_libsql_write_that_lands_after_its_first_read() {
     let db = common::empty_db().await;
     let mut late_events = events();
-    late_events.push(event("p_a", 90, EventKind::LessonTaught, Some("a"), None));
+    late_events.push(taught("p_a", 90, "a"));
     let mut after_late_write = legacy();
     after_late_write.set("events", EVENT_COLUMNS, rows_of_events(&late_events));
     let url = serve_snapshots(vec![legacy(), after_late_write]).await;
@@ -619,19 +611,22 @@ async fn import_reports_a_libsql_write_that_lands_after_its_first_read() {
 #[tokio::test]
 async fn malformed_history_fails_before_the_import_claims_the_target() {
     let db = common::empty_db().await;
-    let mut malformed = events();
-    malformed
+    let mut rows = event_rows();
+    let rating = EVENT_COLUMNS.iter().position(|c| *c == "rating").unwrap();
+    let answer = rows
         .iter_mut()
-        .find(|e| e.kind == EventKind::QuizAnswered)
-        .expect("an answer")
-        .payload
-        .rating = None;
+        .find(|row| row[rating] != CellValue::Null)
+        .expect("an answer");
+    answer[rating] = CellValue::Null;
     let mut tables = legacy();
-    tables.set("events", EVENT_COLUMNS, rows_of_events(&malformed));
+    tables.set("events", EVENT_COLUMNS, rows);
 
     let e = import(tables, &db).await.unwrap_err();
 
-    assert!(matches!(e, Error::BadEvent(_)), "{e}");
+    assert!(
+        matches!(&e, Error::BadRow(m) if m.contains("rating")),
+        "{e}"
+    );
     db.snapshot(&Want::overlay())
         .await
         .expect("the target stays unclaimed");
@@ -641,7 +636,7 @@ async fn malformed_history_fails_before_the_import_claims_the_target() {
 async fn repeated_import_reports_a_late_event_on_a_path_without_a_stream() {
     let db = common::empty_db().await;
     let mut late_events = events();
-    late_events.push(event("p_c", 50, EventKind::LessonTaught, Some("a"), None));
+    late_events.push(taught("p_c", 50, "a"));
     let mut with_late_event = legacy();
     with_late_event.set("events", EVENT_COLUMNS, rows_of_events(&late_events));
     let url = serve_snapshots(vec![legacy(), with_late_event]).await;

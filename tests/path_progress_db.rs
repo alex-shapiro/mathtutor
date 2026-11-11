@@ -1,6 +1,6 @@
 //! Integration tests for `PathState::progress`.
 
-use mathtutor::event_log::{self, Event};
+use mathtutor::event_log::{Event, EventKind};
 use mathtutor::progress::PathProgress;
 use mathtutor::types::{Rating, Strategy};
 
@@ -13,12 +13,14 @@ async fn progress(db: &mathtutor::db::Db, path_id: &str) -> PathProgress {
 }
 
 fn answered(path: &str, atom: &str, rating: Rating) -> Event {
-    event_log::quiz_answered(
-        path.into(),
-        Some(atom.into()),
-        format!("{atom}.q1"),
-        rating,
-        None,
+    Event::now(
+        path,
+        EventKind::QuizAnswered {
+            atom: Some(atom.into()),
+            quiz: format!("{atom}.q1"),
+            rating,
+            user_answer: None,
+        },
     )
 }
 
@@ -35,7 +37,12 @@ async fn lesson_taught_event_lands_in_taught_atoms() {
     let db = common::fresh_db(PATH_ID).await;
     common::append(
         &db,
-        &[event_log::lesson_taught(PATH_ID.into(), "atom.a".into())],
+        &[Event::now(
+            PATH_ID,
+            EventKind::LessonTaught {
+                atom: "atom.a".into(),
+            },
+        )],
     )
     .await;
 
@@ -49,7 +56,12 @@ async fn lesson_authored_event_also_counts_as_taught() {
     let db = common::fresh_db(PATH_ID).await;
     common::append(
         &db,
-        &[event_log::lesson_authored(PATH_ID.into(), "atom.a".into())],
+        &[Event::now(
+            PATH_ID,
+            EventKind::LessonAuthored {
+                atom: "atom.a".into(),
+            },
+        )],
     )
     .await;
 
@@ -92,7 +104,12 @@ async fn loads_only_rows_for_the_named_path() {
     common::append(
         &db,
         &[
-            event_log::lesson_taught("p_other".into(), "atom.other".into()),
+            Event::now(
+                "p_other",
+                EventKind::LessonTaught {
+                    atom: "atom.other".into(),
+                },
+            ),
             answered("p_other", "atom.other", Rating::Good),
         ],
     )

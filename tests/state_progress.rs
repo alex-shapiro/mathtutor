@@ -248,10 +248,9 @@ async fn past_due_ignores_a_deleted_quiz() {
     let long_ago = Utc::now() - Duration::days(365);
     common::append(
         &db,
-        &[common::answered_at(
-            &quiz_id,
-            mathtutor::types::Rating::Good,
+        &[common::at(
             long_ago,
+            common::answered(&quiz_id, mathtutor::types::Rating::Good),
         )],
     )
     .await;

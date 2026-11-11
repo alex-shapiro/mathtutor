@@ -2,7 +2,7 @@
 
 use chrono::{Duration, TimeZone, Utc};
 use mathtutor::db::Db;
-use mathtutor::event_log::{Event, EventKind, EventPayload};
+use mathtutor::event_log::Event;
 use mathtutor::overlay::QuizDraft;
 use mathtutor::scheduler::{self, LessonHistory, QuizHistory};
 use mathtutor::surface::Surface;
@@ -11,7 +11,7 @@ use mathtutor::{path, store};
 
 mod common;
 
-use common::{PATH_ID, answered_at, presented_at, taught_at};
+use common::{PATH_ID, answered, at, presented, taught};
 
 const ATOM: &str = "test.atom";
 const QUIZ: &str = "test.atom.q1";
@@ -44,9 +44,9 @@ async fn quiz_history_counts_presentations_and_picks_latest_ts() {
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
     let t1 = t0 + Duration::minutes(5);
     let t2 = t0 + Duration::minutes(15);
-    common::append(&db, &[presented_at(QUIZ, t0)]).await;
-    common::append(&db, &[presented_at(QUIZ, t1)]).await;
-    common::append(&db, &[presented_at(QUIZ, t2)]).await;
+    common::append(&db, &[at(t0, presented(QUIZ))]).await;
+    common::append(&db, &[at(t1, presented(QUIZ))]).await;
+    common::append(&db, &[at(t2, presented(QUIZ))]).await;
 
     let h = quiz_history(&db).await;
     assert_eq!(h.repetitions, 3);
@@ -58,15 +58,15 @@ async fn quiz_history_answer_aggregates_match_cards_cache() {
     let db = common::fresh_db(PATH_ID).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
-    common::append(&db, &[answered_at(QUIZ, Rating::Good, t0)]).await;
+    common::append(&db, &[at(t0, answered(QUIZ, Rating::Good))]).await;
     common::append(
         &db,
-        &[answered_at(QUIZ, Rating::Again, t0 + Duration::minutes(1))],
+        &[at(t0 + Duration::minutes(1), answered(QUIZ, Rating::Again))],
     )
     .await;
     common::append(
         &db,
-        &[answered_at(QUIZ, Rating::Easy, t0 + Duration::minutes(2))],
+        &[at(t0 + Duration::minutes(2), answered(QUIZ, Rating::Easy))],
     )
     .await;
 
@@ -97,7 +97,7 @@ async fn quiz_history_recent_ratings_newest_first_capped_at_ten() {
     ];
     for (i, r) in ratings.iter().enumerate() {
         let ts = t0 + Duration::seconds(i64::try_from(i).unwrap());
-        common::append(&db, &[answered_at(QUIZ, *r, ts)]).await;
+        common::append(&db, &[at(ts, answered(QUIZ, *r))]).await;
     }
 
     let h = quiz_history(&db).await;
@@ -116,19 +116,12 @@ async fn quiz_history_isolates_quiz_id_and_path_id() {
     common::seed_path(&db, "p_other", &[], Strategy::BottomUp).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
-    common::append(&db, &[presented_at("other.q1", t0)]).await;
+    common::append(&db, &[at(t0, presented("other.q1"))]).await;
     common::append(
         &db,
         &[Event {
-            ts: t0,
-            kind: EventKind::QuizAnswered,
             path: "p_other".into(),
-            atom: Some(ATOM.into()),
-            quiz: Some(QUIZ.into()),
-            payload: EventPayload {
-                rating: Some(Rating::Good),
-                ..Default::default()
-            },
+            ..at(t0, answered(QUIZ, Rating::Good))
         }],
     )
     .await;
@@ -154,9 +147,9 @@ async fn lesson_history_counts_taught_events_and_picks_latest_ts() {
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
     let t1 = t0 + Duration::days(1);
     let t2 = t0 + Duration::days(3);
-    common::append(&db, &[taught_at(ATOM, t0)]).await;
-    common::append(&db, &[taught_at(ATOM, t1)]).await;
-    common::append(&db, &[taught_at(ATOM, t2)]).await;
+    common::append(&db, &[at(t0, taught(ATOM))]).await;
+    common::append(&db, &[at(t1, taught(ATOM))]).await;
+    common::append(&db, &[at(t2, taught(ATOM))]).await;
 
     let h = lesson_history(&db).await;
     assert_eq!(h.repetitions, 3);
@@ -169,16 +162,12 @@ async fn lesson_history_isolates_atom_and_path() {
     common::seed_path(&db, "p_other", &[], Strategy::BottomUp).await;
 
     let t0 = Utc.with_ymd_and_hms(2026, 5, 26, 0, 0, 0).unwrap();
-    common::append(&db, &[taught_at("other.atom", t0)]).await;
+    common::append(&db, &[at(t0, taught("other.atom"))]).await;
     common::append(
         &db,
         &[Event {
-            ts: t0,
-            kind: EventKind::LessonTaught,
             path: "p_other".into(),
-            atom: Some(ATOM.into()),
-            quiz: None,
-            payload: EventPayload::default(),
+            ..at(t0, taught(ATOM))
         }],
     )
     .await;

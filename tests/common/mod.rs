@@ -11,7 +11,7 @@ use baserunna::node::{Node, NodeConfig, Services};
 use baserunna::store::MemStore;
 use chrono::{DateTime, Utc};
 use mathtutor::db::{Db, DbConfig};
-use mathtutor::event_log::{Event, EventKind, EventPayload};
+use mathtutor::event_log::{Event, EventKind};
 use mathtutor::graph::{FlatConcept, Graph, Quiz};
 use mathtutor::overlay::Overlay;
 use mathtutor::path::PathFile;
@@ -283,63 +283,57 @@ pub fn path_with_strategy(targets: &[&str], strategy: Strategy) -> PathFile {
     }
 }
 
-pub fn taught(atom_id: &str) -> Event {
-    taught_at(atom_id, Utc::now())
+/// Return `e` with its timestamp set to `ts`.
+pub fn at(ts: DateTime<Utc>, e: Event) -> Event {
+    Event { ts, ..e }
 }
 
-pub fn taught_at(atom_id: &str, ts: DateTime<Utc>) -> Event {
-    Event {
-        ts,
-        kind: EventKind::LessonTaught,
-        path: PATH_ID.into(),
-        atom: Some(atom_id.into()),
-        quiz: None,
-        payload: EventPayload::default(),
-    }
+/// Return the atom ID of `quiz_id`, such as `a.b` for `a.b.q1`.
+fn quiz_atom(quiz_id: &str) -> String {
+    quiz_id
+        .rsplit_once(".q")
+        .map_or(quiz_id, |(atom, _)| atom)
+        .to_string()
+}
+
+pub fn taught(atom_id: &str) -> Event {
+    Event::now(
+        PATH_ID,
+        EventKind::LessonTaught {
+            atom: atom_id.into(),
+        },
+    )
 }
 
 pub fn lesson_authored(atom_id: &str) -> Event {
-    Event {
-        ts: Utc::now(),
-        kind: EventKind::LessonAuthored,
-        path: PATH_ID.into(),
-        atom: Some(atom_id.into()),
-        quiz: None,
-        payload: EventPayload::default(),
-    }
+    Event::now(
+        PATH_ID,
+        EventKind::LessonAuthored {
+            atom: atom_id.into(),
+        },
+    )
 }
 
 pub fn answered(quiz_id: &str, rating: Rating) -> Event {
-    answered_at(quiz_id, rating, Utc::now())
-}
-
-pub fn answered_at(quiz_id: &str, rating: Rating, ts: DateTime<Utc>) -> Event {
-    Event {
-        ts,
-        kind: EventKind::QuizAnswered,
-        path: PATH_ID.into(),
-        atom: None,
-        quiz: Some(quiz_id.into()),
-        payload: EventPayload {
-            rating: Some(rating),
-            ..Default::default()
+    Event::now(
+        PATH_ID,
+        EventKind::QuizAnswered {
+            atom: None,
+            quiz: quiz_id.into(),
+            rating,
+            user_answer: None,
         },
-    }
+    )
 }
 
 pub fn presented(quiz_id: &str) -> Event {
-    presented_at(quiz_id, Utc::now())
-}
-
-pub fn presented_at(quiz_id: &str, ts: DateTime<Utc>) -> Event {
-    Event {
-        ts,
-        kind: EventKind::QuizPresented,
-        path: PATH_ID.into(),
-        atom: None,
-        quiz: Some(quiz_id.into()),
-        payload: EventPayload::default(),
-    }
+    Event::now(
+        PATH_ID,
+        EventKind::QuizPresented {
+            atom: quiz_atom(quiz_id),
+            quiz: quiz_id.into(),
+        },
+    )
 }
 
 /// Build the events that complete `atom_id`.
@@ -356,18 +350,12 @@ pub fn complete_events(atom_id: &str) -> Vec<Event> {
 pub fn progress_of(events: &[Event]) -> PathProgress {
     let mut p = PathProgress::default();
     for e in events {
-        match e.kind {
-            EventKind::LessonTaught | EventKind::LessonAuthored => {
-                if let Some(atom) = &e.atom {
-                    p.taught_atoms.insert(atom.clone());
-                }
+        match &e.kind {
+            EventKind::LessonTaught { atom } | EventKind::LessonAuthored { atom } => {
+                p.taught_atoms.insert(atom.clone());
             }
-            EventKind::QuizAnswered => {
-                if let (Some(q), Some(r)) = (&e.quiz, e.payload.rating)
-                    && r.is_correct()
-                {
-                    p.correct_quizzes.insert(q.clone());
-                }
+            EventKind::QuizAnswered { quiz, rating, .. } if rating.is_correct() => {
+                p.correct_quizzes.insert(quiz.clone());
             }
             _ => {}
         }

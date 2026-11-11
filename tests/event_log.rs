@@ -13,12 +13,20 @@ use common::PATH_ID;
 
 async fn logged(db: &Db, path_id: &str) -> Vec<Event> {
     let events = event_log::load(db, path_id).await.expect("load");
-    assert_eq!(events[0].kind, EventKind::PathCreated);
+    assert_eq!(events[0].kind, EventKind::PathCreated {});
     events[1..].to_vec()
 }
 
 fn answered(path: &str, atom: &str, quiz: &str, rating: Rating) -> Event {
-    event_log::quiz_answered(path.into(), Some(atom.into()), quiz.into(), rating, None)
+    Event::now(
+        path,
+        EventKind::QuizAnswered {
+            atom: Some(atom.into()),
+            quiz: quiz.into(),
+            rating,
+            user_answer: None,
+        },
+    )
 }
 
 #[tokio::test]
@@ -27,18 +35,36 @@ async fn append_and_load_round_trip() {
     common::append(
         &db,
         &[
-            event_log::lesson_authored(PATH_ID.into(), "atom.x".into()),
-            event_log::quiz_presented(PATH_ID.into(), "atom.x".into(), "atom.x.q1".into()),
+            Event::now(
+                PATH_ID,
+                EventKind::LessonAuthored {
+                    atom: "atom.x".into(),
+                },
+            ),
+            Event::now(
+                PATH_ID,
+                EventKind::QuizPresented {
+                    atom: "atom.x".into(),
+                    quiz: "atom.x.q1".into(),
+                },
+            ),
         ],
     )
     .await;
 
-    let events = logged(&db, PATH_ID).await;
-    assert_eq!(events.len(), 2);
-    assert_eq!(events[0].kind, EventKind::LessonAuthored);
-    assert_eq!(events[0].atom.as_deref(), Some("atom.x"));
-    assert_eq!(events[1].kind, EventKind::QuizPresented);
-    assert_eq!(events[1].quiz.as_deref(), Some("atom.x.q1"));
+    let kinds: Vec<EventKind> = logged(&db, PATH_ID)
+        .await
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+    let authored = EventKind::LessonAuthored {
+        atom: "atom.x".into(),
+    };
+    let presented = EventKind::QuizPresented {
+        atom: "atom.x".into(),
+        quiz: "atom.x.q1".into(),
+    };
+    assert_eq!(kinds, [authored, presented]);
 }
 
 #[tokio::test]
@@ -48,17 +74,20 @@ async fn load_returns_events_in_insertion_order() {
     common::append(
         &db,
         &[
-            common::presented_at("q1", ts),
-            common::presented_at("q2", ts),
+            common::at(ts, common::presented("q1")),
+            common::at(ts, common::presented("q2")),
         ],
     )
     .await;
-    common::append(&db, &[common::presented_at("q3", ts)]).await;
+    common::append(&db, &[common::at(ts, common::presented("q3"))]).await;
 
     let quizzes: Vec<_> = logged(&db, PATH_ID)
         .await
         .iter()
-        .map(|e| e.quiz.clone().unwrap())
+        .filter_map(|e| match &e.kind {
+            EventKind::QuizPresented { quiz, .. } => Some(quiz.clone()),
+            _ => None,
+        })
         .collect();
     assert_eq!(quizzes, vec!["q1".to_string(), "q2".into(), "q3".into()]);
 }
@@ -66,26 +95,21 @@ async fn load_returns_events_in_insertion_order() {
 #[tokio::test]
 async fn append_preserves_payload_user_answer_and_rating() {
     let db = common::fresh_db(PATH_ID).await;
-    common::append(
-        &db,
-        &[event_log::quiz_answered(
-            PATH_ID.into(),
-            Some("atom.x".into()),
-            "atom.x.q1".into(),
-            Rating::Good,
-            Some("user said cosine".into()),
-        )],
-    )
-    .await;
+    let answer = Event::now(
+        PATH_ID,
+        EventKind::QuizAnswered {
+            atom: Some("atom.x".into()),
+            quiz: "atom.x.q1".into(),
+            rating: Rating::Good,
+            user_answer: Some("user said cosine".into()),
+        },
+    );
+    common::append(&db, std::slice::from_ref(&answer)).await;
 
     let events = logged(&db, PATH_ID).await;
     assert_eq!(events.len(), 1);
-    let e = &events[0];
-    assert_eq!(e.kind, EventKind::QuizAnswered);
-    assert_eq!(e.path, PATH_ID);
-    assert_eq!(e.atom.as_deref(), Some("atom.x"));
-    assert_eq!(e.payload.rating, Some(Rating::Good));
-    assert_eq!(e.payload.user_answer.as_deref(), Some("user said cosine"));
+    assert_eq!(events[0].kind, answer.kind);
+    assert_eq!(events[0].path, PATH_ID);
 }
 
 #[tokio::test]
@@ -95,25 +119,33 @@ async fn append_only_touches_the_named_path() {
 
     common::append(
         &db,
-        &[event_log::lesson_authored(PATH_ID.into(), "atom.x".into())],
+        &[Event::now(
+            PATH_ID,
+            EventKind::LessonAuthored {
+                atom: "atom.x".into(),
+            },
+        )],
     )
     .await;
     common::append(
         &db,
-        &[event_log::lesson_authored(
-            "p_other".into(),
-            "atom.y".into(),
+        &[Event::now(
+            "p_other",
+            EventKind::LessonAuthored {
+                atom: "atom.y".into(),
+            },
         )],
     )
     .await;
 
+    let authored = |atom: &str| EventKind::LessonAuthored { atom: atom.into() };
     let mine = logged(&db, PATH_ID).await;
     assert_eq!(mine.len(), 1);
-    assert_eq!(mine[0].atom.as_deref(), Some("atom.x"));
+    assert_eq!(mine[0].kind, authored("atom.x"));
 
     let other = logged(&db, "p_other").await;
     assert_eq!(other.len(), 1);
-    assert_eq!(other[0].atom.as_deref(), Some("atom.y"));
+    assert_eq!(other[0].kind, authored("atom.y"));
 }
 
 #[tokio::test]
@@ -161,9 +193,26 @@ async fn non_answer_events_leave_cards_unscheduled() {
     common::append(
         &db,
         &[
-            event_log::quiz_presented(PATH_ID.into(), "atom.x".into(), "atom.x.q1".into()),
-            event_log::quiz_authored(PATH_ID.into(), "atom.x".into(), "atom.x.q2".into()),
-            event_log::lesson_taught(PATH_ID.into(), "atom.x".into()),
+            Event::now(
+                PATH_ID,
+                EventKind::QuizPresented {
+                    atom: "atom.x".into(),
+                    quiz: "atom.x.q1".into(),
+                },
+            ),
+            Event::now(
+                PATH_ID,
+                EventKind::QuizAuthored {
+                    atom: "atom.x".into(),
+                    quiz: "atom.x.q2".into(),
+                },
+            ),
+            Event::now(
+                PATH_ID,
+                EventKind::LessonTaught {
+                    atom: "atom.x".into(),
+                },
+            ),
         ],
     )
     .await;
@@ -229,7 +278,11 @@ async fn recompute_rebuilds_cards_identically_to_live_append() {
         (Rating::Again, t0 + Duration::days(20)),
         (Rating::Good, t0 + Duration::days(25)),
     ] {
-        common::append(&db, &[common::answered_at("atom.x.q1", rating, ts)]).await;
+        common::append(
+            &db,
+            &[common::at(ts, common::answered("atom.x.q1", rating))],
+        )
+        .await;
     }
 
     let before = common::path_state(&db, PATH_ID).await.cards["atom.x.q1"].clone();
@@ -266,7 +319,7 @@ async fn failed_transaction_does_not_write_events_or_cards() {
         .await;
     assert!(matches!(r, Err(Error::NoPath)));
 
-    assert!(logged(&db, PATH_ID).await.is_empty());
+    assert_eq!(logged(&db, PATH_ID).await, []);
     let ps = common::path_state(&db, PATH_ID).await;
     assert!(ps.cards.is_empty());
 }

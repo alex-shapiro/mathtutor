@@ -2,7 +2,7 @@
 
 use chrono::Utc;
 
-use mathtutor::event_log::{Event, EventKind, EventPayload};
+use mathtutor::event_log::{Event, EventKind};
 use mathtutor::graph::{FlatConcept, Graph};
 use mathtutor::path::PathFile;
 use mathtutor::progress::PathProgress;
@@ -50,32 +50,24 @@ fn path_with(targets: &[&str]) -> PathFile {
 }
 
 fn progress_of(events: &[Event]) -> PathProgress {
+    let taught_atoms = events.iter().filter_map(|e| match &e.kind {
+        EventKind::LessonTaught { atom } | EventKind::LessonAuthored { atom } => Some(atom.clone()),
+        _ => None,
+    });
     PathProgress {
-        taught_atoms: events.iter().filter_map(|e| e.atom.clone()).collect(),
+        taught_atoms: taught_atoms.collect(),
         ..PathProgress::default()
     }
 }
 
 fn taught(atom_id: &str) -> Event {
-    Event {
-        ts: Utc::now(),
-        kind: EventKind::LessonTaught,
-        path: PATH_ID.into(),
-        atom: Some(atom_id.into()),
-        quiz: None,
-        payload: EventPayload::default(),
-    }
+    let atom = atom_id.into();
+    Event::now(PATH_ID, EventKind::LessonTaught { atom })
 }
 
 fn authored(atom_id: &str) -> Event {
-    Event {
-        ts: Utc::now(),
-        kind: EventKind::LessonAuthored,
-        path: PATH_ID.into(),
-        atom: Some(atom_id.into()),
-        quiz: None,
-        payload: EventPayload::default(),
-    }
+    let atom = atom_id.into();
+    Event::now(PATH_ID, EventKind::LessonAuthored { atom })
 }
 
 #[test]

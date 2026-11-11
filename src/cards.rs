@@ -102,40 +102,33 @@ pub enum ProjectionTarget<'e> {
     None,
 }
 
-/// Return the derived row that `e` changes, or [`Error::BadEvent`] if a required field is missing.
-pub fn projection_target(e: &Event) -> Result<ProjectionTarget<'_>> {
-    match e.kind {
-        EventKind::LessonTaught | EventKind::LessonAuthored => e
-            .atom
-            .as_deref()
-            .map(|atom_id| ProjectionTarget::Taught { atom_id })
-            .ok_or(Error::BadEvent("lesson event without atom")),
-        EventKind::QuizAnswered if e.payload.rating.is_none() => {
-            Err(Error::BadEvent("quiz answer without rating"))
+/// Return the derived row that `e` changes.
+pub fn projection_target(e: &Event) -> ProjectionTarget<'_> {
+    match &e.kind {
+        EventKind::LessonTaught { atom } | EventKind::LessonAuthored { atom } => {
+            ProjectionTarget::Taught { atom_id: atom }
         }
-        EventKind::QuizPresented | EventKind::QuizAnswered => e
-            .quiz
-            .as_deref()
-            .map(|quiz_id| ProjectionTarget::Card { quiz_id })
-            .ok_or(Error::BadEvent("quiz event without quiz")),
-        _ => Ok(ProjectionTarget::None),
+        EventKind::QuizPresented { quiz, .. } | EventKind::QuizAnswered { quiz, .. } => {
+            ProjectionTarget::Card { quiz_id: quiz }
+        }
+        _ => ProjectionTarget::None,
     }
 }
 
 pub fn apply_taught_event(t: &mut Taught, e: &Event) {
-    if e.kind == EventKind::LessonTaught {
+    if matches!(e.kind, EventKind::LessonTaught { .. }) {
         t.count += 1;
         t.last_at = Some(e.ts);
     }
 }
 
 pub fn apply_event(c: &mut CardRow, e: &Event) -> Result<()> {
-    match (e.kind, e.payload.rating) {
-        (EventKind::QuizPresented, _) => {
+    match &e.kind {
+        EventKind::QuizPresented { .. } => {
             c.presented += 1;
             c.last_presented_at = Some(e.ts);
         }
-        (EventKind::QuizAnswered, Some(rating)) => {
+        &EventKind::QuizAnswered { rating, .. } => {
             c.state = Some(apply_answer(c.state.as_ref(), rating, e.ts)?);
             c.reps += 1;
             if rating == Rating::Again {
@@ -239,7 +232,7 @@ pub fn fold_history(
     let mut cards: HashMap<String, CardRow> = HashMap::new();
     let mut taught: BTreeMap<String, Taught> = BTreeMap::new();
     for e in events {
-        match projection_target(e)? {
+        match projection_target(e) {
             ProjectionTarget::Card { quiz_id } => {
                 let c = cards
                     .entry(quiz_id.to_string())

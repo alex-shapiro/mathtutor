@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::answer::atom_from_quiz_id;
 use crate::db::Db;
-use crate::event_log;
+use crate::event_log::{Event, EventKind};
 use crate::graph::{FlatConcept, Graph};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
@@ -71,15 +71,18 @@ pub async fn compute_next(
         let envelope = Envelope::build(ps, &g, action.clone(), surface);
 
         match &action {
-            Action::PresentQuiz { quiz_id, atom_id } => changes.append(
-                view,
-                &event_log::quiz_presented(p.id.clone(), atom_id.clone(), quiz_id.clone()),
-            )?,
+            Action::PresentQuiz { quiz_id, atom_id } => {
+                let presented = EventKind::QuizPresented {
+                    atom: atom_id.clone(),
+                    quiz: quiz_id.clone(),
+                };
+                changes.append(view, &Event::now(&p.id, presented))?;
+            }
             Action::PresentLesson { atom_id } => {
-                changes.append(
-                    view,
-                    &event_log::lesson_taught(p.id.clone(), atom_id.clone()),
-                )?;
+                let taught = EventKind::LessonTaught {
+                    atom: atom_id.clone(),
+                };
+                changes.append(view, &Event::now(&p.id, taught))?;
             }
             _ => {}
         }

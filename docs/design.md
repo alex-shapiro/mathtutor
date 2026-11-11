@@ -233,30 +233,28 @@ User-authored lessons and quizzes are stored in the database overlay and shared 
 
 ## Event log
 
-Each path records learning activity in an append-only `events.<path id>` stream with UTC RFC 3339 timestamps. `cards` and `taught` are materialized projections of the event stream.
+Each path records learning activity in an append-only `events.<path id>` stream with UTC RFC 3339 timestamps. `cards` and `taught` are materialized projections of the event stream. Each event is a JSON object with `ts`, `path`, `kind`, and the fields of its kind:
 
-```yaml
-- ts: 2026-05-09T18:42:01Z
-  type: quiz_answered
-  path: <path-id>
-  atom: la.5.4.7
-  quiz: la.5.4.7.q1
-  payload:
-    rating: good
-    user_answer: """..."""
+```json
+{
+  "ts": "2026-05-09T18:42:01.000Z",
+  "path": "<path-id>",
+  "kind": "quiz_answered",
+  "atom": "la.5.4.7",
+  "quiz": "la.5.4.7.q1",
+  "rating": "good",
+  "user_answer": "..."
+}
 ```
 
-Event types:
+| Kind                                                                | Fields                                                 |
+| ------------------------------------------------------------------- | ------------------------------------------------------ |
+| `path_created`                                                      | None                                                   |
+| `lesson_authored`, `lesson_amended`, `lesson_taught`                | `atom`                                                 |
+| `quiz_authored`, `quiz_presented`, `quiz_amended`, `quiz_removed`   | `atom`, `quiz`                                         |
+| `quiz_answered`                                                     | `quiz`, `rating`, and optionally `atom` and `user_answer` |
 
-- `path_created`
-- `lesson_authored`
-- `lesson_amended`
-- `lesson_taught`
-- `quiz_authored`
-- `quiz_presented`
-- `quiz_answered`
-- `quiz_amended`
-- `quiz_removed`
+A read rejects an event that is missing a field of its kind or has a field that its kind does not record.
 
 ## Spaced repetition (FSRS)
 

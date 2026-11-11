@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use crate::cards::{self, CardRow, ProjectionTarget};
 use crate::db::client::Entry;
 use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
-use crate::event_log::{self, Event, EventKind};
+use crate::event_log::{Event, EventKind};
 use crate::graph::{Curriculum, Graph};
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
@@ -283,8 +283,11 @@ impl Changes {
     /// Insert path `p` and append its `path_created` event.
     pub fn create_path(&mut self, view: &View, p: &PathFile) -> Result<()> {
         self.ops.push(Op::insert(p));
-        let mut created = event_log::path_created(p.id.clone());
-        created.ts = p.created_at;
+        let created = Event {
+            ts: p.created_at,
+            path: p.id.clone(),
+            kind: EventKind::PathCreated {},
+        };
         self.append(view, &created)
     }
 
@@ -326,10 +329,11 @@ impl Changes {
     /// Fails with [`Error::PathNotLoaded`] unless `view` holds the path of `e` or this write set creates the path.
     pub fn append(&mut self, view: &View, e: &Event) -> Result<()> {
         let base = view.paths.get(&e.path);
-        if base.is_none() && e.kind != EventKind::PathCreated && !self.creates_path(&e.path) {
+        let creates = matches!(e.kind, EventKind::PathCreated {});
+        if base.is_none() && !creates && !self.creates_path(&e.path) {
             return Err(Error::PathNotLoaded(e.path.clone()));
         }
-        match cards::projection_target(e)? {
+        match cards::projection_target(e) {
             ProjectionTarget::Taught { atom_id } => {
                 let key = (e.path.clone(), atom_id.to_string());
                 let t = self.taught.entry(key).or_insert_with(|| {
@@ -358,9 +362,11 @@ impl Changes {
 
     /// Return `true` if this write set appends the `path_created` event of `path_id`.
     fn creates_path(&self, path_id: &str) -> bool {
-        self.events
-            .get(path_id)
-            .is_some_and(|events| events.iter().any(|e| e.kind == EventKind::PathCreated))
+        self.events.get(path_id).is_some_and(|events| {
+            events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::PathCreated {}))
+        })
     }
 
     fn into_ops(self, overlay_version: Option<&str>) -> Vec<Op> {

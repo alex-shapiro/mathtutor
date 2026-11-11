@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use crate::db::Db;
-use crate::event_log;
+use crate::event_log::{Event, EventKind};
 use crate::graph;
 use crate::overlay::{self, QuizDraft, QuizPatch};
 use crate::view::Want;
@@ -28,13 +28,14 @@ pub async fn cmd_lesson_upsert(
         let amended = stored.is_some();
 
         overlay::upsert_lesson(changes, atom_id, &body);
+        let atom = atom_id.to_string();
         let change = if amended {
-            event_log::lesson_amended(id.clone(), atom_id.to_string())
+            EventKind::LessonAmended { atom: atom.clone() }
         } else {
-            event_log::lesson_authored(id.clone(), atom_id.to_string())
+            EventKind::LessonAuthored { atom: atom.clone() }
         };
-        changes.append(view, &change)?;
-        changes.append(view, &event_log::lesson_taught(id, atom_id.to_string()))
+        changes.append(view, &Event::now(&id, change))?;
+        changes.append(view, &Event::now(id, EventKind::LessonTaught { atom }))
     })
     .await
 }
@@ -58,10 +59,11 @@ pub async fn cmd_quiz_create(
             .clone()
             .into_quiz(next_quiz_id(atom_id, &c.quizzes, tombstones));
         overlay::add_quiz(changes, atom_id, &quiz);
-        changes.append(
-            view,
-            &event_log::quiz_authored(id, atom_id.to_string(), quiz.id.clone()),
-        )?;
+        let authored = EventKind::QuizAuthored {
+            atom: atom_id.to_string(),
+            quiz: quiz.id.clone(),
+        };
+        changes.append(view, &Event::now(id, authored))?;
         Ok(quiz.id)
     })
     .await
@@ -79,10 +81,11 @@ pub async fn cmd_quiz_update(
         let g = view.graph()?;
         let (atom, quiz) = g.quiz(quiz_id)?;
         overlay::amend_quiz(changes, &atom.id, quiz, patch);
-        changes.append(
-            view,
-            &event_log::quiz_amended(id, atom.id.clone(), quiz_id.to_string()),
-        )
+        let amended = EventKind::QuizAmended {
+            atom: atom.id.clone(),
+            quiz: quiz_id.to_string(),
+        };
+        changes.append(view, &Event::now(id, amended))
     })
     .await
 }
@@ -102,10 +105,11 @@ pub async fn cmd_quiz_delete(db: &Db, quiz_id: &str, path_id: Option<&str>) -> R
         let g = view.graph()?;
         let (atom, _) = g.quiz(quiz_id)?;
         overlay::remove_quiz(changes, &atom.id, quiz_id);
-        changes.append(
-            view,
-            &event_log::quiz_removed(id, atom.id.clone(), quiz_id.to_string()),
-        )
+        let removed = EventKind::QuizRemoved {
+            atom: atom.id.clone(),
+            quiz: quiz_id.to_string(),
+        };
+        changes.append(view, &Event::now(id, removed))
     })
     .await
 }

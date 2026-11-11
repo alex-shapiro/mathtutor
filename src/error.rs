@@ -78,9 +78,6 @@ pub enum Error {
     #[error("malformed row: {0}")]
     BadRow(String),
 
-    #[error("malformed event: {0}")]
-    BadEvent(&'static str),
-
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
 
@@ -194,7 +191,6 @@ impl Error {
             | Error::SchemaMismatch { .. }
             | Error::Http(_)
             | Error::BadRow(_)
-            | Error::BadEvent(_)
             | Error::Json(_)
             | Error::CardsCorrupt(_)
             | Error::Turso(_)

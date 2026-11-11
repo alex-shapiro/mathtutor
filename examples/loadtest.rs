@@ -559,7 +559,7 @@ async fn verify(base: &DbConfig, ledger: &Ledger) {
         let events = event_log::load(&db, path_id).await.expect("load events");
         let logged = events
             .iter()
-            .filter(|e| e.kind == EventKind::QuizAnswered)
+            .filter(|e| matches!(e.kind, EventKind::QuizAnswered { .. }))
             .count() as u64;
         if logged < *ok || logged > ok + failed {
             bad += 1;

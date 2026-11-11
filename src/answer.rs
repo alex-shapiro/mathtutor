@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::db::Db;
-use crate::event_log;
+use crate::event_log::{Event, EventKind};
 
 use crate::types::Rating;
 use crate::view::Want;
@@ -23,14 +23,13 @@ pub async fn cmd_quiz_answer(
         // Verify that the quiz exists in the merged graph before recording an event.
         let g = view.graph()?;
         let (atom, _) = g.quiz(quiz_id)?;
-        let e = event_log::quiz_answered(
-            id,
-            Some(atom.id.clone()),
-            quiz_id.to_string(),
+        let answered = EventKind::QuizAnswered {
+            atom: Some(atom.id.clone()),
+            quiz: quiz_id.to_string(),
             rating,
-            user_answer.clone(),
-        );
-        changes.append(view, &e)
+            user_answer: user_answer.clone(),
+        };
+        changes.append(view, &Event::now(id, answered))
     })
     .await
 }
