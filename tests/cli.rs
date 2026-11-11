@@ -29,6 +29,8 @@ fn commands_without_learner_state_run_without_a_database() {
         &["graph", "show", "fnd.1"],
         &["graph", "list", "fnd.1", "--recursive"],
         &["graph", "check"],
+        #[cfg(feature = "mcp")]
+        &["mcp", "tools"],
     ] {
         let out = mt(args);
         let stderr = String::from_utf8_lossy(&out.stderr);

@@ -24,7 +24,7 @@ Set these environment variables before you run a command that reads or writes le
 
 The first `mt path new` creates the database. Only a key without a database limit can create a database, and that key can also delete it. After the first run, give each device and server its own key that is limited to the database. See "Baserunna keys" in `docs/design.md`.
 
-`mt graph list` and `mt graph show` run without these variables if `--path` is omitted.
+`mt instruct`, `mt graph check`, and `mt mcp tools` run without these variables. `mt graph list` and `mt graph show` also run without them if `--path` is omitted.
 
 `mt` uses the curriculum that is embedded in the binary. To use a curriculum directory instead, pass `--graph DIR` before the command, as in `mt --graph DIR path next`, or set `MT_GRAPH`.
 
@@ -62,6 +62,7 @@ mt quiz answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT]
 
 mt instruct                           # print the agent playbook
 mt mcp                                # start the MCP HTTP server (see docs/mcp.md)
+mt mcp tools                          # print the MCP tool schemas as JSON
 mt import-turso [--url URL]           # import a libSQL database into Baserunna
 
 mt --graph DIR <COMMAND>              # use the curriculum in DIR instead of the embedded one

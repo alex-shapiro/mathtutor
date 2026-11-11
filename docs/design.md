@@ -20,7 +20,7 @@ Each atom represents a single concept. A lesson is 1–2 paragraphs and introduc
 mt path list
 mt path new <GOAL> --targets <ID>[,<ID>...] [--strategy {bottom_up,top_down}]
 mt path state [--path P]
-mt path next  [--path P]
+mt path next  [--path P] [--new | --due]
 mt path strategy {bottom_up,top_down} [--path P]
 mt path subpath set --atoms <ID>[,<ID>...] [--path P]
 mt path subpath clear [--path P]
@@ -49,6 +49,8 @@ mt quiz answer <QUIZ_ID> --rating {again,hard,good,easy} [--user-answer TEXT]
 mt instruct
 mt import-turso [--url URL]
 ```
+
+`--new` skips due reviews, and `--due` returns only due reviews. See "Spaced repetition (FSRS)".
 
 Each `TEXT` value is a single shell word. Put the text in single quotes, and write each single quote in the text as `'\''`. The shell then keeps `$`, `\`, `"`, and line breaks unchanged, so LaTeX such as `$x^2$` reaches `mt` intact. The `next_step` field and the agent playbook use this form.
 
