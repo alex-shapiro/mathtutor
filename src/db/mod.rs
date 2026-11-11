@@ -137,7 +137,8 @@ impl Db {
     }
 
     /// Return a handle that reads the overlay from the database instead of a cache.
-    pub(crate) fn without_overlay_cache(&self) -> Self {
+    #[must_use]
+    pub fn without_overlay_cache(&self) -> Self {
         Self {
             overlay_cache: Arc::default(),
             cache_file: None,

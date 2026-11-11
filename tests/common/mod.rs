@@ -191,10 +191,20 @@ pub async fn append(db: &Db, events: &[Event]) {
     .expect("append");
 }
 
-/// Load the stored overlay.
+/// Load the overlay from its stored rows, and assert that it equals the overlay that `db` caches.
 pub async fn overlay(db: &Db) -> Overlay {
-    let view = db.snapshot(&Want::overlay()).await.expect("snapshot");
-    view.overlay().expect("overlay").clone()
+    let read = async |db: &Db| {
+        let view = db.snapshot(&Want::overlay()).await.expect("snapshot");
+        view.overlay().expect("overlay").clone()
+    };
+    let cached = read(db).await;
+    let stored = read(&db.without_overlay_cache()).await;
+    assert_eq!(
+        serde_json::to_value(&cached).unwrap(),
+        serde_json::to_value(&stored).unwrap(),
+        "the cached overlay differs from the stored rows"
+    );
+    stored
 }
 
 /// Load the stored state for `path_id`.
