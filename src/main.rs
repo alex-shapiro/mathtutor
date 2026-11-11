@@ -94,7 +94,7 @@ impl Context {
 
 /// Print `e` to stderr and return its exit code.
 fn report_failure(e: &Error) -> ExitCode {
-    eprintln!("error: {e}");
+    eprintln!("error: {}", e.message(Surface::Cli));
     ExitCode::from(e.exit_code())
 }
 

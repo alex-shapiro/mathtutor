@@ -441,7 +441,7 @@ fn encode<T: Serialize>(
             Ok(CallToolResult::structured(object))
         }
         Err(e) => {
-            let mut body = json!({ "error": format!("{e}"), "kind": e.kind().name() });
+            let mut body = json!({ "error": e.message(Surface::Mcp), "kind": e.kind().name() });
             if e.outcome_is_unknown() {
                 body["next_step"] = json!(op.unknown_outcome_step(Surface::Mcp));
             }
@@ -932,7 +932,7 @@ mod tests {
 
     #[test]
     fn known_outcome_error_omits_next_step() {
-        let result = encode::<()>(Operation::AnswerQuiz, Err(Error::NoPath)).unwrap();
+        let result = encode::<()>(Operation::AnswerQuiz, Err(Error::NoPath(None))).unwrap();
         let body = result.structured_content.expect("structured error");
         assert!(body.get("next_step").is_none());
     }

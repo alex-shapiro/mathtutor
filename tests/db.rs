@@ -1116,7 +1116,10 @@ async fn graph_lookup_rejects_an_unknown_path() {
         path: Some("typo"),
     };
     let result = mathtutor::discover::graph_for(lookup).await;
-    assert!(matches!(result, Err(Error::NoPath)));
+    assert!(
+        matches!(&result, Err(Error::NoPath(Some(id))) if id == "typo"),
+        "{result:?}"
+    );
 }
 
 struct DisconnectedTransport;

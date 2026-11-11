@@ -258,10 +258,10 @@ async fn failed_transaction_does_not_write_events_or_cards() {
                 view,
                 &answered(PATH_ID, "atom.x", "atom.x.q1", Rating::Good),
             )?;
-            Err(Error::NoPath)
+            Err(Error::NoPath(None))
         })
         .await;
-    assert!(matches!(r, Err(Error::NoPath)));
+    assert!(matches!(r, Err(Error::NoPath(_))));
 
     assert_eq!(logged(&db, PATH_ID).await, []);
     let ps = common::path_state(&db, PATH_ID).await;

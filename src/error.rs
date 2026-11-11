@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::surface::Surface;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -37,8 +38,12 @@ pub enum Error {
     #[error("atom '{0}' not found in graph")]
     AtomNotFound(String),
 
-    #[error("learning path not found")]
-    NoPath,
+    /// The selected path does not exist, or no path exists if the command named no path.
+    #[error("{}", match .0 {
+        Some(id) => format!("learning path '{id}' not found"),
+        None => "no learning path exists".to_string(),
+    })]
+    NoPath(Option<String>),
 
     #[error(
         "path '{0}' is not loaded in this transaction; mt must load a path before it records events for the path"
@@ -298,7 +303,7 @@ impl Error {
             | Error::BadBindAddr(_)
             | Error::BadPublicUrl(_)
             | Error::BadClientIpHeader(_) => ErrorKind::Config,
-            Error::NoPath => ErrorKind::NoPath,
+            Error::NoPath(_) => ErrorKind::NoPath,
             Error::NoLesson(_) => ErrorKind::NoLesson,
             Error::NoHome => ErrorKind::NoHome,
             Error::FileIo { .. } | Error::AymlParse { .. } | Error::AymlSerialize(_) => {
@@ -322,6 +327,18 @@ impl Error {
             Error::Bind { .. } | Error::Serve(_) => ErrorKind::Server,
             Error::PathNotLoaded(_) | Error::OverlayNotLoaded => ErrorKind::Internal,
         }
+    }
+
+    /// Return the text of this error for an agent on `surface`, with the next step if the error names a missing path.
+    pub fn message(&self, surface: Surface) -> String {
+        let step = match (self, surface) {
+            (Error::NoPath(Some(_)), Surface::Cli) => "run `mt path list` to list the paths",
+            (Error::NoPath(Some(_)), Surface::Mcp) => "call `get_paths` to list the paths",
+            (Error::NoPath(None), Surface::Cli) => "run `mt path new` to create one",
+            (Error::NoPath(None), Surface::Mcp) => "call `new_path` to create one",
+            _ => return self.to_string(),
+        };
+        format!("{self}; {step}")
     }
 
     /// Return the process exit code of this error.
@@ -366,7 +383,7 @@ mod tests {
     #[test]
     fn exit_codes_separate_usage_state_and_unknown_outcomes() {
         assert_eq!(Error::UnknownId("x".into()).exit_code(), 2);
-        assert_eq!(Error::NoPath.exit_code(), 1);
+        assert_eq!(Error::NoPath(None).exit_code(), 1);
         let unsent = baserunna_client::Error::Transport(TransportError::NotSent("refused".into()));
         assert_eq!(Error::Baserunna(unsent).exit_code(), 1);
         let lost = baserunna_client::Error::Transport(TransportError::Unknown("reset".into()));
@@ -392,6 +409,26 @@ mod tests {
             .map(|k| (k.name().to_string(), k.exit_code()))
             .collect();
         assert_eq!(documented, kinds);
+    }
+
+    #[test]
+    fn a_missing_path_names_its_id_and_the_list_step_of_the_surface() {
+        let missing = Error::NoPath(Some("p_2026_05_09_173042_k3x9".into()));
+        assert_eq!(
+            missing.message(Surface::Cli),
+            "learning path 'p_2026_05_09_173042_k3x9' not found; run `mt path list` to list the paths"
+        );
+        assert!(
+            missing
+                .message(Surface::Mcp)
+                .ends_with("call `get_paths` to list the paths")
+        );
+        assert!(
+            Error::NoPath(None)
+                .message(Surface::Mcp)
+                .contains("`new_path`")
+        );
+        assert_eq!(Error::Cycle.message(Surface::Cli), Error::Cycle.to_string());
     }
 
     #[test]

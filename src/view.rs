@@ -238,7 +238,7 @@ impl View {
         self.selected
             .as_ref()
             .and_then(|id| self.paths.get(id))
-            .ok_or(Error::NoPath)
+            .ok_or_else(|| Error::NoPath(self.selected.clone()))
     }
 
     /// Return every loaded path, ordered by creation time.

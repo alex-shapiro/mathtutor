@@ -92,8 +92,8 @@ The selected atom does not have a lesson in the merged graph. The agent authors 
 
 ```yaml
 action: create_lesson
-path: p_2026_05_09_173_42
-next_step: "mt lesson upsert la.5.4.7 --path p_2026_05_09_173_42 --body '<lesson>'"
+path: p_2026_05_09_173042_k3x9
+next_step: "mt lesson upsert la.5.4.7 --path p_2026_05_09_173042_k3x9 --body '<lesson>'"
 payload:
   atom:
     id: la.5.4.7
@@ -111,8 +111,8 @@ A lesson exists in the merged graph, but it has not been taught on this path. `m
 
 ```yaml
 action: present_lesson
-path: p_2026_05_09_173_42
-next_step: "mt path next --path p_2026_05_09_173_42"
+path: p_2026_05_09_173042_k3x9
+next_step: "mt path next --path p_2026_05_09_173042_k3x9"
 payload:
   atom:
     id: la.5.4.7
@@ -130,8 +130,8 @@ The lesson has been taught on this path, but a difficulty slot does not have a q
 
 ```yaml
 action: create_quiz
-path: p_2026_05_09_173_42
-next_step: "mt quiz create la.5.4.7 --path p_2026_05_09_173_42 --difficulty medium --question '<question>' --answer '<answer>' [--rubric '<rubric>']"
+path: p_2026_05_09_173042_k3x9
+next_step: "mt quiz create la.5.4.7 --path p_2026_05_09_173042_k3x9 --difficulty medium --question '<question>' --answer '<answer>' [--rubric '<rubric>']"
 payload:
   atom:
     id: la.5.4.7
@@ -155,8 +155,8 @@ A quiz card is due or required for atom completion. The agent presents the quest
 
 ```yaml
 action: present_quiz
-path: p_2026_05_09_173_42
-next_step: "mt quiz answer la.5.4.7.q2 --path p_2026_05_09_173_42 --rating <again|hard|good|easy> --user-answer '<verbatim reply>'"
+path: p_2026_05_09_173042_k3x9
+next_step: "mt quiz answer la.5.4.7.q2 --path p_2026_05_09_173042_k3x9 --rating <again|hard|good|easy> --user-answer '<verbatim reply>'"
 payload:
   atom:
     id: la.5.4.7
@@ -185,8 +185,8 @@ payload:
 
 ```yaml
 action: no_reviews_due
-path: p_2026_05_09_173_42
-next_step: "mt path next --path p_2026_05_09_173_42"
+path: p_2026_05_09_173042_k3x9
+next_step: "mt path next --path p_2026_05_09_173042_k3x9"
 payload:
   message: "Zero reviews are due."
 ```
@@ -197,7 +197,7 @@ All target atoms on the path are complete, and zero review cards are currently d
 
 ```yaml
 action: done
-path: p_2026_05_09_173_42
+path: p_2026_05_09_173042_k3x9
 payload:
   message: "Path complete."
 ```
@@ -208,7 +208,7 @@ payload:
 
 ```yaml
 schema_version: 1
-path: p_2026_05_09_173_42
+path: p_2026_05_09_173042_k3x9
 goal: "Understand SVD"
 total_remaining: 23
 atoms:
@@ -353,7 +353,7 @@ Each error has a kind that sets its exit code. An MCP tool error reports the sam
 | `subpath_duplicate_atom`  | 2         | The subpath lists an atom more than once.                                       |
 | `conflicting_flags`       | 2         | The command has flags that cannot occur together.                               |
 | `config`                  | 2         | A setting is missing or incorrect, such as `BASERUNNA_TOKEN` or `BASERUNNA_DB`. |
-| `no_path`                 | 1         | The learning path does not exist.                                               |
+| `no_path`                 | 1         | The learning path does not exist. The error names the ID and the list step.     |
 | `no_lesson`               | 1         | The atom does not have a stored lesson.                                         |
 | `no_home`                 | 1         | Neither `MATHTUTOR_HOME` nor `HOME` is set.                                     |
 | `io`                      | 1         | A file read, file write, or AYML conversion failed.                             |
