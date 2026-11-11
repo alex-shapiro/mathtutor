@@ -122,6 +122,47 @@ Reverting to Turso after Baserunna accepts new writes loses those writes.
 - **Define a pre-traffic checklist:** Verify the imported path count, an OAuth login, and a test `get_next` / `answer_quiz` cycle before enabling user traffic.
 - **Rely on the operator:** Keeps the runbook shorter.
 
+### A lost refresh response signs the connector out
+
+A refresh request to `/oauth/token` deletes the presented refresh token in the transaction that issues the new pair. If the response does not reach the connector, the connector holds only the deleted token, and its next refresh fails. The user must sign in again.
+
+- **Keep the old token valid for a short grace window:** A lost response has zero effect. A stolen refresh token stays usable for longer.
+- **Return the same new pair if the old token comes back within the window:** A lost response has zero effect, and the server issues no extra secret. A stolen refresh token has the same longer exposure.
+- **Keep strict rotation:** A stolen token works only once. A lost response signs the connector out.
+
+### Who creates the database
+
+The first `mt path new` creates the database. Only a key without a database limit can create a database, and such a key can also delete every database of its user. Thus the first session of an agent must hold a key that can delete all learner history.
+
+- **Add an operator setup command, such as `mt db create`:** The operator runs it once with a temporary unlimited key. After that, every learner command uses a key that is limited to the database. A new user has an extra setup step.
+- **Keep creation in `mt path new`:** Setup has no extra step. The agent holds an unlimited key on first use.
+- **Create the database in the Baserunna console, and never create databases in `mt`:** The user clicks "Create database" in the console, where the user already creates keys. Every command then uses a key that is limited to the database, and the first command creates the tables. A typo in `BASERUNNA_DB` names a database that does not exist, so the command fails and no second history starts. `mt import-turso` needs no temporary unlimited key. Audit 4 confirmed that a key limited to a database that the console created can create the tables and the first path. The user has one console step and no extra command.
+
+The current behavior also blocks the first agent session. The playbook starts with `mt path state`, which fails on a new setup because the database does not exist yet. The error tells the agent to check `BASERUNNA_DB` and `BASERUNNA_URL`, so the agent stops before it reaches `mt path new`. A user of MCP only cannot pass this step. `mt mcp` starts, but `/ready` fails and every tool call fails with an error that names `BASERUNNA_DB`, a setting that the MCP user cannot see. Only the console step or a path that the CLI creates gets past this error. The setup command removes both problems. A creation hint in the error removes them too, but an agent that follows the hint after a typo in `BASERUNNA_DB` starts a second, empty learner history.
+
+### Devices as full database clients
+
+The CLI on each device and the MCP server are full clients of the database. Each one holds a Baserunna key, writes the derived `cards` and `taught` rows with its own FSRS version, checks the schema version, and downloads the full overlay after each overlay edit. Four items under "Later" come from this cause: a leaked device key can drop tables, every device must run the same release, devices on different releases compute cards differently, and each device downloads the full overlay.
+
+- **Make the CLI a client of the server API:** Only the server holds a Baserunna key, writes projections, and checks the schema. Each device holds a token that the server can revoke and that cannot drop tables. The CLI needs a running `mt mcp` server, a Fly cold start delays the first command, and a user with one device must run or host a server.
+- **Keep devices as full clients:** No server is necessary. The four problems stay, and each one needs its own fix.
+
+### Sign-in delay after incorrect passwords
+
+`/oauth/authorize` delays the next attempt from an address after 5 incorrect passwords. The wait doubles from 1 second up to a limit of 15 minutes, so an attacker at the limit can try about 4 passwords per hour from each address. The limit also applies to the administrator on the same address, and to every user behind the same NAT or `/64` IPv6 network. The server uses 15 minutes now.
+
+- **Shorter limit, such as 1 minute:** A user who mistypes many times waits less. An attacker can try about 60 passwords per hour from each address.
+- **Longer limit, such as 1 hour:** An attacker can try 1 password per hour from each address. A user who mistypes many times can wait up to 1 hour.
+- **Add a global limit on failures from all addresses:** An attacker with many addresses gets few attempts. An attacker can lock out the administrator from every address.
+
+### Default Baserunna server
+
+`BASERUNNA_URL` defaults to `https://baserunna.fly.dev`, the deployment of the maintainer. A user who does not set `BASERUNNA_URL` sends the API key of another server to this deployment. The deployment rejects the key with a 401, and `mt` reports the URL and the two settings to check.
+
+- **Remove the default and fail with exit code `2` that names `BASERUNNA_URL`:** No key goes to an unintended server. Each user sets one more variable.
+- **Keep the default as a hosted service and state its limits in the README:** Setup stays short. Users depend on a single node without backup that the maintainer operates.
+- **Keep the default only for the maintainer and document it:** Setup stays short for the maintainer. Other users can send their key to the maintainer's server by mistake.
+
 ## Later
 
 - [ ] **Protect learner history from a leaked key.** This is a preexisting limit of Baserunna. Every key that can write learner state can also drop the tables and delete or trim the event streams, because Baserunna gives these actions to the writer role and has no per-key role. A key limited to the database cannot delete the database, but it can destroy its contents. Baserunna has no backup or point-in-time restore. Ask Baserunna for a role that writes rows and appends to streams without schema or stream deletion, and add a backup (see "Database backup and rollback").
@@ -135,6 +176,6 @@ Reverting to Turso after Baserunna accepts new writes loses those writes.
 - [ ] **Give imported user quizzes IDs that a curriculum release cannot reuse.** `mt import-turso` keeps the `<atom>.qN` IDs of user quizzes. A later release can add a curriculum quiz with the same ID, and the overlay row then replaces that curriculum quiz. Rename the imported quizzes to the user quiz ID form in quizzes, tombstones, cards, and events, and make the import verification accept the new IDs.
 - [ ] **Take event times from one clock.** Each device and the server write events with their own clock, and FSRS computes due times from those events. A device with a fast clock delays reviews on every device, and a device with a slow clock brings them forward. Take the time from the Baserunna commit if the server can return it. As a minimum, reject or clamp an answer whose time is before the last review of its card.
 - [ ] **Alert the operator when the server cannot serve.** A failed `/ready` check stops a deploy, but nothing alerts the operator after the deploy. Both Fly apps scale to zero, so a revoked key, a Baserunna outage, or a schema mismatch shows only when a learner gets an error. Add a scheduled external check of `/ready`, such as a GitHub Actions cron job or an uptime service.
-- [ ] **Let the operator sign out OAuth connectors.** Refresh tokens rotate and get 30 more days at each refresh, so an active connector stays signed in without limit. The server has no revocation endpoint, and a new `MT_ADMIN_PASSWORD` does not invalidate stored tokens. A lost device or a leaked refresh token keeps write access to learner history. Add `mt mcp revoke` for all tokens or for the tokens of one client, or reject grants that an older password issued. The second option signs out every connector when the password changes.
+- [ ] **Let the operator sign out OAuth connectors.** Refresh tokens rotate and get 30 more days at each refresh, so an active connector stays signed in without limit. The server has no revocation endpoint, and a new `MT_ADMIN_PASSWORD` does not invalidate stored tokens. A lost device or a leaked refresh token keeps write access to learner history. Add `mt mcp revoke` for all tokens or for the tokens of one client, or reject grants that an older password issued. The second option signs out every connector when the password changes. Client registrations with a token grant never expire, so a revocation command must also delete the registrations of removed connectors.
 - [ ] **Import paths that exceed one transaction.** `mt import-turso` writes each path with all its events in one transaction. Baserunna limits a transaction to 16 MB of writes and 10,000 operations, so a path above the limit fails each time and the import stays open. Check the size of each path before the import claims the target and name the paths that are too large. A split into more transactions must not append events twice on resume.
 - [ ] **Version the overlay cache file.** The cache file stores quizzes in their curriculum-file form without a format number. A release that changes that form with serde defaults can decode an old cache file without an error and use stale content until the next overlay edit. Put a format number or the crate version in the cache file name.
