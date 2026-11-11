@@ -80,10 +80,10 @@ If the user asks to review only due quizzes, {{get_due}}. The result is `present
 If the user is blocked on a target atom in `top_down` mode, create a subpath of prerequisite atoms leading to that target:
 
 1. {{inspect_target}} to inspect the target's prerequisites and select the missing concepts, deepest first.
-2. {{subpath_set}}. The final atom in the list must be a path target.
+2. {{run}} `{{subpath_set}}` with an ordered list of prerequisite atoms. The final atom in the list must be a path target.
 3. If the user is blocked on a prerequisite in the subpath, {{subpath_set_again}} with additional prerequisites prepended.
 
-{{next_name}} clears the subpath after the user completes its final atom. To clear the subpath earlier, {{subpath_clear}}.
+{{next_name}} clears the subpath after the user completes its final atom. {{run}} `{{subpath_clear}}` to clear the subpath earlier.
 
 ## Action playbook
 
@@ -132,7 +132,7 @@ All target atoms on the path are complete. Inform the user and offer to start a 
 
 - **Update a lesson:** {{run}} `{{upsert_lesson}}` to replace the stored lesson body, and present the updated lesson.
 - **Update a quiz:** {{run}} `{{update_quiz}}` to modify specific fields while preserving the quiz ID and FSRS review history.
-- **Delete a quiz:** {{delete_quiz}} to tombstone the quiz so that the scheduler prompts for a replacement via `create_quiz`. Prefer {{update_quiz_name}} over {{delete_quiz_name}} to preserve FSRS state.
+- **Delete a quiz:** {{run}} `{{delete_quiz}}` to tombstone the quiz so that the scheduler prompts for a replacement via {{create_quiz_name}}. Prefer {{update_quiz_name}} over {{delete_quiz_name}} to preserve FSRS state.
 
 ## Style rules
 

@@ -40,26 +40,11 @@ const TERMS: &[(&str, &str, &str)] = &[
         "Call `get_item { id: <target> }`",
     ),
     (
-        "subpath_set",
-        "Run `mt path subpath set --atoms <prereq>,<...>,<target>`",
-        "Call `subpath_set { path_id, atoms }` with an ordered list of prerequisite atoms",
-    ),
-    (
         "subpath_set_again",
         "run `mt path subpath set` again",
         "call `subpath_set` again",
     ),
-    (
-        "subpath_clear",
-        "run `mt path subpath clear`",
-        "call `subpath_clear { path_id }`",
-    ),
     ("run", "Run", "Call"),
-    (
-        "delete_quiz",
-        "Run `mt quiz delete <quiz-id>`",
-        "Call `delete_quiz { quiz_id, path_id }`",
-    ),
     (
         "error_report",
         "`mt` prints errors to stderr and exits with a non-zero status code.",
@@ -76,6 +61,7 @@ const TERMS: &[(&str, &str, &str)] = &[
 const TOOL_TERMS: &[(&str, AgentCommand)] = &[
     ("next_name", AgentCommand::GetNext),
     ("answer_name", AgentCommand::AnswerQuiz),
+    ("create_quiz_name", AgentCommand::CreateQuiz),
     ("update_quiz_name", AgentCommand::UpdateQuiz),
     ("delete_quiz_name", AgentCommand::DeleteQuiz),
 ];
@@ -86,7 +72,7 @@ const FIELD_TERMS: &[(&str, Field)] = &[
     ("verbatim_field", Field::UserAnswer),
 ];
 
-/// Return the steps with free text that the playbook names, each with its term name.
+/// Return the steps that the playbook names, each with its term name.
 pub fn playbook_steps() -> Vec<(&'static str, Step)> {
     let path = || Value::Id("path-id");
     let atom = || Value::Id("atom-id");
@@ -124,6 +110,19 @@ pub fn playbook_steps() -> Vec<(&'static str, Step)> {
                 .optional(Field::Rubric, Value::Text("rubric"))
                 .optional(Field::Difficulty, Value::Choice(Difficulty::SPELLINGS))
                 .optional(Field::QuizType, Value::Choice(QuizType::SPELLINGS)),
+        ),
+        (
+            "delete_quiz",
+            Step::new(AgentCommand::DeleteQuiz, path()).arg(Field::QuizId, quiz()),
+        ),
+        (
+            "subpath_set",
+            Step::new(AgentCommand::SubpathSet, path())
+                .arg(Field::Atoms, Value::IdList(&["prereq", "...", "target"])),
+        ),
+        (
+            "subpath_clear",
+            Step::new(AgentCommand::SubpathClear, path()),
         ),
     ]
 }
@@ -203,7 +202,7 @@ pub(crate) fn filled_steps() -> Vec<Step> {
         .flat_map(|i| {
             steps.iter().map(move |step| {
                 step.fill(|field| match field {
-                    Field::Atom => atom_id(),
+                    Field::Atom | Field::Atoms => atom_id(),
                     Field::QuizId => "fnd.1.1.1.q1".into(),
                     Field::PathId => "p_test".into(),
                     Field::Difficulty => {
@@ -362,7 +361,16 @@ mod tests {
                     continue;
                 };
                 let args = &args[..args.find('}').expect("closing brace")];
-                for arg in args.split(',').map(str::trim).filter(|a| !a.is_empty()) {
+                let mut depth = 0;
+                let args = args.split(|c| {
+                    match c {
+                        '[' => depth += 1,
+                        ']' => depth -= 1,
+                        _ => {}
+                    }
+                    c == ',' && depth == 0
+                });
+                for arg in args.map(str::trim).filter(|a| !a.is_empty()) {
                     let field = arg.split(':').next().unwrap().trim().trim_end_matches('?');
                     assert!(fields.contains(field), "`{name}` has no field {field}");
                 }

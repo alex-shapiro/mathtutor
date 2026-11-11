@@ -135,6 +135,8 @@ impl AgentCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Atom,
+    /// Atoms of a subpath in teaching order.
+    Atoms,
     QuizId,
     PathId,
     Body,
@@ -152,6 +154,7 @@ impl Field {
     pub fn mcp(self) -> &'static str {
         match self {
             Field::Atom => "atom",
+            Field::Atoms => "atoms",
             Field::QuizId => "quiz_id",
             Field::PathId => "path_id",
             Field::Body => "body",
@@ -170,6 +173,7 @@ impl Field {
         match self {
             Field::Atom | Field::QuizId => None,
             Field::PathId => Some("--path"),
+            Field::Atoms => Some("--atoms"),
             Field::Body => Some("--body"),
             Field::Question => Some("--question"),
             Field::Answer => Some("--answer"),
@@ -193,6 +197,8 @@ pub enum Value {
     Text(&'static str),
     /// A value that the agent selects from a fixed list.
     Choice(&'static [&'static str]),
+    /// An ordered list of identifiers that the agent supplies, with a placeholder name for each item.
+    IdList(&'static [&'static str]),
 }
 
 impl Step {
@@ -274,7 +280,7 @@ impl Step {
     pub fn mcp_args(&self) -> serde_json::Map<String, serde_json::Value> {
         self.args
             .iter()
-            .map(|a| (a.field.mcp().to_string(), a.value.raw().into()))
+            .map(|a| (a.field.mcp().to_string(), a.value.json()))
             .collect()
     }
 
@@ -309,7 +315,7 @@ impl Step {
             .ordered_args()
             .map(|a| {
                 let mark = if a.optional { "?" } else { "" };
-                format!("{}{mark}: {}", a.field.mcp(), a.value.mcp())
+                format!("{}{mark}: {}", a.field.mcp(), a.value.json())
             })
             .collect();
         format!("{} {{ {} }}", self.tool.mcp(), fields.join(", "))
@@ -328,21 +334,31 @@ impl Value {
             Value::Known(v) => v.clone(),
             Value::Id(name) | Value::Text(name) => format!("<{name}>"),
             Value::Choice(options) => options.join("|"),
+            Value::IdList(names) => placeholders(names).join(","),
         }
     }
 
     fn cli(&self) -> String {
         match self {
             Value::Known(v) => shell_word(v),
-            Value::Id(name) => format!("<{name}>"),
+            Value::Id(_) | Value::IdList(_) => self.raw(),
             Value::Text(name) => format!("'<{name}>'"),
             Value::Choice(options) => format!("<{}>", options.join("|")),
         }
     }
 
-    fn mcp(&self) -> String {
-        serde_json::Value::from(self.raw()).to_string()
+    /// Return the value as an MCP argument.
+    fn json(&self) -> serde_json::Value {
+        match self {
+            Value::IdList(names) => placeholders(names).into(),
+            _ => self.raw().into(),
+        }
     }
+}
+
+/// Return the placeholder of each name in `names`.
+fn placeholders(names: &[&str]) -> Vec<String> {
+    names.iter().map(|name| format!("<{name}>")).collect()
 }
 
 /// Return `s` as a single shell word: unchanged if it holds only safe characters, or in single quotes with each `'` written as `'\''`.
