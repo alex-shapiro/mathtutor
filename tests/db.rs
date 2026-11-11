@@ -220,8 +220,8 @@ async fn commands_check_the_database_in_their_first_request() {
     db.snapshot(&Want::path(Some(PATH_ID))).await.unwrap();
     assert_eq!(
         traffic.requests.load(Ordering::Relaxed),
-        2,
-        "a read with a cold cache loads the overlay beside the path"
+        1,
+        "a read with a cold cache loads the overlay in the request that reads the path"
     );
 }
 
