@@ -27,7 +27,7 @@ The server operates as a single-user, single-tenant instance backed by a single 
 1. **Static bearer token:** Configured via `MT_API_KEY` and passed in `Authorization: Bearer <token>` or `?token=<token>`.
 2. **OAuth 2.1 access token:** Issued by the built-in authorization server if `MT_ADMIN_PASSWORD` is set, and passed in `Authorization: Bearer <token>`.
 
-Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticated requests receive `401 Unauthorized` with a `WWW-Authenticate` header pointing to `/.well-known/oauth-protected-resource`. If the server cannot read an access token from Baserunna, the request receives `503 Service Unavailable` with a `Retry-After` header.
+Either `MT_API_KEY` or `MT_ADMIN_PASSWORD` must be set at startup. Unauthenticated requests receive `401 Unauthorized` with a `WWW-Authenticate` header pointing to `/.well-known/oauth-protected-resource`. The server keeps each valid access token in memory until it expires, so it reads a token from Baserunna once. The server has no revocation endpoint, so the cache does not extend the life of a token. If the server cannot read an access token from Baserunna, the request receives `503 Service Unavailable` with a `Retry-After` header.
 
 ### Built-in OAuth 2.1 authorization server
 

@@ -1542,3 +1542,43 @@ async fn a_token_grant_keeps_the_client_registration_for_the_refresh_token_lifet
     assert_eq!(days_left().await, 30);
     server.stop().await;
 }
+
+#[tokio::test]
+async fn a_validated_access_token_needs_no_further_database_read() {
+    use mathtutor::db::Op;
+    use mathtutor::mcp::oauth::secret_hash;
+    use mathtutor::schema::OAuthAccessToken;
+
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    let reg = register_client(&server, "Cached").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+    let session = handshake_with_token(&server, &tokens.access_token).await;
+
+    let raw = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db);
+    let hash = secret_hash(&tokens.access_token);
+    raw.write(&[Op::delete_row::<OAuthAccessToken>(&hash)])
+        .await
+        .unwrap();
+
+    let res = mcp_post_with_token(
+        &server,
+        &session,
+        &tokens.access_token,
+        &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}),
+    )
+    .await;
+    assert_eq!(res.status(), 200, "the server reads the token from memory");
+    server.stop().await;
+}

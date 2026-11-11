@@ -1,5 +1,6 @@
 //! OAuth 2.1 authorization server for `mt mcp`.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -12,7 +13,7 @@ use axum::{
     routing::{get, post},
 };
 use base64::Engine;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -598,15 +599,84 @@ fn check_refresh(
     Ok(row)
 }
 
-/// Return the `client_id` for an access token that gives access to the MCP tools, or `None` if the token is unknown, expired, or has another scope.
-pub async fn validate_access_token(db: &Db, token: &str) -> Result<Option<String>, crate::Error> {
-    let stored: Option<OAuthAccessToken> = db
-        .read_one(Op::get_row::<OAuthAccessToken>(secret_hash(token)))
-        .await?
-        .row()?;
-    Ok(stored
-        .filter(|t| t.expires_at >= Utc::now() && includes_mcp(&t.scope))
-        .map(|t| t.client_id))
+/// Number of valid access tokens that the server keeps in memory.
+const MAX_CACHED_ACCESS_TOKENS: usize = 1_000;
+
+/// Access tokens that give access to the MCP tools, with a memory cache of the valid tokens.
+///
+/// The server has no revocation endpoint, so a cached token stays valid exactly as long as its row.
+#[derive(Clone)]
+pub struct AccessTokens {
+    db: Db,
+    /// Expiry time of each valid access token, keyed by the hash of the token.
+    valid: Arc<std::sync::Mutex<HashMap<String, DateTime<Utc>>>>,
+}
+
+impl AccessTokens {
+    pub fn new(db: Db) -> Self {
+        Self {
+            db,
+            valid: Arc::default(),
+        }
+    }
+
+    /// Return `true` if `token` is a known, unexpired access token with the `mcp` scope.
+    pub async fn is_valid(&self, token: &str) -> Result<bool, crate::Error> {
+        let hash = secret_hash(token);
+        let now = Utc::now();
+        if self.cached(&hash, now) {
+            return Ok(true);
+        }
+        let stored: Option<OAuthAccessToken> = self
+            .db
+            .read_one(Op::get_row::<OAuthAccessToken>(&hash))
+            .await?
+            .row()?;
+        let Some(expires_at) = stored
+            .filter(|t| t.expires_at >= now && includes_mcp(&t.scope))
+            .map(|t| t.expires_at)
+        else {
+            return Ok(false);
+        };
+        self.remember(hash, expires_at, now);
+        Ok(true)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, DateTime<Utc>>> {
+        self.valid
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Return `true` if the cache holds token hash `hash` unexpired at `now`, and forget the hash if it expired.
+    fn cached(&self, hash: &str, now: DateTime<Utc>) -> bool {
+        let mut valid = self.lock();
+        match valid.get(hash) {
+            Some(expires_at) if *expires_at >= now => true,
+            Some(_) => {
+                valid.remove(hash);
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// Cache token hash `hash` until `expires_at`, and make room by evicting expired tokens, then the token that expires first.
+    fn remember(&self, hash: String, expires_at: DateTime<Utc>, now: DateTime<Utc>) {
+        let mut valid = self.lock();
+        if valid.len() >= MAX_CACHED_ACCESS_TOKENS {
+            valid.retain(|_, e| *e >= now);
+        }
+        if valid.len() >= MAX_CACHED_ACCESS_TOKENS
+            && let Some(first) = valid
+                .iter()
+                .min_by_key(|(_, e)| **e)
+                .map(|(h, _)| h.clone())
+        {
+            valid.remove(&first);
+        }
+        valid.insert(hash, expires_at);
+    }
 }
 
 async fn load_client(db: &Db, client_id: &str) -> Result<OAuthClient, OAuthError> {
@@ -866,6 +936,40 @@ mod tests {
             refreshed_scope(granted(), Some("mcp write")),
             Err(OAuthError::InvalidScope)
         ));
+    }
+
+    fn test_db() -> Db {
+        let cfg = crate::db::DbConfig {
+            url: "http://127.0.0.1:9".into(),
+            token: "t".into(),
+            db: "d".into(),
+            cache_dir: None,
+            curriculum: crate::graph::Curriculum::embedded(),
+        };
+        Db::connect(&cfg).unwrap()
+    }
+
+    #[test]
+    fn cached_access_tokens_expire_and_stay_bounded() {
+        let tokens = AccessTokens::new(test_db());
+        let now = Utc::now();
+        tokens.remember("valid".into(), now + Duration::minutes(1), now);
+        tokens.remember("expired".into(), now - Duration::seconds(1), now);
+        assert!(tokens.cached("valid", now));
+        assert!(!tokens.cached("expired", now));
+        assert!(!tokens.lock().contains_key("expired"), "a lookup evicts it");
+
+        for i in 0..MAX_CACHED_ACCESS_TOKENS {
+            let expires_at =
+                now + Duration::minutes(2) + Duration::seconds(i64::try_from(i).unwrap());
+            tokens.remember(format!("t{i}"), expires_at, now);
+        }
+        assert_eq!(tokens.lock().len(), MAX_CACHED_ACCESS_TOKENS);
+        assert!(
+            !tokens.cached("valid", now),
+            "the token that expires first leaves"
+        );
+        assert!(tokens.cached("t0", now));
     }
 
     #[test]

@@ -502,7 +502,8 @@ async fn open_import_blocks_a_handle_opened_before_it_until_it_verifies() {
     }
     #[cfg(feature = "mcp")]
     {
-        let token = mathtutor::mcp::oauth::validate_access_token(&db, "token").await;
+        let tokens = mathtutor::mcp::oauth::AccessTokens::new(db.clone());
+        let token = tokens.is_valid("token").await;
         assert!(matches!(token, Err(Error::ImportInProgress)), "{token:?}");
     }
 

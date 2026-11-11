@@ -584,7 +584,7 @@ fn resolve_public_url(explicit: Option<&str>, socket: std::net::SocketAddr) -> C
 #[derive(Clone)]
 struct AuthState {
     api_key: Option<Arc<str>>,
-    db: Option<Db>,
+    access_tokens: Option<oauth::AccessTokens>,
     www_authenticate: Arc<str>,
 }
 
@@ -594,14 +594,17 @@ impl AuthState {
             .api_key
             .as_deref()
             .map(|s| Arc::<str>::from(s.to_string().into_boxed_str()));
-        let db = auth.admin_password.as_deref().map(|_| db);
+        let access_tokens = auth
+            .admin_password
+            .as_deref()
+            .map(|_| oauth::AccessTokens::new(db));
         let issuer = public_url.as_str().trim_end_matches('/');
         let www_authenticate = format!(
             r#"Bearer realm="mt mcp", resource_metadata="{issuer}/.well-known/oauth-protected-resource""#
         );
         Self {
             api_key,
-            db,
+            access_tokens,
             www_authenticate: Arc::from(www_authenticate.into_boxed_str()),
         }
     }
@@ -632,10 +635,10 @@ async fn auth_middleware(
         {
             return next.run(req).await;
         }
-        if let Some(db) = state.db.as_ref() {
-            match oauth::validate_access_token(db, &token).await {
-                Ok(Some(_client_id)) => return next.run(req).await,
-                Ok(None) => {}
+        if let Some(access_tokens) = state.access_tokens.as_ref() {
+            match access_tokens.is_valid(&token).await {
+                Ok(true) => return next.run(req).await,
+                Ok(false) => {}
                 Err(e) => {
                     tracing::warn!(error = %e, "cannot validate access token");
                     return token_check_unavailable();
