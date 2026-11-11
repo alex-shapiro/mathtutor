@@ -101,7 +101,12 @@ impl Db {
     pub async fn create_if_missing(&self) -> Result<bool> {
         self.create_tables_if_missing()
             .await
-            .map_err(|e| self.explain_key_error(e))
+            .map_err(|e| self.setup_error(e))
+    }
+
+    /// Return the error of a failed table setup, which applied no writes of the command.
+    fn setup_error(&self, e: Error) -> Error {
+        self.explain_key_error(e).into_not_applied()
     }
 
     async fn create_tables_if_missing(&self) -> Result<bool> {
@@ -124,17 +129,20 @@ impl Db {
 
     /// Create the tables of each checked table set that the existing database does not hold, and replace the tables of each set that an older release stored.
     async fn set_up_tables(&self) -> Result<()> {
-        for &set in self.checked_sets() {
-            match schema::state(&self.client, set).await?.schema {
-                SchemaState::NoTables => schema::create_tables(&self.client, set).await?,
-                SchemaState::Other(found) if set.replaces(&found) => {
-                    tracing::warn!(tables = %set, %found, "replacing tables of an older schema version");
-                    schema::recreate_tables(&self.client, set).await?;
+        let setup = async {
+            for &set in self.checked_sets() {
+                match schema::state(&self.client, set).await?.schema {
+                    SchemaState::NoTables => schema::create_tables(&self.client, set).await?,
+                    SchemaState::Other(found) if set.replaces(&found) => {
+                        tracing::warn!(tables = %set, %found, "replacing tables of an older schema version");
+                        schema::recreate_tables(&self.client, set).await?;
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
-        Ok(())
+            Ok(())
+        };
+        setup.await.map_err(|e| self.setup_error(e))
     }
 
     /// Return a handle whose requests also check the authorization tables, and create them in the first request if they are missing.
@@ -312,9 +320,7 @@ impl Db {
     pub(crate) async fn read(&self, ops: &[Op]) -> Result<Vec<OpResult>> {
         match self.read_once(ops).await {
             Err(e) if Self::needs_table_setup(&e) => {
-                self.set_up_tables()
-                    .await
-                    .map_err(|e| self.explain_key_error(e).into_not_applied())?;
+                self.set_up_tables().await?;
                 self.read_once(ops).await
             }
             result => result,
@@ -529,10 +535,7 @@ impl Txn {
         if let Err(e) = &result
             && Db::needs_table_setup(e)
         {
-            self.db
-                .set_up_tables()
-                .await
-                .map_err(|e| self.db.explain_key_error(e))?;
+            self.db.set_up_tables().await?;
             self.ran_table_setup = true;
         }
         result

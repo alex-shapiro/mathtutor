@@ -257,6 +257,53 @@ async fn table_creation_keeps_an_import_marker_that_an_import_stored_meanwhile()
     assert!(matches!(e, Error::ImportInProgress), "{e:?}");
 }
 
+/// Transport that delivers the first request that creates a table and loses its response.
+struct LostSetupTransport {
+    inner: HttpTransport,
+    lost: std::sync::atomic::AtomicBool,
+}
+
+impl Transport for LostSetupTransport {
+    fn send(
+        &self,
+        req: http::Request<Bytes>,
+    ) -> BoxFuture<'_, Result<http::Response<Bytes>, TransportError>> {
+        Box::pin(async move {
+            let creates_table =
+                req.method() == http::Method::POST && req.uri().path().ends_with("/tables");
+            if creates_table && !self.lost.swap(true, Ordering::SeqCst) {
+                self.inner.send(req).await?;
+                return Err(TransportError::TimedOut("response lost".into()));
+            }
+            self.inner.send(req).await
+        })
+    }
+}
+
+/// Return a handle to a new database without tables, whose transport loses the response of the first table creation.
+async fn lost_setup_db() -> Db {
+    let cfg = common::fresh_config();
+    raw_db(&cfg).ensure().await.unwrap();
+    let transport = LostSetupTransport {
+        inner: cfg.transport().unwrap(),
+        lost: false.into(),
+    };
+    Db::with_transport(&cfg, transport)
+}
+
+#[tokio::test]
+async fn a_lost_response_during_table_setup_applies_no_write_of_the_command() {
+    let e = lost_setup_db().await.create_if_missing().await.unwrap_err();
+    assert!(!e.outcome_is_unknown(), "{e:?}");
+    assert_eq!(e.exit_code(), 1, "{e:?}");
+
+    let db = lost_setup_db().await;
+    path::cmd_path_new(&db, "g", &["fnd.1.1.1".into()], Strategy::BottomUp)
+        .await
+        .expect("the command retries after the failed setup");
+    assert_eq!(path::compute_path_list(&db).await.unwrap().paths.len(), 1);
+}
+
 #[tokio::test]
 async fn learner_commands_ignore_the_authorization_schema_version() {
     let cfg = common::fresh_config();
