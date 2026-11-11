@@ -1248,3 +1248,30 @@ async fn overlay_cache_on_disk_serves_the_next_process_until_the_overlay_changes
         Some("new")
     );
 }
+
+#[tokio::test]
+async fn a_rejected_token_names_the_server_and_the_settings() {
+    let cfg = common::fresh_config();
+    common::create_db(&cfg).await;
+    let wrong = DbConfig {
+        token: "not-a-key".into(),
+        ..cfg.clone()
+    };
+    let db = Db::connect(&wrong).unwrap();
+    let errors = [
+        db.require_database().await.unwrap_err(),
+        db.create_if_missing().await.unwrap_err(),
+        db.snapshot(&Want::overlay()).await.unwrap_err(),
+        path::cmd_path_new(&db, "g", &["fnd.1.1.1".into()], Strategy::BottomUp)
+            .await
+            .unwrap_err(),
+    ];
+    for e in errors {
+        let message = e.to_string();
+        assert!(matches!(e, Error::TokenRejected { .. }), "{e:?}");
+        assert!(message.contains(&cfg.url), "{message}");
+        assert!(message.contains("BASERUNNA_URL"), "{message}");
+        assert!(message.contains("BASERUNNA_TOKEN"), "{message}");
+        assert_eq!(e.exit_code(), 2);
+    }
+}

@@ -89,6 +89,12 @@ impl std::fmt::Debug for Db {
 impl Db {
     /// Create the database and its tables if they do not exist, and return `true` if this call created the database.
     pub async fn create_if_missing(&self) -> Result<bool> {
+        self.create_tables_if_missing()
+            .await
+            .map_err(|e| self.name_rejected_token(e))
+    }
+
+    async fn create_tables_if_missing(&self) -> Result<bool> {
         let state = schema::state(&self.client).await?.schema;
         let created = state == SchemaState::NoDatabase;
         match state {
@@ -105,7 +111,10 @@ impl Db {
 
     /// Fail with [`Error::DatabaseNotFound`] or [`Error::SchemaMismatch`] unless the database holds the tables of this release.
     pub async fn require_database(&self) -> Result<()> {
-        match schema::state(&self.client).await?.schema {
+        let state = schema::state(&self.client)
+            .await
+            .map_err(|e| self.name_rejected_token(e))?;
+        match state.schema {
             SchemaState::Current => Ok(()),
             other => Err(self.schema_error(other)),
         }
@@ -184,11 +193,23 @@ impl Db {
     /// Return the error for a failed request, and report a missing database or a blocked state instead of a missing table or stream.
     async fn gate_failure(&self, e: client::Error) -> Error {
         if e.code() != Some(ErrorCode::NotFound) {
-            return e.into();
+            return self.name_rejected_token(e.into());
         }
         match schema::state(&self.client).await {
             Ok(state) => self.check_state(state).err().unwrap_or_else(|| e.into()),
-            Err(check) => check,
+            Err(check) => self.name_rejected_token(check),
+        }
+    }
+
+    /// Return [`Error::TokenRejected`] if `e` reports that the server rejected the token, or `e` otherwise.
+    fn name_rejected_token(&self, e: Error) -> Error {
+        match &e {
+            Error::Baserunna(c) if c.code() == Some(ErrorCode::Unauthenticated) => {
+                Error::TokenRejected {
+                    url: self.url.to_string(),
+                }
+            }
+            _ => e,
         }
     }
 

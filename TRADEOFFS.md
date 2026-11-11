@@ -24,3 +24,11 @@ The first `mt path new` creates the database. Only a key without a database limi
 - **Shorter limit, such as 1 minute:** A user who mistypes many times waits less. An attacker can try about 60 passwords per hour from each address.
 - **Longer limit, such as 1 hour:** An attacker can try 1 password per hour from each address. A user who mistypes many times can wait up to 1 hour, or must restart the server.
 - **Add a global limit on failures from all addresses:** An attacker with many addresses gets few attempts. An attacker can lock out the administrator from every address.
+
+## Default Baserunna server
+
+`BASERUNNA_URL` defaults to `https://baserunna.fly.dev`, the deployment of the maintainer. A user who does not set `BASERUNNA_URL` sends the API key of another server to this deployment. The deployment rejects the key with a 401, and `mt` reports the URL and the two settings to check.
+
+- **Remove the default and fail with exit code `2` that names `BASERUNNA_URL`:** No key goes to an unintended server. Each user sets one more variable.
+- **Keep the default as a hosted service and state its limits in the README:** Setup stays short. Users depend on a single node without backup that the maintainer operates.
+- **Keep the default only for the maintainer and document it:** Setup stays short for the maintainer. Other users can send their key to the maintainer's server by mistake.

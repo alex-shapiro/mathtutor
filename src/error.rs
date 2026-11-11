@@ -69,6 +69,11 @@ pub enum Error {
     MissingToken,
 
     #[error(
+        "the Baserunna server at {url} rejected BASERUNNA_TOKEN; check that BASERUNNA_URL names the server that issued the key and that BASERUNNA_TOKEN is a current key"
+    )]
+    TokenRejected { url: String },
+
+    #[error(
         "database '{db}' at {url} does not exist or does not hold Math Tutor data; check BASERUNNA_DB and BASERUNNA_URL"
     )]
     DatabaseNotFound { db: String, url: String },
@@ -255,6 +260,7 @@ impl Error {
             Error::SubpathDuplicateAtom(_) => ErrorKind::SubpathDuplicateAtom,
             Error::ConflictingFlags(_, _) => ErrorKind::ConflictingFlags,
             Error::MissingToken
+            | Error::TokenRejected { .. }
             | Error::DatabaseNotFound { .. }
             | Error::TableMismatch { .. }
             | Error::MissingTursoUrl
