@@ -6,12 +6,10 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::db::{Db, Op, ts};
-use crate::event_log;
+use crate::db::{Db, ts};
 use crate::graph::{Graph, natural_id_cmp};
-use crate::schema::PathUpdate;
 use crate::types::Strategy;
-use crate::view::{Changes, View, Want};
+use crate::view::Want;
 use crate::{Error, Result};
 
 /// Stored metadata and configuration for a learning path.
@@ -58,23 +56,6 @@ pub fn generate_path_id(now: DateTime<Utc>) -> String {
     format!("p_{}_{suffix}", now.format("%Y_%m_%d_%H%M%S"))
 }
 
-/// Insert `p` and append its `path_created` event.
-pub fn insert(view: &View, changes: &mut Changes, p: &PathFile) -> Result<()> {
-    changes.op(Op::insert(p));
-    let mut created = event_log::path_created(p.id.clone());
-    created.ts = p.created_at;
-    changes.append(view, &created)
-}
-
-/// Replace the stored subpath for `path_id`.
-pub fn set_subpath(changes: &mut Changes, path_id: &str, atoms: &[String]) {
-    let set = PathUpdate {
-        subpath: Some(atoms),
-        ..PathUpdate::default()
-    };
-    changes.op(Op::update::<PathFile>(path_id, &set));
-}
-
 /// Create a new learning path and return its ID.
 pub async fn cmd_path_new(
     db: &Db,
@@ -97,8 +78,10 @@ pub async fn cmd_path_new(
         strategy,
         subpath: Vec::new(),
     };
-    db.transact(&Want::nothing(), |view, changes| insert(view, changes, &p))
-        .await?;
+    db.transact(&Want::nothing(), |view, changes| {
+        changes.create_path(view, &p)
+    })
+    .await?;
     Ok(p.id)
 }
 
@@ -111,11 +94,7 @@ pub async fn cmd_path_strategy(
     let want = Want::path(explicit_id).without_overlay();
     db.transact(&want, |view, changes| {
         let id = view.path()?.file.id.clone();
-        let set = PathUpdate {
-            strategy: Some(strategy),
-            ..PathUpdate::default()
-        };
-        changes.op(Op::update::<PathFile>(&id, &set));
+        changes.set_strategy(&id, strategy);
         Ok(id)
     })
     .await

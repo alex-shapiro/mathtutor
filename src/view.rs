@@ -9,15 +9,16 @@ use chrono::{DateTime, Utc};
 use crate::cards::{self, CardRow, ProjectionTarget};
 use crate::db::client::Entry;
 use crate::db::{Db, Op, OpResult, Txn, run_txn, ts};
-use crate::event_log::{Event, EventKind};
+use crate::event_log::{self, Event, EventKind};
 use crate::graph::Graph;
 use crate::overlay::{Edit, Overlay};
 use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::schema::{
-    ACTIVITY_PREFIX, CardRecord, LessonRow, QuizRow, RemovedQuizRow, TaughtRow, activity_key,
-    events_stream,
+    ACTIVITY_PREFIX, CardRecord, LessonRow, PathUpdate, QuizRow, RemovedQuizRow, TaughtRow,
+    activity_key, events_stream,
 };
+use crate::types::Strategy;
 use crate::{Error, Result};
 
 pub(crate) const OVERLAY_VERSION_KEY: &str = "overlay_version";
@@ -242,6 +243,7 @@ impl View {
 /// Pending write operations accumulated during a transaction.
 #[derive(Debug, Default)]
 pub struct Changes {
+    /// Writes of `paths` rows.
     ops: Vec<Op>,
     overlay: Vec<Edit>,
     cards: BTreeMap<(String, String), CardRow>,
@@ -251,9 +253,30 @@ pub struct Changes {
 }
 
 impl Changes {
-    /// Record a raw database write operation.
-    pub fn op(&mut self, op: Op) {
-        self.ops.push(op);
+    /// Insert path `p` and append its `path_created` event.
+    pub fn create_path(&mut self, view: &View, p: &PathFile) -> Result<()> {
+        self.ops.push(Op::insert(p));
+        let mut created = event_log::path_created(p.id.clone());
+        created.ts = p.created_at;
+        self.append(view, &created)
+    }
+
+    /// Set the traversal strategy of `path_id`.
+    pub fn set_strategy(&mut self, path_id: &str, strategy: Strategy) {
+        let update = PathUpdate {
+            strategy: Some(strategy),
+            ..PathUpdate::default()
+        };
+        self.ops.push(Op::update::<PathFile>(path_id, &update));
+    }
+
+    /// Replace the stored subpath of `path_id`.
+    pub fn set_subpath(&mut self, path_id: &str, atoms: &[String]) {
+        let update = PathUpdate {
+            subpath: Some(atoms),
+            ..PathUpdate::default()
+        };
+        self.ops.push(Op::update::<PathFile>(path_id, &update));
     }
 
     /// Set the updated [`CardRow`] for its `(path_id, quiz_id)` pair.

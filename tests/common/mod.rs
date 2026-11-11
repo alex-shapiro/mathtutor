@@ -15,7 +15,7 @@ use mathtutor::db::{Db, DbConfig};
 use mathtutor::event_log::{Event, EventKind, EventPayload};
 use mathtutor::graph::{FlatConcept, Graph, Quiz};
 use mathtutor::overlay::Overlay;
-use mathtutor::path::{self, PathFile};
+use mathtutor::path::PathFile;
 use mathtutor::progress::PathProgress;
 use mathtutor::types::{Difficulty, Rating, Strategy};
 use mathtutor::view::{Changes, PathState, View, Want};
@@ -132,7 +132,7 @@ pub async fn seed_path(db: &Db, path_id: &str, targets: &[&str], strategy: Strat
         subpath: Vec::new(),
     };
     db.transact(&Want::nothing(), |view, changes| {
-        path::insert(view, changes, &p)
+        changes.create_path(view, &p)
     })
     .await
     .expect("seed path");

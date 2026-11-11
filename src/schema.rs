@@ -68,7 +68,7 @@ impl Row for PathFile {
 
 /// Mutable columns of a `paths` row.
 #[derive(Debug, Default, Serialize)]
-pub struct PathUpdate<'a> {
+pub(crate) struct PathUpdate<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strategy: Option<Strategy>,
     #[serde(skip_serializing_if = "Option::is_none")]

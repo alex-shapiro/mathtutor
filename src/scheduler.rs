@@ -10,7 +10,7 @@ use crate::answer::atom_from_quiz_id;
 use crate::db::Db;
 use crate::event_log;
 use crate::graph::{FlatConcept, Graph};
-use crate::path::{self, PathFile};
+use crate::path::PathFile;
 use crate::progress::PathProgress;
 use crate::subpath;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
@@ -93,7 +93,7 @@ pub async fn compute_next(
             && !subpath.is_empty()
             && subpath.iter().all(|a| is_atom_complete(&g, &progress, a))
         {
-            path::set_subpath(changes, &p.id, &[]);
+            changes.set_subpath(&p.id, &[]);
         }
         Ok(envelope)
     })

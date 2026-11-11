@@ -5,7 +5,7 @@ use std::path::Path;
 
 use crate::db::Db;
 use crate::graph::Graph;
-use crate::path::{self, PathFile};
+use crate::path::PathFile;
 use crate::types::Strategy;
 use crate::view::Want;
 use crate::{Error, Result};
@@ -45,7 +45,7 @@ pub async fn cmd_subpath_set(
                 None => return Err(Error::AtomNotFound(a.clone())),
             }
         }
-        path::set_subpath(changes, &p.id, atoms);
+        changes.set_subpath(&p.id, atoms);
         Ok(p.id.clone())
     })
     .await
@@ -57,7 +57,7 @@ pub async fn cmd_subpath_clear(db: &Db, explicit_id: Option<&str>) -> Result<Str
         &Want::path(explicit_id).without_overlay(),
         |view, changes| {
             let id = view.path()?.file.id.clone();
-            path::set_subpath(changes, &id, &[]);
+            changes.set_subpath(&id, &[]);
             Ok(id)
         },
     )

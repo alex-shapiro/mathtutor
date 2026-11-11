@@ -96,7 +96,7 @@ pub enum Edit {
 
 impl Edit {
     /// Convert this edit into database write operations.
-    pub fn ops(&self) -> Vec<Op> {
+    pub(crate) fn ops(&self) -> Vec<Op> {
         match self {
             Edit::Lesson { atom_id, body } => vec![Op::upsert(&LessonRow {
                 atom_id: atom_id.clone(),
