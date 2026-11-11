@@ -460,7 +460,7 @@ impl Learner {
                 drop(ledger);
                 out.push(("quiz answer", t.elapsed(), r.map_err(|e| e.to_string())));
             }
-            Action::Done => {
+            Action::NoReviewsDue | Action::Done => {
                 if let Some(shared) = &self.shared {
                     let mut current = shared.lock().unwrap();
                     if current.as_deref() == Some(p.as_str()) {

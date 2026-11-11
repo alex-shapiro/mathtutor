@@ -76,7 +76,7 @@ Each `--targets` entry is either an atom ID, such as `tx.1.1`, or a cluster ID, 
 
 ```yaml
 schema_version: 1
-action: create_lesson | present_lesson | create_quiz | present_quiz | done
+action: create_lesson | present_lesson | create_quiz | present_quiz | no_reviews_due | done
 path: <path-id>
 next_step: <command that performs the action>
 payload: ...
@@ -175,6 +175,18 @@ payload:
     total_count: 5
     correct_pct: 60
     recent_ratings: [easy, good, hard, again, good]
+```
+
+### `no_reviews_due`
+
+`mt path next --due` returns this action if zero review cards are due. The path can still be incomplete. `next_step` is `mt path next` without `--due`.
+
+```yaml
+action: no_reviews_due
+path: p_2026_05_09_173_42
+next_step: "mt path next --path p_2026_05_09_173_42"
+payload:
+  message: "Zero reviews are due."
 ```
 
 ### `done`
@@ -286,6 +298,8 @@ Each quiz on a path has an FSRS card whose state is derived from its `quiz_answe
    - `create_quiz` if the `easy`, `medium`, or `hard` difficulty slot does not have a quiz.
    - `present_quiz` if a quiz has not been answered with `hard`, `good`, or `easy`.
 3. Otherwise, return `done`.
+
+`--due` skips step 2 and returns `no_reviews_due` if zero cards are due.
 
 An atom is complete if its lesson is taught and each difficulty slot has at least a single quiz answered with `hard`, `good`, or `easy`. An `again` rating does not complete a slot. An unpassed quiz is presented again immediately, whereas a failed review of a previously passed quiz is scheduled at its next FSRS due time.
 

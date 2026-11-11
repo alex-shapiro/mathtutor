@@ -117,18 +117,20 @@ pub enum Action {
         atom_id: String,
         difficulty: Difficulty,
     },
+    /// Zero quiz cards are due, in [`NextMode::Due`].
+    NoReviewsDue,
     Done,
 }
 
 impl Action {
-    /// Return the atom ID associated with this action, or `None` for [`Action::Done`].
+    /// Return the atom ID associated with this action, or `None` if the action has no atom.
     pub fn atom_id(&self) -> Option<&str> {
         match self {
             Action::CreateLesson { atom_id }
             | Action::PresentLesson { atom_id }
             | Action::CreateQuiz { atom_id, .. }
             | Action::PresentQuiz { atom_id, .. } => Some(atom_id),
-            Action::Done => None,
+            Action::NoReviewsDue | Action::Done => None,
         }
     }
 }
@@ -149,7 +151,7 @@ pub fn next_action(
         return Action::PresentQuiz { quiz_id, atom_id };
     }
     if mode == NextMode::Due {
-        return Action::Done;
+        return Action::NoReviewsDue;
     }
 
     match p.strategy {
@@ -335,7 +337,7 @@ enum Payload {
     PresentLesson(PresentLessonPayload),
     CreateLesson(CreateLessonPayload),
     CreateQuiz(CreateQuizPayload),
-    Done(DonePayload),
+    Message(MessagePayload),
 }
 
 #[derive(Serialize)]
@@ -411,7 +413,7 @@ struct QuizFull {
 }
 
 #[derive(Serialize)]
-struct DonePayload {
+struct MessagePayload {
     message: String,
 }
 
@@ -540,13 +542,23 @@ impl Envelope {
                     }),
                 }
             }
+            Action::NoReviewsDue => Envelope {
+                next,
+                next_step,
+                schema_version: 1,
+                action: "no_reviews_due".to_string(),
+                path: p.id.clone(),
+                payload: Payload::Message(MessagePayload {
+                    message: "Zero reviews are due.".into(),
+                }),
+            },
             Action::Done => Envelope {
                 next,
                 next_step,
                 schema_version: 1,
                 action: "done".to_string(),
                 path: p.id.clone(),
-                payload: Payload::Done(DonePayload {
+                payload: Payload::Message(MessagePayload {
                     message: "Path complete.".into(),
                 }),
             },
@@ -558,7 +570,7 @@ impl Envelope {
 pub fn next_step(action: &Action, path_id: &str) -> Option<Step> {
     let path = Value::known(path_id);
     let step = match action {
-        Action::PresentLesson { .. } => Step::new(Tool::GetNext, path),
+        Action::PresentLesson { .. } | Action::NoReviewsDue => Step::new(Tool::GetNext, path),
         Action::PresentQuiz { quiz_id, .. } => Step::new(Tool::AnswerQuiz, path)
             .arg(Field::QuizId, Value::known(quiz_id))
             .arg(Field::Rating, Value::Choice(surface::RATINGS))

@@ -30,6 +30,11 @@ const TERMS: &[(&str, &str, &str)] = &[
     ),
     ("next_name", "`mt path next`", "`get_next`"),
     (
+        "get_due",
+        "run `mt path next --due`",
+        "call `get_next { path_id, mode: \"due\" }`",
+    ),
+    (
         "inspect_target",
         "Run `mt graph show <target>`",
         "Call `get_item { id: <target> }`",
@@ -161,6 +166,7 @@ pub(crate) fn filled_steps() -> Vec<Step> {
             quiz_id: "fnd.1.1.1.q1".into(),
             atom_id: atom_id(),
         },
+        Action::NoReviewsDue,
         Action::Done,
     ];
     let steps: Vec<Step> = playbook_steps()

@@ -130,7 +130,7 @@ pub struct PathNextCmd {
     #[argh(switch)]
     pub new: bool,
 
-    /// return only the earliest due review card, or `done` if zero cards are due
+    /// return only the earliest due review card, or `no_reviews_due` if zero cards are due
     #[argh(switch)]
     pub due: bool,
 }

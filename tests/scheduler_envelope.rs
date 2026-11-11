@@ -244,3 +244,18 @@ async fn next_step_names_the_path_and_the_verbatim_answer_on_each_surface() {
     assert!(step.contains("user_answer: "), "{step}");
     assert!(!step.contains("mt "), "{step}");
 }
+
+#[tokio::test]
+async fn due_mode_without_due_reviews_does_not_report_a_complete_path() {
+    let db = common::empty_db().await;
+    let id = path::cmd_path_new(&db, "g", &["fnd.1.1.2".into()], Strategy::BottomUp)
+        .await
+        .unwrap();
+    let envelope = scheduler::compute_next(&db, Some(&id), scheduler::NextMode::Due, Surface::Cli)
+        .await
+        .unwrap();
+    let envelope = serde_json::to_value(envelope).unwrap();
+    assert_eq!(envelope["action"], "no_reviews_due");
+    assert_eq!(envelope["next_step"], format!("mt path next --path {id}"));
+    assert_ne!(envelope["payload"]["message"], "Path complete.");
+}

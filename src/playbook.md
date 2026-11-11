@@ -73,6 +73,8 @@ On each turn:
 
 Stop if `action: done` is returned or if the user pauses the session.
 
+If the user asks to review only due quizzes, {{get_due}}. The result is `present_quiz` for the earliest due quiz, or `no_reviews_due` if zero quizzes are due.
+
 ## Subpaths
 
 If the user is blocked on a target atom in `top_down` mode, create a subpath of prerequisite atoms leading to that target:
@@ -117,6 +119,10 @@ A stored quiz is due for review. Present `quiz.question` to the user, wait for t
 - `again`: The answer is incorrect, or the user asks for the solution.
 
 Always pass the user's verbatim response in {{verbatim_field}}.
+
+### `no_reviews_due`
+
+Zero quizzes are due for review, and the path can still have untaught material. Inform the user, and offer to continue with `next_step` or to end the session.
 
 ### `done`
 

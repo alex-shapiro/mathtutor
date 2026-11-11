@@ -576,7 +576,7 @@ fn due_mode_returns_earliest_due_card() {
 }
 
 #[test]
-fn due_mode_returns_done_if_zero_cards_are_due() {
+fn due_mode_reports_zero_due_reviews_on_an_incomplete_path() {
     let g = graph_of(vec![atom("a", &[], None, vec![])]);
     let p = path_with(&["a"]);
     assert!(matches!(
@@ -589,7 +589,7 @@ fn due_mode_returns_done_if_zero_cards_are_due() {
             &[],
             scheduler::NextMode::Due,
         ),
-        Action::Done
+        Action::NoReviewsDue
     ));
 }
 
