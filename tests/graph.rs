@@ -257,6 +257,91 @@ fn orphan_check_cluster_prereq_covers_descendant_atoms() {
     assert!(orphan_ids(&report).is_empty(), "{:?}", report.issues);
 }
 
+fn issues_of(report: &graph::CheckReport, prefix: &str) -> Vec<String> {
+    report
+        .issues
+        .iter()
+        .filter(|i| i.message.starts_with(prefix))
+        .filter_map(|i| i.node.clone())
+        .collect()
+}
+
+#[test]
+fn graph_check_rejects_an_atom_inside_its_own_prerequisite_cluster() {
+    let dir = write_graph(
+        "
+  - id: ta.1
+    name: cluster
+    children:
+      - id: ta.1.1
+        name: needs its own cluster
+        description: d
+        terminal: true
+        prerequisites:
+          - ta.1
+",
+    );
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
+    assert_eq!(
+        issues_of(&report, "a prerequisite of this atom"),
+        vec!["ta.1.1".to_string()],
+        "{:?}",
+        report.issues
+    );
+}
+
+#[test]
+fn graph_check_rejects_a_cycle_through_a_prerequisite_cluster() {
+    let dir = write_graph(
+        "
+  - id: ta.1
+    name: cluster
+    children:
+      - id: ta.1.1
+        name: needs the other cluster
+        description: d
+        prerequisites:
+          - ta.2.1
+  - id: ta.2
+    name: other cluster
+    children:
+      - id: ta.2.1
+        name: needs the first cluster
+        description: d
+        terminal: true
+        prerequisites:
+          - ta.1
+",
+    );
+    let report =
+        graph::run_check(&graph::CurriculumSource::Dir(dir.path().into())).expect("run_check");
+    assert!(
+        !issues_of(&report, "prerequisite cycle").is_empty(),
+        "{:?}",
+        report.issues
+    );
+}
+
+#[test]
+fn atomic_prerequisites_expand_clusters_and_include_the_holding_clusters() {
+    let mut holder = cluster("c.1", &["c.1.1"]);
+    holder.prerequisites = vec!["c.3".to_string()];
+    let g = Graph::of_concepts(vec![
+        cluster("c", &["c.1", "c.2", "c.3"]),
+        holder,
+        atom("c.1.1", &["c.2"], None, Vec::new()),
+        cluster("c.2", &["c.2.1", "c.2.2"]),
+        atom("c.2.1", &[], None, Vec::new()),
+        atom("c.2.2", &[], None, Vec::new()),
+        atom("c.3", &[], None, Vec::new()),
+    ]);
+    assert_eq!(
+        g.atomic_prerequisites("c.1.1"),
+        vec!["c.3", "c.2.1", "c.2.2"],
+    );
+}
+
 #[test]
 fn curriculum_lookup_runs_without_database_credentials() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_mt"))

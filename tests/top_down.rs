@@ -107,6 +107,47 @@ fn top_down_cluster_target_expands_to_atomic_children() {
     );
 }
 
+#[test]
+fn top_down_teaches_the_atoms_of_a_prerequisite_cluster_first() {
+    let g = Graph::of_concepts(vec![
+        cluster("tx", &["tx.1", "tx.2"]),
+        cluster("tx.1", &["tx.1.1"]),
+        cluster("tx.2", &["tx.2.1"]),
+        empty_atom("tx.1.1", &["tx.2"]),
+        empty_atom("tx.2.1", &[]),
+    ]);
+    let p = path_with_strategy(&["tx"], Strategy::TopDown);
+    assert_eq!(
+        common::upcoming(&g, &p, &[]),
+        vec!["tx.2.1", "tx.1.1"],
+        "`tx.1.1` needs cluster `tx.2`, so the atoms of `tx.2` come first",
+    );
+}
+
+#[test]
+fn top_down_teaches_the_prerequisites_of_an_ancestor_cluster_first() {
+    let mut holder = cluster("tx.1", &["tx.1.1"]);
+    holder.prerequisites = vec!["tx.2".to_string()];
+    let g = Graph::of_concepts(vec![
+        cluster("tx", &["tx.1", "tx.2"]),
+        holder,
+        cluster("tx.2", &["tx.2.1"]),
+        empty_atom("tx.1.1", &[]),
+        empty_atom("tx.2.1", &[]),
+    ]);
+    let top_down = path_with_strategy(&["tx"], Strategy::TopDown);
+    assert_eq!(
+        common::upcoming(&g, &top_down, &[]),
+        vec!["tx.2.1", "tx.1.1"]
+    );
+    let bottom_up = path_with_strategy(&["tx.1.1"], Strategy::BottomUp);
+    assert_eq!(
+        common::upcoming(&g, &bottom_up, &[]),
+        vec!["tx.2.1", "tx.1.1"],
+        "bottom-up reaches the prerequisite of the cluster that holds the target",
+    );
+}
+
 #[tokio::test]
 async fn cluster_target_stored_verbatim_and_syllabus_not_empty() {
     let conn = common::empty_db().await;

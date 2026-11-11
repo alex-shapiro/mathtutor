@@ -13,6 +13,8 @@ List only direct, required dependencies in `prerequisites`:
 - Reference an **atom ID** if the dependent node requires a specific concept.
 - Reference a **cluster ID** if the dependent node requires all concepts in that cluster.
 
+A prerequisite of a cluster applies to every atom in that cluster. A prerequisite must not contain the node that lists it, because the node would then require itself. `mt graph check` rejects such a node.
+
 Cross-area prerequisites are supported and encouraged.
 
 ## Orphans

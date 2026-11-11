@@ -106,7 +106,7 @@ impl<'v> PathPlan<'v> {
 
     /// Return the atoms of this path in the order that the scheduler teaches them.
     ///
-    /// `bottom_up` visits the prerequisites and the children of each target before the target. `top_down` lists the subpath and then the targets.
+    /// `bottom_up` lists the transitive atomic prerequisites of each target atom before the atom. `top_down` lists the subpath and then the targets.
     fn teaching_order(&self) -> Vec<String> {
         let g = &self.graph;
         let mut visited = HashSet::new();
@@ -222,20 +222,14 @@ impl Action {
     }
 }
 
-fn visit_bottom_up(g: &Graph, id: &str, visited: &mut HashSet<String>, out: &mut Vec<String>) {
-    if !visited.insert(id.to_string()) {
+fn visit_bottom_up(g: &Graph, atom: &str, visited: &mut HashSet<String>, out: &mut Vec<String>) {
+    if !visited.insert(atom.to_string()) {
         return;
     }
-    let Some(c) = g.by_id.get(id) else { return };
-    for prereq in &c.prerequisites {
-        visit_bottom_up(g, prereq, visited, out);
+    for prereq in g.atomic_prerequisites(atom) {
+        visit_bottom_up(g, &prereq, visited, out);
     }
-    if c.children_ids.is_empty() {
-        out.push(id.to_string());
-    }
-    for child in &c.children_ids {
-        visit_bottom_up(g, child, visited, out);
-    }
+    out.push(atom.to_string());
 }
 
 /// Return the next action that atom `c` needs on a path with `progress`, or `None` if the atom is complete.

@@ -314,7 +314,7 @@ An atom is complete if its lesson is taught and each difficulty slot has at leas
 A path uses either the `bottom_up` or `top_down` traversal strategy. `mt path strategy` changes the active strategy at any time.
 
 - **Bottom-up**: Default strategy. Traverses the prerequisite DAG in post-order DFS so that every prerequisite is completed before its dependents.
-- **Top-down**: Presents target atoms directly in target order without requiring prerequisites first.
+- **Top-down**: Presents the target atoms without the prerequisites that are not targets. If a target atom requires another target atom, the required atom comes first.
 
 ### Subpaths
 

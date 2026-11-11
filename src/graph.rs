@@ -404,23 +404,42 @@ impl Graph {
         atoms
     }
 
-    /// Return all atomic descendants of `targets` and their transitive prerequisites.
+    /// Return the atoms that atom `atom_id` requires directly, in first-seen order.
+    ///
+    /// The list holds the atoms of the prerequisites of the atom and of each cluster that holds it, outermost cluster first.
+    pub fn atomic_prerequisites(&self, atom_id: &str) -> Vec<String> {
+        let mut holders = vec![atom_id];
+        let mut id = atom_id;
+        while let Some(parent) = self.parent(id) {
+            holders.push(&parent.id);
+            id = &parent.id;
+        }
+        let mut seen = HashSet::new();
+        let mut atoms = Vec::new();
+        for holder in holders.iter().rev() {
+            for p in self
+                .by_id
+                .get(*holder)
+                .into_iter()
+                .flat_map(|c| &c.prerequisites)
+            {
+                self.collect_atomic_descendants(p, &mut seen, &mut atoms);
+            }
+        }
+        atoms
+    }
+
+    /// Return all atomic descendants of `targets` and their transitive atomic prerequisites.
     pub fn reachable_atoms(&self, targets: &[String]) -> HashSet<String> {
         let mut out: HashSet<String> = HashSet::new();
-        let mut stack: Vec<String> = targets.to_vec();
-        while let Some(id) = stack.pop() {
-            let Some(c) = self.by_id.get(&id) else {
-                continue;
-            };
-            if !c.children_ids.is_empty() {
-                stack.extend(c.children_ids.iter().cloned());
-                stack.extend(c.prerequisites.iter().cloned());
-                continue;
+        let mut stack: Vec<String> = targets
+            .iter()
+            .flat_map(|t| self.atomic_descendants(t))
+            .collect();
+        while let Some(atom) = stack.pop() {
+            if out.insert(atom.clone()) {
+                stack.extend(self.atomic_prerequisites(&atom));
             }
-            if !out.insert(id.clone()) {
-                continue;
-            }
-            stack.extend(c.prerequisites.iter().cloned());
         }
         out
     }
@@ -709,10 +728,43 @@ pub fn run_check(source: &CurriculumSource) -> Result<CheckReport> {
             collect_prereq_edges(root, &mut adj);
         }
     }
-    detect_cycles(&id_to_area, &adj, &mut report);
+    let mut by_id = HashMap::new();
+    for (entry, _sv, concepts) in &area_trees {
+        flatten(area_root_concept(entry, concepts.clone()), &mut by_id);
+    }
+    let atom_edges =
+        atomic_prerequisite_edges(&Graph::new(by_id, Vec::new()), &id_to_area, &mut report);
+    detect_cycles(&id_to_area, &atom_edges, &mut report);
     check_orphans(&area_trees, &adj, &id_to_area, &mut report);
 
     Ok(report)
+}
+
+/// Return the atomic prerequisites of each atom in `g`, and report each atom that its own prerequisites contain.
+fn atomic_prerequisite_edges(
+    g: &Graph,
+    id_to_area: &BTreeMap<String, String>,
+    report: &mut CheckReport,
+) -> HashMap<String, Vec<String>> {
+    let mut edges = HashMap::new();
+    for (id, area) in id_to_area {
+        if g.by_id.get(id).is_none_or(|c| !c.children_ids.is_empty()) {
+            continue;
+        }
+        let mut prereqs = g.atomic_prerequisites(id);
+        if let Some(pos) = prereqs.iter().position(|p| p == id) {
+            prereqs.remove(pos);
+            report.issues.push(CheckIssue {
+                area: Some(area.clone()),
+                node: Some(id.clone()),
+                message:
+                    "a prerequisite of this atom or of a cluster that holds it contains this atom"
+                        .into(),
+            });
+        }
+        edges.insert(id.clone(), prereqs);
+    }
+    edges
 }
 
 /// Report non-terminal atoms that are not referenced as prerequisites directly or via an ancestor cluster.

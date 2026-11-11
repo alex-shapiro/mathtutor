@@ -164,12 +164,10 @@ fn topo_sort(g: &Graph, atoms: &[String]) -> Result<Vec<String>> {
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
 
     for atom in atoms {
-        if let Some(c) = g.by_id.get(atom) {
-            for p in &c.prerequisites {
-                if atom_set.contains(p.as_str()) {
-                    adj.entry(p.as_str()).or_default().push(atom.as_str());
-                    *indegree.get_mut(atom.as_str()).unwrap() += 1;
-                }
+        for p in g.atomic_prerequisites(atom) {
+            if let Some(&p) = atom_set.get(p.as_str()) {
+                adj.entry(p).or_default().push(atom.as_str());
+                *indegree.get_mut(atom.as_str()).unwrap() += 1;
             }
         }
     }
