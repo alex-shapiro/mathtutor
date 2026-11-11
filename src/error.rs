@@ -114,7 +114,9 @@ pub enum Error {
     #[error("turso: {0}")]
     Turso(String),
 
-    #[error("{0} differences between the import and libSQL")]
+    #[error(
+        "{0} differences between the import and libSQL; learner commands stay blocked. Delete the database with an unscoped Baserunna key, fix the cause, and run `mt import-turso` again"
+    )]
     ImportMismatch(usize),
 
     #[error("this database already completed an import; a repeat run would revert newer data")]
@@ -124,7 +126,7 @@ pub enum Error {
     ImportTargetNotEmpty,
 
     #[error(
-        "an import into this database is unfinished; run `mt import-turso` again until zero differences remain, or delete the database and import again"
+        "learner data is unavailable while an operator finishes a migration of this database; try again later"
     )]
     ImportInProgress,
 
@@ -247,5 +249,17 @@ mod tests {
         let lost = Error::Baserunna(lost);
         assert!(lost.outcome_is_unknown());
         assert_eq!(lost.exit_code(), 3);
+    }
+
+    #[test]
+    fn open_import_error_gives_learners_no_operator_steps() {
+        let shown = Error::ImportInProgress.to_string();
+        assert!(shown.contains("migration"), "{shown}");
+        assert!(!shown.contains("mt "), "{shown}");
+        assert!(
+            Error::ImportMismatch(2)
+                .to_string()
+                .contains("mt import-turso")
+        );
     }
 }
