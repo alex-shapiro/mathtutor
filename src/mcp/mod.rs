@@ -478,10 +478,25 @@ impl AuthConfig {
 /// Return the name of every MCP tool.
 #[cfg(test)]
 pub(crate) fn tool_names() -> Vec<String> {
+    tool_fields().into_keys().collect()
+}
+
+/// Return the input field names of each MCP tool, keyed by tool name.
+#[cfg(test)]
+pub(crate) fn tool_fields() -> std::collections::HashMap<String, std::collections::HashSet<String>>
+{
     MathTutorServer::tool_router()
         .list_all()
         .into_iter()
-        .map(|t| t.name.into_owned())
+        .map(|t| {
+            let fields = t
+                .input_schema
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .map(|p| p.keys().cloned().collect())
+                .unwrap_or_default();
+            (t.name.into_owned(), fields)
+        })
         .collect()
 }
 

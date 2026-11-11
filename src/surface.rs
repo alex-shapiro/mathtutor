@@ -150,7 +150,7 @@ pub enum Field {
 
 impl Field {
     /// Return the MCP argument name of this field.
-    fn mcp(self) -> &'static str {
+    pub fn mcp(self) -> &'static str {
         match self {
             Field::Atom => "atom",
             Field::QuizId => "quiz_id",
@@ -167,7 +167,7 @@ impl Field {
     }
 
     /// Return the CLI flag of this field, or `None` for the positional argument.
-    fn cli_flag(self) -> Option<&'static str> {
+    pub fn cli_flag(self) -> Option<&'static str> {
         match self {
             Field::Atom | Field::QuizId => None,
             Field::PathId => Some("--path"),

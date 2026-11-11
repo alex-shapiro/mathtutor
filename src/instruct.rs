@@ -6,7 +6,7 @@ use crate::types::{Difficulty, QuizType, Rating};
 
 /// Playbook template.
 ///
-/// A line `<!-- cli -->` or `<!-- mcp -->` starts a block for that surface only, and `<!-- end -->` ends it. Each `{{name}}` is a term of [`TERMS`] or a step of [`playbook_steps`].
+/// A line `<!-- cli -->` or `<!-- mcp -->` starts a block for that surface only, and `<!-- end -->` ends it. Each `{{name}}` is a term of [`TERMS`], [`TOOL_TERMS`], or [`FIELD_TERMS`], or a step of [`playbook_steps`].
 const TEMPLATE: &str = include_str!("playbook.md");
 
 /// Name, CLI form, and MCP form of each term in [`TEMPLATE`].
@@ -29,7 +29,6 @@ const TERMS: &[(&str, &str, &str)] = &[
         "Continue with `mt path next`",
         "Call `get_next` again",
     ),
-    ("next_name", "`mt path next`", "`get_next`"),
     (
         "get_due",
         "run `mt path next --due`",
@@ -55,17 +54,12 @@ const TERMS: &[(&str, &str, &str)] = &[
         "run `mt path subpath clear`",
         "call `subpath_clear { path_id }`",
     ),
-    ("quiz_type", "`--type`", "`kind`"),
-    ("answer_name", "`mt quiz answer`", "`answer_quiz`"),
-    ("verbatim_field", "`--user-answer`", "`user_answer`"),
     ("run", "Run", "Call"),
     (
         "delete_quiz",
         "Run `mt quiz delete <quiz-id>`",
         "Call `delete_quiz { quiz_id, path_id }`",
     ),
-    ("update_quiz_name", "`mt quiz update`", "`update_quiz`"),
-    ("delete_quiz_name", "`mt quiz delete`", "`delete_quiz`"),
     (
         "error_report",
         "`mt` prints errors to stderr and exits with a non-zero status code.",
@@ -76,6 +70,20 @@ const TERMS: &[(&str, &str, &str)] = &[
         "Exit code 3 indicates that the commit status is unknown, and `mt` then prints the safe next step on stderr.",
         "The error kind `outcome_unknown` indicates that the commit status is unknown, and the `next_step` field of the error then gives the safe next call.",
     ),
+];
+
+/// Name and command of each term in [`TEMPLATE`] that names an agent command.
+const TOOL_TERMS: &[(&str, Tool)] = &[
+    ("next_name", Tool::GetNext),
+    ("answer_name", Tool::AnswerQuiz),
+    ("update_quiz_name", Tool::UpdateQuiz),
+    ("delete_quiz_name", Tool::DeleteQuiz),
+];
+
+/// Name and field of each term in [`TEMPLATE`] that names a command argument.
+const FIELD_TERMS: &[(&str, Field)] = &[
+    ("quiz_type", Field::QuizType),
+    ("verbatim_field", Field::UserAnswer),
 ];
 
 /// Return the steps with free text that the playbook names, each with its term name.
@@ -143,6 +151,22 @@ pub fn playbook(surface: Surface) -> String {
         };
         out = out.replace(&format!("{{{{{name}}}}}"), term);
     }
+    for (name, tool) in TOOL_TERMS {
+        let term = match surface {
+            Surface::Cli => format!("`mt {}`", tool.cli()),
+            Surface::Mcp => format!("`{}`", tool.mcp()),
+        };
+        out = out.replace(&format!("{{{{{name}}}}}"), &term);
+    }
+    for (name, field) in FIELD_TERMS {
+        let term = match surface {
+            Surface::Cli => field.cli_flag(),
+            Surface::Mcp => Some(field.mcp()),
+        };
+        if let Some(term) = term {
+            out = out.replace(&format!("{{{{{name}}}}}"), &format!("`{term}`"));
+        }
+    }
     for (name, step) in playbook_steps() {
         out = out.replace(&format!("{{{{{name}}}}}"), &step.render(surface));
     }
@@ -206,31 +230,53 @@ pub fn cmd_instruct() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use argh::FromArgs;
 
     use super::*;
     use crate::cli::Mt;
 
-    /// Return the subcommand words of each `mt` command that `text` names in code.
-    fn cli_commands(text: &str) -> Vec<Vec<&str>> {
+    /// Return the inline code spans of `text`, and the code lines that start with 4 spaces.
+    fn code_spans(text: &str) -> Vec<&str> {
         let mut out = Vec::new();
         for line in text.lines() {
-            let mut starts: Vec<usize> = line.match_indices("`mt ").map(|(i, _)| i + 4).collect();
-            if let Some(code) = line.strip_prefix("    mt ") {
-                starts.push(line.len() - code.len());
-            }
-            for start in starts {
-                let words: Vec<&str> = line[start..]
-                    .split(' ')
-                    .take_while(|w| {
-                        w.chars().next().is_some_and(|c| c.is_ascii_lowercase())
-                            && w.chars().all(|c| c.is_ascii_lowercase() || c == '-')
-                    })
-                    .collect();
-                out.push(words);
-            }
+            out.extend(line.split('`').skip(1).step_by(2));
+            out.extend(line.strip_prefix("    "));
         }
         out
+    }
+
+    /// Return the subcommand words and the flags of each `mt` command that `text` names in code.
+    fn cli_commands(text: &str) -> Vec<(Vec<&str>, Vec<&str>)> {
+        let is_word = |w: &str| {
+            w.chars().next().is_some_and(|c| c.is_ascii_lowercase())
+                && w.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+        };
+        code_spans(text)
+            .into_iter()
+            .filter_map(|span| span.strip_prefix("mt "))
+            .map(|command| {
+                let tokens: Vec<&str> = command.split(' ').collect();
+                let n = tokens.iter().take_while(|w| is_word(w)).count();
+                let flags = tokens[n..]
+                    .iter()
+                    .map(|t| t.trim_matches(['[', ']']))
+                    .filter(|t| t.starts_with('-'))
+                    .collect();
+                (tokens[..n].to_vec(), flags)
+            })
+            .collect()
+    }
+
+    /// Return the words of the help text of `mt` with subcommand `words`, or `None` if `words` is not a command.
+    fn help_words(words: &[&str]) -> Option<HashSet<String>> {
+        let mut args = words.to_vec();
+        args.push("--help");
+        let help = Mt::from_args(&["mt"], &args).expect_err("--help exits early");
+        help.status.ok()?;
+        let split = |c: char| c.is_whitespace() || matches!(c, ',' | '[' | ']');
+        Some(help.output.split(split).map(String::from).collect())
     }
 
     #[test]
@@ -240,8 +286,13 @@ mod tests {
             assert!(!text.contains("{{"), "{surface:?}: unresolved term");
             assert!(!text.contains("<!--"), "{surface:?}: block marker");
         }
-        let steps = playbook_steps().into_iter().map(|(name, _)| name);
-        for name in TERMS.iter().map(|(name, _, _)| *name).chain(steps) {
+        let names = TERMS
+            .iter()
+            .map(|(name, _, _)| *name)
+            .chain(TOOL_TERMS.iter().map(|(name, _)| *name))
+            .chain(FIELD_TERMS.iter().map(|(name, _)| *name))
+            .chain(playbook_steps().into_iter().map(|(name, _)| name));
+        for name in names {
             assert!(
                 TEMPLATE.contains(&format!("{{{{{name}}}}}")),
                 "unused {name}"
@@ -250,19 +301,24 @@ mod tests {
     }
 
     #[test]
-    fn cli_playbook_names_only_cli_commands() {
+    fn cli_playbook_names_only_cli_commands_and_their_flags() {
         let text = playbook(Surface::Cli);
         let commands = cli_commands(&text);
         assert!(commands.len() > 20, "{commands:?}");
-        for words in commands {
-            let mut args = words.clone();
-            args.push("--help");
-            let help = Mt::from_args(&["mt"], &args).expect_err("--help exits early");
-            assert!(
-                help.status.is_ok(),
-                "`mt {}` is not a command",
-                words.join(" ")
-            );
+        let mut all_flags = HashSet::new();
+        for (words, flags) in commands {
+            let command = words.join(" ");
+            let help =
+                help_words(&words).unwrap_or_else(|| panic!("`mt {command}` is not a command"));
+            for flag in flags {
+                assert!(help.contains(flag), "`mt {command}` has no flag {flag}");
+            }
+            all_flags.extend(help.into_iter().filter(|w| w.starts_with('-')));
+        }
+        for span in code_spans(&text) {
+            if let Some(flag) = span.split(' ').next().filter(|w| w.starts_with('-')) {
+                assert!(all_flags.contains(flag), "no named command has flag {flag}");
+            }
         }
         assert!(!text.contains(" { "), "MCP tool syntax in the CLI playbook");
     }
@@ -280,13 +336,13 @@ mod tests {
 
     #[cfg(feature = "mcp")]
     #[test]
-    fn mcp_playbook_names_only_mcp_tools() {
+    fn mcp_playbook_names_only_mcp_tools_and_their_fields() {
         let text = playbook(Surface::Mcp);
         assert!(
             cli_commands(&text).is_empty(),
             "CLI command in the MCP playbook"
         );
-        let tools = crate::mcp::tool_names();
+        let tools = crate::mcp::tool_fields();
         let mut calls = 0;
         let code_lines = text.match_indices("\n    ").map(|(i, _)| i + 4);
         for i in text.match_indices('`').map(|(i, _)| i).chain(code_lines) {
@@ -300,7 +356,17 @@ mod tests {
 
             if is_call && !name.is_empty() {
                 calls += 1;
-                assert!(tools.contains(&name), "`{name}` is not an MCP tool");
+                let fields = tools
+                    .get(&name)
+                    .unwrap_or_else(|| panic!("`{name}` is not an MCP tool"));
+                let Some(args) = after.strip_prefix(" {") else {
+                    continue;
+                };
+                let args = &args[..args.find('}').expect("closing brace")];
+                for arg in args.split(',').map(str::trim).filter(|a| !a.is_empty()) {
+                    let field = arg.split(':').next().unwrap().trim().trim_end_matches('?');
+                    assert!(fields.contains(field), "`{name}` has no field {field}");
+                }
             }
         }
         assert!(calls > 15, "{calls} tool calls");
