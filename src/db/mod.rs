@@ -12,7 +12,7 @@ use client::api::ErrorCode;
 
 use crate::graph::Curriculum;
 use crate::schema::{self, DbState, ImportMarker, OAuthRow, SchemaState};
-use crate::view::OverlayCache;
+use crate::view::{Changes, OverlayCache, OverlayWrite};
 use crate::{Error, Result};
 
 pub const DEFAULT_URL: &str = "https://baserunna.fly.dev";
@@ -256,7 +256,7 @@ impl Db {
     /// Commit `ops` after the database and import checks.
     async fn commit(&self, ops: &[Op]) -> Result<()> {
         run_txn!(self, |txn| {
-            txn.write(ops.iter().cloned());
+            txn.queue(ops.iter().cloned());
             Ok::<_, Error>(())
         })
     }
@@ -372,17 +372,42 @@ impl Txn {
         Ok(())
     }
 
-    /// Execute `op` in the transaction.
+    /// Read the OAuth row of type `R` with primary key `pk` in the transaction.
     #[cfg(feature = "mcp")]
-    pub(crate) async fn run_one(&mut self, op: Op) -> Result<OpResult> {
-        let mut results = self.run(std::slice::from_ref(&op)).await?;
-        results
+    pub(crate) async fn get_oauth<R: OAuthRow>(&mut self, pk: &str) -> Result<Option<R>> {
+        let mut results = self.run(&[Op::get_row::<R>(pk)]).await?;
+        let result = results
             .pop()
-            .ok_or_else(|| Error::BadRow("transaction returned no result".into()))
+            .ok_or_else(|| Error::BadRow("transaction returned no result".into()))?;
+        Ok(result.row()?)
+    }
+
+    /// Queue the insert of OAuth row `row`, which the server deletes after `ttl`.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn insert_oauth<R: OAuthRow>(&mut self, row: &R, ttl: Duration) {
+        self.queue([Op::insert_expiring(row, ttl)]);
+    }
+
+    /// Queue the delete of the OAuth row of type `R` with primary key `pk`.
+    #[cfg(feature = "mcp")]
+    pub(crate) fn delete_oauth<R: OAuthRow>(&mut self, pk: &str) {
+        self.queue([Op::delete_row::<R>(pk)]);
+    }
+
+    /// Queue `marker` as the progress of an import into this database.
+    pub(crate) fn set_import_marker(&mut self, marker: ImportMarker) {
+        self.queue([marker.write_op()]);
+    }
+
+    /// Queue the writes of `changes`, and return its overlay edits if it has any.
+    pub(crate) fn write_changes(&mut self, changes: Changes) -> Option<OverlayWrite> {
+        let (ops, overlay_write) = changes.into_ops();
+        self.queue(ops);
+        overlay_write
     }
 
     /// Queue write operations to send with the next request or the commit.
-    pub(crate) fn write(&mut self, ops: impl IntoIterator<Item = Op>) {
+    fn queue(&mut self, ops: impl IntoIterator<Item = Op>) {
         self.inner.write(ops);
     }
 }

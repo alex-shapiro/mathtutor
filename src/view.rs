@@ -45,7 +45,7 @@ impl CachedOverlay {
 }
 
 /// Overlay edits queued by a transaction and the version that they commit under.
-struct OverlayWrite {
+pub(crate) struct OverlayWrite {
     version: String,
     edits: Vec<Edit>,
 }
@@ -335,7 +335,7 @@ impl Changes {
     }
 
     /// Return the write operations of this set, and its overlay edits with the new overlay version if it has edits.
-    fn into_ops(self) -> (Vec<Op>, Option<OverlayWrite>) {
+    pub(crate) fn into_ops(self) -> (Vec<Op>, Option<OverlayWrite>) {
         let mut ops = self.ops;
         let overlay_write = (!self.overlay.is_empty()).then(|| OverlayWrite {
             version: new_overlay_version(),
@@ -463,8 +463,7 @@ impl Db {
         if let PathSel::Id(explicit_id) = &want.path {
             changes.touch_path(explicit_id);
         }
-        let (ops, overlay_write) = changes.into_ops();
-        txn.write(ops);
+        let overlay_write = txn.write_changes(changes);
         Ok(Attempted {
             out,
             overlay,

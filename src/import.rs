@@ -560,7 +560,7 @@ async fn claim_import_target_in(txn: &mut Txn) -> Result<()> {
     if overlay_version.entry()?.is_some() || !paths.rows::<PathFile>()?.is_empty() {
         return Err(Error::ImportTargetNotEmpty);
     }
-    txn.write([ImportMarker::Open.write_op()]);
+    txn.set_import_marker(ImportMarker::Open);
     Ok(())
 }
 

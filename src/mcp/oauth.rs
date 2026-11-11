@@ -387,8 +387,8 @@ impl IssuedTokens {
         }
     }
 
-    /// Return the operations that store these tokens.
-    fn insert_ops(&self) -> [Op; 2] {
+    /// Queue the inserts that store these tokens in `txn`.
+    fn insert(&self, txn: &mut Txn) {
         let now = Utc::now();
         let access = OAuthAccessToken {
             token_hash: secret_hash(&self.access),
@@ -402,10 +402,8 @@ impl IssuedTokens {
             scope: self.scope.clone(),
             expires_at: now + REFRESH_TOKEN_TTL,
         };
-        [
-            Op::insert_expiring(&access, std_ttl(ACCESS_TOKEN_TTL)),
-            Op::insert_expiring(&refresh, std_ttl(REFRESH_TOKEN_TTL)),
-        ]
+        txn.insert_oauth(&access, std_ttl(ACCESS_TOKEN_TTL));
+        txn.insert_oauth(&refresh, std_ttl(REFRESH_TOKEN_TTL));
     }
 }
 
@@ -430,14 +428,11 @@ async fn exchange_code(
     verifier: &str,
 ) -> Result<IssuedTokens, OAuthError> {
     let code_hash = secret_hash(code);
-    let row = txn
-        .run_one(Op::get_row::<OAuthCode>(&code_hash))
-        .await?
-        .row()?;
+    let row = txn.get_oauth::<OAuthCode>(&code_hash).await?;
     let scope = redeem(row, client_id, redirect_uri, verifier)?;
     let tokens = IssuedTokens::new(client_id, scope);
-    txn.write([Op::delete_row::<OAuthCode>(&code_hash)]);
-    txn.write(tokens.insert_ops());
+    txn.delete_oauth::<OAuthCode>(&code_hash);
+    tokens.insert(txn);
     Ok(tokens)
 }
 
@@ -447,15 +442,13 @@ async fn rotate_refresh(
     provided: &str,
     req: &TokenRequest,
 ) -> Result<IssuedTokens, OAuthError> {
-    let row = txn
-        .run_one(Op::get_row::<OAuthRefreshToken>(secret_hash(provided)))
-        .await?
-        .row()?;
+    let token_hash = secret_hash(provided);
+    let row = txn.get_oauth::<OAuthRefreshToken>(&token_hash).await?;
     let stored = check_refresh(row, req.client_id.as_deref())?;
     let scope = refreshed_scope(stored.scope, req.scope.as_deref())?;
     let tokens = IssuedTokens::new(&stored.client_id, scope);
-    txn.write([Op::delete_row::<OAuthRefreshToken>(secret_hash(provided))]);
-    txn.write(tokens.insert_ops());
+    txn.delete_oauth::<OAuthRefreshToken>(&token_hash);
+    tokens.insert(txn);
     Ok(tokens)
 }
 
