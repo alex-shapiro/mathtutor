@@ -629,7 +629,7 @@ async fn auth_middleware(
 
     if let Some(token) = provided {
         if let Some(expected) = state.api_key.as_deref()
-            && constant_time_eq(token.as_bytes(), expected.as_bytes())
+            && oauth::constant_time_eq(token.as_bytes(), expected.as_bytes())
         {
             return next.run(req).await;
         }
@@ -662,11 +662,6 @@ fn token_check_unavailable() -> Response {
         http::HeaderValue::from_static("5"),
     );
     resp
-}
-
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    use subtle::ConstantTimeEq;
-    a.ct_eq(b).into()
 }
 
 const MAX_LOGGED_BODY: usize = 1 << 20;

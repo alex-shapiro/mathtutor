@@ -207,17 +207,8 @@ async fn authorize_get(
 
 #[derive(Deserialize)]
 struct AuthorizePost {
-    response_type: String,
-    client_id: String,
-    redirect_uri: String,
-    #[serde(default)]
-    state: Option<String>,
-    code_challenge: String,
-    code_challenge_method: String,
-    #[serde(default)]
-    scope: Option<String>,
-    #[serde(default)]
-    resource: Option<String>,
+    #[serde(flatten)]
+    query: AuthorizeQuery,
     csrf: String,
     password: String,
 }
@@ -226,16 +217,7 @@ async fn authorize_post(
     State(s): State<OAuthState>,
     Form(f): Form<AuthorizePost>,
 ) -> Result<Response, OAuthError> {
-    let q = AuthorizeQuery {
-        response_type: f.response_type,
-        client_id: f.client_id,
-        redirect_uri: f.redirect_uri,
-        state: f.state,
-        code_challenge: f.code_challenge,
-        code_challenge_method: f.code_challenge_method,
-        scope: f.scope,
-        resource: f.resource,
-    };
+    let q = f.query;
     let client = validate_authorize_request(&s, &q).await?;
     if !csrf_verify(&s.csrf_key, &q, &f.csrf) {
         tracing::warn!(client_id = %client.client_id, "csrf token rejected on authorize POST");
@@ -281,7 +263,7 @@ async fn validate_authorize_request(
     q: &AuthorizeQuery,
 ) -> Result<OAuthClient, OAuthError> {
     if q.response_type != "code" {
-        return Err(OAuthError::unsupported_response_type());
+        return Err(OAuthError::UnsupportedResponseType);
     }
     if q.code_challenge_method != "S256" {
         return Err(OAuthError::invalid_request(
@@ -334,7 +316,7 @@ async fn token(
     match req.grant_type.as_str() {
         "authorization_code" => token_authorization_code(&s, req).await,
         "refresh_token" => token_refresh(&s, req).await,
-        other => Err(OAuthError::unsupported_grant_type(other)),
+        other => Err(OAuthError::UnsupportedGrantType(other.to_string())),
     }
 }
 
@@ -484,23 +466,23 @@ fn redeem(
 ) -> Result<Option<String>, OAuthError> {
     let Some(row) = row else {
         tracing::warn!(%client_id, "auth code unknown or already used");
-        return Err(OAuthError::invalid_grant());
+        return Err(OAuthError::InvalidGrant);
     };
     if row.client_id != client_id {
         tracing::warn!(%client_id, stored_client_id = %row.client_id, "auth code client_id mismatch");
-        return Err(OAuthError::invalid_grant());
+        return Err(OAuthError::InvalidGrant);
     }
     if row.redirect_uri != redirect_uri {
         tracing::warn!(%client_id, "auth code redirect_uri mismatch");
-        return Err(OAuthError::invalid_grant());
+        return Err(OAuthError::InvalidGrant);
     }
     if row.expires_at < Utc::now() {
         tracing::warn!(%client_id, "auth code expired");
-        return Err(OAuthError::invalid_grant());
+        return Err(OAuthError::InvalidGrant);
     }
     if row.code_challenge != pkce_s256(verifier) {
         tracing::warn!(%client_id, "PKCE verifier did not match challenge");
-        return Err(OAuthError::invalid_grant());
+        return Err(OAuthError::InvalidGrant);
     }
     Ok(row.scope)
 }
@@ -510,17 +492,17 @@ fn check_refresh(
     client_id: Option<&str>,
 ) -> Result<OAuthRefreshToken, OAuthError> {
     let Some(row) = row else {
-        return Err(OAuthError::invalid_grant());
+        return Err(OAuthError::InvalidGrant);
     };
     if row.expires_at < Utc::now() {
         tracing::warn!(client_id = %row.client_id, "refresh token expired");
-        return Err(OAuthError::invalid_grant());
+        return Err(OAuthError::InvalidGrant);
     }
     if let Some(rc) = client_id
         && rc != row.client_id
     {
         tracing::warn!(client_id = %rc, stored_client_id = %row.client_id, "refresh token client_id mismatch");
-        return Err(OAuthError::invalid_grant());
+        return Err(OAuthError::InvalidGrant);
     }
     Ok(row)
 }
@@ -618,7 +600,8 @@ fn pkce_s256(verifier: &str) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+/// Return `true` if `a` equals `b`, in a time that does not depend on where they differ.
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.ct_eq(b).into()
 }
 
@@ -642,8 +625,7 @@ fn csrf_verify(key: &[u8; 32], q: &AuthorizeQuery, token: &str) -> bool {
     let Ok(provided) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(mac_b64) else {
         return false;
     };
-    let expected = csrf_mac(key, ts, q);
-    provided.ct_eq(&expected).into()
+    constant_time_eq(&provided, &csrf_mac(key, ts, q))
 }
 
 // Length-prefix each field before hashing to prevent canonicalization ambiguity.
@@ -682,18 +664,6 @@ pub enum OAuthError {
 impl OAuthError {
     fn invalid_request(msg: impl Into<String>) -> Self {
         Self::InvalidRequest(msg.into())
-    }
-
-    fn invalid_grant() -> Self {
-        Self::InvalidGrant
-    }
-
-    fn unsupported_response_type() -> Self {
-        Self::UnsupportedResponseType
-    }
-
-    fn unsupported_grant_type(grant: &str) -> Self {
-        Self::UnsupportedGrantType(grant.to_string())
     }
 }
 
