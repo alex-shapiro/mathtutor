@@ -248,8 +248,9 @@ async fn authorize_post(
         return Ok((StatusCode::UNAUTHORIZED, Html(html)).into_response());
     }
 
+    let secret = random_token();
     let code = OAuthCode {
-        code: random_token(),
+        code_hash: secret_hash(&secret),
         client_id: client.client_id.clone(),
         redirect_uri: q.redirect_uri.clone(),
         scope: q.scope.clone(),
@@ -268,7 +269,7 @@ async fn authorize_post(
         .map_err(|_| OAuthError::invalid_request("redirect_uri is not a valid URL"))?;
     {
         let mut pairs = redirect.query_pairs_mut();
-        pairs.append_pair("code", &code.code);
+        pairs.append_pair("code", &secret);
         if let Some(state) = &q.state {
             pairs.append_pair("state", state);
         }
@@ -405,13 +406,13 @@ impl IssuedTokens {
     fn insert_ops(&self) -> [Op; 2] {
         let now = Utc::now();
         let access = OAuthAccessToken {
-            token: self.access.clone(),
+            token_hash: secret_hash(&self.access),
             client_id: self.client_id.clone(),
             scope: self.scope.clone(),
             expires_at: now + ACCESS_TOKEN_TTL,
         };
         let refresh = OAuthRefreshToken {
-            token: self.refresh.clone(),
+            token_hash: secret_hash(&self.refresh),
             client_id: self.client_id.clone(),
             scope: self.scope.clone(),
             expires_at: now + REFRESH_TOKEN_TTL,
@@ -443,13 +444,17 @@ async fn exchange_code(
     redirect_uri: &str,
     verifier: &str,
 ) -> Result<IssuedTokens, OAuthError> {
-    let row = txn.run_one(Op::get_row::<OAuthCode>(code)).await?.row()?;
+    let code_hash = secret_hash(code);
+    let row = txn
+        .run_one(Op::get_row::<OAuthCode>(&code_hash))
+        .await?
+        .row()?;
     let scope = redeem(row, client_id, redirect_uri, verifier)?;
     let tokens = IssuedTokens::new(client_id, scope);
     let used = OAuthCodeUse {
         used_at: Utc::now(),
     };
-    txn.write([Op::update::<OAuthCode>(code, &used)]);
+    txn.write([Op::update::<OAuthCode>(&code_hash, &used)]);
     txn.write(tokens.insert_ops());
     Ok(tokens)
 }
@@ -461,12 +466,12 @@ async fn rotate_refresh(
     req: &TokenRequest,
 ) -> Result<IssuedTokens, OAuthError> {
     let row = txn
-        .run_one(Op::get_row::<OAuthRefreshToken>(provided))
+        .run_one(Op::get_row::<OAuthRefreshToken>(secret_hash(provided)))
         .await?
         .row()?;
     let stored = check_refresh(row, req.client_id.as_deref())?;
     let tokens = IssuedTokens::new(&stored.client_id, req.scope.clone().or(stored.scope));
-    txn.write([Op::delete_row::<OAuthRefreshToken>(provided)]);
+    txn.write([Op::delete_row::<OAuthRefreshToken>(secret_hash(provided))]);
     txn.write(tokens.insert_ops());
     Ok(tokens)
 }
@@ -530,7 +535,7 @@ fn check_refresh(
 /// Return the `client_id` for a non-expired access token, or `None` if unknown or expired.
 pub async fn validate_access_token(db: &Db, token: &str) -> Result<Option<String>, crate::Error> {
     let stored: Option<OAuthAccessToken> = db
-        .read_one(Op::get_row::<OAuthAccessToken>(token))
+        .read_one(Op::get_row::<OAuthAccessToken>(secret_hash(token)))
         .await?
         .row()?;
     Ok(stored
@@ -603,6 +608,16 @@ fn random_token() -> String {
     let mut buf = [0u8; 32];
     rand::rng().fill_bytes(&mut buf);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+}
+
+/// Return the hex SHA-256 digest that keys the stored row of an authorization code or token.
+pub fn secret_hash(secret: &str) -> String {
+    use std::fmt::Write as _;
+    let mut hex = String::with_capacity(64);
+    for b in Sha256::digest(secret.as_bytes()) {
+        let _ = write!(hex, "{b:02x}");
+    }
+    hex
 }
 
 fn pkce_s256(verifier: &str) -> String {

@@ -10,7 +10,7 @@ use crate::path::PathFile;
 use crate::types::{Difficulty, QuizType, Rating, Strategy};
 use crate::{Error, Result};
 
-pub(crate) const VERSION: &str = "1";
+pub(crate) const VERSION: &str = "2";
 const VERSION_KEY: &str = "schema_version";
 
 /// Key that records the progress of `mt import-turso` on this database.
@@ -170,7 +170,8 @@ impl Row for OAuthClient {
 /// Row in the `oauth_codes` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthCode {
-    pub code: String,
+    /// Hex SHA-256 digest of the authorization code.
+    pub code_hash: String,
     pub client_id: String,
     pub redirect_uri: String,
     pub scope: Option<String>,
@@ -197,7 +198,8 @@ pub struct OAuthCodeUse {
 /// Row in the `oauth_access_tokens` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthAccessToken {
-    pub token: String,
+    /// Hex SHA-256 digest of the access token.
+    pub token_hash: String,
     pub client_id: String,
     pub scope: Option<String>,
     #[serde(with = "ts")]
@@ -211,7 +213,8 @@ impl Row for OAuthAccessToken {
 /// Row in the `oauth_refresh_tokens` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthRefreshToken {
-    pub token: String,
+    /// Hex SHA-256 digest of the refresh token.
+    pub token_hash: String,
     pub client_id: String,
     pub scope: Option<String>,
     #[serde(with = "ts")]
@@ -254,7 +257,7 @@ fn json(name: &str) -> NewColumn {
 
 fn token_columns() -> Vec<NewColumn> {
     vec![
-        string("token"),
+        string("token_hash"),
         string("client_id"),
         string_or_null("scope"),
         string("expires_at"),
@@ -339,9 +342,9 @@ pub fn tables() -> Vec<NewTable> {
         ),
         table(
             OAuthCode::TABLE,
-            &["code"],
+            &["code_hash"],
             vec![
-                string("code"),
+                string("code_hash"),
                 string("client_id"),
                 string("redirect_uri"),
                 string_or_null("scope"),
@@ -352,8 +355,8 @@ pub fn tables() -> Vec<NewTable> {
                 string_or_null("used_at"),
             ],
         ),
-        table(OAuthAccessToken::TABLE, &["token"], token_columns()),
-        table(OAuthRefreshToken::TABLE, &["token"], token_columns()),
+        table(OAuthAccessToken::TABLE, &["token_hash"], token_columns()),
+        table(OAuthRefreshToken::TABLE, &["token_hash"], token_columns()),
     ]
 }
 

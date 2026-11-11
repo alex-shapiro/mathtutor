@@ -766,6 +766,64 @@ async fn refresh_token_rotates_and_returns_a_fresh_access_token() {
     server.stop().await;
 }
 
+#[tokio::test]
+async fn stored_codes_and_tokens_are_keyed_by_the_hash_of_the_secret() {
+    use mathtutor::db::{Op, Row};
+    use mathtutor::mcp::oauth::secret_hash;
+    use mathtutor::schema::{OAuthAccessToken, OAuthCode, OAuthRefreshToken};
+
+    let cfg = common::fresh_config();
+    let server = spawn_server_on(
+        cfg.clone(),
+        AuthConfig {
+            api_key: Some(API_KEY.into()),
+            admin_password: Some(ADMIN_PASSWORD.into()),
+            ..AuthConfig::default()
+        },
+    )
+    .await;
+    let reg = register_client(&server, "Hashed").await;
+    let pkce = PkcePair::new();
+    let code = full_authorize(&server, &reg.client_id, &pkce).await;
+    let tokens = exchange_code(&server, &reg.client_id, &code, &pkce.verifier).await;
+
+    let raw = baserunna_client::Client::new(cfg.transport().unwrap())
+        .with_token(&cfg.token)
+        .db(&cfg.db);
+    let rows = raw
+        .read(&[
+            Op::query_all::<OAuthCode>(),
+            Op::query_all::<OAuthAccessToken>(),
+            Op::query_all::<OAuthRefreshToken>(),
+        ])
+        .await
+        .unwrap();
+    let [codes, access, refresh]: [_; 3] = rows.try_into().unwrap();
+    let codes: Vec<OAuthCode> = codes.rows().unwrap();
+    let access: Vec<OAuthAccessToken> = access.rows().unwrap();
+    let refresh: Vec<OAuthRefreshToken> = refresh.rows().unwrap();
+    let stored = [
+        (OAuthCode::TABLE, codes[0].code_hash.as_str(), code.as_str()),
+        (
+            OAuthAccessToken::TABLE,
+            access[0].token_hash.as_str(),
+            tokens.access_token.as_str(),
+        ),
+        (
+            OAuthRefreshToken::TABLE,
+            refresh[0].token_hash.as_str(),
+            tokens.refresh_token.as_str(),
+        ),
+    ];
+    for (table, key, secret) in stored {
+        assert_ne!(key, secret, "{table} stores the secret");
+        assert_eq!(key, secret_hash(secret), "{table}");
+    }
+    let session = handshake_with_token(&server, &tokens.access_token).await;
+    assert!(!session.is_empty(), "the access token still authenticates");
+    server.stop().await;
+}
+
 fn oauth_client() -> reqwest::Client {
     client()
 }
