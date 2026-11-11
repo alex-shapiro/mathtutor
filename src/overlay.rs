@@ -9,7 +9,7 @@ use crate::db::{Db, Op};
 use crate::graph::Quiz;
 use crate::schema::{LessonRow, QuizRow, RemovedQuizRow};
 use crate::types::{Difficulty, QuizType};
-use crate::view::{Changes, Want};
+use crate::view::{Changes, View, Want};
 
 /// In-memory snapshot of the curriculum overlay.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -269,38 +269,56 @@ impl QuizPatch {
     }
 }
 
-/// Set the lesson body for `atom_id` in the overlay.
-pub fn upsert_lesson(changes: &mut Changes, atom_id: &str, body: &str) {
-    changes.overlay(Edit::Lesson {
-        atom_id: atom_id.into(),
-        body: body.into(),
-    });
+/// Set the lesson body for `atom_id` in the overlay that `view` loaded.
+pub fn upsert_lesson(changes: &mut Changes, view: &View, atom_id: &str, body: &str) -> Result<()> {
+    changes.overlay(
+        view,
+        Edit::Lesson {
+            atom_id: atom_id.into(),
+            body: body.into(),
+        },
+    )
 }
 
-/// Insert a new quiz into the overlay.
-pub fn add_quiz(changes: &mut Changes, atom_id: &str, q: &Quiz) {
-    changes.overlay(Edit::Quiz {
-        atom_id: atom_id.into(),
-        quiz: q.clone(),
-        new: true,
-    });
+/// Insert a new quiz into the overlay that `view` loaded.
+pub fn add_quiz(changes: &mut Changes, view: &View, atom_id: &str, q: &Quiz) -> Result<()> {
+    changes.overlay(
+        view,
+        Edit::Quiz {
+            atom_id: atom_id.into(),
+            quiz: q.clone(),
+            new: true,
+        },
+    )
 }
 
-/// Replace `base` in the overlay with `patch` applied, and clear any removal tombstone.
-pub fn amend_quiz(changes: &mut Changes, atom_id: &str, base: &Quiz, patch: &QuizPatch) {
-    changes.overlay(Edit::Quiz {
-        atom_id: atom_id.into(),
-        quiz: patch.apply(base),
-        new: false,
-    });
+/// Replace `base` in the overlay that `view` loaded with `patch` applied, and clear any removal tombstone.
+pub fn amend_quiz(
+    changes: &mut Changes,
+    view: &View,
+    atom_id: &str,
+    base: &Quiz,
+    patch: &QuizPatch,
+) -> Result<()> {
+    changes.overlay(
+        view,
+        Edit::Quiz {
+            atom_id: atom_id.into(),
+            quiz: patch.apply(base),
+            new: false,
+        },
+    )
 }
 
-/// Mark `quiz_id` as removed in the overlay.
-pub fn remove_quiz(changes: &mut Changes, atom_id: &str, quiz_id: &str) {
-    changes.overlay(Edit::Remove {
-        atom_id: atom_id.into(),
-        quiz_id: quiz_id.into(),
-    });
+/// Mark `quiz_id` as removed in the overlay that `view` loaded.
+pub fn remove_quiz(changes: &mut Changes, view: &View, atom_id: &str, quiz_id: &str) -> Result<()> {
+    changes.overlay(
+        view,
+        Edit::Remove {
+            atom_id: atom_id.into(),
+            quiz_id: quiz_id.into(),
+        },
+    )
 }
 
 /// Print the curriculum overlay as AYML (`mt graph dump`).

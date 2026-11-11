@@ -488,9 +488,8 @@ async fn open_import_blocks_a_handle_opened_before_it_until_it_verifies() {
     let read = db.snapshot(&Want::overlay()).await.unwrap_err();
     assert!(matches!(read, Error::ImportInProgress), "{read}");
     let write = db
-        .transact(&Want::overlay(), |_, changes| {
-            overlay::upsert_lesson(changes, "fnd.1.1.1", "edit during the import");
-            Ok(())
+        .transact(&Want::overlay(), |v, changes| {
+            overlay::upsert_lesson(changes, v, "fnd.1.1.1", "edit during the import")
         })
         .await
         .unwrap_err();
@@ -526,9 +525,8 @@ async fn completed_import_rejects_rerun_and_keeps_newer_content() {
         .find(|(_, a)| a.lesson.is_some())
         .map(|(id, _)| id.clone())
         .expect("imported lesson");
-    db.transact(&Want::overlay(), |_, changes| {
-        overlay::upsert_lesson(changes, &atom, "newer");
-        Ok(())
+    db.transact(&Want::overlay(), |v, changes| {
+        overlay::upsert_lesson(changes, v, &atom, "newer")
     })
     .await
     .unwrap();

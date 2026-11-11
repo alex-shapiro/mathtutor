@@ -499,22 +499,22 @@ async fn seed(db: &Db, atoms: usize, lesson_bytes: usize) {
             .iter()
             .map(|id| ((*id).clone(), sample_text(&mut rng, lesson_bytes)))
             .collect();
-        db.transact(&Want::overlay(), |_, changes| {
+        db.transact(&Want::overlay(), |view, changes| {
             for (id, body) in &lessons {
-                overlay::upsert_lesson(changes, id, body);
+                overlay::upsert_lesson(changes, view, id, body)?;
                 for (i, d) in [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard]
                     .into_iter()
                     .enumerate()
                 {
                     let q = Quiz {
-                        id: format!("{id}.q{}", i + 1),
+                        id: format!("{id}.u{}", i + 1),
                         difficulty: d,
                         kind: None,
                         question: "q ".repeat(120),
                         answer: "a ".repeat(150),
                         rubric: Some("r ".repeat(100)),
                     };
-                    overlay::add_quiz(changes, id, &q);
+                    overlay::add_quiz(changes, view, id, &q)?;
                 }
             }
             Ok(())

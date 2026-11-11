@@ -32,7 +32,7 @@ pub async fn cmd_lesson_upsert(
             return changes.append(view, &taught);
         }
 
-        overlay::upsert_lesson(changes, atom_id, &body);
+        overlay::upsert_lesson(changes, view, atom_id, &body)?;
         let change = if stored.is_some() {
             EventKind::LessonAmended { atom }
         } else {
@@ -62,7 +62,7 @@ pub async fn cmd_quiz_create(
         let quiz = draft
             .clone()
             .into_quiz(next_quiz_id(atom_id, &c.quizzes, tombstones));
-        overlay::add_quiz(changes, atom_id, &quiz);
+        overlay::add_quiz(changes, view, atom_id, &quiz)?;
         let authored = EventKind::QuizAuthored {
             atom: atom_id.to_string(),
             quiz: quiz.id.clone(),
@@ -84,7 +84,7 @@ pub async fn cmd_quiz_update(
         let id = view.path()?.file.id.clone();
         let g = view.graph()?;
         let (atom, quiz) = g.quiz(quiz_id)?;
-        overlay::amend_quiz(changes, &atom.id, quiz, patch);
+        overlay::amend_quiz(changes, view, &atom.id, quiz, patch)?;
         let amended = EventKind::QuizAmended {
             atom: atom.id.clone(),
             quiz: quiz_id.to_string(),
@@ -108,7 +108,7 @@ pub async fn cmd_quiz_delete(db: &Db, quiz_id: &str, path_id: Option<&str>) -> R
         }
         let g = view.graph()?;
         let (atom, _) = g.quiz(quiz_id)?;
-        overlay::remove_quiz(changes, &atom.id, quiz_id);
+        overlay::remove_quiz(changes, view, &atom.id, quiz_id)?;
         let removed = EventKind::QuizRemoved {
             atom: atom.id.clone(),
             quiz: quiz_id.to_string(),

@@ -308,8 +308,12 @@ impl Changes {
     }
 
     /// Record an overlay [`Edit`].
-    pub fn overlay(&mut self, e: Edit) {
+    ///
+    /// Fails with [`Error::OverlayNotLoaded`] unless `view` loaded the overlay, so that the commit checks the overlay version that the edit is based on.
+    pub fn overlay(&mut self, view: &View, e: Edit) -> Result<()> {
+        view.loaded_overlay()?;
         self.overlay.push(e);
+        Ok(())
     }
 
     /// Append `e` to its path event stream and update derived `cards` and `taught` rows.

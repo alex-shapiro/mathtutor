@@ -377,8 +377,8 @@ async fn opening_an_existing_database_preserves_data() {
     let cfg = common::fresh_config();
     let db = common::create_db(&cfg).await;
     common::seed_path(&db, PATH_ID, &["fnd.2"], Strategy::TopDown).await;
-    common::write(&db, PATH_ID, |_, changes| {
-        overlay::upsert_lesson(changes, ATOM, "kept");
+    common::write(&db, PATH_ID, |v, changes| {
+        overlay::upsert_lesson(changes, v, ATOM, "kept").unwrap();
     })
     .await;
 
@@ -770,8 +770,8 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
     let writer = common::create_db(&cfg).await;
     common::seed_path(&writer, PATH_ID, &[], Strategy::BottomUp).await;
     let body = "x".repeat(20_000);
-    common::write(&writer, PATH_ID, |_, c| {
-        overlay::upsert_lesson(c, "fnd.1.1.1", &body);
+    common::write(&writer, PATH_ID, |v, c| {
+        overlay::upsert_lesson(c, v, "fnd.1.1.1", &body).unwrap();
     })
     .await;
 
@@ -810,8 +810,8 @@ async fn cached_overlay_is_reused_until_another_client_writes() {
         "a valid cache skips the overlay ({warm} bytes)"
     );
 
-    common::write(&writer, PATH_ID, |_, c| {
-        overlay::upsert_lesson(c, "fnd.1.1.1", "revised");
+    common::write(&writer, PATH_ID, |v, c| {
+        overlay::upsert_lesson(c, v, "fnd.1.1.1", "revised").unwrap();
     })
     .await;
     let third = read(&reader).await;

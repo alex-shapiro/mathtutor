@@ -4,7 +4,7 @@ use mathtutor::db::Db;
 use mathtutor::graph::{Graph, Quiz};
 use mathtutor::overlay::{self, QuizDraft, QuizPatch};
 use mathtutor::types::{Difficulty, QuizType};
-use mathtutor::view::Changes;
+use mathtutor::view::{Changes, View};
 
 mod common;
 
@@ -18,8 +18,8 @@ async fn fresh_db() -> Db {
     common::fresh_db(PATH_ID).await
 }
 
-async fn edit(db: &Db, f: impl Fn(&mut Changes)) {
-    common::write(db, PATH_ID, |_, changes| f(changes)).await;
+async fn edit(db: &Db, f: impl Fn(&View, &mut Changes)) {
+    common::write(db, PATH_ID, |view, changes| f(view, changes)).await;
 }
 
 async fn merged(db: &Db) -> std::sync::Arc<Graph> {
@@ -57,8 +57,8 @@ async fn load_returns_empty_overlay_on_fresh_db() {
 async fn upsert_lesson_writes_row_and_round_trips() {
     let db = fresh_db().await;
 
-    edit(&db, |c| {
-        overlay::upsert_lesson(c, NO_LESSON_ATOM, "Negation flips truth.");
+    edit(&db, |v, c| {
+        overlay::upsert_lesson(c, v, NO_LESSON_ATOM, "Negation flips truth.").unwrap();
     })
     .await;
 
@@ -71,8 +71,14 @@ async fn upsert_lesson_writes_row_and_round_trips() {
 async fn upsert_lesson_overwrites_existing_overlay_row() {
     let db = fresh_db().await;
 
-    edit(&db, |c| overlay::upsert_lesson(c, NO_LESSON_ATOM, "first")).await;
-    edit(&db, |c| overlay::upsert_lesson(c, NO_LESSON_ATOM, "second")).await;
+    edit(&db, |v, c| {
+        overlay::upsert_lesson(c, v, NO_LESSON_ATOM, "first").unwrap();
+    })
+    .await;
+    edit(&db, |v, c| {
+        overlay::upsert_lesson(c, v, NO_LESSON_ATOM, "second").unwrap();
+    })
+    .await;
 
     let ov = common::overlay(&db).await;
     let entry = ov.atoms.get(NO_LESSON_ATOM).expect("atom present");
@@ -83,9 +89,10 @@ async fn upsert_lesson_overwrites_existing_overlay_row() {
 async fn add_quiz_writes_row_and_round_trips() {
     let db = fresh_db().await;
 
-    edit(&db, |c| {
+    edit(&db, |v, c| {
         overlay::add_quiz(
             c,
+            v,
             NO_LESSON_ATOM,
             &quiz(
                 "fnd.1.1.2.q1",
@@ -95,7 +102,8 @@ async fn add_quiz_writes_row_and_round_trips() {
                 "¬P",
                 Some("Look for the ¬ glyph"),
             ),
-        );
+        )
+        .unwrap();
     })
     .await;
 
@@ -115,8 +123,8 @@ async fn add_quiz_writes_row_and_round_trips() {
 async fn amend_quiz_upserts_and_untombstones() {
     let db = fresh_db().await;
 
-    edit(&db, |c| {
-        overlay::remove_quiz(c, WITH_LESSON_ATOM, SHIPPED_QUIZ_ID);
+    edit(&db, |v, c| {
+        overlay::remove_quiz(c, v, WITH_LESSON_ATOM, SHIPPED_QUIZ_ID).unwrap();
     })
     .await;
     let base = Quiz {
@@ -127,14 +135,14 @@ async fn amend_quiz_upserts_and_untombstones() {
         answer: "A".into(),
         rubric: None,
     };
-    edit(&db, |c| {
+    edit(&db, |v, c| {
         let patch = QuizPatch {
             difficulty: Some(Difficulty::Hard),
             question: Some("new question".into()),
             answer: Some("new answer".into()),
             ..QuizPatch::default()
         };
-        overlay::amend_quiz(c, WITH_LESSON_ATOM, &base, &patch);
+        overlay::amend_quiz(c, v, WITH_LESSON_ATOM, &base, &patch).unwrap();
     })
     .await;
 
@@ -159,12 +167,12 @@ async fn amend_quiz_upserts_and_untombstones() {
 async fn remove_quiz_is_idempotent() {
     let db = fresh_db().await;
 
-    edit(&db, |c| {
-        overlay::remove_quiz(c, WITH_LESSON_ATOM, SHIPPED_QUIZ_ID);
+    edit(&db, |v, c| {
+        overlay::remove_quiz(c, v, WITH_LESSON_ATOM, SHIPPED_QUIZ_ID).unwrap();
     })
     .await;
-    edit(&db, |c| {
-        overlay::remove_quiz(c, WITH_LESSON_ATOM, SHIPPED_QUIZ_ID);
+    edit(&db, |v, c| {
+        overlay::remove_quiz(c, v, WITH_LESSON_ATOM, SHIPPED_QUIZ_ID).unwrap();
     })
     .await;
 
@@ -187,8 +195,8 @@ async fn merged_graph_fills_in_missing_lesson() {
         "atom must ship without a lesson"
     );
 
-    edit(&db, |c| {
-        overlay::upsert_lesson(c, NO_LESSON_ATOM, "Negation flips truth.");
+    edit(&db, |v, c| {
+        overlay::upsert_lesson(c, v, NO_LESSON_ATOM, "Negation flips truth.").unwrap();
     })
     .await;
     let g = merged(&db).await;
@@ -212,8 +220,8 @@ async fn merged_graph_overlay_lesson_overrides_shipped() {
         .clone();
     assert!(shipped.is_some(), "atom must ship with a lesson");
 
-    edit(&db, |c| {
-        overlay::upsert_lesson(c, WITH_LESSON_ATOM, "overlay body");
+    edit(&db, |v, c| {
+        overlay::upsert_lesson(c, v, WITH_LESSON_ATOM, "overlay body").unwrap();
     })
     .await;
     let g = merged(&db).await;
@@ -231,9 +239,10 @@ async fn merged_graph_appends_overlay_quizzes() {
     let g = merged(&db).await;
     let before = g.by_id.get(WITH_LESSON_ATOM).unwrap().quizzes.len();
 
-    edit(&db, |c| {
+    edit(&db, |v, c| {
         overlay::add_quiz(
             c,
+            v,
             WITH_LESSON_ATOM,
             &quiz(
                 "fnd.1.1.1.q2",
@@ -243,7 +252,8 @@ async fn merged_graph_appends_overlay_quizzes() {
                 "P ∨ ¬P",
                 None,
             ),
-        );
+        )
+        .unwrap();
     })
     .await;
 
@@ -265,13 +275,13 @@ async fn merged_graph_amendment_replaces_shipped_quiz() {
         answer: "A".into(),
         rubric: None,
     };
-    edit(&db, |c| {
+    edit(&db, |v, c| {
         let patch = QuizPatch {
             question: Some("Define proposition.".into()),
             answer: Some("Truth-valued declarative.".into()),
             ..QuizPatch::default()
         };
-        overlay::amend_quiz(c, WITH_LESSON_ATOM, &base, &patch);
+        overlay::amend_quiz(c, v, WITH_LESSON_ATOM, &base, &patch).unwrap();
     })
     .await;
 
@@ -292,8 +302,8 @@ async fn merged_graph_amendment_replaces_shipped_quiz() {
 async fn merged_graph_drops_tombstoned_quizzes() {
     let db = fresh_db().await;
 
-    edit(&db, |c| {
-        overlay::remove_quiz(c, WITH_LESSON_ATOM, SHIPPED_QUIZ_ID);
+    edit(&db, |v, c| {
+        overlay::remove_quiz(c, v, WITH_LESSON_ATOM, SHIPPED_QUIZ_ID).unwrap();
     })
     .await;
 
@@ -315,8 +325,8 @@ async fn overlay_is_global_across_paths() {
         common::seed_path(&db, id, &[], mathtutor::types::Strategy::BottomUp).await;
     }
 
-    edit(&db, |c| {
-        overlay::upsert_lesson(c, NO_LESSON_ATOM, "shared lesson");
+    edit(&db, |v, c| {
+        overlay::upsert_lesson(c, v, NO_LESSON_ATOM, "shared lesson").unwrap();
     })
     .await;
 
@@ -359,12 +369,14 @@ async fn graph_atom_helper_rejects_clusters_and_unknowns() {
 async fn graph_quiz_helper_finds_overlay_authored_ids() {
     let db = fresh_db().await;
 
-    edit(&db, |c| {
+    edit(&db, |v, c| {
         overlay::add_quiz(
             c,
+            v,
             WITH_LESSON_ATOM,
             &quiz("fnd.1.1.1.q9", Difficulty::Hard, None, "new", "new", None),
-        );
+        )
+        .unwrap();
     })
     .await;
 
@@ -402,4 +414,18 @@ async fn deleting_a_deleted_quiz_succeeds() {
     mathtutor::store::cmd_quiz_delete(&db, &quiz_id, path)
         .await
         .expect("a repeated delete is safe after an unknown outcome");
+}
+
+#[tokio::test]
+async fn an_overlay_edit_fails_in_a_write_set_without_the_overlay() {
+    let db = fresh_db().await;
+    let want = mathtutor::view::Want::path(Some(PATH_ID)).without_overlay();
+    let e = db
+        .transact(&want, |view, changes| {
+            overlay::upsert_lesson(changes, view, NO_LESSON_ATOM, "unchecked")
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(e, mathtutor::Error::OverlayNotLoaded), "{e:?}");
+    assert!(common::overlay(&db).await.atoms.is_empty());
 }

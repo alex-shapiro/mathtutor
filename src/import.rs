@@ -600,9 +600,10 @@ pub async fn import(turso: &Turso, db: &Db) -> Result<Report> {
         ..Report::default()
     };
     for edits in legacy.overlay.chunks(IMPORT_WRITE_BATCH) {
-        db.transact(&Want::overlay(), |_, changes| {
-            edits.iter().cloned().for_each(|e| changes.overlay(e));
-            Ok(())
+        db.transact(&Want::overlay(), |view, changes| {
+            edits
+                .iter()
+                .try_for_each(|e| changes.overlay(view, e.clone()))
         })
         .await?;
     }
