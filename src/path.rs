@@ -123,10 +123,7 @@ pub struct PathListView {
 
 /// Print all learning path summaries as AYML (`mt path list`).
 pub async fn cmd_path_list(db: &Db) -> Result<()> {
-    let view = compute_path_list(db).await?;
-    let text = ayml::to_string(&view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
-    print!("{text}");
-    Ok(())
+    crate::print_ayml(&compute_path_list(db).await?)
 }
 
 /// Compute the progress summary of every learning path.

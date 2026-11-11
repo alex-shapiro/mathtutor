@@ -2,10 +2,10 @@
 
 use serde::Serialize;
 
+use crate::Result;
 use crate::db::Db;
 use crate::scheduler::PathPlan;
 use crate::view::Want;
-use crate::{Error, Result};
 
 /// Preview of upcoming untaught atoms for a learning path.
 #[derive(Debug, Serialize)]
@@ -29,10 +29,7 @@ pub struct SyllabusAtom {
 
 /// Print the upcoming syllabus as AYML for `mt path syllabus`.
 pub async fn cmd_path_syllabus(db: &Db, explicit_id: Option<&str>, n: usize) -> Result<()> {
-    let view = compute_syllabus(db, explicit_id, n).await?;
-    let text = ayml::to_string(&view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
-    print!("{text}");
-    Ok(())
+    crate::print_ayml(&compute_syllabus(db, explicit_id, n).await?)
 }
 
 /// Compute up to `n` upcoming untaught atoms for `explicit_id` or the latest path.

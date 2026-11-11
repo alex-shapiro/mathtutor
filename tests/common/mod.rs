@@ -272,10 +272,6 @@ pub fn complete_atom(id: &str, prereqs: &[&str]) -> FlatConcept {
     )
 }
 
-pub fn graph_of(concepts: Vec<FlatConcept>) -> Graph {
-    Graph::of_concepts(concepts)
-}
-
 pub fn path_with(targets: &[&str]) -> PathFile {
     path_with_strategy(targets, Strategy::BottomUp)
 }
@@ -294,14 +290,6 @@ pub fn path_with_strategy(targets: &[&str], strategy: Strategy) -> PathFile {
 /// Return `e` with its timestamp set to `ts`.
 pub fn at(ts: DateTime<Utc>, e: Event) -> Event {
     Event { ts, ..e }
-}
-
-/// Return the atom ID of `quiz_id`, such as `a.b` for `a.b.q1`.
-fn quiz_atom(quiz_id: &str) -> String {
-    quiz_id
-        .rsplit_once(".q")
-        .map_or(quiz_id, |(atom, _)| atom)
-        .to_string()
 }
 
 pub fn taught(atom_id: &str) -> Event {
@@ -338,7 +326,9 @@ pub fn presented(quiz_id: &str) -> Event {
     Event::now(
         PATH_ID,
         EventKind::QuizPresented {
-            atom: quiz_atom(quiz_id),
+            atom: mathtutor::graph::atom_from_quiz_id(quiz_id)
+                .unwrap_or(quiz_id)
+                .into(),
             quiz: quiz_id.into(),
         },
     )

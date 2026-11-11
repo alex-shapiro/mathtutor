@@ -5,7 +5,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use mathtutor::Error;
 use mathtutor::db::{Db, DbConfig};
-use mathtutor::graph::Curriculum;
+use mathtutor::graph::{Curriculum, Graph};
 use mathtutor::overlay::QuizDraft;
 use mathtutor::scheduler::{self, Action, NextMode, PathPlan};
 use mathtutor::surface::Surface;
@@ -14,27 +14,25 @@ use mathtutor::{answer, path, store, subpath, syllabus};
 
 mod common;
 
-use common::{
-    cluster, empty_atom as atom, graph_of, lesson_authored, path_with, path_with_strategy, taught,
-};
+use common::{cluster, empty_atom as atom, lesson_authored, path_with, path_with_strategy, taught};
 
 #[test]
 fn empty_targets_yield_empty_syllabus() {
-    let g = graph_of(vec![]);
+    let g = Graph::of_concepts(vec![]);
     let p = path_with(&[]);
     assert_eq!(common::upcoming(&g, &p, &[]), Vec::<String>::new());
 }
 
 #[test]
 fn single_untaught_target_appears() {
-    let g = graph_of(vec![atom("a", &[])]);
+    let g = Graph::of_concepts(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
     assert_eq!(common::upcoming(&g, &p, &[]), vec!["a".to_string()]);
 }
 
 #[test]
 fn taught_target_is_skipped() {
-    let g = graph_of(vec![atom("a", &[])]);
+    let g = Graph::of_concepts(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
     assert_eq!(common::upcoming(&g, &p, &events), Vec::<String>::new());
@@ -42,7 +40,7 @@ fn taught_target_is_skipped() {
 
 #[test]
 fn lesson_authored_event_counts_as_taught() {
-    let g = graph_of(vec![atom("a", &[])]);
+    let g = Graph::of_concepts(vec![atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = vec![lesson_authored("a")];
     assert_eq!(common::upcoming(&g, &p, &events), Vec::<String>::new());
@@ -50,7 +48,7 @@ fn lesson_authored_event_counts_as_taught() {
 
 #[test]
 fn prereq_appears_before_target() {
-    let g = graph_of(vec![atom("pre", &[]), atom("target", &["pre"])]);
+    let g = Graph::of_concepts(vec![atom("pre", &[]), atom("target", &["pre"])]);
     let p = path_with(&["target"]);
     assert_eq!(
         common::upcoming(&g, &p, &[]),
@@ -60,7 +58,7 @@ fn prereq_appears_before_target() {
 
 #[test]
 fn taught_prereq_is_skipped_but_target_remains() {
-    let g = graph_of(vec![atom("pre", &[]), atom("target", &["pre"])]);
+    let g = Graph::of_concepts(vec![atom("pre", &[]), atom("target", &["pre"])]);
     let p = path_with(&["target"]);
     let events = vec![taught("pre")];
     assert_eq!(
@@ -71,7 +69,7 @@ fn taught_prereq_is_skipped_but_target_remains() {
 
 #[test]
 fn diamond_prereq_appears_once() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         atom("tx.1", &["a", "b"]),
         atom("a", &["c"]),
         atom("b", &["c"]),
@@ -89,7 +87,7 @@ fn diamond_prereq_appears_once() {
 
 #[test]
 fn cluster_target_expands_to_atomic_children() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         cluster("la.2", &["la.2.1", "la.2.2"]),
         atom("la.2.1", &[]),
         atom("la.2.2", &[]),
@@ -103,7 +101,7 @@ fn cluster_target_expands_to_atomic_children() {
 
 #[test]
 fn multiple_targets_walked_in_order() {
-    let g = graph_of(vec![atom("a", &[]), atom("b", &[])]);
+    let g = Graph::of_concepts(vec![atom("a", &[]), atom("b", &[])]);
     let p = path_with(&["a", "b"]);
     assert_eq!(
         common::upcoming(&g, &p, &[]),
@@ -113,7 +111,7 @@ fn multiple_targets_walked_in_order() {
 
 #[test]
 fn plan_rejects_a_target_that_the_curriculum_lacks() {
-    let g = graph_of(vec![atom("a", &[])]);
+    let g = Graph::of_concepts(vec![atom("a", &[])]);
     let state = common::state_of(&path_with(&["a", "ghost"]), &[]);
     let plan = PathPlan::new(&state, Arc::new(g), Utc::now());
     assert!(matches!(plan, Err(Error::UnknownId(id)) if id == "ghost"));
@@ -121,7 +119,7 @@ fn plan_rejects_a_target_that_the_curriculum_lacks() {
 
 #[test]
 fn n_truncates_atoms_but_total_remaining_is_full_count() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         atom("a", &[]),
         atom("b", &[]),
         atom("c", &[]),
@@ -137,14 +135,14 @@ fn n_truncates_atoms_but_total_remaining_is_full_count() {
 
 #[test]
 fn top_down_lists_targets_not_prereqs() {
-    let g = graph_of(vec![atom("p", &[]), atom("t", &["p"])]);
+    let g = Graph::of_concepts(vec![atom("p", &[]), atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     assert_eq!(common::upcoming(&g, &p, &[]), vec!["t".to_string()],);
 }
 
 #[test]
 fn top_down_prefixes_subpath_before_targets() {
-    let g = graph_of(vec![atom("p", &[]), atom("q", &[]), atom("t", &["p", "q"])]);
+    let g = Graph::of_concepts(vec![atom("p", &[]), atom("q", &[]), atom("t", &["p", "q"])]);
     let mut p = path_with_strategy(&["t"], Strategy::TopDown);
     p.subpath = vec!["q".to_string(), "t".to_string()];
     assert_eq!(
@@ -155,7 +153,7 @@ fn top_down_prefixes_subpath_before_targets() {
 
 #[test]
 fn top_down_skips_taught_subpath_and_target_atoms() {
-    let g = graph_of(vec![atom("p", &[]), atom("t", &["p"])]);
+    let g = Graph::of_concepts(vec![atom("p", &[]), atom("t", &["p"])]);
     let mut p = path_with_strategy(&["t"], Strategy::TopDown);
     p.subpath = vec!["p".to_string(), "t".to_string()];
     assert_eq!(

@@ -3,11 +3,11 @@
 mod common;
 
 use common::{
-    PATH_ID, cluster, complete_atom, complete_events, empty_atom, graph_of, path_state,
-    path_with_strategy,
+    PATH_ID, cluster, complete_atom, complete_events, empty_atom, path_state, path_with_strategy,
 };
 
 use mathtutor::db::Db;
+use mathtutor::graph::Graph;
 use mathtutor::path::{self, PathFile};
 use mathtutor::scheduler::{Action, NextMode};
 use mathtutor::types::Strategy;
@@ -19,7 +19,7 @@ fn atom_id(a: &Action) -> Option<&str> {
 
 #[test]
 fn top_down_presents_target_before_its_prereqs() {
-    let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
+    let g = Graph::of_concepts(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let action = common::next_action(&g, &p, &[], NextMode::Default);
     assert_eq!(
@@ -31,7 +31,7 @@ fn top_down_presents_target_before_its_prereqs() {
 
 #[test]
 fn bottom_up_descends_into_prereqs_first() {
-    let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
+    let g = Graph::of_concepts(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let p = path_with_strategy(&["t"], Strategy::BottomUp);
     let action = common::next_action(&g, &p, &[], NextMode::Default);
     assert_eq!(
@@ -43,7 +43,7 @@ fn bottom_up_descends_into_prereqs_first() {
 
 #[test]
 fn top_down_subpath_walked_in_order() {
-    let g = graph_of(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
+    let g = Graph::of_concepts(vec![empty_atom("p", &[]), empty_atom("t", &["p"])]);
     let mut p = path_with_strategy(&["t"], Strategy::TopDown);
     p.subpath = vec!["p".to_string(), "t".to_string()];
     let action = common::next_action(&g, &p, &[], NextMode::Default);
@@ -52,7 +52,7 @@ fn top_down_subpath_walked_in_order() {
 
 #[test]
 fn top_down_subpath_advances_once_earlier_atom_completes() {
-    let g = graph_of(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
+    let g = Graph::of_concepts(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
     let mut p = path_with_strategy(&["t"], Strategy::TopDown);
     p.subpath = vec!["p".to_string(), "t".to_string()];
     let events = complete_events("p");
@@ -66,7 +66,7 @@ fn top_down_subpath_advances_once_earlier_atom_completes() {
 
 #[test]
 fn top_down_drained_subpath_falls_through_to_targets() {
-    let g = graph_of(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
+    let g = Graph::of_concepts(vec![complete_atom("p", &[]), empty_atom("t", &["p"])]);
     let mut p = path_with_strategy(&["t"], Strategy::TopDown);
     p.subpath = vec!["p".to_string()];
     let events = complete_events("p");
@@ -80,7 +80,7 @@ fn top_down_drained_subpath_falls_through_to_targets() {
 
 #[test]
 fn top_down_returns_done_if_targets_complete() {
-    let g = graph_of(vec![complete_atom("t", &[])]);
+    let g = Graph::of_concepts(vec![complete_atom("t", &[])]);
     let p = path_with_strategy(&["t"], Strategy::TopDown);
     let events = complete_events("t");
     let action = common::next_action(&g, &p, &events, NextMode::Default);
@@ -92,7 +92,7 @@ fn top_down_returns_done_if_targets_complete() {
 
 #[test]
 fn top_down_cluster_target_expands_to_atomic_children() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         cluster("tx.1", &["tx.1.1", "tx.1.2"]),
         empty_atom("tx.1.1", &[]),
         empty_atom("tx.1.2", &[]),

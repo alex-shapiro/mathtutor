@@ -22,12 +22,12 @@ pub enum Lookup<'a> {
 
 /// Print curriculum item `id` from `lookup` as AYML.
 pub async fn cmd_graph_show(lookup: Lookup<'_>, id: &str) -> Result<()> {
-    emit(&compute_item(lookup, id).await?)
+    crate::print_ayml(&compute_item(lookup, id).await?)
 }
 
 /// Print the curriculum items under `id` from `lookup` as AYML.
 pub async fn cmd_graph_list(lookup: Lookup<'_>, id: Option<&str>, recursive: bool) -> Result<()> {
-    emit(&compute_children(lookup, id, recursive).await?)
+    crate::print_ayml(&compute_children(lookup, id, recursive).await?)
 }
 
 /// Return curriculum item `id` from `lookup`.
@@ -270,10 +270,4 @@ fn count_atomic_descendants(g: &Graph, id: &str) -> usize {
             .map(|cid| count_atomic_descendants(g, cid))
             .sum()
     }
-}
-
-fn emit<T: Serialize>(view: &T) -> Result<()> {
-    let text = ayml::to_string(view).map_err(|e| Error::AymlSerialize(e.to_string()))?;
-    print!("{text}");
-    Ok(())
 }

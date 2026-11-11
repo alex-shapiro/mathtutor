@@ -19,10 +19,7 @@ use crate::{Error, Result};
 
 /// Compute the next action for `path_id` and print its AYML envelope for `mt path next`.
 pub async fn cmd_path_next(db: &Db, path_id: Option<&str>, mode: NextMode) -> Result<()> {
-    let envelope = compute_next(db, path_id, mode, Surface::Cli).await?;
-    let text = ayml::to_string(&envelope).map_err(|e| Error::AymlSerialize(e.to_string()))?;
-    print!("{text}");
-    Ok(())
+    crate::print_ayml(&compute_next(db, path_id, mode, Surface::Cli).await?)
 }
 
 /// Filter for [`compute_next`] action selection.

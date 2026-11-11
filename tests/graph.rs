@@ -3,14 +3,15 @@
 use mathtutor::Error;
 use mathtutor::discover::Lookup;
 use mathtutor::graph;
+use mathtutor::graph::Graph;
 use mathtutor::types::Difficulty;
 
 mod common;
 
-use common::{atom, cluster, graph_of, quiz, write_graph};
+use common::{atom, cluster, quiz, write_graph};
 
 fn graph_with_quiz(atom_id: &str, quiz_id: &str) -> mathtutor::graph::Graph {
-    graph_of(vec![atom(
+    Graph::of_concepts(vec![atom(
         atom_id,
         &[],
         Some("body"),
@@ -53,7 +54,7 @@ fn atom_accepts_leaf_concept() {
 
 #[test]
 fn atom_rejects_cluster() {
-    let g = graph_of(vec![cluster("fnd.1", &["fnd.1.1"])]);
+    let g = Graph::of_concepts(vec![cluster("fnd.1", &["fnd.1.1"])]);
     assert!(matches!(g.atom("fnd.1"), Err(Error::NotAtom(_))));
 }
 
@@ -65,7 +66,7 @@ fn atom_rejects_unknown_id() {
 
 #[test]
 fn reachable_includes_transitive_prereqs() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         common::empty_atom("tx.1.1", &["la.2.2", "fnd.2.3.1"]),
         common::empty_atom("la.2.2", &["la.1.1"]),
         common::empty_atom("la.1.1", &[]),
@@ -80,7 +81,7 @@ fn reachable_includes_transitive_prereqs() {
 
 #[test]
 fn reachable_expands_cluster_prereqs_to_their_atoms() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         common::empty_atom("tx.1.1", &["la.2.2"]),
         cluster("la.2.2", &["la.2.2.1", "la.2.2.2"]),
         common::empty_atom("la.2.2.1", &[]),
@@ -95,7 +96,7 @@ fn reachable_expands_cluster_prereqs_to_their_atoms() {
 
 #[test]
 fn reachable_handles_diamond_without_looping() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         common::empty_atom("tx.1", &["a", "b"]),
         common::empty_atom("a", &["c"]),
         common::empty_atom("b", &["c"]),
@@ -322,7 +323,7 @@ async fn recursive_children_list_every_descendant_in_natural_order() {
 
 #[test]
 fn overlapping_targets_expand_once_each() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         cluster("c", &["c.1", "c.2"]),
         cluster("c.1", &["c.1.a"]),
         atom("c.1.a", &[], None, Vec::new()),

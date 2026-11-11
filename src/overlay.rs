@@ -4,12 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::Result;
 use crate::db::{Db, Op};
 use crate::graph::Quiz;
 use crate::schema::{LessonRow, QuizRow, RemovedQuizRow};
 use crate::types::{Difficulty, QuizType};
 use crate::view::{Changes, Want};
-use crate::{Error, Result};
 
 /// In-memory snapshot of the curriculum overlay.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -262,9 +262,7 @@ pub fn remove_quiz(changes: &mut Changes, atom_id: &str, quiz_id: &str) {
 /// Print the curriculum overlay as AYML (`mt graph dump`).
 pub async fn cmd_graph_dump(db: &Db) -> Result<()> {
     let view = db.snapshot(&Want::overlay()).await?;
-    let text = ayml::to_string(view.overlay()?).map_err(|e| Error::AymlSerialize(e.to_string()))?;
-    print!("{text}");
-    Ok(())
+    crate::print_ayml(view.overlay()?)
 }
 
 #[cfg(test)]

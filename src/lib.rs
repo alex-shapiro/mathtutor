@@ -9,6 +9,13 @@ pub mod instruct;
 pub mod overlay;
 
 pub use error::{Error, Result};
+
+/// Print `value` as AYML to stdout.
+pub(crate) fn print_ayml<T: serde::Serialize>(value: &T) -> Result<()> {
+    let text = ayml::to_string(value).map_err(|e| Error::AymlSerialize(e.to_string()))?;
+    print!("{text}");
+    Ok(())
+}
 pub mod discover;
 pub mod event_log;
 pub mod graph;

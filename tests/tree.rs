@@ -2,17 +2,17 @@
 
 use std::collections::HashSet;
 
-use mathtutor::graph::FlatConcept;
+use mathtutor::graph::{FlatConcept, Graph};
 use mathtutor::progress::PathProgress;
 use mathtutor::tree::{self, TreeAtomStatus, TreeNode, build_spine};
 use mathtutor::types::{Difficulty, Rating, Strategy};
 
 mod common;
 
-use common::{atom, cluster, graph_of, quiz};
+use common::{atom, cluster, quiz};
 
 fn state_badge(progress: &PathProgress, c: &FlatConcept) -> String {
-    TreeAtomStatus::of(&graph_of(vec![c.clone()]), progress, c).badge()
+    TreeAtomStatus::of(&Graph::of_concepts(vec![c.clone()]), progress, c).badge()
 }
 
 fn find<'a>(nodes: &'a [TreeNode], id: &str) -> Option<&'a TreeNode> {
@@ -111,7 +111,7 @@ fn badge_uppercase_if_quiz_answered_correctly() {
 
 #[test]
 fn spine_includes_atoms_and_existing_ancestors() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         cluster("la.5", &["la.5.4"]),
         cluster("la.5.4", &["la.5.4.7"]),
         common::empty_atom("la.5.4.7", &[]),

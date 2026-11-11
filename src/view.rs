@@ -102,12 +102,13 @@ fn write_cached_overlay(path: &Path, version: &str, overlay: &Overlay) {
     }
 }
 
-/// Target path selector for a [`Want`] query.
+/// Paths that a [`Want`] loads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PathSel {
     None,
     Id(String),
     Recent,
+    All,
 }
 
 /// Specification of data to load into a [`View`].
@@ -115,7 +116,6 @@ enum PathSel {
 pub struct Want {
     path: PathSel,
     overlay: bool,
-    all_paths: bool,
 }
 
 impl Want {
@@ -124,7 +124,6 @@ impl Want {
         Self {
             path: PathSel::None,
             overlay: false,
-            all_paths: false,
         }
     }
 
@@ -148,7 +147,7 @@ impl Want {
     /// Request the curriculum overlay and the state of every path.
     pub fn all_paths() -> Self {
         Self {
-            all_paths: true,
+            path: PathSel::All,
             ..Self::overlay()
         }
     }
@@ -495,7 +494,7 @@ impl Db {
     /// Resolve `selector` to a path ID, choosing the most recent path at most once per command.
     async fn selected_path_id(&self, selector: &PathSel) -> Result<Option<String>> {
         match selector {
-            PathSel::None => Ok(None),
+            PathSel::None | PathSel::All => Ok(None),
             PathSel::Id(id) => Ok(Some(id.clone())),
             PathSel::Recent => self.most_recent_path_id().await,
         }
@@ -694,7 +693,7 @@ impl Plan {
                 (Slot::RemovedQuizzes, Op::query_all::<RemovedQuizRow>()),
             ]),
         }
-        if want.all_paths {
+        if want.path == PathSel::All {
             pending.extend([
                 (Slot::Paths, Op::query_all::<PathFile>()),
                 (Slot::Cards, Op::query_all::<CardRecord>()),

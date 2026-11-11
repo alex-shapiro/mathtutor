@@ -10,9 +10,7 @@ use mathtutor::types::Rating;
 
 mod common;
 
-use common::{
-    PATH_ID, complete_atom, complete_events, empty_atom, graph_of, path_with, progress_of, taught,
-};
+use common::{PATH_ID, complete_atom, complete_events, empty_atom, path_with, progress_of, taught};
 
 fn completion(g: &Graph, p: &PathFile, progress: &PathProgress) -> (TargetProgress, ReachProgress) {
     let c = PathCompletion::of(g, &p.resolve_targets(g).unwrap(), progress);
@@ -21,7 +19,7 @@ fn completion(g: &Graph, p: &PathFile, progress: &PathProgress) -> (TargetProgre
 
 #[test]
 fn target_complete_counts_toward_both_targets_and_reachable() {
-    let g = graph_of(vec![complete_atom("a", &[])]);
+    let g = Graph::of_concepts(vec![complete_atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = complete_events("a");
 
@@ -36,7 +34,7 @@ fn target_complete_counts_toward_both_targets_and_reachable() {
 
 #[test]
 fn prereq_complete_counts_toward_reachable_only() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         complete_atom("pre", &[]),
         complete_atom("target", &["pre"]),
     ]);
@@ -53,7 +51,7 @@ fn prereq_complete_counts_toward_reachable_only() {
 
 #[test]
 fn taught_counts_lesson_taught_in_path_regardless_of_quiz_progress() {
-    let g = graph_of(vec![complete_atom("a", &[])]);
+    let g = Graph::of_concepts(vec![complete_atom("a", &[])]);
     let p = path_with(&["a"]);
     let events = vec![taught("a")];
 
@@ -65,7 +63,7 @@ fn taught_counts_lesson_taught_in_path_regardless_of_quiz_progress() {
 
 #[test]
 fn empty_path_yields_zero_progress_without_division_panic() {
-    let g = graph_of(vec![]);
+    let g = Graph::of_concepts(vec![]);
     let p = path_with(&[]);
 
     let (t, r) = completion(&g, &p, &PathProgress::default());
@@ -79,7 +77,7 @@ fn empty_path_yields_zero_progress_without_division_panic() {
 
 #[test]
 fn reachable_includes_transitive_prereqs() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         empty_atom("a", &[]),
         empty_atom("b", &["a"]),
         empty_atom("c", &["b"]),
@@ -92,7 +90,7 @@ fn reachable_includes_transitive_prereqs() {
 
 #[test]
 fn learned_pct_rounds_down() {
-    let g = graph_of(vec![
+    let g = Graph::of_concepts(vec![
         complete_atom("a", &[]),
         complete_atom("b", &[]),
         complete_atom("c", &[]),

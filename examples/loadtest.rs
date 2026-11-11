@@ -11,6 +11,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
+
 use mathtutor::db::client::api::{self, Endpoint as _, Histogram, Metrics};
 use mathtutor::db::client::bytes::Bytes;
 use mathtutor::db::client::{BoxFuture, Route, Transport, TransportError, http};
@@ -299,22 +302,7 @@ fn print_server(m: &Metrics, before: Option<&Metrics>, secs: f64) {
     }
 }
 
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n.max(1)
-    }
-}
-
-fn sample_text(rng: &mut Rng, bytes: usize) -> String {
+fn sample_text(rng: &mut StdRng, bytes: usize) -> String {
     const WORDS: [&str; 12] = [
         "vector",
         "space",
@@ -331,7 +319,7 @@ fn sample_text(rng: &mut Rng, bytes: usize) -> String {
     ];
     let mut s = String::with_capacity(bytes + 16);
     while s.len() < bytes {
-        s.push_str(WORDS[rng.below(WORDS.len() as u64) as usize]);
+        s.push_str(WORDS[rng.random_range(0..WORDS.len())]);
         s.push(' ');
     }
     s
@@ -345,16 +333,15 @@ struct Learner {
     ledger: Ledger,
     path: Option<String>,
     shared: Option<Arc<Mutex<Option<String>>>>,
-    rng: Rng,
+    rng: StdRng,
     targets: Arc<Vec<String>>,
     lesson_bytes: usize,
 }
 
 impl Learner {
     async fn new_path(&mut self) -> Result<(), String> {
-        let n = self.targets.len() as u64;
-        let target = self.targets[self.rng.below(n) as usize].clone();
-        let strategy = if self.rng.below(4) == 0 {
+        let target = self.targets[self.rng.random_range(0..self.targets.len())].clone();
+        let strategy = if self.rng.random_range(0..4) == 0 {
             Strategy::TopDown
         } else {
             Strategy::BottomUp
@@ -380,7 +367,7 @@ impl Learner {
             out.push(("path new", t.elapsed(), r));
             return;
         };
-        let roll = self.rng.below(100);
+        let roll = self.rng.random_range(0..100);
         let t = Instant::now();
         if roll < 4 {
             let r = state::compute_state(&self.db, Some(&p)).await.map(drop);
@@ -442,7 +429,7 @@ impl Learner {
                 out.push(("quiz create", t.elapsed(), r.map_err(|e| e.to_string())));
             }
             Action::PresentQuiz { quiz_id, .. } => {
-                let rating = match self.rng.below(100) {
+                let rating = match self.rng.random_range(0..100) {
                     0..15 => Rating::Again,
                     15..30 => Rating::Hard,
                     30..80 => Rating::Good,
@@ -505,7 +492,7 @@ async fn seed(db: &Db, atoms: usize, lesson_bytes: usize) {
         .map(|(id, _)| id)
         .collect();
     ids.sort();
-    let mut rng = Rng(7);
+    let mut rng = StdRng::seed_from_u64(7);
     let started = Instant::now();
     for chunk in ids[..atoms.min(ids.len())].chunks(BATCH) {
         let lessons: Vec<(String, String)> = chunk
@@ -650,7 +637,7 @@ async fn main() {
             ledger: ledger.clone(),
             path: None,
             shared: shared_path.clone(),
-            rng: Rng(0x9E37_79B9_7F4A_7C15 ^ ((i as u64 + 1) * 0x2545_F491_4F6C_DD1D)),
+            rng: StdRng::seed_from_u64(i as u64),
             targets: targets.clone(),
             lesson_bytes,
         })));
